@@ -1,0 +1,45 @@
+# Mnemos 配置文件
+# 复制此文件为 config.yaml 并修改为你的实际路径
+
+wiki:
+  # Obsidian Vault 中的 wiki 目录路径
+  # 留空则自动检测平台默认值
+  vault_path: "~/Documents/Obsidian Vault/wiki"
+
+memos:
+  enabled: true
+  # Memos 服务器地址
+  api_url: "https://your-memos-instance.com"
+  # API Token（建议通过 MEMOS_TOKEN 环境变量设置）
+  token: ""
+
+persona:
+  enabled: true
+  # 画像数据源开关
+  # 开启越多画像越精准，但隐私暴露也越多
+  data_sources:
+    session:
+      enabled: true
+      description: "AI对话信号（核心）- 推断专注深度、质疑倾向、完美偏好等"
+    git:
+      enabled: false
+      description: "Git提交记录 - 推断续航模式、创新倾向、协作偏好"
+    memos:
+      enabled: false
+      description: "Memos笔记 - 推断认知风格、知识结构"
+    wiki:
+      enabled: false
+      description: "知识库交互 - 推断关注领域、学习路径"
+    file_system:
+      enabled: false
+      description: "文件系统活动 - 推断工作模式、项目切换频率"
+    wechat:
+      enabled: false
+      description: "微信聊天记录 - 推断情绪模式、社交偏好"
+
+integrations:
+  claude_code:
+    enabled: true
+    settings_json_path: "~/.claude/settings.json"
+  mcp:
+    enabled: false
