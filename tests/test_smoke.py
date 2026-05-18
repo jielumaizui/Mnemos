@@ -43,13 +43,13 @@ class TestSignalStore(unittest.TestCase):
 
     def test_signal_store_import(self):
         """SignalStore 模块可导入"""
-        from core.persona.signal_store import SignalStore, get_signal_store
+        from core.persona.psyche import SignalStore, get_signal_store
         self.assertIsNotNone(SignalStore)
         self.assertIsNotNone(get_signal_store)
 
     def test_database_path(self):
         """数据库路径在 ~/.mnemos/ 下"""
-        from core.persona.signal_store import SIGNAL_DB_PATH
+        from core.persona.psyche import SIGNAL_DB_PATH
         self.assertIn(".mnemos", str(SIGNAL_DB_PATH))
 
 
@@ -59,12 +59,12 @@ class TestPersonaImports(unittest.TestCase):
     def test_all_persona_modules(self):
         """所有 persona 子模块可导入"""
         modules = [
-            "core.persona.signal_store",
-            "core.persona.signal_collector",
-            "core.persona.preference_analyzer",
-            "core.persona.blindspot_analyzer",
-            "core.persona.persona_store",
-            "core.persona.report_generator",
+            "core.persona.psyche",
+            "core.persona.daimon",
+            "core.persona.pythia",
+            "core.persona.hamartia",
+            "core.persona.delphi",
+            "core.persona.rhapsode",
         ]
         for mod in modules:
             with self.subTest(module=mod):
@@ -77,13 +77,13 @@ class TestKIAImports(unittest.TestCase):
     def test_all_kia_modules(self):
         """所有 kia 子模块可导入"""
         modules = [
-            "core.kia.task_classifier",
-            "core.kia.pre_flight_injector",
-            "core.kia.auto_retrospective",
-            "core.kia.skill_wiki_flywheel",
-            "core.kia.connect_worker",
-            "core.kia.distillation_queue",
-            "core.kia.knowledge_scheduler",
+            "core.kia.dike",
+            "core.kia.prophasis",
+            "core.kia.epimetheus",
+            "core.kia.ixion",
+            "core.kia.charon",
+            "core.kia.amphora",
+            "core.kia.chronos",
         ]
         for mod in modules:
             with self.subTest(module=mod):
@@ -96,11 +96,11 @@ class TestIntegrationImports(unittest.TestCase):
     def test_all_integration_modules(self):
         """所有 integrations 模块可导入"""
         modules = [
-            "integrations.memos_sdk",
-            "integrations.wiki_reader",
-            "integrations.ai_context_reader",
-            "integrations.claude_integration",
-            "integrations.mcp_server",
+            "integrations.styx",
+            "integrations.oracle",
+            "integrations.xenios",
+            "integrations.apollon",
+            "integrations.agora",
         ]
         for mod in modules:
             with self.subTest(module=mod):
@@ -128,7 +128,7 @@ class TestNoHardcodedPaths(unittest.TestCase):
         self.assertIn(".mnemos", str(config.data_dir))
 
         # signal_store 数据库路径
-        from core.persona.signal_store import SIGNAL_DB_PATH
+        from core.persona.psyche import SIGNAL_DB_PATH
         self.assertIn(".mnemos", str(SIGNAL_DB_PATH))
 
 

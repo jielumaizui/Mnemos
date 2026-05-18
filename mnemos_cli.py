@@ -266,6 +266,39 @@ def cmd_doctor(args):
         md_count = len(md_files)
         print(f"  Wiki 页面: {md_count}")
 
+        # 知识来源分布
+        if md_count > 0:
+            try:
+                import yaml
+                sources = {"人工写入": 0, "Memos同步": 0, "蒸馏提取": 0, "复盘经验": 0, "Git历史": 0, "其他": 0}
+                for md_file in md_files:
+                    try:
+                        content = md_file.read_text(encoding="utf-8", errors="ignore")
+                        src = "人工写入"
+                        if content.startswith("---"):
+                            parts = content.split("---", 2)
+                            if len(parts) >= 3:
+                                fm = yaml.safe_load(parts[1]) or {}
+                                tags = fm.get("tags", [])
+                                if "memos" in tags or "memos-sync" in tags or fm.get("source") == "memos":
+                                    src = "Memos同步"
+                                elif "distilled" in tags or fm.get("source") == "distill":
+                                    src = "蒸馏提取"
+                                elif "retrospective" in tags or fm.get("source") == "retrospective":
+                                    src = "复盘经验"
+                                elif "git" in tags or fm.get("source") == "git":
+                                    src = "Git历史"
+                        sources[src] = sources.get(src, 0) + 1
+                    except Exception:
+                        continue
+                print("  知识来源分布:")
+                for src_name, cnt in sources.items():
+                    if cnt > 0:
+                        pct = cnt / md_count * 100
+                        print(f"    - {src_name}: {cnt} ({pct:.0f}%)")
+            except Exception:
+                pass
+
         # 最近修改时间
         if md_files:
             try:
@@ -288,7 +321,7 @@ def cmd_doctor(args):
     print()
     print("画像数据质量:")
     try:
-        from core.persona.signal_store import get_signal_store
+        from core.persona.psyche import get_signal_store
         store = get_signal_store()
         stats = store.get_signal_stats(days=30)
         total = sum(v for v in stats.values() if v > 0)
@@ -307,7 +340,7 @@ def cmd_doctor(args):
     print()
     print("MCP 服务器状态:")
     try:
-        from integrations.mcp_server import MCPServer
+        from integrations.agora import MCPServer
         server = MCPServer()
         tool_count = len(server.tools)
         print(f"  ✓ 协议版本: JSON-RPC 2.0 / MCP 2024-11-05")
@@ -378,7 +411,7 @@ def cmd_status(args):
 
     # 画像统计
     try:
-        from core.persona.signal_store import get_signal_store
+        from core.persona.psyche import get_signal_store
         store = get_signal_store()
         stats = store.get_signal_stats(days=30)
         total = sum(v for v in stats.values() if v > 0)
@@ -400,13 +433,77 @@ def cmd_config(args):
         print(yaml.dump(config.to_dict(), allow_unicode=True, sort_keys=False))
 
 
+def cmd_daemon(args):
+    """后台守护进程管理"""
+    import subprocess
+    daemon_script = Path(__file__).parent / "mnemos_daemon.py"
+    if not daemon_script.exists():
+        print(f"守护进程脚本不存在: {daemon_script}")
+        return
+
+    if args.daemon_cmd == "start":
+        subprocess.run([sys.executable, str(daemon_script), "start"])
+    elif args.daemon_cmd == "stop":
+        subprocess.run([sys.executable, str(daemon_script), "stop"])
+    elif args.daemon_cmd == "status":
+        subprocess.run([sys.executable, str(daemon_script), "status"])
+    else:
+        print("可用子命令: start, stop, status")
+
+
+def cmd_agent(args):
+    """AI Agent 管理"""
+    from integrations.olympus import AgentRegistry
+
+    if args.agent_cmd == "list":
+        print("=" * 60)
+        print("AI Agent 状态")
+        print("=" * 60)
+        agents = AgentRegistry.discover_all()
+        if not agents:
+            print("未检测到任何 Agent")
+            return
+        for agent in agents:
+            mark = "★" if agent.name == os.environ.get("MNEMOS_HOST_AGENT", "").lower() else " "
+            print(f"  [{mark}] {agent.name:12s} 优先级={agent.priority}")
+        print()
+        print(f"共 {len(agents)} 个 Agent 可用")
+
+    elif args.agent_cmd == "detect":
+        host = os.environ.get("MNEMOS_HOST_AGENT", "")
+        if host:
+            print(f"宿主 Agent (MNEMOS_HOST_AGENT): {host}")
+        else:
+            print("未设置 MNEMOS_HOST_AGENT，将按优先级自动选择")
+        best = AgentRegistry.select_best_agent()
+        if best:
+            print(f"最佳可用 Agent: {best.name}")
+        else:
+            print("未检测到任何 Agent")
+
+    elif args.agent_cmd == "install":
+        print("=" * 60)
+        print("安装 Agent hooks")
+        print("=" * 60)
+        agents = AgentRegistry.discover_all()
+        for agent in agents:
+            print(f"\n安装 {agent.name} ...")
+            try:
+                ok = agent.install_hooks()
+                print(f"  {'✓' if ok else '✗'} {agent.name}")
+            except Exception as e:
+                print(f"  ✗ {agent.name}: {e}")
+    else:
+        print("可用子命令: list, detect, install")
+
+
 def cmd_mcp_serve(args):
     """启动 MCP 服务器"""
     print("启动 MCP 服务器 (stdin/stdout 模式)...")
     print("按 Ctrl+C 停止")
 
     try:
-        from integrations.mcp_server import run_mcp_server
+        from integrations.agora import run_mcp_server
         run_mcp_server()
     except ImportError:
         print("❌ MCP 服务器未实现。请先安装 mnemos[mcp] 依赖。")
@@ -440,6 +537,20 @@ def main():
     config_parser = subparsers.add_parser("config", help="查看/编辑配置")
     config_parser.add_argument("--set", help="设置配置项 (如 wiki.vault_path=~/wiki)")
 
+    # agent
+    agent_parser = subparsers.add_parser("agent", help="AI Agent 管理")
+    agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
+    agent_sub.add_parser("list", help="列出本地可用的 AI Agent")
+    agent_sub.add_parser("install", help="为所有可用 Agent 安装 hooks")
+    agent_sub.add_parser("detect", help="检测宿主 Agent（MNEMOS_HOST_AGENT）")
+
+    # daemon
+    daemon_parser = subparsers.add_parser("daemon", help="后台守护进程")
+    daemon_sub = daemon_parser.add_subparsers(dest="daemon_cmd")
+    daemon_sub.add_parser("start", help="启动守护进程")
+    daemon_sub.add_parser("stop", help="停止守护进程")
+    daemon_sub.add_parser("status", help="查看守护进程状态")
+
     # mcp serve
     mcp_parser = subparsers.add_parser("mcp", help="MCP 协议")
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_cmd")
@@ -456,6 +567,10 @@ def main():
         cmd_status(args)
     elif args.command == "config":
         cmd_config(args)
+    elif args.command == "agent":
+        cmd_agent(args)
+    elif args.command == "daemon":
+        cmd_daemon(args)
     elif args.command == "mcp" and args.mcp_cmd == "serve":
         cmd_mcp_serve(args)
     else:

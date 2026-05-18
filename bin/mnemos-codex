@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Mnemos-Codex Wrapper — 代达罗斯之翼
+# 包装 codex 命令，在前后注入 Mnemos 生命周期
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_CMD="${PYTHON_CMD:-python3}"
+
+WORKING_DIR="$(pwd)"
+SESSION_ID="codex:$(echo "$WORKING_DIR" | md5 | head -c 8):$(date +%Y%m%d-%H%M%S)"
+
+# ---- Session Start ----
+echo "[Mnemos] Codex session start: $SESSION_ID"
+$PYTHON_CMD "$PROJECT_DIR/integrations/apollon.py" \
+    --session-start \
+    --working-dir "$WORKING_DIR" \
+    --user-message "codex_cli" 2>/dev/null || true
+
+# ---- Run Codex ----
+CODEX_EXIT=0
+codex "$@" || CODEX_EXIT=$?
+
+# ---- Session End ----
+echo "[Mnemos] Codex session end: $SESSION_ID"
+$PYTHON_CMD "$PROJECT_DIR/integrations/apollon.py" \
+    --session-end \
+    --working-dir "$WORKING_DIR" 2>/dev/null || true
+
+exit $CODEX_EXIT

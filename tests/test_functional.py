@@ -58,7 +58,7 @@ class TestSignalStoreFunctional(unittest.TestCase):
 
     def test_database_crud(self):
         """信号数据库可读写"""
-        from core.persona.signal_store import SignalStore, SessionSignal
+        from core.persona.psyche import SignalStore, SessionSignal
 
         self._store = store = SignalStore(db_path=self.db_path)
 
@@ -79,7 +79,7 @@ class TestSignalStoreFunctional(unittest.TestCase):
 
     def test_source_validation(self):
         """非法数据源会被拒绝"""
-        from core.persona.signal_store import SignalStore
+        from core.persona.psyche import SignalStore
 
         self._store = store = SignalStore(db_path=self.db_path)
         with self.assertRaises(ValueError):
@@ -102,7 +102,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
 
     def test_schedule_and_retrieve(self):
         """任务可调度并可检索"""
-        from core.kia.knowledge_scheduler import KnowledgeScheduler
+        from core.kia.chronos import KnowledgeScheduler
 
         scheduler = KnowledgeScheduler(db_path=str(self.db_path))
 
@@ -124,7 +124,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
 
     def test_mark_completed(self):
         """任务可标记完成"""
-        from core.kia.knowledge_scheduler import KnowledgeScheduler
+        from core.kia.chronos import KnowledgeScheduler
 
         scheduler = KnowledgeScheduler(db_path=str(self.db_path))
 
@@ -142,7 +142,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
 
     def test_cleanup_old(self):
         """可清理旧任务"""
-        from core.kia.knowledge_scheduler import KnowledgeScheduler
+        from core.kia.chronos import KnowledgeScheduler
 
         scheduler = KnowledgeScheduler(db_path=str(self.db_path))
 
