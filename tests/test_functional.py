@@ -3,23 +3,31 @@
 import sys
 import os
 import tempfile
+import shutil
 import unittest
 import json
+import gc
 from pathlib import Path
 from datetime import datetime, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
+def _cleanup_temp(path: str):
+    """Windows-compatible temp cleanup: force GC to close DB handles first"""
+    gc.collect()
+    shutil.rmtree(path, ignore_errors=True)
+
+
 class TestConfigFunctional(unittest.TestCase):
     """配置系统功能测试"""
 
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.config_path = Path(self.temp_dir.name) / "test_config.yaml"
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_path = Path(self.temp_dir) / "test_config.yaml"
 
     def tearDown(self):
-        self.temp_dir.cleanup()
+        _cleanup_temp(self.temp_dir)
 
     def test_config_save_and_load(self):
         """配置可保存并重新加载"""
@@ -41,17 +49,18 @@ class TestSignalStoreFunctional(unittest.TestCase):
     """SignalStore 数据库功能测试"""
 
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_signals.db"
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_signals.db"
+        self._store = None
 
     def tearDown(self):
-        self.temp_dir.cleanup()
+        _cleanup_temp(self.temp_dir)
 
     def test_database_crud(self):
         """信号数据库可读写"""
         from core.persona.signal_store import SignalStore, SessionSignal
 
-        store = SignalStore(db_path=self.db_path)
+        self._store = store = SignalStore(db_path=self.db_path)
 
         # 写入 session 信号
         signal = SessionSignal(
@@ -72,7 +81,7 @@ class TestSignalStoreFunctional(unittest.TestCase):
         """非法数据源会被拒绝"""
         from core.persona.signal_store import SignalStore
 
-        store = SignalStore(db_path=self.db_path)
+        self._store = store = SignalStore(db_path=self.db_path)
         with self.assertRaises(ValueError):
             store._validate_source("invalid_source")
 
@@ -85,11 +94,11 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
     """KnowledgeScheduler 功能测试"""
 
     def setUp(self):
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.temp_dir.name) / "test_scheduler.db"
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_scheduler.db"
 
     def tearDown(self):
-        self.temp_dir.cleanup()
+        _cleanup_temp(self.temp_dir)
 
     def test_schedule_and_retrieve(self):
         """任务可调度并可检索"""
