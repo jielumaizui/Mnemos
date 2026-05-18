@@ -49,6 +49,7 @@ class MCPServer:
             "wiki_search": self._tool_wiki_search,
             "wiki_read": self._tool_wiki_read,
             "knowledge_ingest": self._tool_knowledge_ingest,
+            "knowledge_import": self._tool_knowledge_import,
             "preflight_inject": self._tool_preflight_inject,
             "guard_check": self._tool_guard_check,
             "persona_summary": self._tool_persona_summary,
@@ -137,6 +138,227 @@ class MCPServer:
                 "success": False,
                 "message": f"摄入失败: {e}",
             }
+
+    def _tool_knowledge_import(self, file_path: str, title: str = "",
+                                tags: List[str] = None,
+                                trigger_parse: bool = True) -> Dict:
+        """
+        知识导入 — 将用户指定的本地文件解析并存入知识库
+
+        使用场景：
+        - 用户说"把这个文件加入知识库：~/notes/architecture.md"
+        - 用户说"解析这个代码文件，提取设计模式"
+        - 用户说"把这份文档存进去，以后好查"
+
+        处理流程：
+        1. 读取指定路径的文件内容
+        2. 根据文件类型处理（.md 保留原格式，代码文件加代码块包装）
+        3. 添加 frontmatter（来源标记 file_import，原始路径，导入时间）
+        4. 写入 Wiki 00-Inbox/
+        5. 立即触发 Charon 解析（语义索引、实体提取、标签、热度评分）
+        """
+        from core.config import get_config
+        from core.kia.charon import run_connect_cycle
+        from pathlib import Path
+        from datetime import datetime
+        import mimetypes
+
+        src_path = Path(file_path).expanduser().resolve()
+        if not src_path.exists():
+            return {
+                "success": False,
+                "message": f"文件不存在: {file_path}",
+            }
+
+        if not src_path.is_file():
+            return {
+                "success": False,
+                "message": f"路径不是文件: {file_path}",
+            }
+
+        # 读取内容
+        try:
+            raw_bytes = src_path.read_bytes()
+            # 尝试 UTF-8，失败则用 latin-1（保证不丢数据）
+            try:
+                content = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                content = raw_bytes.decode("latin-1")
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"读取文件失败: {e}",
+            }
+
+        # 文件类型处理
+        suffix = src_path.suffix.lower()
+        code_exts = {
+            ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".c", ".cpp",
+            ".h", ".hpp", ".cs", ".rb", ".php", ".swift", ".kt", ".scala", ".sh",
+            ".bash", ".zsh", ".fish", ".ps1", ".pl", ".lua", ".r", ".m", ".mm",
+            ".sql", ".dockerfile", ".makefile", ".cmake", ".gradle", ".svelte",
+            ".vue", ".html", ".css", ".scss", ".sass", ".less", ".xml", ".json",
+        }
+        text_exts = {".txt", ".log", ".csv", ".tsv", ".ini", ".cfg", ".conf", ".toml"}
+
+        # 生成标题
+        doc_title = title or src_path.stem
+        safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', doc_title).strip()[:60]
+
+        # 构建 markdown 内容
+        if suffix == ".md":
+            # Markdown 文件：保留内容，在开头添加/合并 frontmatter
+            if content.startswith("---"):
+                # 已有 frontmatter，追加我们的标记
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    existing_fm = parts[1]
+                    body = parts[2].lstrip("\n")
+                    new_fm = f"""---
+{existing_fm.rstrip()}
+imported_from: {src_path}
+imported_at: {datetime.now().isoformat()}
+source: file_import
+tags: [{', '.join(tags or ['file_import'])}]
+---
+
+"""
+                    md_content = new_fm + body
+                else:
+                    md_content = content
+            else:
+                md_content = f"""---
+title: {safe_title}
+imported_from: {src_path}
+imported_at: {datetime.now().isoformat()}
+source: file_import
+tags: [{', '.join(tags or ['file_import'])}]
+---
+
+{content}
+"""
+        elif suffix in code_exts:
+            # 代码文件：包装为 markdown 代码块
+            lang = suffix.lstrip(".")
+            if lang == "js":
+                lang = "javascript"
+            elif lang == "ts":
+                lang = "typescript"
+            elif lang == "py":
+                lang = "python"
+            elif lang == "sh" or lang == "bash" or lang == "zsh":
+                lang = "bash"
+            elif lang == "dockerfile":
+                lang = "dockerfile"
+            elif lang == "makefile":
+                lang = "makefile"
+            elif lang == "html":
+                lang = "html"
+            elif lang == "css" or lang == "scss" or lang == "sass" or lang == "less":
+                lang = "css"
+            elif lang == "json":
+                lang = "json"
+            elif lang == "xml":
+                lang = "xml"
+            elif lang == "sql":
+                lang = "sql"
+            elif lang == "yaml" or lang == "yml":
+                lang = "yaml"
+
+            md_content = f"""---
+title: {safe_title}
+imported_from: {src_path}
+imported_at: {datetime.now().isoformat()}
+source: file_import
+file_type: code
+language: {lang}
+tags: [{', '.join(tags or ['file_import', 'code'])}]
+---
+
+# {safe_title}
+
+原始路径：`{src_path}`
+
+```{lang}
+{content}
+```
+"""
+        elif suffix in text_exts or suffix in {".yaml", ".yml"}:
+            # 纯文本文件
+            md_content = f"""---
+title: {safe_title}
+imported_from: {src_path}
+imported_at: {datetime.now().isoformat()}
+source: file_import
+file_type: text
+tags: [{', '.join(tags or ['file_import', 'text'])}]
+---
+
+# {safe_title}
+
+原始路径：`{src_path}`
+
+```text
+{content}
+```
+"""
+        else:
+            # 其他类型：尝试文本展示
+            md_content = f"""---
+title: {safe_title}
+imported_from: {src_path}
+imported_at: {datetime.now().isoformat()}
+source: file_import
+file_type: {suffix.lstrip('.') or 'unknown'}
+tags: [{', '.join(tags or ['file_import'])}]
+---
+
+# {safe_title}
+
+原始路径：`{src_path}`
+文件类型：{suffix or 'unknown'}
+
+```text
+{content}
+```
+"""
+
+        # 写入 Inbox
+        try:
+            config = get_config()
+            inbox_dir = config.wiki_dir / "00-Inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            inbox_name = f"{ts}-import-{safe_title[:30]}.md"
+            inbox_path = inbox_dir / inbox_name
+            inbox_path.write_text(md_content, encoding="utf-8")
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"写入 Inbox 失败: {e}",
+            }
+
+        # 触发 Charon 解析
+        parse_result = None
+        if trigger_parse:
+            try:
+                parse_result = run_connect_cycle(dry_run=False)
+            except Exception as e:
+                logger.warning(f"Charon 解析触发失败: {e}")
+                parse_result = {"error": str(e)}
+
+        return {
+            "success": True,
+            "message": f"文件已导入知识库: {inbox_path.name}",
+            "original_path": str(src_path),
+            "inbox_path": str(inbox_path),
+            "title": safe_title,
+            "file_size": len(raw_bytes),
+            "content_length": len(content),
+            "pipeline": "文件 → 00-Inbox → Charon(语义索引/实体提取/标签/热度) → 知识图谱",
+            "parse_result": parse_result,
+        }
 
     def _tool_preflight_inject(self, task_type: str, subtype: str = "",
                                context_text: str = "") -> Dict:
@@ -487,6 +709,20 @@ class MCPServer:
                         "source": {"type": "string", "description": "来源标记", "default": "human"},
                     },
                     "required": ["content"],
+                },
+            },
+            {
+                "name": "knowledge_import",
+                "description": "知识导入 — 将用户指定的本地文件解析并存入知识库。支持 .md（保留格式）、代码文件（自动识别语言并加代码块）、文本文件等。文件写入 Wiki 00-Inbox/ 后立即触发 Charon 解析器（语义索引、实体提取、标签、热度评分 L0-L9）。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "文件绝对路径（如 ~/notes/architecture.md 或 /Users/zhuwei/project/main.py）"},
+                        "title": {"type": "string", "description": "文档标题（可选，默认使用文件名）", "default": ""},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选）", "default": []},
+                        "trigger_parse": {"type": "boolean", "description": "是否立即触发解析", "default": True},
+                    },
+                    "required": ["file_path"],
                 },
             },
             {

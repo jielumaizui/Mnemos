@@ -152,9 +152,10 @@ mnemos mcp serve     # 启动 MCP 服务器
 
 | 工具 | 用途 |
 |------|------|
-| `wiki_search` | 搜索知识库（多来源：人工输入、Memos、蒸馏、复盘、Git） |
+| `wiki_search` | 搜索知识库（多来源：文件导入、人工输入、Memos、蒸馏、复盘、Git） |
 | `wiki_read` | 读取指定页面（经语义索引、热度评分、标签处理） |
-| `knowledge_ingest` | **用户主动投喂知识** — 当用户说"记住这个"时，Agent 调用此工具将知识写入 Memos，自动进入解析链路 |
+| `knowledge_ingest` | **用户主动口述知识** — 当用户说"记住这个"时，Agent 调用此工具将知识写入 Memos |
+| `knowledge_import` | **用户指定文件导入** — 当用户说"把这个文件存进知识库"时，Agent 读取文件并写入 Wiki，自动触发完整解析 |
 | `preflight_inject` | 任务前装载历史经验（KIA 闭环第一步） |
 | `guard_check` | 执行中风险守护（KIA 闭环第二步） |
 | `persona_summary` | 获取用户画像摘要 |
