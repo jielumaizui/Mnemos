@@ -31,8 +31,41 @@ logger = logging.getLogger(__name__)
 
 # ========== 配置 ==========
 
-WIKI_DIR = get_config().wiki_dir
-REPORTS_DIR = WIKI_DIR / "01-People" / "self-reports"
+def _get_wiki_dir():
+    """Lazy-load wiki directory to avoid side effects at import time."""
+    return get_config().wiki_dir
+
+
+class _LazyPath:
+    """Lazy path that evaluates get_config() only when accessed."""
+    __slots__ = ('_segments',)
+    def __init__(self, *segments):
+        self._segments = segments
+    def __truediv__(self, other):
+        return _LazyPath(*self._segments, other)
+    def __rtruediv__(self, other):
+        raise NotImplementedError
+    def _resolve(self):
+        result = _get_wiki_dir()
+        for seg in self._segments:
+            result = result / seg
+        return result
+    def __str__(self):
+        return str(self._resolve())
+    def __repr__(self):
+        return f"LazyPath({'/'.join(self._segments)})"
+    def __fspath__(self):
+        return str(self._resolve())
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+    def __hash__(self):
+        return hash(self._resolve())
+    def __eq__(self, other):
+        return self._resolve() == other
+
+
+WIKI_DIR = _LazyPath()
+REPORTS_DIR = _LazyPath("01-People", "self-reports")
 
 
 # ========== 数据模型 ==========

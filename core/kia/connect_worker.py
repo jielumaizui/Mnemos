@@ -39,16 +39,51 @@ from typing import Dict, List, Set, Tuple, Optional
 from core.config import get_config
 
 
-WIKI_DIR = get_config().wiki_dir
+def _get_wiki_dir():
+    """Lazy-load wiki directory to avoid side effects at import time."""
+    return get_config().wiki_dir
 
-# ========== 目录结构 ==========
-INBOX_DIR    = WIKI_DIR / "00-Inbox"
-PEOPLE_DIR   = WIKI_DIR / "01-People"
-PROJECTS_DIR = WIKI_DIR / "02-Projects"
-TECH_DIR     = WIKI_DIR / "03-Tech"
-CONCEPTS_DIR = WIKI_DIR / "04-Concepts"
-MOCS_DIR     = WIKI_DIR / "05-MOCs"
-RETROS_DIR   = WIKI_DIR / "06-Retrospectives"
+
+# Lazy module-level constants: evaluated on first access, not at import time
+# This prevents get_config() from running when the module is merely imported
+class _LazyPath:
+    """Descriptor-like lazy path that evaluates get_config() only when accessed."""
+    __slots__ = ('_segments',)
+    def __init__(self, *segments):
+        self._segments = segments
+    def __truediv__(self, other):
+        return _LazyPath(*self._segments, other)
+    def __rtruediv__(self, other):
+        raise NotImplementedError
+    def _resolve(self):
+        result = _get_wiki_dir()
+        for seg in self._segments:
+            result = result / seg
+        return result
+    def __str__(self):
+        return str(self._resolve())
+    def __repr__(self):
+        return f"LazyPath({'/'.join(self._segments)})"
+    def __fspath__(self):
+        return str(self._resolve())
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+    def __hash__(self):
+        return hash(self._resolve())
+    def __eq__(self, other):
+        return self._resolve() == other
+    def __iter__(self):
+        return iter(self._resolve())
+
+
+WIKI_DIR = _LazyPath()
+INBOX_DIR    = _LazyPath("00-Inbox")
+PEOPLE_DIR   = _LazyPath("01-People")
+PROJECTS_DIR = _LazyPath("02-Projects")
+TECH_DIR     = _LazyPath("03-Tech")
+CONCEPTS_DIR = _LazyPath("04-Concepts")
+MOCS_DIR     = _LazyPath("05-MOCs")
+RETROS_DIR   = _LazyPath("06-Retrospectives")
 
 ALL_DIRS = [INBOX_DIR, PEOPLE_DIR, PROJECTS_DIR, TECH_DIR, CONCEPTS_DIR, MOCS_DIR, RETROS_DIR]
 

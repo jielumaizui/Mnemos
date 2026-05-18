@@ -348,7 +348,7 @@ class SignalStore:
 
     def _init_db(self):
         """初始化数据库"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(SCHEMA_SQL)
             conn.commit()
 
@@ -361,7 +361,7 @@ class SignalStore:
         if data.get("correction_domains"):
             data["correction_domains"] = json.dumps(data["correction_domains"], ensure_ascii=False)
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO session_signals (
                     session_id, timestamp, task_type, task_subtype,
@@ -392,7 +392,7 @@ class SignalStore:
 
     def get_recent_session_signals(self, days: int = 90) -> List[Dict]:
         """获取最近N天的session信号"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM session_signals
@@ -409,7 +409,7 @@ class SignalStore:
         if data.get("topic_tags"):
             data["topic_tags"] = json.dumps(data["topic_tags"], ensure_ascii=False)
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO wechat_signals (
                     timestamp, content_hash, msg_length,
@@ -434,7 +434,7 @@ class SignalStore:
 
     def get_recent_wechat_signals(self, days: int = 90) -> List[Dict]:
         """获取最近N天的微信信号"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM wechat_signals
@@ -448,7 +448,7 @@ class SignalStore:
     def insert_memos_signal(self, signal: MemosSignal) -> int:
         """插入memos笔记信号"""
         data = asdict(signal)
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO memos_signals (
                     memo_uid, timestamp, content_length,
@@ -471,7 +471,7 @@ class SignalStore:
 
     def get_recent_memos_signals(self, days: int = 90) -> List[Dict]:
         """获取最近N天的memos信号"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM memos_signals
@@ -485,7 +485,7 @@ class SignalStore:
     def insert_git_signal(self, signal: GitSignal) -> int:
         """插入git信号"""
         data = asdict(signal)
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO git_signals (
                     repo_path, commit_hash, timestamp,
@@ -522,7 +522,7 @@ class SignalStore:
     def get_unprocessed_signals(self, source_type: str, limit: int = 1000) -> List[Dict]:
         """获取未处理的信号（用于画像分析）"""
         self._validate_source(source_type)
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT s.*, m.confidence, m.possible_external_factors
@@ -539,7 +539,7 @@ class SignalStore:
         if not signal_ids:
             return
         placeholders = ",".join("?" * len(signal_ids))
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.execute(f"""
                 UPDATE signal_metadata
                 SET processed = 1, processed_at = ?
@@ -550,7 +550,7 @@ class SignalStore:
     def insert_knowledge_signal(self, page_path: str, action_type: str, timestamp: str,
                                  tags_added: str = "[]", tags_removed: str = "[]") -> int:
         """插入知识库交互信号"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO knowledge_signals (
                     page_path, action_type, timestamp,
@@ -570,7 +570,7 @@ class SignalStore:
                                    project_name: str = "", is_in_inbox: int = 0,
                                    is_versioned: int = 0) -> int:
         """插入文件系统行为信号"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO file_system_signals (
                     file_path, action_type, timestamp,
@@ -590,7 +590,7 @@ class SignalStore:
     def get_signal_stats(self, days: int = 30) -> Dict[str, Any]:
         """获取信号统计摘要"""
         stats = {}
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             for source in ["session", "knowledge", "wechat", "git", "file_system", "memos"]:
                 cursor = conn.execute(f"""
                     SELECT COUNT(*) FROM {source}_signals
@@ -601,7 +601,7 @@ class SignalStore:
 
     def get_daily_summary(self, date: str) -> Dict[str, Any]:
         """获取某天的信号聚合摘要"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM signal_daily_index WHERE date = ?
@@ -618,7 +618,7 @@ class SignalStore:
         用于防止跨项目污染：不同项目的信号可能反映不同的工作偏好，
         不应混为一谈。
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM session_signals
@@ -631,7 +631,7 @@ class SignalStore:
     def get_signal_projects(self, days: int = 90) -> List[Dict]:
         """获取所有有信号的项目列表"""
         projects = []
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             # Session项目
             cursor = conn.execute("""
@@ -668,7 +668,7 @@ class SignalStore:
 
     def session_exists(self, session_id: str) -> bool:
         """检查 session 信号是否已存在"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM session_signals WHERE session_id = ? LIMIT 1",
                 (session_id,)
@@ -677,7 +677,7 @@ class SignalStore:
 
     def git_commit_exists(self, commit_hash: str) -> bool:
         """检查 git commit 信号是否已存在"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM git_signals WHERE commit_hash = ? LIMIT 1",
                 (commit_hash,)
@@ -688,7 +688,7 @@ class SignalStore:
         """检查 memos 信号是否已存在（memo_uid 为空时不检查）"""
         if not memo_uid:
             return False
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM memos_signals WHERE memo_uid = ? LIMIT 1",
                 (memo_uid,)
@@ -697,7 +697,7 @@ class SignalStore:
 
     def knowledge_page_exists(self, page_path: str, since: str = None) -> bool:
         """检查知识库页面信号是否已存在"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             if since:
                 cursor = conn.execute(
                     "SELECT 1 FROM knowledge_signals WHERE page_path = ? AND timestamp >= ? LIMIT 1",
@@ -712,7 +712,7 @@ class SignalStore:
 
     def file_system_exists(self, file_path: str, since: str = None) -> bool:
         """检查文件系统信号是否已存在"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             if since:
                 cursor = conn.execute(
                     "SELECT 1 FROM file_system_signals WHERE file_path = ? AND timestamp >= ? LIMIT 1",
@@ -727,7 +727,7 @@ class SignalStore:
 
     def wechat_exists(self, content_hash: str) -> bool:
         """检查微信信号是否已存在"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM wechat_signals WHERE content_hash = ? LIMIT 1",
                 (content_hash,)
@@ -745,7 +745,7 @@ class SignalStore:
             "session": self.get_recent_session_signals_by_project(project_dir, days),
         }
 
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
 
             # Git信号（匹配repo_path前缀）
@@ -774,7 +774,7 @@ class SignalStore:
                              energy: Dict, cognitive: Dict, value: Dict,
                              blindspot: Dict, signal_count: int) -> int:
         """保存画像版本"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 INSERT INTO persona_versions (
                     version, generated_at, period_start, period_end,
@@ -794,7 +794,7 @@ class SignalStore:
 
     def get_latest_persona_version(self) -> Optional[Dict]:
         """获取最新画像版本"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
                 SELECT * FROM persona_versions
@@ -812,7 +812,7 @@ class SignalStore:
 
     def update_blindspot_profile(self, blindspot_data: Dict) -> bool:
         """更新最新画像版本的盲区数据（独立保存时调用）"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
                 SELECT id FROM persona_versions ORDER BY version DESC LIMIT 1
             """)
