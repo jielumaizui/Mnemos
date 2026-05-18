@@ -148,7 +148,19 @@ mnemos mcp serve     # 启动 MCP 服务器
 
 ### 方式一：MCP 协议（推荐，通用）
 
-任何支持 MCP 的 AI Agent 都可以接入：
+任何支持 MCP 的 AI Agent 都可以接入。接入后，Agent 可以使用以下工具：
+
+| 工具 | 用途 |
+|------|------|
+| `wiki_search` | 搜索知识库（多来源：人工输入、Memos、蒸馏、复盘、Git） |
+| `wiki_read` | 读取指定页面（经语义索引、热度评分、标签处理） |
+| `knowledge_ingest` | **用户主动投喂知识** — 当用户说"记住这个"时，Agent 调用此工具将知识写入 Memos，自动进入解析链路 |
+| `preflight_inject` | 任务前装载历史经验（KIA 闭环第一步） |
+| `guard_check` | 执行中风险守护（KIA 闭环第二步） |
+| `persona_summary` | 获取用户画像摘要 |
+| `signal_collect` | 触发信号采集 |
+
+配置示例：
 
 ```json
 {
@@ -175,7 +187,9 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 
 - Mnemos 通过 Memos SDK 连接你的 Memos 实例，采集原始笔记和对话记录
 - Memos 负责**快速记录**，Mnemos 负责**深度蒸馏**
-- 你不需要 Memos 也能用 Mnemos（支持手动输入和其他数据源）
+- **人工输入是重要入口**：当用户直接对 AI Agent 说"记住这个"、"帮我记下"时，Agent 通过 MCP 工具的 `knowledge_ingest` 将知识写入 Memos → 同步到 Wiki 00-Inbox/ → 经过 Charon 解析器（语义索引、实体提取、标签构建、热度评分 L0-L9）→ 正式进入知识图谱
+- 所有进入系统的知识，无论来源（人工输入、Memos 同步、Agent 蒸馏、Git 历史），都经过同一套解析器处理，标准统一
+- 你不需要 Memos 也能用 Mnemos（支持直接写入 Wiki 和其他数据源）
 - Memos 是 [独立的开源项目](https://github.com/usememos/memos)，有自己的 [开源许可](https://github.com/usememos/memos/blob/main/LICENSE)，Mnemos 仅通过其公开 API 集成
 
 ### Obsidian：知识库的可视化与人工编辑

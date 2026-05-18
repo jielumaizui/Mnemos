@@ -48,6 +48,7 @@ class MCPServer:
         return {
             "wiki_search": self._tool_wiki_search,
             "wiki_read": self._tool_wiki_read,
+            "knowledge_ingest": self._tool_knowledge_ingest,
             "preflight_inject": self._tool_preflight_inject,
             "guard_check": self._tool_guard_check,
             "persona_summary": self._tool_persona_summary,
@@ -84,6 +85,58 @@ class MCPServer:
             "content": content,
             "path": page_path,
         }
+
+    def _tool_knowledge_ingest(self, content: str, tags: List[str] = None,
+                               source: str = "human") -> Dict:
+        """
+        知识摄入 — 将用户主动提供的人工知识写入 Memos，进入知识库处理链路。
+
+        完整流程：
+        1. Agent 调用此工具，把用户口头/输入的知识存入 Memos
+        2. Memos 同步机制将内容同步到 Wiki 的 00-Inbox/
+        3. Charon（Connect Worker）对内容进行语义索引、实体提取、标签构建、热度评分
+        4. 知识正式纳入图谱，可被 wiki_search / wiki_read 检索
+
+        这是除 Memos 自动同步、Agent 对话蒸馏、Git 历史提取之外，
+        另一个重要的知识入口：用户主动投喂。
+        """
+        from core.config import get_config
+        from integrations.styx import MemosClient
+
+        config = get_config()
+        if not config.memos_enabled or not config.memos_token:
+            return {
+                "success": False,
+                "message": "Memos 未配置，无法摄入知识。请在 ~/.mnemos/config.json 中配置 memos.token 和 memos.api_url",
+            }
+
+        try:
+            client = MemosClient(
+                host=config.memos_api_url,
+                token=config.memos_token,
+            )
+            # 自动添加 source 标签，便于后续溯源
+            ingest_tags = list(tags or [])
+            if source not in ingest_tags:
+                ingest_tags.append(source)
+            if "mnemos-ingest" not in ingest_tags:
+                ingest_tags.append("mnemos-ingest")
+
+            memory = client.save(content, tags=ingest_tags)
+            return {
+                "success": True,
+                "message": "知识已成功摄入 Memos，将自动同步到 Wiki 并经过解析器处理",
+                "memo_id": memory.id,
+                "tags": memory.tags,
+                "ingested_length": len(content),
+                "pipeline": "Memos → Wiki 00-Inbox → Charon(语义索引/标签/热度) → 知识图谱",
+            }
+        except Exception as e:
+            logger.error(f"知识摄入失败: {e}")
+            return {
+                "success": False,
+                "message": f"摄入失败: {e}",
+            }
 
     def _tool_preflight_inject(self, task_type: str, subtype: str = "",
                                context_text: str = "") -> Dict:
@@ -402,7 +455,7 @@ class MCPServer:
         tools = [
             {
                 "name": "wiki_search",
-                "description": "搜索知识库（多来源知识：人工写入、Memos同步、Agent对话蒸馏、Retrospective复盘、Git历史等）",
+                "description": "搜索知识库。知识来源包括：1) 用户主动投喂（通过knowledge_ingest存入）2) Memos同步 3) Agent对话蒸馏 4) Retrospective复盘 5) Git历史。所有知识均经过语义索引、标签构建、热度评分(L0-L9)处理。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -414,13 +467,26 @@ class MCPServer:
             },
             {
                 "name": "wiki_read",
-                "description": "读取指定 wiki 页面（知识经语义索引、热度评分L0-L9、标签体系处理）",
+                "description": "读取指定 wiki 页面。页面内容经过完整解析器处理：语义索引提取实体/概念/技术栈、自动标签分类、热度评分L0-L9、知识图谱关联。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "page_path": {"type": "string", "description": "wiki 页面相对路径"},
                     },
                     "required": ["page_path"],
+                },
+            },
+            {
+                "name": "knowledge_ingest",
+                "description": "知识摄入 — 将用户主动提供的人工知识写入Memos，自动进入Wiki处理链路（Memos→00-Inbox→语义索引/标签/热度评分→知识图谱）。当用户说'记住这个'、'帮我记下'、'这很重要'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "用户提供的知识内容"},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选，如 ['coding', 'important']）", "default": []},
+                        "source": {"type": "string", "description": "来源标记", "default": "human"},
+                    },
+                    "required": ["content"],
                 },
             },
             {
