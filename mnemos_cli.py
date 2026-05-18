@@ -414,6 +414,11 @@ def cmd_mcp_serve(args):
 
 
 def main():
+    # Fix Windows console encoding (cp1252 can't handle Chinese/emoji)
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description="Mnemos")
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
