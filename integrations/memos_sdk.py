@@ -851,7 +851,7 @@ class MemosClient:
 
         保留此方法作为兼容性空操作，避免调用方报错。
         """
-        logger.warning("[Deprecated] mark_l1_processed 已废弃，蒸馏体系使用指纹表追踪状态")
+        print("[Deprecated] mark_l1_processed 已废弃，蒸馏体系使用指纹表追踪状态")
         return True
 
     def save_session(self, working_dir: str, summary: str = ""):
