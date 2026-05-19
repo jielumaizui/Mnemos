@@ -216,7 +216,8 @@ class AgentDelegate:
                 # 无有效内容时的回退
                 return self._build_fallback_prompt(task)
 
-            prompt = DISTILLATION_PROMPT.replace("{session_content}", session_text)
+            prompt = DISTILLATION_PROMPT.replace("{session_id}", task.session_id)
+            prompt = prompt.replace("{session_content}", session_text)
             return prompt
         except Exception as e:
             logger.warning(f"构建完整蒸馏 prompt 失败，使用回退: {e}")
