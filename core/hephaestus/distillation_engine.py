@@ -170,7 +170,7 @@ def build_session_text(messages: List[Dict]) -> str:
         if not content:
             continue
         content = clean_message_content(content)
-        if not content or len(content) < 10:
+        if not content:
             continue
         # 截断超长消息
         if len(content) > 1000:
