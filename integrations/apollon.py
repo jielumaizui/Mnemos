@@ -22,6 +22,7 @@ Claude Code Memos 集成脚本
 
 import os
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 import sys

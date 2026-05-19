@@ -360,17 +360,12 @@ class DistillationEngine:
                     anti_patterns=frag_data.get("anti_patterns", []),
                     related_concepts=frag_data.get("related_concepts", []),
                 )
-                result.fragments.append(fragment)
+                fragments.append(fragment)
             except Exception as e:
                 # 跳过解析失败的 fragment
                 continue
 
-        # 7. 二次确认：如果判为 skip，生成询问文案，不直接丢弃
-        if result.judgment == "skip":
-            result.needs_reconfirm = True
-            result.reconfirm_question = self._generate_reconfirm_question(result, session_text)
-
-        return result
+        return fragments
 
     def _generate_reconfirm_question(self, result: DistillationResult,
                                       session_text: str) -> str:
