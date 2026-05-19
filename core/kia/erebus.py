@@ -90,7 +90,7 @@ class DarkKnowledgeMiner:
         self._has_trail_data = self._check_trail_db()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.trail_db))
+        conn = sqlite3.connect(str(self.trail_db), timeout=10)
         conn.row_factory = sqlite3.Row
         return conn
 

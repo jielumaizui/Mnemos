@@ -14,6 +14,7 @@
 import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -60,9 +61,20 @@ class AgentDelegate:
         agent = self.detector.select_best()
         if not agent:
             logger.warning("无可用 Agent 执行蒸馏，任务将留在队列中等待")
+            self._alert_no_agent(task)
             return False
 
         logger.info(f"委托蒸馏任务 {task.session_id} 给 Agent: {agent.name}")
+
+        # 预构建完整蒸馏 prompt，放入 meta 供所有适配器复用
+        # 同源复用：确保每个 Agent 收到完全相同的 DISTILLATION_PROMPT
+        if "full_prompt" not in task.meta:
+            try:
+                full_prompt = self.build_distill_prompt(task)
+                task.meta["full_prompt"] = full_prompt
+                logger.debug(f"已预构建蒸馏 prompt ({len(full_prompt)} chars)")
+            except Exception as e:
+                logger.warning(f"预构建蒸馏 prompt 失败，依赖适配器自行构建: {e}")
 
         # 写入任务文件
         task_path = self._write_task_file(task)
@@ -76,6 +88,63 @@ class AgentDelegate:
         else:
             logger.warning(f"蒸馏任务下发失败: {task.session_id}")
         return ok
+
+    def _alert_no_agent(self, task: DistillTask):
+        """无可用 Agent 时触发告警
+
+        1. 写入告警日志
+        2. 生成提醒文件到 distill_queue
+        3. 提供 doctor 检测提示
+        """
+        # 1. 写入告警日志
+        alert_dir = Path.home() / ".mnemos" / "alerts"
+        alert_dir.mkdir(parents=True, exist_ok=True)
+        alert_file = alert_dir / f"no_agent_{datetime.now().strftime('%Y%m%d')}.log"
+        alert_entry = (
+            f"[{datetime.now().isoformat()}] "
+            f"无可用 Agent，蒸馏任务积压: {task.session_id}\n"
+            f"  来源: {task.meta.get('source', 'unknown')}\n"
+            f"  消息数: {len(task.messages)}\n"
+            f"  建议: 运行 `mnemos doctor` 检查 Agent 状态\n"
+            f"  或设置环境变量 MNEMOS_HOST_AGENT=claude\n"
+        )
+        with open(alert_file, "a", encoding="utf-8") as f:
+            f.write(alert_entry)
+
+        # 2. 生成提醒文件（Agent 下次启动时会看到）
+        reminder_dir = Path.home() / ".mnemos" / "reminders"
+        reminder_dir.mkdir(parents=True, exist_ok=True)
+        reminder_file = reminder_dir / "agent_needed.md"
+        reminder_content = f"""# Mnemos 告警: Agent 不可用
+
+**时间**: {datetime.now().isoformat()}
+**状态**: 有 {self._count_pending_tasks()} 个蒸馏任务等待处理，但未检测到可用 Agent。
+
+## 待处理任务
+
+- Session: `{task.session_id}`
+- 来源: {task.meta.get('source', 'unknown')}
+- 消息数: {len(task.messages)}
+
+## 解决方案
+
+1. 运行诊断：`mnemos doctor`
+2. 安装 Agent hooks：`mnemos agent install`
+3. 手动设置宿主 Agent：`export MNEMOS_HOST_AGENT=claude`
+4. 检查 Claude Code / Cursor 是否已安装
+
+---
+此提醒会在 Agent 恢复后自动清除。
+"""
+        reminder_file.write_text(reminder_content, encoding="utf-8")
+        logger.warning(f"Agent 不可用告警已写入: {alert_file}")
+
+    def _count_pending_tasks(self) -> int:
+        """统计待处理任务数"""
+        queue_dir = Path.home() / ".claude" / "distill_queue"
+        if not queue_dir.exists():
+            return 0
+        return len(list(queue_dir.glob("*.json")))
 
     def _write_task_file(self, task: DistillTask) -> Optional[Path]:
         """将任务写入临时文件"""
@@ -135,8 +204,26 @@ class AgentDelegate:
     def build_distill_prompt(self, task: DistillTask) -> str:
         """构建蒸馏提示词
 
-        生成给 Agent 的 prompt，指导 Agent 如何蒸馏对话。
+        使用统一的 DISTILLATION_PROMPT 作为单一 truth source，
+        确保所有 Agent 收到的蒸馏任务使用完全相同的 prompt。
         """
+        try:
+            from core.hephaestus.distillation_prompts import DISTILLATION_PROMPT
+            from core.hephaestus.distillation_engine import build_session_text
+
+            session_text = build_session_text(task.messages)
+            if not session_text:
+                # 无有效内容时的回退
+                return self._build_fallback_prompt(task)
+
+            prompt = DISTILLATION_PROMPT.replace("{session_content}", session_text)
+            return prompt
+        except Exception as e:
+            logger.warning(f"构建完整蒸馏 prompt 失败，使用回退: {e}")
+            return self._build_fallback_prompt(task)
+
+    def _build_fallback_prompt(self, task: DistillTask) -> str:
+        """回退：轻量蒸馏 prompt（当完整 prompt 不可用时）"""
         messages = task.messages
         meta = task.meta
 
@@ -149,15 +236,7 @@ class AgentDelegate:
             "",
             "## 指令",
             "请对以下对话进行蒸馏，提取核心知识、经验教训和可复用的模式。",
-            "",
-            "### 输出格式要求",
-            "1. 核心主题（一句话概括）",
-            "2. 关键知识点（ bullet list ）",
-            "3. 经验教训（哪些做对了、哪些可以改进）",
-            "4. 可复用模式（抽象为通用规则）",
-            "5. 相关标签（便于检索）",
-            "",
-            "请保持输出格式稳定，同一对话多次蒸馏结果应一致。",
+            "输出严格 JSON 格式（见 distillation_prompts.py 中的 DISTILLATION_PROMPT 完整要求）。",
             "",
             "## 原始对话",
             "",

@@ -434,6 +434,9 @@ class PreFlightInjector:
         lines = [
             f"[Knowledge Loaded: {knowledge.task_type}/{knowledge.subtype} v{knowledge.version}]",
             "",
+            "> 指令：以下 checklist 来自历史复盘经验，请你在接下来的回复中主动检查并遵循这些建议。",
+            "> 如果某项不适用当前场景，可以忽略，但请在心中过一遍。",
+            "",
             "本次任务的历史经验：",
         ]
 

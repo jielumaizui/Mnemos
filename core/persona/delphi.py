@@ -318,7 +318,7 @@ class PersonaStore:
         )
 
     def load_persona(self) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
-        """加载当前画像。先尝试wiki，失败则从数据库回退。"""
+        """加载当前画像。先尝试wiki，失败则从数据库回退，最后返回默认冷启动模板。"""
         # 1. 尝试从wiki加载
         if self.persona_page.exists():
             try:
@@ -330,7 +330,66 @@ class PersonaStore:
                 logger.warning(f"忽略异常: {e}")
 
         # 2. 从数据库回退
-        return self._load_persona_from_db()
+        profile, bs = self._load_persona_from_db()
+        if profile is not None:
+            return profile, bs
+
+        # 3. 冷启动：返回默认模板
+        logger.info("[画像] 无历史画像，返回默认冷启动模板")
+        return self._create_default_persona(), None
+
+    def _create_default_persona(self) -> PreferenceProfile:
+        """创建默认冷启动画像模板
+
+        所有维度中性（0.5），confidence=0.0，标记所有维度为数据不足。
+        这是一个合法的画像对象，可以被 KIA 和其他模块安全使用。
+        """
+        from .pythia import PreferenceProfile, EnergyProfile, CognitiveProfile, ValueProfile
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        all_energy_dims = ["focus_depth", "startup_difficulty", "endurance_mode",
+                          "switching_flexibility", "recovery_cycle"]
+        all_cognitive_dims = ["abstraction", "system_view", "skepticism",
+                             "creativity", "deduction"]
+        all_value_dims = ["correctness_vs_efficiency", "depth_vs_breadth",
+                         "perfection_vs_completion", "innovation_vs_safety",
+                         "autonomy_vs_collaboration"]
+
+        return PreferenceProfile(
+            version=0,
+            generated_at=now,
+            period_start=now,
+            period_end=now,
+            energy=EnergyProfile(
+                focus_depth=0.5,
+                startup_difficulty=0.5,
+                endurance_mode=0.5,
+                switching_flexibility=0.5,
+                recovery_cycle=0.5,
+                confidence=0.0,
+                insufficient_dimensions=all_energy_dims,
+            ),
+            cognitive=CognitiveProfile(
+                abstraction=0.5,
+                system_view=0.5,
+                skepticism=0.5,
+                creativity=0.5,
+                deduction=0.5,
+                confidence=0.0,
+                insufficient_dimensions=all_cognitive_dims,
+            ),
+            value=ValueProfile(
+                correctness_vs_efficiency=0.5,
+                depth_vs_breadth=0.5,
+                perfection_vs_completion=0.5,
+                innovation_vs_safety=0.5,
+                autonomy_vs_collaboration=0.5,
+                confidence=0.0,
+                insufficient_dimensions=all_value_dims,
+            ),
+            signal_count=0,
+        )
 
     def _load_persona_from_db(self) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
         """从数据库重建画像"""
@@ -760,6 +819,139 @@ def get_persona_store() -> PersonaStore:
     if _persona_store_instance is None:
         _persona_store_instance = PersonaStore()
     return _persona_store_instance
+
+# ========== Agent 适配画像策略 ==========
+
+# A/B 测试状态：每个进程只确定一次
+_ab_test_persona_driven: Optional[bool] = None
+
+
+def _ensure_ab_test_group() -> bool:
+    """确保 A/B 测试分组已确定"""
+    global _ab_test_persona_driven
+    if _ab_test_persona_driven is None:
+        import random
+        _ab_test_persona_driven = random.random() < 0.5
+    return _ab_test_persona_driven
+
+
+def _load_base_behavior_prompt() -> str:
+    """加载基础画像策略（所有 Agent 通用）"""
+    try:
+        if not _ensure_ab_test_group():
+            return "\n[Persona-Driven Behavior]\n- A/B 对照组：本次 session 不使用画像驱动策略"
+
+        pstore = PersonaStore()
+        profile, _ = pstore.load_persona()
+        if not profile:
+            return ""
+
+        lines = ["\n[Persona-Driven Behavior]"]
+        ins_energy = set(profile.energy.insufficient_dimensions or [])
+        ins_cognitive = set(profile.cognitive.insufficient_dimensions or [])
+        ins_value = set(profile.value.insufficient_dimensions or [])
+
+        # 能量层映射
+        if "focus_depth" not in ins_energy:
+            fd = profile.energy.focus_depth
+            if fd > 0.6:
+                lines.append("- 用户专注深度高：提供结构化、层次化的深度回复，避免碎片化信息")
+            elif fd < 0.4:
+                lines.append("- 用户专注深度低：提供简短、可快速消化的信息，多用列表和要点")
+
+        if "startup_difficulty" not in ins_energy:
+            sd = profile.energy.startup_difficulty
+            if sd > 0.6:
+                lines.append("- 用户启动难度高：主动提供框架、模板或选项，降低决策成本")
+            elif sd < 0.4:
+                lines.append("- 用户启动容易：可以用开放性问题开场，给用户更多探索空间")
+
+        if "switching_flexibility" not in ins_energy:
+            sf = profile.energy.switching_flexibility
+            if sf > 0.6:
+                lines.append("- 用户切换弹性高：允许话题自然切换，不必强行锁定当前主题")
+            elif sf < 0.4:
+                lines.append("- 用户切换弹性低：坚持当前主线，切换话题时明确提示和确认")
+
+        # 认知层映射
+        if "abstraction" not in ins_cognitive:
+            ab = profile.cognitive.abstraction
+            if ab > 0.6:
+                lines.append("- 用户偏抽象思维：先说原理/框架，再用案例佐证")
+            elif ab < 0.4:
+                lines.append("- 用户偏具象思维：先给具体案例，再归纳原理")
+
+        if "system_view" not in ins_cognitive:
+            sv = profile.cognitive.system_view
+            if sv > 0.6:
+                lines.append("- 用户偏好系统视角：先给全貌和关联，再深入细节")
+            elif sv < 0.4:
+                lines.append("- 用户偏好单点视角：聚焦当前问题，全局背景简要提及")
+
+        if "skepticism" not in ins_cognitive:
+            sk = profile.cognitive.skepticism
+            if sk > 0.6:
+                lines.append("- 用户质疑倾向强：主动展示推理过程、证据和局限性")
+            elif sk < 0.4:
+                lines.append("- 用户信任倾向强：直接给结论和建议，不必过度解释前提")
+
+        # 价值层映射
+        if "correctness_vs_efficiency" not in ins_value:
+            ce = profile.value.correctness_vs_efficiency
+            if ce > 0.6:
+                lines.append("- 用户重视正确性：确保信息准确，不确定时明确说明")
+            elif ce < 0.4:
+                lines.append("- 用户重视效率：快速给出可行方案，不必追求完美")
+
+        if "perfection_vs_completion" not in ins_value:
+            pc = profile.value.perfection_vs_completion
+            if pc > 0.6:
+                lines.append("- 用户追求完美：提供详尽、完整的方案，考虑边界情况")
+            elif pc < 0.4:
+                lines.append("- 用户追求完成：先给 MVP 方案，细节后续补充")
+
+        if "depth_vs_breadth" not in ins_value:
+            db = profile.value.depth_vs_breadth
+            if db > 0.6:
+                lines.append("- 用户偏好深度：深入一个点，不必面面俱到")
+            elif db < 0.4:
+                lines.append("- 用户偏好广度：提供多种选择和视角，不必深入每个细节")
+
+        if len(lines) > 1:
+            return "\n".join(lines)
+        return ""
+    except Exception:
+        return ""
+
+
+def get_behavior_prompt(agent: str) -> str:
+    """根据用户画像和 Agent 类型生成行为策略提示
+
+    Args:
+        agent: Agent 标识（claude/hermes/openclaw/opencode/codex）
+
+    Returns:
+        画像驱动的行为策略文本（含 Agent 特定策略）
+    """
+    base = _load_base_behavior_prompt()
+    if not base:
+        return ""
+
+    lines = [base]
+
+    # Agent 特定策略
+    agent_notes = {
+        "claude": "[Agent Note] 你当前使用 Claude Code，擅长深度技术讨论和代码分析。画像策略叠加：在技术讨论中优先提供深度分析，代码审查时关注架构设计和边界 case。",
+        "hermes": "[Agent Note] 你当前使用 Hermes，擅长快速信息检索和多源搜索。画像策略叠加：在检索时优先返回高置信度来源，根据用户偏好调整信息密度（深度/广度）。",
+        "openclaw": "[Agent Note] 你当前使用 OpenClaw，擅长分析和推理。画像策略叠加：在推理过程中主动展示思考链，根据用户质疑倾向调整论证详略。",
+        "opencode": "[Agent Note] 你当前使用 OpenCode，擅长代码理解和生成。画像策略叠加：在代码生成时根据用户追求完美/完成的倾向调整详尽程度。",
+        "codex": "[Agent Note] 你当前使用 Codex，专注代码生成任务。画像策略叠加：快速生成可运行代码，根据用户效率偏好提供简洁实现或完整方案。",
+    }
+    note = agent_notes.get(agent, "")
+    if note:
+        lines.append(note)
+    return "\n".join(lines)
+
 
 if __name__ == "__main__":
     # 测试

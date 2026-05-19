@@ -157,11 +157,11 @@ class FalsifiabilityMarker:
         CREATE INDEX IF NOT EXISTS idx_evidence_time ON falsification_evidence(timestamp);
         CREATE INDEX IF NOT EXISTS idx_mark_status ON falsifiability_marks(status);
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=10)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -639,7 +639,7 @@ class FalsifiabilityMarker:
 
     def _save_mark(self, mark: FalsifiabilityMark):
         """保存标记到数据库"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO falsifiability_marks
                    (page_path, page_title, falsifiable_statements, test_methods,
@@ -663,7 +663,7 @@ class FalsifiabilityMarker:
 
     def _save_evidence(self, evidence: FalsificationEvidence):
         """保存证伪证据"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.execute(
                 """INSERT INTO falsification_evidence
                    (page_path, evidence_type, evidence_source, evidence_content,

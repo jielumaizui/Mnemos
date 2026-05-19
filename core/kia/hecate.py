@@ -24,6 +24,7 @@ Shadow Page - 知识影子页面系统
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -164,6 +165,10 @@ class ShadowPageManager:
         需要 tvly CLI 已安装并登录
         """
         results = []
+        if not shutil.which("tvly"):
+            logger.warning("tvly CLI 未安装，跳过 tavily 搜索")
+            return results
+
         try:
             cmd = [
                 "tvly", "search", query,

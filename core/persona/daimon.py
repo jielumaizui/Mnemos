@@ -95,7 +95,7 @@ class SignalCollector:
             return count
 
         try:
-            with sqlite3.connect(str(self._wiki_state_db())) as conn:
+            with sqlite3.connect(str(self._wiki_state_db()), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT * FROM processed_sessions

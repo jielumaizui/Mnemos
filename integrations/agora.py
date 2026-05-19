@@ -15,6 +15,8 @@ MCP Server - Model Context Protocol 服务器
 
 
 import json
+import os
+import re
 import sys
 import logging
 from typing import Dict, List, Optional, Any
@@ -48,15 +50,23 @@ class MCPServer:
         return {
             "wiki_search": self._tool_wiki_search,
             "wiki_read": self._tool_wiki_read,
+            "wiki_write": self._tool_wiki_write,
+            "session_search": self._tool_session_search,
+            "session_save": self._tool_session_save,
             "knowledge_ingest": self._tool_knowledge_ingest,
             "knowledge_import": self._tool_knowledge_import,
+            "knowledge_distill": self._tool_knowledge_distill,
+            "document_process": self._tool_document_process,
+            "wiki_build": self._tool_wiki_build,
             "preflight_inject": self._tool_preflight_inject,
             "guard_check": self._tool_guard_check,
             "persona_summary": self._tool_persona_summary,
             "persona_behavior_prompt": self._tool_persona_behavior_prompt,
+            "persona_update": self._tool_persona_update,
             "signal_collect": self._tool_signal_collect,
             "retrospective_list": self._tool_retrospective_list,
             "knowledge_source_list": self._tool_knowledge_source_list,
+            "health_check": self._tool_health_check,
         }
 
     # ---- Tool 实现 ----
@@ -86,6 +96,76 @@ class MCPServer:
             "content": content,
             "path": page_path,
         }
+
+    def _tool_session_search(self, query: str, session_id: str = "",
+                             limit: int = 10) -> Dict:
+        """
+        搜索历史会话记录，自动合并分片内容
+
+        使用场景：
+        - 用户说"我们之前聊过什么"
+        - 需要查找某次 session 的完整对话
+        - 查询按 hash/range/segment 分片存储的聊天记录
+
+        特性：
+        - 自动检测分段记录（segment=xxx, type=chunk）
+        - 按 hash/session 标识合并所有分段为完整对话
+        - 返回合并后的记忆列表
+        """
+        from core.config import get_config
+        from integrations.styx import MemosClient
+
+        config = get_config()
+        if not config.memos_enabled or not config.memos_token:
+            return {
+                "success": False,
+                "message": "Memos 未配置，无法搜索会话记录",
+            }
+
+        try:
+            client = MemosClient(
+                base_url=config.memos_api_url,
+                token=config.memos_token,
+            )
+
+            # 如果提供了 session_id，构造精确查询
+            if session_id:
+                search_query = f"session:{session_id}"
+            else:
+                search_query = query
+
+            results = client.search_and_merge_segments(
+                query=search_query,
+                limit=limit,
+            )
+
+            # 序列化 Memory 对象
+            serialized = []
+            for mem in results:
+                serialized.append({
+                    "id": mem.id,
+                    "uid": mem.uid,
+                    "content": mem.content,
+                    "tags": mem.tags,
+                    "visibility": mem.visibility,
+                    "created_at": mem.created_at,
+                    "updated_at": mem.updated_at,
+                    "agent": mem.agent,
+                })
+
+            return {
+                "success": True,
+                "query": search_query,
+                "results": serialized,
+                "count": len(serialized),
+                "merged": True,
+            }
+        except Exception as e:
+            logger.error(f"会话搜索失败: {e}")
+            return {
+                "success": False,
+                "message": f"搜索失败: {e}",
+            }
 
     def _tool_knowledge_ingest(self, content: str, tags: List[str] = None,
                                source: str = "human") -> Dict:
@@ -608,6 +688,372 @@ tags: [{', '.join(tags or ['file_import'])}]
             "wiki_dir": str(wiki_dir),
         }
 
+    def _tool_wiki_write(self, page_path: str, content: str,
+                         frontmatter: Dict = None) -> Dict:
+        """
+        写入 Wiki 页面
+
+        使用场景：
+        - Agent 执行蒸馏后，将结果写入 Wiki
+        - Agent 生成新的知识页面
+        - 更新已有页面的内容
+        """
+        from core.config import get_config
+        from datetime import datetime
+
+        config = get_config()
+        wiki_dir = config.wiki_dir
+
+        # 安全路径处理
+        safe_path = page_path.lstrip("/")
+        target = (wiki_dir / safe_path).resolve()
+
+        # 确保在 wiki 目录内
+        try:
+            target.relative_to(wiki_dir.resolve())
+        except ValueError:
+            return {
+                "success": False,
+                "message": f"路径超出 Wiki 目录范围: {page_path}",
+            }
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # 构建完整内容（frontmatter + body）
+        fm = dict(frontmatter or {})
+        fm.setdefault("updated_at", datetime.now().isoformat())
+
+        fm_lines = ["---"]
+        for k, v in fm.items():
+            if isinstance(v, list):
+                fm_lines.append(f"{k}: [{', '.join(str(x) for x in v)}]")
+            else:
+                fm_lines.append(f"{k}: {v}")
+        fm_lines.append("---")
+
+        full_content = "\n".join(fm_lines) + "\n\n" + content
+
+        try:
+            target.write_text(full_content, encoding="utf-8")
+            return {
+                "success": True,
+                "message": f"Wiki 页面已写入: {safe_path}",
+                "path": safe_path,
+                "size": len(full_content),
+            }
+        except Exception as e:
+            logger.error(f"Wiki 写入失败: {e}")
+            return {
+                "success": False,
+                "message": f"写入失败: {e}",
+            }
+
+    def _tool_session_save(self, session_id: str, messages: List[Dict],
+                           tags: List[str] = None) -> Dict:
+        """
+        保存完整聊天记录到 Memos（L1 原始池）
+
+        使用场景：
+        - Agent 会话结束时，将本轮对话完整保存
+        - 支持按 hash/range/segment 分片存储
+        - 自动添加 _meta 完整性校验
+        """
+        from core.config import get_config
+        from integrations.styx import MemosClient
+
+        config = get_config()
+        if not config.memos_enabled or not config.memos_token:
+            return {
+                "success": False,
+                "message": "Memos 未配置，无法保存会话",
+            }
+
+        try:
+            client = MemosClient(
+                token=config.memos_token,
+                base_url=config.memos_api_url,
+            )
+
+            save_tags = list(tags or [])
+            if "source=agent" not in save_tags:
+                save_tags.append("source=agent")
+            if "level=L1" not in save_tags:
+                save_tags.append("level=L1")
+
+            memories = client.save_session_full(
+                session_id=session_id,
+                messages=messages,
+                tags=save_tags,
+                visibility="PUBLIC",
+            )
+
+            return {
+                "success": True,
+                "message": f"已保存 {len(memories)} 条分片记录",
+                "session_id": session_id,
+                "chunks": len(memories),
+                "memo_ids": [m.id for m in memories],
+            }
+        except Exception as e:
+            logger.error(f"会话保存失败: {e}")
+            return {
+                "success": False,
+                "message": f"保存失败: {e}",
+            }
+
+    def _tool_knowledge_distill(self, session_id: str,
+                                messages: List[Dict],
+                                write_to_wiki: bool = True) -> Dict:
+        """
+        触发知识蒸馏（同源复用 — 入队而非直接调 LLM）
+
+        将原始聊天记录入蒸馏队列，由宿主 Agent 异步处理。
+        遵循同源复用原则：Mnemos 不直接调用 LLM API。
+
+        使用场景：
+        - Agent 完成一次有价值的对话后，主动触发蒸馏
+        - 将技术讨论、调试过程、设计决策转为 Wiki 知识
+        """
+        try:
+            from core.kia.amphora import enqueue
+            enqueue(
+                session_id=session_id,
+                messages=messages,
+                meta={"source": "mcp", "write_to_wiki": write_to_wiki}
+            )
+            return {
+                "success": True,
+                "message": "蒸馏任务已入队，由宿主 Agent 异步处理",
+                "session_id": session_id,
+                "note": "任务进入 HephaestusWorker 队列，daemon 会委托给可用 Agent 执行",
+            }
+        except Exception as e:
+            logger.error(f"蒸馏入队失败: {e}")
+            return {
+                "success": False,
+                "message": f"蒸馏入队失败: {e}",
+            }
+
+    def _tool_document_process(self, file_path: str,
+                               title: str = "",
+                               save_to_memos: bool = True) -> Dict:
+        """
+        处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）
+
+        使用场景：
+        - 用户说"解析这个 PDF"
+        - 用户说"把这份 PPT 的内容存到知识库"
+        - 提取文档结构、大纲、关键内容
+        """
+        from core.hephaestus.document_processor import DocumentProcessor
+        from pathlib import Path
+
+        src_path = Path(file_path).expanduser().resolve()
+        if not src_path.exists():
+            return {
+                "success": False,
+                "message": f"文件不存在: {file_path}",
+            }
+
+        try:
+            processor = DocumentProcessor()
+            doc = processor.process_document(src_path)
+
+            if not doc:
+                return {
+                    "success": False,
+                    "message": "文档解析失败，无法提取内容",
+                }
+
+            result = {
+                "success": True,
+                "title": doc.title,
+                "doc_type": doc.doc_type.value if hasattr(doc.doc_type, "value") else str(doc.doc_type),
+                "pages": doc.pages,
+                "word_count": len(doc.content.split()) if doc.content else 0,
+                "has_toc": doc.toc is not None and len(doc.toc) > 0,
+                "toc": doc.toc[:20] if doc.toc else [],
+                "content_preview": doc.content[:2000] if doc.content else "",
+            }
+
+            if save_to_memos:
+                memo_id = processor.save_to_memos(doc)
+                result["memo_id"] = memo_id
+                result["pipeline"] = "文档 → Memos → Wiki 00-Inbox → Charon 解析"
+
+            return result
+        except Exception as e:
+            logger.error(f"文档处理失败: {e}")
+            return {
+                "success": False,
+                "message": f"处理失败: {e}",
+            }
+
+    def _tool_wiki_build(self, dry_run: bool = False) -> Dict:
+        """
+        触发 Wiki 构建（L1 → L2）
+
+        扫描 Memos 中的 L1 原始记录，对已完成 session 执行：
+        1. 质量评分
+        2. 内容去重
+        3. 知识蒸馏
+        4. Wiki 页面生成
+        5. 索引更新
+        6. Git 自动提交
+
+        使用场景：
+        - 定期构建任务（daemon 定时触发）
+        - Agent 主动请求"把最近的对话整理成 Wiki"
+        """
+        from core.config import get_config
+        from integrations.styx import MemosClient
+        from core.hephaestus.wiki_builder import run_build_cycle
+
+        config = get_config()
+        if not config.memos_enabled or not config.memos_token:
+            return {
+                "success": False,
+                "message": "Memos 未配置，无法构建 Wiki",
+            }
+
+        try:
+            client = MemosClient(
+                token=config.memos_token,
+                base_url=config.memos_api_url,
+            )
+            result = run_build_cycle(client, dry_run=dry_run)
+            return {
+                "success": True,
+                "message": "Wiki 构建完成",
+                "dry_run": dry_run,
+                "result": result,
+            }
+        except Exception as e:
+            logger.error(f"Wiki 构建失败: {e}")
+            return {
+                "success": False,
+                "message": f"构建失败: {e}",
+            }
+
+    def _tool_persona_update(self) -> Dict:
+        """
+        触发用户画像更新
+
+        采集最新信号并重新计算三层画像（能量/认知/价值）。
+        使用场景：
+        - 用户说"更新我的画像"
+        - 定期画像刷新（daemon 每小时触发）
+        """
+        from core.persona.daimon import SignalCollector
+        from core.persona.pythia import PreferenceAnalyzer
+
+        try:
+            # 1. 采集信号
+            collector = SignalCollector()
+            collect_result = collector.collect_all()
+
+            # 2. 分析画像
+            analyzer = PreferenceAnalyzer()
+            profile = analyzer.analyze_full(days=30)
+
+            return {
+                "success": True,
+                "message": "画像更新完成",
+                "signals_collected": collect_result,
+                "profile": {
+                    "energy": profile.energy.__dict__ if profile.energy else {},
+                    "cognitive": profile.cognitive.__dict__ if profile.cognitive else {},
+                    "value": profile.value.__dict__ if profile.value else {},
+                },
+            }
+        except Exception as e:
+            logger.error(f"画像更新失败: {e}")
+            return {
+                "success": False,
+                "message": f"更新失败: {e}",
+            }
+
+    def _tool_health_check(self) -> Dict:
+        """
+        系统健康检查
+
+        检查 Mnemos 各组件状态：
+        - 配置完整性
+        - Memos API 连通性
+        - Wiki 目录可写性
+        - 各模块可导入性
+        - 最近构建/蒸馏状态
+        """
+        from core.config import get_config
+        from pathlib import Path
+
+        config = get_config()
+        checks = {}
+        healthy = True
+
+        # 1. 配置检查
+        checks["config_loaded"] = True
+        checks["memos_configured"] = bool(config.memos_enabled and config.memos_token)
+        checks["wiki_dir"] = str(config.wiki_dir)
+        checks["wiki_dir_exists"] = config.wiki_dir.exists()
+        checks["wiki_dir_writable"] = (
+            config.wiki_dir.exists() and os.access(config.wiki_dir, os.W_OK)
+        )
+
+        # 2. Memos 连通性
+        if checks["memos_configured"]:
+            try:
+                from integrations.styx import MemosClient
+                client = MemosClient(
+                    token=config.memos_token,
+                    base_url=config.memos_api_url,
+                )
+                # 简单 ping：获取用户自身信息
+                resp = client.session.get(
+                    f"{client.base_url}/api/v1/auth/status",
+                    headers=client.headers,
+                    timeout=5,
+                )
+                checks["memos_reachable"] = resp.status_code == 200
+            except Exception as e:
+                checks["memos_reachable"] = False
+                checks["memos_error"] = str(e)
+                healthy = False
+        else:
+            checks["memos_reachable"] = False
+
+        # 3. 模块可导入性
+        modules = [
+            "core.config",
+            "core.kia.charon",
+            "core.hephaestus.wiki_builder",
+            "core.hephaestus.distillation_engine",
+            "core.persona.pythia",
+            "integrations.styx",
+            "integrations.oracle",
+        ]
+        for mod in modules:
+            try:
+                __import__(mod)
+                checks[f"module_{mod.replace('.', '_')}"] = True
+            except Exception as e:
+                checks[f"module_{mod.replace('.', '_')}"] = False
+                checks[f"module_{mod.replace('.', '_')}_error"] = str(e)
+                healthy = False
+
+        # 4. 最近文件统计
+        try:
+            wiki_md_count = len(list(config.wiki_dir.rglob("*.md")))
+            checks["wiki_pages"] = wiki_md_count
+        except Exception:
+            checks["wiki_pages"] = 0
+
+        return {
+            "success": True,
+            "healthy": healthy,
+            "checks": checks,
+        }
+
     # ---- JSON-RPC 2.0 / MCP 协议处理 ----
 
     def _make_jsonrpc_response(self, request_id: Any, result: Dict) -> Dict:
@@ -699,6 +1145,45 @@ tags: [{', '.join(tags or ['file_import'])}]
                 },
             },
             {
+                "name": "wiki_write",
+                "description": "写入 Wiki 页面。Agent 执行蒸馏或生成新知识后，将结果写入 Wiki 知识库。支持 frontmatter 元数据写入。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "page_path": {"type": "string", "description": "wiki 页面相对路径（如 'concepts/my-idea.md'）"},
+                        "content": {"type": "string", "description": "页面 Markdown 内容（不含 frontmatter）"},
+                        "frontmatter": {"type": "object", "description": "Frontmatter 元数据（可选）", "default": {}},
+                    },
+                    "required": ["page_path", "content"],
+                },
+            },
+            {
+                "name": "session_search",
+                "description": "搜索历史会话记录，自动合并分片内容。支持按关键词或 session_id 查找按 hash/range/segment 分片存储的完整聊天记录。当用户问'我们之前聊过什么'、'上次那个session'、'找回之前的对话'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索关键词（支持内容关键词、session_id 片段、hash 前缀等）", "default": ""},
+                        "session_id": {"type": "string", "description": "精确 session ID（可选，提供时优先按 session_id 查找）", "default": ""},
+                        "limit": {"type": "integer", "description": "返回结果数量上限", "default": 10},
+                    },
+                    "required": [],
+                },
+            },
+            {
+                "name": "session_save",
+                "description": "保存完整聊天记录到 Memos（L1 原始池）。按 hash/range/segment 分片存储，带 _meta 完整性校验。当 Agent 会话结束且对话有价值时使用此工具保存。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "会话唯一标识"},
+                        "messages": {"type": "array", "items": {"type": "object"}, "description": "消息列表 [{role, content, timestamp}]"},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "额外标签（可选）", "default": []},
+                    },
+                    "required": ["session_id", "messages"],
+                },
+            },
+            {
                 "name": "knowledge_ingest",
                 "description": "知识摄入 — 将用户主动提供的人工知识写入Memos，自动进入Wiki处理链路（Memos→00-Inbox→语义索引/标签/热度评分→知识图谱）。当用户说'记住这个'、'帮我记下'、'这很重要'时使用此工具。",
                 "inputSchema": {
@@ -723,6 +1208,42 @@ tags: [{', '.join(tags or ['file_import'])}]
                         "trigger_parse": {"type": "boolean", "description": "是否立即触发解析", "default": True},
                     },
                     "required": ["file_path"],
+                },
+            },
+            {
+                "name": "knowledge_distill",
+                "description": "触发知识蒸馏 — 将原始聊天记录转为结构化 Wiki 知识（问题-解决/决策记录/经验法则/反模式/方法论/洞察关联 6种形态）。Agent 完成一次有价值的对话后，应主动调用此工具将对话转为 Wiki 知识。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "会话标识（用于追溯）"},
+                        "messages": {"type": "array", "items": {"type": "object"}, "description": "消息列表 [{role, content}]"},
+                        "write_to_wiki": {"type": "boolean", "description": "是否直接写入 Wiki", "default": True},
+                    },
+                    "required": ["session_id", "messages"],
+                },
+            },
+            {
+                "name": "document_process",
+                "description": "处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。提取结构、大纲、关键内容，可选择存入 Memos。当用户说'解析这个PDF'、'把这份PPT存到知识库'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "文件绝对路径"},
+                        "title": {"type": "string", "description": "文档标题（可选）", "default": ""},
+                        "save_to_memos": {"type": "boolean", "description": "是否保存到 Memos", "default": True},
+                    },
+                    "required": ["file_path"],
+                },
+            },
+            {
+                "name": "wiki_build",
+                "description": "触发 Wiki 构建（L1→L2）。扫描 Memos 中的 L1 原始记录，对高质量、已完成 session 执行：质量评分→去重→蒸馏→Wiki页面生成→索引更新→Git提交。当用户说'整理最近的对话'、'构建Wiki'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "dry_run": {"type": "boolean", "description": "仅预览不实际写入", "default": False},
+                    },
                 },
             },
             {
@@ -777,6 +1298,14 @@ tags: [{', '.join(tags or ['file_import'])}]
                 },
             },
             {
+                "name": "persona_update",
+                "description": "触发用户画像更新。采集最新信号并重新计算三层画像（能量/认知/价值）。当用户说'更新我的画像'、'重新分析我的偏好'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+            {
                 "name": "signal_collect",
                 "description": "触发信号采集（从各数据源收集用户行为信号）",
                 "inputSchema": {
@@ -799,6 +1328,14 @@ tags: [{', '.join(tags or ['file_import'])}]
                         "task_type": {"type": "string", "description": "按任务类型过滤"},
                         "limit": {"type": "integer", "description": "返回数量上限", "default": 10},
                     },
+                },
+            },
+            {
+                "name": "health_check",
+                "description": "系统健康检查。检查 Mnemos 各组件状态：配置完整性、Memos API 连通性、Wiki 目录可写性、模块可导入性、最近文件统计。当用户说'检查系统状态'、'doctor'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
                 },
             },
         ]

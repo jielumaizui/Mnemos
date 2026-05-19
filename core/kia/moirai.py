@@ -73,7 +73,7 @@ class QuantumEntanglement:
         self.dna_dir = self.wiki_base / ".kg" / "dna"
 
     def _kg_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.kg_db))
+        conn = sqlite3.connect(str(self.kg_db), timeout=10)
         conn.row_factory = sqlite3.Row
         return conn
 

@@ -1,6 +1,10 @@
-# Mnemos v4.0 架构设计文档
+# Mnemos v0.2.0 架构设计文档
 
 > 基于实际代码的完整架构说明
+>
+> **注意**：本文档部分章节描述的是 v0.1.x 时代的旧架构（Ingest Engine / Guards / Pipeline 模型）。
+> 当前 v0.2.0 架构已升级为三层模型（Agent 适配器层 → 事件总线 → 核心服务层），详见下文「系统架构概览」。
+> 旧章节将在后续版本中逐步更新。
 
 ---
 
@@ -17,7 +21,66 @@
 
 ## 系统架构概览
 
-### 整体架构图
+### 整体架构图（v0.2.0 三层模型）
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 3: Agent 适配器层 (Olympus)                            │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐ │
+│  │ Apollon │ │Caduceus │ │ Typhon  │ │  Musae  │ │Daedalus│ │
+│  │(Claude) │ │(Hermes) │ │(OpenClw)│ │(OpenCod)│ │(Codex) │ │
+│  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └───┬────┘ │
+│       │           │           │           │           │      │
+│       └───────────┴───────────┴───────────┴───────────┘      │
+│                           │                                  │
+│                           ▼                                  │
+├──────────────────────────────────────────────────────────────┤
+│  Layer 2: 统一事件总线 (Mnemos Event Bus)                     │
+│  ~/.mnemos/events/  —  文件系统事件队列（跨进程/跨 Agent）   │
+│  session.start | session.end | distill.request | signal.batch │
+├──────────────────────────────────────────────────────────────┤
+│  Layer 1: Mnemos 核心服务（Agent-Agnostic）                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────┐  │
+│  │Hephaestus│ │   KIA    │ │ Persona  │ │   Daemon       │  │
+│  │(蒸馏Worker)│ │(知识注入) │ │(画像系统) │ │ (后台服务)      │  │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───────┬────────┘  │
+│       │            │            │               │           │
+│       └────────────┴────────────┴───────────────┘           │
+│                           │                                  │
+│                           ▼                                  │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │         Wiki 知识库 (Obsidian Vault)                    │ │
+│  │  00-Inbox/  01-Projects/  02-Areas/  03-Resources/      │ │
+│  │  04-Archives/  05-Periodic/  06-Memos/  07-Shadow/     │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 各层职责
+
+**Layer 3 — Agent 适配器层 (Olympus)**
+- `integrations/olympus.py` — `AgentAdapter` 基类 + `AgentRegistry` 注册中心
+- `integrations/apollon.py` — Claude Code 适配器（Hooks、settings.json）
+- `integrations/caduceus.py` — Hermes 适配器（Poll、Inbox 轮询）
+- `integrations/typhon.py` — OpenClaw 适配器（SQLite、Hooks）
+- `integrations/musae.py` — OpenCode 适配器（JSON Config、Hooks）
+- `integrations/daedalus.py` — Codex 适配器（File-based、Windows .bat）
+- 所有适配器实现统一的 `AgentAdapter` 接口：`name`, `priority`, `is_available()`, `get_data_dir()`, `on_session_start()`, `on_session_end()`, `collect_signals()`, `install_hooks()`, `delegate_distillation()`
+
+**Layer 2 — 统一事件总线**
+- `core/mnemos_bus.py` — 文件系统事件队列
+- 事件目录：`~/.mnemos/events/{inbox,processing,archive}/`
+- 标准事件：`session.start`, `session.end`, `distill.request`, `signal.batch`
+- 提供 `publish()`, `poll()`, `ack()` 接口
+- 跨进程、跨 Agent，无需额外消息队列依赖
+
+**Layer 1 — Mnemos 核心服务**
+- `core/hephaestus_worker.py` — 蒸馏 Worker（轮询队列 → 委托 Agent → 收集结果 → 验证格式 → 移入 Inbox）
+- `core/kia/` — Knowledge-in-Action 闭环（预加载、守护、复盘）
+- `core/persona/` — 用户画像系统（信号采集 → 画像分析 → 盲区检测 → 校准）
+- `mnemos_daemon.py` — 后台守护进程（信号采集、蒸馏调度、画像更新、知识调度）
+
+### 旧架构图（v0.1.x，仅供参考）
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐

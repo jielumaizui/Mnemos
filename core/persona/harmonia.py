@@ -165,7 +165,7 @@ def _save_calibration(store: PersonaStore, profile: PreferenceProfile, calibrati
         # 更新最新画像版本的用户确认状态
         import sqlite3
         db_path = store.signal_store.db_path
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db_path), timeout=10) as conn:
             conn.execute("""
                 UPDATE persona_versions
                 SET user_confirmed = 1, confirmed_at = ?

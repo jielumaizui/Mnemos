@@ -5,6 +5,66 @@
 
 ---
 
+## [v0.2.0] — 五 Agent 全适配重构版（2026-05-19）
+
+> 从 "Claude Code First" 到 "Agent-Agnostic" 的架构重构。所有 5 个 Agent 适配器成为一等公民，统一事件总线实现跨 Agent 通信。
+
+### Added
+
+- **五 Agent 适配器全部可用**
+  - `integrations/apollon.py` — Claude Code（Hooks + settings.json）
+  - `integrations/caduceus.py` — Hermes（Poll + Inbox 轮询）
+  - `integrations/typhon.py` — OpenClaw（SQLite + Hooks）
+  - `integrations/musae.py` — OpenCode（JSON Config + Hooks）
+  - `integrations/daedalus.py` — Codex（File-based + Windows .bat wrapper）
+- **统一事件总线** `core/mnemos_bus.py`
+  - 文件系统事件队列（`~/.mnemos/events/{inbox,processing,archive}/`）
+  - 标准事件格式：session.start / session.end / distill.request / signal.batch
+  - 跨进程、跨 Agent 通信，无需额外依赖
+- **统一蒸馏 Prompt** `core/hephaestus/distillation_prompts.py`
+  - 单一 truth source，所有 Agent 使用完全相同的蒸馏 prompt
+  - 支持数据蒸馏模式（Data Distillation Mode）
+- **蒸馏格式验证层**
+  - `HephaestusWorker._validate_distill_output()` 严格校验 JSON 格式
+  - judgment 字段必须属于 {knowledge, skill, skip}
+  - knowledge 判定要求 fragments 数组且每个 fragment 有 title + form
+  - 无效输出自动移入 `distill_failed/`，避免污染 Inbox
+- **Skip 智能过滤**
+  - 判定为 skip 的蒸馏结果直接丢弃，不进入 Wiki Inbox
+- **画像冷启动**
+  - `PersonaStore._create_default_persona()` 为新用户生成默认模板
+  - 所有维度初始值 0.5，confidence 0.0，避免 None 导致的空指针
+- **Windows 支持**
+  - `mnemos scheduler install-windows` — 注册 Task Scheduler 开机启动
+  - `mnemos scheduler uninstall-windows` — 注销任务
+- **画像校准 CLI**
+  - `mnemos calibrate` — 交互式校准流程（1-5 分评分 + 置信度调整）
+- **蒸馏重试机制**
+  - `MAX_RETRIES = 3`，超期任务（24h）自动恢复为待处理
+- **Daemon 预检**
+  - `_run_preflight_checks()` 启动前检查目录、API、Agent 可用性、数据库
+- **Agent 诊断命令**
+  - `mnemos agent doctor` — 诊断所有 Agent 状态
+  - `mnemos agent list` — 列出可用 Agent
+  - `mnemos agent detect` — 检测宿主 Agent
+
+### Fixed
+
+- **Claude Code 适配器检测失败** — `is_available()` 增加 `~/.claude/settings.json` 和 `shutil.which("claude")` 检测路径
+- **Caduceus datetime 导入缺失** — `from datetime import datetime` 补全
+- **所有适配器 placeholder 格式错误** — judgment 值从 `keep/skip` 修正为 `knowledge/skill/skip`
+- **Apollon timezone 导入缺失** — `delegate_distillation()` 使用的 `timezone.utc` 未导入
+- **文件编码问题** — 13 处 `write_text()` 补全 `encoding="utf-8"`
+- ** distill_queue 双通道问题** — 所有蒸馏路径统一通过 `enqueue() → HephaestusWorker.process_all() → AgentDelegate.delegate()`
+
+### Changed
+
+- **架构升级**：从单层处理模型升级为三层模型（Agent 适配器层 → 事件总线 → 核心服务层）
+- **Agent 检测优先级**：Claude Code > Hermes > OpenClaw > OpenCode > Codex
+- **README 重写**：新架构图、五 Agent 适配器说明、更新后的 CLI 命令列表
+
+---
+
 ## [Unreleased] — 持续集成
 
 ### Knowledge-in-Action 闭环系统（2026-05-07）

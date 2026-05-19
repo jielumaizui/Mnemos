@@ -257,7 +257,7 @@ class DNAEngine:
         CREATE INDEX IF NOT EXISTS idx_dna_simhash ON knowledge_dna(content_simhash);
         CREATE INDEX IF NOT EXISTS idx_dna_signature ON knowledge_dna(semantic_signature);
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
 
     def compute_dna(self, page_path: Path) -> Optional[KnowledgeDNA]:
@@ -327,7 +327,7 @@ class DNAEngine:
     def save_dna(self, dna: KnowledgeDNA) -> bool:
         """保存 DNA 到数据库"""
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
                 conn.execute(
                     """INSERT OR REPLACE INTO knowledge_dna
                        (page_path, content_md5, content_simhash, semantic_signature,
@@ -362,7 +362,7 @@ class DNAEngine:
     def load_dna(self, page_path: str) -> Optional[KnowledgeDNA]:
         """从数据库加载 DNA"""
         try:
-            with sqlite3.connect(str(self.db_path)) as conn:
+            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 row = conn.execute(
                     "SELECT * FROM knowledge_dna WHERE page_path = ?",
@@ -482,7 +482,7 @@ class DNAEngine:
         threshold = threshold or self.RELATED_THRESHOLD
 
         results = []
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM knowledge_dna").fetchall()
 
@@ -557,7 +557,7 @@ class DNAEngine:
 
     def get_stats(self) -> Dict:
         """获取 DNA 库统计"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             total = conn.execute("SELECT COUNT(*) FROM knowledge_dna").fetchone()[0]
 
             # 签名分布

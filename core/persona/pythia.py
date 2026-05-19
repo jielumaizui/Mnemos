@@ -838,7 +838,7 @@ class PreferenceAnalyzer:
         """获取Git信号"""
         try:
             import sqlite3
-            with sqlite3.connect(str(self.store.db_path)) as conn:
+            with sqlite3.connect(str(self.store.db_path), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT * FROM git_signals
@@ -853,7 +853,7 @@ class PreferenceAnalyzer:
         """获取Wiki信号"""
         try:
             import sqlite3
-            with sqlite3.connect(str(self.store.db_path)) as conn:
+            with sqlite3.connect(str(self.store.db_path), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT * FROM knowledge_signals
@@ -868,7 +868,7 @@ class PreferenceAnalyzer:
         """获取文件系统信号"""
         try:
             import sqlite3
-            with sqlite3.connect(str(self.store.db_path)) as conn:
+            with sqlite3.connect(str(self.store.db_path), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT * FROM file_system_signals

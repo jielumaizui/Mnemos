@@ -133,7 +133,7 @@ class PredictivePushEngine:
             session_id TEXT
         );
         """
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
 
     # ========== 上下文分析 ==========
@@ -356,7 +356,7 @@ class PredictivePushEngine:
     def record_push(self, decision: PushDecision, session_id: str = "",
                     user_response: str = ""):
         """记录推送历史"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.execute(
                 """INSERT INTO push_history (timestamp, trigger_context, pushed_pages,
                     user_response, session_id)
@@ -374,7 +374,7 @@ class PredictivePushEngine:
     def get_push_stats(self, days: int = 7) -> Dict:
         """获取推送统计"""
         since = (datetime.now() - timedelta(days=days)).isoformat()[:19]
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             total = conn.execute(
                 "SELECT COUNT(*) FROM push_history WHERE timestamp >=?", (since,)
             ).fetchone()[0]
@@ -503,7 +503,7 @@ class PredictivePushEngine:
 
     def _get_last_push_time(self, session_id: str = "") -> Optional[datetime]:
         """获取上次推送时间"""
-        with sqlite3.connect(str(self.db_path)) as conn:
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             if session_id:
                 row = conn.execute(
                     "SELECT timestamp FROM push_history WHERE session_id=? "

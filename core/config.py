@@ -37,6 +37,7 @@ DEFAULT_CONFIG = {
             "wechat": {"enabled": False, "description": "微信聊天记录"},
         },
     },
+    "cross_agent_share": True,  # 默认开启跨 Agent 知识共享
     "integrations": {
         "claude_code": {
             "enabled": True,
@@ -136,8 +137,13 @@ class Config:
             return Path.home() / "wiki"
 
     def _default_claude_settings_path(self) -> Path:
-        """自动检测 Claude Code settings.json 路径"""
-        return Path.home() / ".claude" / "settings.json"
+        """自动检测 Claude Code settings.json 路径（跨平台）"""
+        if sys.platform == "win32":
+            return Path.home() / "AppData" / "Roaming" / "Claude" / "settings.json"
+        elif sys.platform == "darwin":
+            return Path.home() / "Library" / "Application Support" / "Claude" / "settings.json"
+        else:
+            return Path.home() / ".config" / "claude" / "settings.json"
 
     def save(self):
         """保存配置到文件"""
@@ -187,14 +193,39 @@ class Config:
         return self._data["integrations"]["mcp"]["enabled"]
 
     @property
+    def cross_agent_share(self) -> bool:
+        """是否默认开启跨 Agent 知识共享"""
+        return self._data.get("cross_agent_share", True)
+
+    @property
     def data_dir(self) -> Path:
         """Mnemos 运行时数据目录（数据库、状态文件等）"""
         return Path.home() / ".mnemos"
 
     @property
     def claude_data_dir(self) -> Path:
-        """Claude Code 数据来源目录（distill_queue、wiki_state.db 等）"""
-        return Path.home() / ".claude"
+        """Claude Code 数据来源目录（distill_queue、wiki_state.db 等）
+
+        跨平台路径：
+        - macOS: ~/Library/Application Support/Claude/
+        - Windows: %APPDATA%/Claude/ 或 ~/.claude（回退）
+        - Linux: ~/.config/claude/
+        """
+        if sys.platform == "win32":
+            p = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude"
+            if p.exists():
+                return p
+            return Path.home() / ".claude"
+        elif sys.platform == "darwin":
+            p = Path.home() / "Library" / "Application Support" / "Claude"
+            if p.exists():
+                return p
+            return Path.home() / ".claude"
+        else:
+            p = Path.home() / ".config" / "claude"
+            if p.exists():
+                return p
+            return Path.home() / ".claude"
 
     def get(self, key: str, default=None):
         """按点号路径获取配置值"""

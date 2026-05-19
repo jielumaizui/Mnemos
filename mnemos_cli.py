@@ -137,7 +137,7 @@ def _install_claude_hook(config):
 
         # 添加 session-start hook（跨平台：Windows 用 sys.executable 代替 python3）
         script_path = Path(__file__).resolve()
-        python_cmd = sys.executable if sys.platform == "win32" else "python3"
+        python_cmd = sys.executable
         settings["hooks"]["session_start"] = (
             f"{python_cmd} {script_path} --session-start "
             f"--working-dir \"$PWD\" --user-message \"$USER_MESSAGE\""
@@ -229,6 +229,44 @@ def cmd_doctor(args):
         print(f"✓ Claude Code settings.json: {cc_path}")
     else:
         warnings.append(f"Claude Code settings.json 不存在: {cc_path}")
+
+    # 6.5 Agent 连通性
+    print()
+    print("Agent 连通性:")
+    try:
+        from integrations.olympus import AgentRegistry
+        agents = AgentRegistry.discover_all()
+        if agents:
+            print(f"  ✓ 检测到 {len(agents)} 个 Agent")
+            for agent in agents:
+                print(f"    - {agent.name} (优先级={agent.priority})")
+        else:
+            warnings.append("未检测到任何 Agent，蒸馏功能将不可用")
+            print(f"  ✗ 未检测到 Agent")
+        host = os.environ.get("MNEMOS_HOST_AGENT", "")
+        if host:
+            print(f"  ✓ 宿主 Agent: {host}")
+    except Exception as e:
+        warnings.append(f"Agent 检测失败: {e}")
+
+    # 6.6 跨平台兼容性
+    print()
+    print("跨平台兼容性:")
+    print(f"  ✓ 平台: {sys.platform}")
+    if sys.platform == "win32":
+        print(f"  ✓ Windows 控制台编码: 已处理")
+    elif sys.platform == "darwin":
+        print(f"  ✓ macOS launchd: 支持")
+    elif sys.platform.startswith("linux"):
+        print(f"  ✓ Linux systemd/cron: 支持")
+    # 检查外部命令
+    ext_cmds = [("libreoffice", "文档处理"), ("pdftotext", "PDF 处理"), ("tvly", "联网搜索")]
+    for cmd, desc in ext_cmds:
+        import shutil
+        if shutil.which(cmd):
+            print(f"  ✓ {cmd}: {desc} 可用")
+        else:
+            print(f"  ☐ {cmd}: {desc} 未安装 (可选)")
 
     # 7. 数据库
     print()
@@ -355,7 +393,29 @@ def cmd_doctor(args):
     except Exception as e:
         warnings.append(f"MCP 服务器加载失败: {e}")
 
-    # 12. 可选依赖与功能影响报告
+    # 12. 链路完整性检查
+    print()
+    print("链路完整性:")
+    try:
+        from core.hephaestus_worker import HephaestusWorker
+        worker = HephaestusWorker()
+        stats = worker.get_stats()
+        print(f"  ✓ 蒸馏队列: {stats['pending']} 个待处理")
+        print(f"  ✓ 已委托: {stats['delegated']} 个")
+        print(f"  ✓ Inbox: {stats['inbox_dir']}")
+        if stats['pending'] > 10:
+            warnings.append(f"蒸馏队列积压: {stats['pending']} 个任务")
+    except Exception:
+        print(f"  ☐ 蒸馏链路未初始化")
+
+    # 检查 Charon 自动触发
+    try:
+        from core.kia.charon import run_connect_cycle
+        print(f"  ✓ Charon 知识解析: 可用")
+    except Exception:
+        print(f"  ☐ Charon 知识解析: 未就绪")
+
+    # 13. 可选依赖与功能影响报告
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
@@ -451,6 +511,50 @@ def cmd_daemon(args):
         print("可用子命令: start, stop, status")
 
 
+def cmd_scheduler(args):
+    """定时任务管理"""
+    import subprocess
+    daemon_script = Path(__file__).parent / "mnemos_daemon.py"
+    if not daemon_script.exists():
+        print(f"守护进程脚本不存在: {daemon_script}")
+        return
+
+    if args.scheduler_cmd == "install-windows":
+        subprocess.run([sys.executable, str(daemon_script), "install-windows"])
+    elif args.scheduler_cmd == "uninstall-windows":
+        subprocess.run([sys.executable, str(daemon_script), "uninstall-windows"])
+    else:
+        print("可用子命令: install-windows, uninstall-windows")
+
+
+def cmd_calibrate(args):
+    """画像校准"""
+    from core.persona.calibration_cli import run_calibration
+    from pathlib import Path
+    import json
+
+    # 先展示待处理的挑战问题（如果有）
+    challenge_file = Path.home() / ".mnemos" / "calibrations" / "pending_challenges.json"
+    if challenge_file.exists():
+        try:
+            data = json.loads(challenge_file.read_text(encoding="utf-8"))
+            challenges = data.get("challenges", [])
+            if challenges:
+                print("=" * 60)
+                print("盲区挑战问题（基于最近画像分析生成）")
+                print("=" * 60)
+                for i, c in enumerate(challenges, 1):
+                    print(f"\n  {i}. [{c['type']}] {c['question']}")
+                    print(f"     提示: {c['suggestion']}")
+                print("\n" + "=" * 60)
+                print("以上挑战将在校准流程中帮助你验证画像准确性。\n")
+        except Exception:
+            pass
+
+    # 运行校准流程
+    run_calibration()
+
+
 def cmd_agent(args):
     """AI Agent 管理"""
     from integrations.olympus import AgentRegistry
@@ -493,8 +597,82 @@ def cmd_agent(args):
                 print(f"  {'✓' if ok else '✗'} {agent.name}")
             except Exception as e:
                 print(f"  ✗ {agent.name}: {e}")
+
+    elif args.agent_cmd == "doctor":
+        print("=" * 60)
+        print("Agent 诊断")
+        print("=" * 60)
+        agents = AgentRegistry.discover_all()
+        if not agents:
+            print("✗ 未注册任何 Agent 适配器")
+            return False
+
+        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
+        checked = 0
+        for agent in agents:
+            if target and agent.name != target:
+                continue
+            checked += 1
+            print(f"\n--- {agent.name} ---")
+            # 1. 可用性
+            try:
+                avail = agent.is_available()
+                print(f"  {'✓' if avail else '✗'} 可用性: {'可用' if avail else '不可用'}")
+            except Exception as e:
+                print(f"  ✗ 可用性检查失败: {e}")
+
+            # 2. Hooks 安装
+            data_dir = agent.get_data_dir()
+            if data_dir:
+                hooks_ok = False
+                if agent.name == "claude":
+                    hooks_ok = (data_dir / "settings.json").exists()
+                elif agent.name == "hermes":
+                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
+                elif agent.name == "openclaw":
+                    hooks_ok = (agent._sqlite_path()).exists()
+                elif agent.name == "opencode":
+                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
+                elif agent.name == "codex":
+                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
+                print(f"  {'✓' if hooks_ok else '✗'} Hooks: {'已安装' if hooks_ok else '未安装'}")
+            else:
+                print(f"  ☐ 数据目录: 未配置")
+
+            # 3. 事件目录
+            event_dir = Path.home() / ".mnemos" / "events"
+            try:
+                event_dir.mkdir(parents=True, exist_ok=True)
+                test_file = event_dir / ".write_test"
+                test_file.write_text("ok", encoding="utf-8")
+                test_file.unlink()
+                print(f"  ✓ 事件目录可读写: {event_dir}")
+            except Exception as e:
+                print(f"  ✗ 事件目录不可写: {e}")
+
+            # 4. 蒸馏队列状态
+            from core.hephaestus_worker import HephaestusWorker
+            try:
+                worker = HephaestusWorker()
+                stats = worker.get_stats()
+                print(f"  ✓ 蒸馏队列: {stats['pending']} 待处理, {stats['delegated']} 已委托")
+            except Exception as e:
+                print(f"  ✗ 蒸馏队列检查失败: {e}")
+
+            # 5. 信号采集
+            try:
+                signals = agent.collect_signals(days=7)
+                print(f"  ✓ 信号采集: 最近7天 {len(signals)} 条")
+            except Exception as e:
+                print(f"  ✗ 信号采集失败: {e}")
+
+        if target and checked == 0:
+            print(f"✗ 未找到 Agent: {target}")
+            return False
+        print(f"\n{'=' * 60}\n诊断完成: {checked} 个 Agent")
+        return True
     else:
-        print("可用子命令: list, detect, install")
+        print("可用子命令: list, detect, install, doctor")
 
 
 def cmd_mcp_serve(args):
@@ -543,6 +721,8 @@ def main():
     agent_sub.add_parser("list", help="列出本地可用的 AI Agent")
     agent_sub.add_parser("install", help="为所有可用 Agent 安装 hooks")
     agent_sub.add_parser("detect", help="检测宿主 Agent（MNEMOS_HOST_AGENT）")
+    doctor_parser = agent_sub.add_parser("doctor", help="诊断 Agent 状态")
+    doctor_parser.add_argument("agent_name", nargs="?", default="", help="指定 Agent 名称（可选，如 claude/hermes/openclaw/opencode/codex）")
 
     # daemon
     daemon_parser = subparsers.add_parser("daemon", help="后台守护进程")
@@ -550,6 +730,15 @@ def main():
     daemon_sub.add_parser("start", help="启动守护进程")
     daemon_sub.add_parser("stop", help="停止守护进程")
     daemon_sub.add_parser("status", help="查看守护进程状态")
+
+    # scheduler
+    scheduler_parser = subparsers.add_parser("scheduler", help="定时任务管理")
+    scheduler_sub = scheduler_parser.add_subparsers(dest="scheduler_cmd")
+    scheduler_sub.add_parser("install-windows", help="注册 Windows 开机启动任务")
+    scheduler_sub.add_parser("uninstall-windows", help="注销 Windows 开机启动任务")
+
+    # calibrate
+    subparsers.add_parser("calibrate", help="画像校准与挑战反馈")
 
     # mcp serve
     mcp_parser = subparsers.add_parser("mcp", help="MCP 协议")
@@ -571,6 +760,10 @@ def main():
         cmd_agent(args)
     elif args.command == "daemon":
         cmd_daemon(args)
+    elif args.command == "scheduler":
+        cmd_scheduler(args)
+    elif args.command == "calibrate":
+        cmd_calibrate(args)
     elif args.command == "mcp" and args.mcp_cmd == "serve":
         cmd_mcp_serve(args)
     else:

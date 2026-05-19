@@ -150,7 +150,7 @@ class WeChatCollector:
                 return self._connect_sqlcipher(db_path)
             else:
                 # 尝试直接连接（可能已解密或不加密）
-                conn = sqlite3.connect(str(db_path))
+                conn = sqlite3.connect(str(db_path), timeout=10)
                 # 验证连接：尝试读取表列表
                 cursor = conn.cursor()
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
@@ -195,7 +195,7 @@ class WeChatCollector:
                 capture_output=True, timeout=30, check=True
             )
             if decrypted_path.exists():
-                return sqlite3.connect(str(decrypted_path))
+                return sqlite3.connect(str(decrypted_path), timeout=10)
         except Exception as e:
             logger.warning(f"忽略异常: {e}")
 
@@ -319,7 +319,7 @@ class WeChatCollector:
         contact_db = self.db_path.parent / "Contact" / "Contact.sqlite"
         if contact_db.exists():
             try:
-                conn = sqlite3.connect(str(contact_db))
+                conn = sqlite3.connect(str(contact_db), timeout=10)
                 cursor = conn.cursor()
                 # 自己的联系人信息通常在特定表中
                 cursor.execute("SELECT UserName FROM Contact WHERE UserName LIKE 'wxid_%' LIMIT 1")

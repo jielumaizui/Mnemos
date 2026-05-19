@@ -28,7 +28,7 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -217,9 +217,22 @@ def get_memos_context(working_dir: str, authorize_cross: List[str] = None) -> st
     """
     【上下文回忆类】专用 - 读取Memos历史记录
 
-    有权限控制：同框架默认可读，跨框架需授权
+    权限控制：
+    - 同框架默认可读
+    - 跨框架默认根据配置 cross_agent_share 决定（默认开启）
+    - private 标签的记录不共享（由 read_cross_agent 内部过滤）
     """
+    from core.config import get_config
+
     reader = AIContextReader(agent="claude")
+
+    # 跨 Agent 共享默认由配置控制
+    all_agents = ["claude", "hermes", "openclaw", "opencode", "codex"]
+    if authorize_cross is None:
+        if get_config().cross_agent_share:
+            authorize_cross = all_agents
+        else:
+            authorize_cross = []
 
     if authorize_cross:
         reader.authorize_cross_agent(authorize_cross, duration_minutes=60)
@@ -384,7 +397,7 @@ def get_ab_test_stats(days: int = 30) -> dict:
         from core.persona.psyche import SIGNAL_DB_PATH
 
         db_path = str(SIGNAL_DB_PATH)
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, timeout=10) as conn:
             # 获取画像驱动组的 session 指标
             driven = conn.execute("""
                 SELECT
@@ -1074,7 +1087,7 @@ def run_kia_cycles():
         if total_dna > 1:
             import sqlite3
             dup_count = 0
-            with sqlite3.connect(str(dna_engine.db_path)) as conn:
+            with sqlite3.connect(str(dna_engine.db_path), timeout=10) as conn:
                 rows = conn.execute("SELECT page_path FROM knowledge_dna").fetchall()
                 checked = set()
                 for (page_path,) in rows:
@@ -1443,19 +1456,33 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def is_available(self) -> bool:
         """检测 Claude Code 是否安装"""
+        # 1. macOS 标准路径
         settings_path = Path.home() / "Library" / "Application Support" / "Claude" / "settings.json"
-        if not settings_path.exists():
-            # Linux/Windows fallback
-            settings_path = Path.home() / ".config" / "claude" / "settings.json"
-        return settings_path.exists()
+        if settings_path.exists():
+            return True
+        # 2. Linux/Windows 标准路径
+        settings_path = Path.home() / ".config" / "claude" / "settings.json"
+        if settings_path.exists():
+            return True
+        # 3. Claude Code CLI 常用路径（npm 全局安装）
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if settings_path.exists():
+            return True
+        # 4. 检查 claude 命令是否在 PATH 中
+        import shutil
+        if shutil.which("claude"):
+            return True
+        return False
 
     def get_config_path(self) -> Optional[Path]:
-        p = Path.home() / "Library" / "Application Support" / "Claude" / "settings.json"
-        if p.exists():
-            return p
-        p = Path.home() / ".config" / "claude" / "settings.json"
-        if p.exists():
-            return p
+        candidates = [
+            Path.home() / "Library" / "Application Support" / "Claude" / "settings.json",
+            Path.home() / ".config" / "claude" / "settings.json",
+            Path.home() / ".claude" / "settings.json",
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
         return None
 
     def on_session_start(self, working_dir: str, user_message: str = "") -> Dict:
@@ -1464,7 +1491,18 @@ class ClaudeCodeAdapter(AgentAdapter):
             user_message=user_message,
             authorize_cross=None,
         )
-        return {"context": context, "agent": "claude"}
+        # 同时发布到事件总线
+        try:
+            from core.mnemos_bus import EventBus
+            bus = EventBus()
+            bus.publish("session.start", self.name, {
+                "working_dir": working_dir,
+                "user_message": user_message,
+                "context_length": len(context) if context else 0,
+            })
+        except Exception:
+            pass
+        return {"context": context, "agent": self.name}
 
     def on_session_end(self, working_dir: str, session_messages: List[Dict] = None) -> Dict:
         from core.config import get_config
@@ -1497,6 +1535,23 @@ class ClaudeCodeAdapter(AgentAdapter):
 
         # KIA 周期任务
         run_kia_cycles()
+
+        # 同时发布到事件总线
+        try:
+            from core.mnemos_bus import EventBus
+            bus = EventBus()
+            bus.publish("session.end", self.name, {
+                "working_dir": working_dir,
+                "session_id": sid,
+                "messages": session_messages or [],
+                "meta": {
+                    "source": self.name,
+                    "working_dir": working_dir or os.getcwd(),
+                    "has_retrospective": bool(retro_result),
+                },
+            })
+        except Exception:
+            pass
 
         return {
             "saved": True,
@@ -1532,10 +1587,47 @@ class ClaudeCodeAdapter(AgentAdapter):
             return False
 
     def collect_signals(self, days: int = 7) -> List[Dict]:
-        """从 Claude Code 历史采集信号"""
+        """从 Claude Code 相关数据源采集信号
+
+        SignalCollector 没有按 Agent 分的方法，使用通用采集方法
+        从 distill_queue、wiki_state、git、wiki、filesystem、memos 聚合信号。
+        """
         try:
             collector = SignalCollector()
-            return collector.collect_from_claude(days=days)
+            # 使用通用采集方法，结果中 agent 字段默认为 "claude"
+            collector.collect_all()
+            # 从数据库读取最近 N 天的信号
+            store = get_signal_store()
+            cutoff = datetime.now() - timedelta(days=days)
+            signals = []
+            with sqlite3.connect(str(store.db_path), timeout=10) as conn:
+                cursor = conn.execute(
+                    """SELECT session_id, timestamp, task_type, task_subtype,
+                              user_msg_count, avg_user_msg_length, correction_count,
+                              follow_up_depth, termination_type, output_type, working_dir
+                       FROM session_signals
+                       WHERE timestamp >= ?
+                       ORDER BY timestamp DESC
+                    """,
+                    (cutoff.isoformat(),),
+                )
+                for row in cursor.fetchall():
+                    signals.append({
+                        "source": "claude",
+                        "session_id": row[0],
+                        "timestamp": row[1],
+                        "task_type": row[2] or "unknown",
+                        "task_subtype": row[3] or "",
+                        "user_msg_count": row[4] or 0,
+                        "avg_user_msg_length": row[5] or 0.0,
+                        "correction_count": row[6] or 0,
+                        "follow_up_depth": row[7] or 0,
+                        "termination_type": row[8] or "unknown",
+                        "output_type": row[9] or "discussion",
+                        "working_dir": row[10] or "",
+                        "agent": "claude",
+                    })
+            return signals
         except Exception as e:
             logger.warning(f"Claude 信号采集失败: {e}")
             return []
@@ -1559,7 +1651,7 @@ class ClaudeCodeAdapter(AgentAdapter):
         """委托 Claude Code 执行蒸馏
 
         策略：将任务写入 Claude 的 distill inbox，等待 Claude 下次 session 处理。
-        这是最轻量的方式，无需额外协议。
+        同时写入通知标记文件，提示 Agent 有新任务待处理。
         """
         try:
             # 读取任务
@@ -1572,19 +1664,61 @@ class ClaudeCodeAdapter(AgentAdapter):
             prompt_file.write_text(prompt_content, encoding="utf-8")
             # 同时写入输出路径作为占位符（Agent 会覆盖）
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(
+            placeholder = (
                 f"<!-- MNEMOS_DISTILL_TASK: {task.get('session_id')} -->\n"
-                f"<!-- Claude Code 请阅读 {prompt_file} 并生成蒸馏结果 -->\n",
-                encoding="utf-8",
+                f"<!-- 输出格式要求：\n"
+                f"  1. 必须是有效的 JSON 对象\n"
+                f"  2. 顶层字段：judgment (knowledge/skill/skip), fragments (数组)\n"
+                f"  3. 每个 fragment 包含：form, title, frontmatter, background, core_content, boundaries, anti_patterns, related_concepts\n"
+                f"  4. 详细格式见 prompt 文件：{prompt_file}\n"
+                f"-->\n"
+                f"<!-- Claude Code 请阅读 {prompt_file} 并生成蒸馏结果 -->\n"
             )
+            output_path.write_text(placeholder, encoding="utf-8")
+            # Layer A: 写入通知标记文件
+            notify_file = prompt_dir / ".notify"
+            notify_content = f"""# Mnemos 蒸馏任务通知
+
+**时间**: {datetime.now(timezone.utc).isoformat()}
+**待处理任务**: {task.get('session_id', 'unknown')}
+**输出路径**: {output_path}
+
+请运行以下命令处理：
+```bash
+python3 {prompt_file}
+```
+"""
+            notify_file.write_text(notify_content, encoding="utf-8")
             return True
         except Exception as e:
             logger.warning(f"委托 Claude 蒸馏失败: {e}")
             return False
 
     def _build_distill_prompt(self, task: Dict) -> str:
-        messages = task.get("messages", [])
         meta = task.get("meta", {})
+        # 如果任务携带了完整 prompt，直接使用
+        if meta.get("full_prompt"):
+            return meta["full_prompt"]
+
+        # 使用统一的 DISTILLATION_PROMPT 作为单一 truth source
+        try:
+            from core.hephaestus.distillation_prompts import DISTILLATION_PROMPT
+            from core.hephaestus.distillation_engine import build_session_text
+
+            messages = task.get("messages", [])
+            session_text = build_session_text(messages)
+            if not session_text:
+                return self._build_fallback_prompt(task)
+
+            return DISTILLATION_PROMPT.replace("{session_content}", session_text)
+        except Exception as e:
+            logger.warning(f"构建完整蒸馏 prompt 失败，使用回退: {e}")
+            return self._build_fallback_prompt(task)
+
+    def _build_fallback_prompt(self, task: Dict) -> str:
+        """回退：轻量蒸馏 prompt"""
+        meta = task.get("meta", {})
+        messages = task.get("messages", [])
         lines = [
             "# Mnemos 蒸馏任务",
             "",
@@ -1594,7 +1728,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             "",
             "## 指令",
             "请对以下对话进行蒸馏，提取核心知识、经验教训和可复用的模式。",
-            "将结果以 Markdown 格式写入对应输出文件。",
+            "输出严格 JSON 格式（见 distillation_prompts.py 完整要求）。",
             "",
             "## 原始对话",
             "",
