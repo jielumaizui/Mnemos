@@ -2,13 +2,24 @@
 """
 【已废弃】@deprecated - Ingest Engine
 
-旧的 Clean/Expand 处理引擎已停止维护。
-新体系使用 Karpathy 蒸馏范式：
-  - wiki_builder.py: L1 原始数据 → Wiki Markdown（Obsidian 查看）
-  - core/connect_worker.py: 实体提取 + 关系建立
-  - lint_worker.py: 健康检测
+旧的 Clean/Expand 处理引擎已停止维护。功能拆分迁移方向：
+
+L1 原始层：
+  - 同步/入库 → core/sync_framework/sync_engine.py (SyncEngine)
+  - 防重/噪音过滤 → SyncEngine 统一处理
+
+L2 蒸馏层：
+  - 5层防护（self-ref/dedup/pollution/context-recall/PI）
+    → core/hephaestus/distill_self_check.py (DistillSelfCheck，零LLM)
+  - 质量评分 → core/kia/ingest_helpers.py (score_message_quality)
+
+L3 关联层：
+  - 实体/概念提取 → core/connect_worker.py
+  - Wiki 页面创建/更新 → 由蒸馏后 HephaestusWorker 触发
+  - 索引刷新 → core/kia/ 相关模块
 
 保留此文件作为占位，避免调用方报错。
+现有调用方应逐步迁移到 SyncEngine 或对应 L2/L3 模块。
 """
 
 from __future__ import annotations

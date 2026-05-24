@@ -2,10 +2,15 @@
 """
 Memos 双向同步桥接模块
 
-替代已废弃的 ai_memory_sync.py，提供：
-- 同步内容到 Memos（含噪声检测和防重）
-- 从 Memos 拉取相关内容
-- SQLite 防重追踪（_LazyPath）
+提供：
+- 从 Memos 拉取相关内容（保留，作为 L3 查询接口）
+- 同步内容到 Memos（将被 SyncEngine 替代）
+- SQLite 防重追踪（将被统一 sync_log.db 替代）
+
+⚠️ @deprecated — 部分功能待迁移
+  - sync_to_memos() → 新架构使用 SyncEngine.sync_session()
+  - 防重数据库 → 统一迁移到 ~/.mnemos/sync_log.db
+  - sync_from_memos() → 保留，供 L3 查询使用
 
 设计原则：
 - 完全跨平台

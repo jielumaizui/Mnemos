@@ -5,6 +5,10 @@ Claude Code 会话自动监听器 v4.0 - 跨平台重构版
 监听 Claude Code 的 session 文件变化，自动同步到 Memos（L1 原始池）。
 支持增量同步、防重、防抖。
 
+⚠️ @deprecated — 待迁移到 SyncFramework
+  新架构：ClaudeSource（AgentSource 接口）+ SyncEngine（统一协调）
+  当前文件作为兼容层保留，新功能应使用 integrations/sources/claude_source.py
+
 迁移自: memos-client/claude_live_sync.py
 改造点:
 - import 改为重构项目路径
@@ -383,7 +387,10 @@ class ClaudeSessionHandler(FileSystemEventHandler):
     # -------------------- Tag Building --------------------
 
     def _build_five_dimension_tags(self, session_id: str, messages: List[Dict]) -> List[str]:
-        """构建五维标签（精简统一体系）"""
+        """构建七维标签（L1 对齐：source | time | model | scope | status | content_type | layer）
+
+        TODO: 迁移到 SyncEngine._build_tags() 统一生成。
+        """
         # 解析 task_id（从消息内容中）
         task_id = None
         for msg in messages:
@@ -412,8 +419,10 @@ class ClaudeSessionHandler(FileSystemEventHandler):
             scope=scope,
         )
 
-        # L1 层级标记
-        tags.append("level=L1")
+        # L1 七维标签补充（对齐 SyncEngine 规范）
+        tags.append("status=raw")
+        tags.append("content_type=session-record")
+        tags.append("layer=L1")  # 修正：level → layer
 
         tags.extend([
             f"session={session_id}",
