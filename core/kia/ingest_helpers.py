@@ -6,13 +6,43 @@ Ingest 引擎纯函数辅助模块
 """
 
 import hashlib
+import json
+import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Dict
 
 # 预编译正则，避免每次调用重新编译
 _FINGERPRINT_RE = re.compile(r'[^\w\u4e00-\u9fa5]')
 _WIKI_REF_RE = re.compile(r'\[\[([^\]]+)\]\]')
+
+# RuleScorer 旁路记录器（阶段0：只记录，不改变决策）
+_bypass_logger = logging.getLogger("rule_scorer_bypass")
+_bypass_logger.setLevel(logging.DEBUG)
+if not _bypass_logger.handlers:
+    _bypass_handler = logging.FileHandler(
+        Path.home() / ".mnemos" / "logs" / "rule_scorer_bypass.log",
+        encoding="utf-8"
+    )
+    _bypass_handler.setFormatter(logging.Formatter(
+        '%(asctime)s | %(message)s'
+    ))
+    _bypass_logger.addHandler(_bypass_handler)
+
+
+def _bypass_record(content: str, source: str, rule_score: float, original_result):
+    """旁路记录：记录 RuleScorer 评分，不改变原有决策"""
+    try:
+        _bypass_logger.info(json.dumps({
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "content_preview": content[:200] if content else "",
+            "rule_score": round(rule_score, 3),
+            "original_result": str(original_result),
+        }, ensure_ascii=False))
+    except Exception:
+        pass  # 记录失败不影响主流程
 
 
 # ==================== 内容指纹与去重 ====================
@@ -145,6 +175,15 @@ def is_noise_message(content: str,
     if len(set(stripped)) <= 3 and len(stripped) >= 6:
         return True
 
+    # === RuleScorer 旁路记录（阶段0：只记录，不改变决策）===
+    try:
+        from core.kia.rule_scorer import RuleScorer
+        scorer = RuleScorer()
+        rule_score = scorer.score(content)
+        _bypass_record(content, "is_noise_message", rule_score, False)
+    except Exception:
+        pass
+    
     return False
 
 
@@ -207,6 +246,15 @@ def score_message_quality(content: str) -> Dict[str, float]:
             }
         }
     """
+    # === RuleScorer 旁路记录（阶段0：只记录，不改变决策）===
+    try:
+        from core.kia.rule_scorer import RuleScorer
+        scorer = RuleScorer()
+        rule_score = scorer.score(content)
+        _bypass_record(content, "score_message_quality", rule_score, None)
+    except Exception:
+        pass
+    
     if not content or not isinstance(content, str):
         return _empty_quality_result()
 
