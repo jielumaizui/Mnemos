@@ -1,17 +1,23 @@
 """
 QuestionAnswerSearch — 问答式检索引擎
 
-【E14 全库修复】A11 问答式检索缺失子模块
-支持自然语言问答形式的知识检索。
+【E14 全库修复】A11 问答式检索完整实现。
+支持自然语言问答形式的知识检索，接入 Vault 检索 + 答案片段抽取。
 """
+
+import re
 from typing import List, Dict, Optional
+from pathlib import Path
+
+from core.context_assembler import ContextAssembler
 
 
 class QuestionAnswerSearch:
     """问答式检索：将用户问题转换为结构化查询并返回答案片段"""
 
-    def __init__(self, retriever=None):
-        self.retriever = retriever
+    def __init__(self, wiki_dir: Path = None, retriever=None):
+        self.wiki_dir = wiki_dir or Path.home() / "Documents" / "Obsidian Vault" / "wiki"
+        self.retriever = retriever or ContextAssembler(self.wiki_dir)
 
     def search(self, question: str, top_k: int = 5) -> List[Dict]:
         """
@@ -22,24 +28,177 @@ class QuestionAnswerSearch:
             top_k: 返回结果数
 
         Returns:
-            [{"answer_snippet": str, "source": str, "confidence": float}]
+            [{"answer_snippet": str, "source": str, "confidence": float, "question_type": str}]
         """
-        # TODO: 实现问题解析 → 检索 → 答案抽取流水线
-        return []
+        qtype = self.extract_question_type(question)
+
+        # 1. 检索相关页面
+        context = self.retriever.assemble(question, top_k=top_k * 2)
+
+        # 2. 如果没有检索到内容，直接返回空
+        if not context or context.strip() == "":
+            return []
+
+        # 3. 从上下文抽取答案片段
+        snippets = self._extract_answer_snippets(context, question, qtype)
+
+        # 4. 排序和格式化
+        results = []
+        for snippet in snippets[:top_k]:
+            results.append({
+                "answer_snippet": snippet["text"],
+                "source": snippet.get("source", "unknown"),
+                "confidence": round(snippet["score"], 3),
+                "question_type": qtype,
+            })
+
+        return results
 
     def extract_question_type(self, question: str) -> str:
         """提取问题类型：what/why/how/who/when/compare"""
         q = question.lower().strip()
-        if q.startswith(("what", "什么是", "啥是")):
+
+        if q.startswith(("what", "什么是", "啥是", "什么是", " definition", "define")):
             return "definition"
-        elif q.startswith(("why", "为什么", "为啥")):
+        elif q.startswith(("why", "为什么", "为啥", "为何", "reason")):
             return "causation"
-        elif q.startswith(("how", "怎么", "如何")):
+        elif q.startswith(("how", "怎么", "如何", "怎样", "步骤", "procedure", "steps")):
             return "procedure"
-        elif q.startswith(("who", "谁")):
+        elif q.startswith(("who", "谁", "which person", "作者", "负责人")):
             return "entity"
-        elif q.startswith(("when", "什么时候", "何时")):
+        elif q.startswith(("when", "什么时候", "何时", "时间", "date", "time")):
             return "temporal"
-        elif any(w in q for w in ["vs", "versus", "对比", "区别", "比较"]):
+        elif any(w in q for w in ["vs", "versus", "对比", "区别", "比较", "difference", "compare"]):
             return "comparison"
+        elif q.startswith(("where", "哪里", "位置", "location")):
+            return "location"
+        elif q.startswith(("which", "哪个", "哪一种")):
+            return "selection"
         return "general"
+
+    def _extract_answer_snippets(self, context: str, question: str,
+                                 qtype: str) -> List[Dict]:
+        """从上下文中抽取答案片段"""
+        # 分割为段落
+        paragraphs = self._split_into_paragraphs(context)
+
+        scored_snippets = []
+        for para in paragraphs:
+            score = self._score_paragraph(para, question, qtype)
+            if score > 0.2:
+                scored_snippets.append({
+                    "text": para["text"][:500],
+                    "source": para.get("source", ""),
+                    "score": score,
+                })
+
+        scored_snippets.sort(key=lambda x: x["score"], reverse=True)
+        return scored_snippets
+
+    def _split_into_paragraphs(self, context: str) -> List[Dict]:
+        """将上下文分割为段落"""
+        paragraphs = []
+        current_source = ""
+
+        for line in context.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # 检测来源标记
+            if line.startswith("> 来源:") or line.startswith("### "):
+                current_source = line.replace("> 来源:", "").replace("### ", "").strip()
+                continue
+
+            if len(line) > 20:
+                paragraphs.append({
+                    "text": line,
+                    "source": current_source,
+                })
+
+        return paragraphs
+
+    def _score_paragraph(self, para: Dict, question: str, qtype: str) -> float:
+        """根据问题类型对段落评分"""
+        text = para["text"].lower()
+        question_lower = question.lower()
+        q_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', question_lower))
+        p_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', text))
+
+        if not q_keywords:
+            return 0.0
+
+        # 基础匹配分：Jaccard
+        intersection = q_keywords & p_keywords
+        union = q_keywords | p_keywords
+        base_score = len(intersection) / len(union) if union else 0
+
+        # 问题类型加分
+        type_bonus = 0.0
+
+        if qtype == "definition":
+            # 定义类问题：寻找 "是"、"指的是"、"定义为" 等句式
+            if any(p in text for p in ["是", "指的是", "定义为", "meaning", "refers to", "is a"]):
+                type_bonus = 0.3
+            # 优先选择包含问题核心概念的句子
+            core = next(iter(q_keywords), "")
+            if core and core in text:
+                type_bonus += 0.2
+
+        elif qtype == "causation":
+            # 因果类问题：寻找 "因为"、"由于"、"导致" 等
+            if any(p in text for p in ["因为", "由于", "导致", "原因", "because", "since", "due to", "causes"]):
+                type_bonus = 0.3
+
+        elif qtype == "procedure":
+            # 步骤类问题：寻找列表、数字序号、"首先"、"然后"
+            if any(p in text for p in ["步骤", "首先", "然后", "最后", "1.", "2.", "step", "first", "then"]):
+                type_bonus = 0.3
+            if re.search(r'^\s*[-*\d]\s+', para["text"]):
+                type_bonus += 0.2
+
+        elif qtype == "comparison":
+            # 对比类问题：寻找 "vs"、"区别"、"优势"、"劣势"
+            if any(p in text for p in ["区别", "差异", "优势", "劣势", "对比", "vs", "difference", "compared", "advantage", "disadvantage"]):
+                type_bonus = 0.3
+
+        elif qtype == "temporal":
+            # 时间类问题：寻找日期、时间表达
+            if re.search(r'\d{4}[年/-]\d{1,2}[月/-]?\d{0,2}', para["text"]):
+                type_bonus = 0.3
+            if any(p in text for p in ["时间", "日期", "when", "date", "period", "duration"]):
+                type_bonus += 0.2
+
+        elif qtype == "entity":
+            # 实体类问题：优先包含人名或组织名
+            if re.search(r'[A-Z][a-z]+\s+[A-Z][a-z]+', para["text"]):  # 英文人名
+                type_bonus = 0.2
+
+        # 长度惩罚：过长或过短的段落降低分数
+        length = len(para["text"])
+        length_factor = 1.0
+        if length < 30:
+            length_factor = 0.7
+        elif length > 300:
+            length_factor = 0.9
+
+        return min(1.0, (base_score * 0.5 + type_bonus) * length_factor)
+
+    def answer(self, question: str) -> Optional[Dict]:
+        """
+        直接返回答案（取最高置信度结果）
+
+        Returns:
+            {"answer": str, "source": str, "confidence": float} 或 None
+        """
+        results = self.search(question, top_k=3)
+        if not results:
+            return None
+
+        best = max(results, key=lambda x: x["confidence"])
+        return {
+            "answer": best["answer_snippet"],
+            "source": best["source"],
+            "confidence": best["confidence"],
+            "question_type": best["question_type"],
+        }
