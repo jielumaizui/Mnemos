@@ -33,7 +33,9 @@ class CallResult:
 class HostAgentCaller:
     """Host Agent 统一调用器"""
 
-    SUPPORTED_AGENTS = ["claude", "kimi", "openai", "generic"]
+    # 【设计原则】宿主agent优先：只封装 claude/kimi CLI，不直接调用任何 LLM API
+    # 如果宿主agent不可用，调用失败并上报，而不是偷偷回退到第三方API
+    SUPPORTED_AGENTS = ["claude", "kimi", "generic"]
 
     def __init__(self, agent_type: str = "claude", timeout: int = 300,
                  max_retries: int = 3, retry_delay: float = 2.0):
@@ -137,42 +139,12 @@ class HostAgentCaller:
             raise RuntimeError(f"Kimi CLI error: {result.stderr[:500]}")
         return result.stdout.strip()
 
-    def _call_openai(self, prompt: str, max_tokens: int,
-                     system_prompt: str = None) -> str:
-        """调用 OpenAI API（需要 OPENAI_API_KEY 环境变量）"""
-        import os
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY not set")
-
-        import urllib.request
-        import json
-
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        data = json.dumps({
-            "model": "gpt-4o-mini",
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": 0.3,
-        }).encode("utf-8")
-
-        req = urllib.request.Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=data,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return result["choices"][0]["message"]["content"]
+    # 【已移除】OpenAI API 直接调用
+    # 设计原则：所有 LLM 调用必须通过宿主agent CLI（claude -p / kimi --print）
+    # 不允许代码中直接嵌入第三方 LLM API 调用，防止：
+    # 1. API key 泄露风险
+    # 2. 成本失控（无法通过宿主agent的配额/审计追踪）
+    # 3. 绕过宿主agent的安全策略（如 thinking 模式、tool 权限等）
 
     def _call_generic(self, prompt: str, max_tokens: int,
                       system_prompt: str = None) -> str:
@@ -212,9 +184,6 @@ class HostAgentCaller:
                     return agent
             except Exception:
                 continue
-
-        if os.getenv("OPENAI_API_KEY"):
-            return "openai"
 
         if os.getenv("HOST_AGENT_CALL_TEMPLATE"):
             return "generic"
