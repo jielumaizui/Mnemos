@@ -1,8 +1,15 @@
 """
 WeightAdapter — 权重适配器
 
-【E14 全库修复】蒸馏评分四维权重（count/overlap/time/complement）的自适应调整。
-支持三阶段演进：Hardcoded → AutoSwitch → Bayesian。
+蒸馏评分四维权重（count/overlap/time/complement）的自适应调整。
+
+四阶段生命周期（用户要求的折中设计）：
+  COLD   (0~50条):   纯硬编码基线
+  WARM   (50~500条): 贝叶斯调阈值松紧（保守路线）
+  CALIBRATE (≥500条): 一次性基线校准 → 贝叶斯后验写回硬编码（只执行一次）
+  HOT    (≥500条):   保守路线，但基线已被数据校准过
+
+核心原则：贝叶斯可以修正硬编码基线，但只修正一次。
 """
 
 import json
@@ -148,28 +155,74 @@ class BayesianWeightAdapter:
 class AutoSwitchWeightAdapter:
     """自动切换权重适配器
 
-    根据样本量自动选择：
-    - 样本少 → HardcodedWeightAdapter
-    - 样本足够 → BayesianWeightAdapter
+    三阶段生命周期：
+    1. COLD（0~50条）: 纯硬编码
+    2. WARM（50~500条）: 贝叶斯调阈值松紧（保守路线）
+    3. CALIBRATE（≥500条且未校准）: 一次性基线校准 → 贝叶斯后验写回硬编码
+    4. HOT（≥500条且已校准）: 保守路线，但基线已被数据校准过
+
+    核心原则：贝叶斯可以修正硬编码基线，但只修正一次。
     """
 
-    SWITCH_THRESHOLD = 50  # 每个领域最少反馈数才切换到贝叶斯
+    SWITCH_THRESHOLD = 50      # COLD → WARM
+    CALIBRATE_THRESHOLD = 500  # WARM → CALIBRATE（一次性基线校准）
 
     def __init__(self, db_path: Path = None):
         self.hardcoded = HardcodedWeightAdapter()
         self.bayesian = BayesianWeightAdapter(db_path)
         self.switch_threshold = self.SWITCH_THRESHOLD
+        self.calibrate_threshold = self.CALIBRATE_THRESHOLD
+        self._calibrated_domains: set = set()  # 已校准的领域（内存标记，重启后重新评估）
 
     def get_weights(self, domain: str, context: Dict = None) -> Dict[str, float]:
-        """自动选择适配器获取权重"""
+        """自动选择适配器获取权重，触发一次性校准"""
         sample_count = self._get_sample_count(domain)
 
+        # 阶段3: 一次性基线校准（≥500条且未校准过）
+        if sample_count >= self.calibrate_threshold and domain not in self._calibrated_domains:
+            self._calibrate_hardcoded(domain, sample_count)
+            self._calibrated_domains.add(domain)
+
+        # 阶段1: COLD → 纯硬编码
         if sample_count < self.switch_threshold:
-            logger.debug(f"[WeightAdapter] 领域 '{domain}' 样本不足 ({sample_count} < {self.switch_threshold})，使用硬编码权重")
+            logger.debug(
+                f"[WeightAdapter] 领域 '{domain}' 样本不足 ({sample_count} < {self.switch_threshold})，"
+                f"使用硬编码权重"
+            )
             return self.hardcoded.get_weights(domain, context)
-        else:
-            logger.debug(f"[WeightAdapter] 领域 '{domain}' 样本充足 ({sample_count})，使用贝叶斯权重")
-            return self.bayesian.get_weights(domain, context)
+
+        # 阶段2/4: WARM/HOT → 贝叶斯后验权重（含阈值松紧逻辑由调用方处理）
+        logger.debug(
+            f"[WeightAdapter] 领域 '{domain}' 样本充足 ({sample_count})，"
+            f"使用贝叶斯权重{'（基线已校准）' if domain in self._calibrated_domains else ''}"
+        )
+        return self.bayesian.get_weights(domain, context)
+
+    def _calibrate_hardcoded(self, domain: str, sample_count: int):
+        """
+        一次性基线校准：将贝叶斯后验均值写回硬编码基线。
+
+        触发条件：样本数 ≥ CALIBRATE_THRESHOLD 且该领域从未校准过。
+        行为：
+        1. 计算当前贝叶斯后验权重
+        2. 与硬编码基线做平滑融合（70%贝叶斯 + 30%硬编码，防止过拟合）
+        3. 写回 hardcoded.weights[domain]
+        4. 记录日志
+        """
+        posterior = self.bayesian.get_posterior_weights(domain)
+        baseline = self.hardcoded.get_weights(domain)
+
+        # 平滑融合：不完全替换，保留30%原始基线防止过拟合
+        calibrated = {
+            dim: round(0.7 * posterior.get(dim, baseline[dim]) + 0.3 * baseline[dim], 4)
+            for dim in baseline
+        }
+
+        self.hardcoded.set_weights(domain, calibrated)
+        logger.info(
+            f"[WeightAdapter] 领域 '{domain}' 一次性基线校准完成（样本={sample_count}）。"
+            f"硬编码基线已更新: {baseline} → {calibrated}"
+        )
 
     def record_feedback(self, domain: str, dimension: str,
                         success: bool, outcome_score: float = None):
@@ -187,11 +240,20 @@ class AutoSwitchWeightAdapter:
     def get_status(self, domain: str) -> Dict:
         """获取适配器状态"""
         sample_count = self._get_sample_count(domain)
+        calibrated = domain in self._calibrated_domains
+        mode = "hardcoded"
+        if sample_count >= self.calibrate_threshold:
+            mode = "bayesian_hot" if calibrated else "bayesian_warm"
+        elif sample_count >= self.switch_threshold:
+            mode = "bayesian_warm"
+
         return {
             "domain": domain,
             "sample_count": sample_count,
             "switch_threshold": self.switch_threshold,
-            "mode": "bayesian" if sample_count >= self.switch_threshold else "hardcoded",
+            "calibrate_threshold": self.calibrate_threshold,
+            "mode": mode,
+            "calibrated": calibrated,
             "uncertainty": self.bayesian.get_uncertainty(domain) if sample_count > 0 else {},
         }
 
