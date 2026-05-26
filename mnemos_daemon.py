@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Mnemos Daemon — 后台守护进程 (v2.0)
+Mnemos Daemon — 后台守护进程 (v2.0.0)
 
 职责（全自动闭环）：
 1. L1同步：监控Claude session文件变化 → 自动进Memos
@@ -567,7 +567,7 @@ def _run_preflight_checks() -> List[str]:
 def run_daemon():
     """主循环 — 启动所有自动化服务"""
     logger.info("=" * 50)
-    logger.info("Mnemos daemon v2.0 starting...")
+    logger.info("Mnemos daemon v2.0.0 starting...")
     logger.info("=" * 50)
     write_pid()
 
@@ -828,7 +828,7 @@ def uninstall_windows_task() -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Mnemos Daemon v2.0")
+    parser = argparse.ArgumentParser(description="Mnemos Daemon v2.0.0")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("start", help="启动守护进程（全自动模式）")
     sub.add_parser("stop", help="停止守护进程")
