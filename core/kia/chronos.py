@@ -385,6 +385,14 @@ class KnowledgeScheduler:
             timeout=30,
         ))
 
+        # --- ScorerV2 训练队列检查（每小时，数据积累阶段） ---
+        self.register(ScheduledStep(
+            name="scorer_training",
+            func=self._run_scorer_training,
+            trigger=CronTrigger("0 * * * *"),
+            timeout=60,
+        ))
+
     def _flywheel_predicate(self) -> bool:
         """skill_flywheel 条件：画像信号数 >= 50"""
         try:
@@ -432,6 +440,24 @@ class KnowledgeScheduler:
             }
         except Exception as e:
             logger.error(f"强制复盘检查失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_scorer_training(self) -> Dict:
+        """ScorerV2 训练队列检查：每小时检查是否有足够数据开始训练"""
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            scorer = AdaptiveScorerV2(domain="mnemos")
+            trained = scorer.process_training_queue()
+            status = scorer.get_status()
+            return {
+                "status": "ok",
+                "trained_samples": trained,
+                "ready_samples": status.get("ready_samples", 0),
+                "mode": status.get("mode", "unknown"),
+                "note": "数据积累阶段，算法实现待 ready_samples >= 20 后启动",
+            }
+        except Exception as e:
+            logger.error(f"ScorerV2 训练检查失败: {e}")
             return {"status": "error", "error": str(e)}
 
     # ----------------------------------------------------------
