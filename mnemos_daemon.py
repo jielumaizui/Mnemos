@@ -570,6 +570,25 @@ def service_event_bus(stop_event: threading.Event):
 
 # ==================== 主循环 ====================
 
+def _run_startup_compensation():
+    """启动补偿：扫描关机期间过期的复盘预约，立即补发。
+
+    蓝图 §9 关键边界：
+    - 用户预约过期 → 直接打开 Obsidian
+    - 系统提醒过期 → 走组合权重判断
+    """
+    try:
+        from core.app.forced_retrospective import ForcedRetrospective
+        fr = ForcedRetrospective()
+        expired = fr.startup_compensation()
+        if expired:
+            logger.info(f"启动补偿: {len(expired)} 个过期复盘任务已处理")
+        else:
+            logger.debug("启动补偿: 无过期任务")
+    except Exception as e:
+        logger.warning(f"启动补偿执行失败: {e}")
+
+
 def _run_preflight_checks() -> List[str]:
     """启动前置检查，返回警告列表（非阻塞，仅日志提示）"""
     warnings = []
@@ -647,6 +666,9 @@ def run_daemon():
     config = get_config()
     config.data_dir.mkdir(parents=True, exist_ok=True)
     (config.data_dir / "inbox").mkdir(parents=True, exist_ok=True)
+
+    # 启动补偿：检查关机期间过期的复盘预约
+    _run_startup_compensation()
 
     # 注册信号处理（优雅退出）
     def handle_signal(signum, frame):
@@ -828,6 +850,7 @@ def install_windows_task() -> bool:
         print("[ERR] 此命令仅支持 Windows")
         return False
 
+    from core.config import get_config
     import subprocess
     task_name = "MnemosDaemon"
     python_exe = sys.executable

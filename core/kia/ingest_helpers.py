@@ -1089,3 +1089,65 @@ def build_tag_string(tags: Dict[str, str]) -> str:
     for key, value in tags.items():
         lines.append(f"  - {key}={value}")
     return "\n".join(lines)
+
+
+# ==================== L2 价值预判定 (E14) ====================
+
+def layer2_value_prejudge(content: str, rule_score: Dict[str, float] = None) -> Dict[str, any]:
+    """L2 层价值预判定 —— 连接 RuleScorer 评分与蒸馏决策
+
+    【E14 蒸馏层对齐】
+    根据 quality score 将消息分为三类：
+    - direct_distill (>=70): 高价值，直接进入蒸馏队列
+    - skip (<=30): 低价值，跳过不处理
+    - llm_judge (30-70): 中间值，交由 LLM 二次判断
+
+    Args:
+        content: 消息内容
+        rule_score: score_message_quality() 的返回结果（可选，不传则自动评分）
+
+    Returns:
+        {
+            "decision": "direct_distill" | "skip" | "llm_judge",
+            "score": float,           # 总分
+            "threshold": int,         # 判定阈值
+            "reason": str,            # 判定原因
+            "confidence": float,      # 判定置信度
+        }
+    """
+    # 自动评分（如果未提供）
+    if rule_score is None:
+        rule_score = score_message_quality(content)
+
+    total_score = rule_score.get("total_score", 0.0)
+
+    # 阈值设定
+    DIRECT_THRESHOLD = 70.0
+    SKIP_THRESHOLD = 30.0
+
+    if total_score >= DIRECT_THRESHOLD:
+        return {
+            "decision": "direct_distill",
+            "score": total_score,
+            "threshold": DIRECT_THRESHOLD,
+            "reason": f"质量评分 {total_score:.1f} >= {DIRECT_THRESHOLD}，高价值内容直接进入蒸馏队列",
+            "confidence": min(1.0, (total_score - DIRECT_THRESHOLD) / 30.0 + 0.7),
+        }
+
+    if total_score <= SKIP_THRESHOLD:
+        return {
+            "decision": "skip",
+            "score": total_score,
+            "threshold": SKIP_THRESHOLD,
+            "reason": f"质量评分 {total_score:.1f} <= {SKIP_THRESHOLD}，低价值内容跳过",
+            "confidence": min(1.0, (SKIP_THRESHOLD - total_score) / 30.0 + 0.7),
+        }
+
+    # 中间值：LLM 二次判断
+    return {
+        "decision": "llm_judge",
+        "score": total_score,
+        "threshold": (SKIP_THRESHOLD, DIRECT_THRESHOLD),
+        "reason": f"质量评分 {total_score:.1f} 处于中间区间 ({SKIP_THRESHOLD}-{DIRECT_THRESHOLD})，需 LLM 二次判断",
+        "confidence": 0.5,
+    }

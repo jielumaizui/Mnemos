@@ -377,6 +377,14 @@ class KnowledgeScheduler:
             timeout=60,
         ))
 
+        # --- 强制复盘检查 ---
+        self.register(ScheduledStep(
+            name="forced_retrospective",
+            func=self._run_forced_retrospective,
+            trigger=CronTrigger("*/5 * * * *"),
+            timeout=30,
+        ))
+
     def _flywheel_predicate(self) -> bool:
         """skill_flywheel 条件：画像信号数 >= 50"""
         try:
@@ -408,6 +416,23 @@ class KnowledgeScheduler:
         """调度器自身维护：清理过期任务、检查步骤健康"""
         self.cleanup_old_tasks()
         return {"status": "ok", "steps_registered": len(self.steps)}
+
+    def _run_forced_retrospective(self) -> Dict:
+        """强制复盘检查：到期预约直接打开 Obsidian，系统提醒走权重"""
+        try:
+            from core.app.forced_retrospective import ForcedRetrospective
+            fr = ForcedRetrospective()
+            decisions = fr.check_due_reminders()
+            forced = sum(1 for d in decisions if d.should_force_open)
+            reminded = sum(1 for d in decisions if not d.should_force_open)
+            return {
+                "status": "ok",
+                "forced_open": forced,
+                "dialog_reminder": reminded,
+            }
+        except Exception as e:
+            logger.error(f"强制复盘检查失败: {e}")
+            return {"status": "error", "error": str(e)}
 
     # ----------------------------------------------------------
     # tick — 调度器主循环

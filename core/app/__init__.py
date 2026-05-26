@@ -9,3 +9,5 @@ from .blindspot_discovery import BlindspotDiscovery
 from .predictive_push import PredictivePush
 from .dispute_resolver import DisputeResolver
 from .freshness_alert import FreshnessAlert
+from .obsidian_opener import open_obsidian
+from .forced_retrospective import ForcedRetrospective

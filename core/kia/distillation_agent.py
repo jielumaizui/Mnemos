@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.config import get_config
 from core.hephaestus.distillation_prompts import TYPE_DISTILL_PROMPTS
+from core.kia import amphora
 
 # 路径改为 config 驱动
 QUEUE_DIR = get_config().claude_data_dir / "distill_queue"
@@ -43,79 +44,11 @@ def _ensure_dir():
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _task_path(session_id: str) -> Path:
-    """获取任务文件路径"""
-    safe_id = hashlib.md5(session_id.encode()).hexdigest()[:12]
-    return QUEUE_DIR / f"{safe_id}.json"
-
-
-def _list_pending() -> List[Dict]:
-    """列出所有 pending 状态的任务（从文件系统读取）"""
-    _ensure_dir()
-    tasks = []
-    for task_file in QUEUE_DIR.glob("*.json"):
-        try:
-            task = json.loads(task_file.read_text(encoding="utf-8"))
-            if task.get("status") == "pending":
-                tasks.append(task)
-        except Exception:
-            pass
-    # 按创建时间排序
-    tasks.sort(key=lambda t: t.get("created_at", ""))
-    return tasks
-
-
-def _get_next() -> Optional[Dict]:
-    """获取下一个 pending 任务并标记为 processing（从文件系统读取）"""
-    pending = _list_pending()
-    if not pending:
-        return None
-
-    task = pending[0]
-    task_path = _task_path(task["session_id"])
-
-    try:
-        task["status"] = "processing"
-        task["started_at"] = datetime.now().isoformat()
-        task_path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
-        return task
-    except Exception:
-        return None
-
-
-def _mark_done(session_id: str, output_path: str = None) -> bool:
-    """标记任务完成"""
-    task_path = _task_path(session_id)
-    if not task_path.exists():
-        return False
-
-    try:
-        task = json.loads(task_path.read_text(encoding="utf-8"))
-        task["status"] = "done"
-        task["completed_at"] = datetime.now().isoformat()
-        if output_path:
-            task["output_path"] = output_path
-        task_path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
-
-
-def _mark_failed(session_id: str, error: str) -> bool:
-    """标记任务失败"""
-    task_path = _task_path(session_id)
-    if not task_path.exists():
-        return False
-
-    try:
-        task = json.loads(task_path.read_text(encoding="utf-8"))
-        task["status"] = "failed"
-        task["error"] = error
-        task["completed_at"] = datetime.now().isoformat()
-        task_path.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except Exception:
-        return False
+# 委托给 amphora.py（SQLite 队列），消除 JSON 文件重复实现
+_list_pending = amphora.list_pending
+_get_next = amphora.get_next
+_mark_done = amphora.mark_done
+_mark_failed = amphora.mark_failed
 
 
 # 简单关键词映射，用于判断 session 类型
