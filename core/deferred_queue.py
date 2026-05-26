@@ -63,7 +63,8 @@ class DeferredQueue:
             conn.commit()
 
     def enqueue(self, item_type: str, payload: Dict,
-                priority: int = 5, delay_seconds: int = 0) -> int:
+                priority: int = 5, delay_seconds: int = 0,
+                max_retries: int = 3) -> int:
         """添加延迟处理项"""
         scheduled_at = (datetime.now() + timedelta(seconds=delay_seconds)).isoformat()
 
@@ -115,6 +116,9 @@ class DeferredQueue:
             )
             item.id = row["id"]
             item.created_at = row["scheduled_at"]
+            item.error = row["error"]
+            item.retry_count = row["retry_count"]
+            item.max_retries = row["max_retries"]
             items.append(item)
         return items
 

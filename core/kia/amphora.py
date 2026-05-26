@@ -155,7 +155,10 @@ def get_next() -> Optional[Dict]:
                 WHERE session_id = ?
             """, (datetime.now().isoformat(), session_id))
             conn.commit()
-            return _row_to_dict(row)
+            result = _row_to_dict(row)
+            result["status"] = "processing"
+            result["started_at"] = datetime.now().isoformat()
+            return result
 
 
 def mark_done(session_id: str, output_path: str = None) -> bool:
