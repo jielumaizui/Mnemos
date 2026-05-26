@@ -21,8 +21,10 @@ _WIKI_REF_RE = re.compile(r'\[\[([^\]]+)\]\]')
 _bypass_logger = logging.getLogger("rule_scorer_bypass")
 _bypass_logger.setLevel(logging.DEBUG)
 if not _bypass_logger.handlers:
+    _bypass_log_path = Path.home() / ".mnemos" / "logs" / "rule_scorer_bypass.log"
+    _bypass_log_path.parent.mkdir(parents=True, exist_ok=True)
     _bypass_handler = logging.FileHandler(
-        Path.home() / ".mnemos" / "logs" / "rule_scorer_bypass.log",
+        _bypass_log_path,
         encoding="utf-8"
     )
     _bypass_handler.setFormatter(logging.Formatter(

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemos"
-version = "0.2.0"
+version = "2.0.0"
 description = "AI-Agent Companion for Knowledge Management with User Persona"
 readme = "README.md"
 license = {text = "MIT"}
@@ -36,8 +36,10 @@ mnemos = "mnemos_cli:main"
 Homepage = "https://github.com/jielumaizui/mnemos"
 Documentation = "https://github.com/jielumaizui/mnemos/blob/main/README.md"
 
+[tool.setuptools.packages.find]
+include = ["core*", "integrations*"]
+
 [tool.setuptools]
-packages = ["core", "core.kia", "core.persona", "integrations"]
 py-modules = ["mnemos_cli"]
 
 [tool.black]
