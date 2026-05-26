@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "required": ["judgment", "fragments"],
+  "properties": {
+    "judgment": {
+      "type": "string",
+      "enum": ["knowledge"],
+      "description": "判断结论"
+    },
+    "judgment_reason": {
+      "type": "string",
+      "description": "判断理由"
+    },
+    "fragments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["form", "title", "core_content"],
+        "properties": {
+          "form": {
+            "type": "string",
+            "enum": ["decision", "pattern", "pitfall", "snippet", "reference", "todo"],
+            "description": "知识形态"
+          },
+          "title": {
+            "type": "string",
+            "description": "页面标题"
+          },
+          "frontmatter": {
+            "type": "object",
+            "description": "YAML frontmatter"
+          },
+          "background": {
+            "type": "string",
+            "description": "背景描述"
+          },
+          "core_content": {
+            "type": "string",
+            "description": "核心内容（Markdown格式）"
+          },
+          "boundaries": {
+            "type": "object",
+            "description": "适用边界"
+          },
+          "anti_patterns": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "反模式列表"
+          },
+          "related_concepts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "相关概念列表"
+          }
+        }
+      }
+    }
+  }
+}

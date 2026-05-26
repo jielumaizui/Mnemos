@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "required": ["judgment", "reason"],
+  "properties": {
+    "judgment": {
+      "type": "string",
+      "enum": ["knowledge", "skill", "skip"],
+      "description": "价值判断结论"
+    },
+    "reason": {
+      "type": "string",
+      "description": "判断理由"
+    },
+    "skill_name": {
+      "type": "string",
+      "description": "如果判为skill，建议的skill名称"
+    },
+    "knowledge_forms": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "可能的知识形态列表"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "判断置信度"
+    },
+    "analysis_type": {
+      "type": "string",
+      "enum": ["standard", "data_distillation"],
+      "description": "分析类型"
+    }
+  }
+}

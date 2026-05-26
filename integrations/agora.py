@@ -67,6 +67,11 @@ class MCPServer:
             "retrospective_list": self._tool_retrospective_list,
             "knowledge_source_list": self._tool_knowledge_source_list,
             "health_check": self._tool_health_check,
+            "context_aware_search": self._tool_context_aware_search,
+            "intent_route": self._tool_intent_route,
+            "blindspot_check": self._tool_blindspot_check,
+            "predictive_push": self._tool_predictive_push,
+            "freshness_check": self._tool_freshness_check,
         }
 
     # ---- Tool 实现 ----
@@ -973,6 +978,161 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "message": f"更新失败: {e}",
             }
 
+    def _tool_context_aware_search(self, query: str, limit: int = 10,
+                                     working_dir: str = "") -> Dict:
+        """
+        上下文感知搜索 — 知识图谱召回 + 画像加权评分
+
+        相比 wiki_search，增加了用户画像加权（领域偏好、形态偏好、技术栈、时间模式），
+        返回更精准的排序结果。
+        """
+        from core.app.context_search import ContextAwareSearch
+
+        context = {}
+        if working_dir:
+            context["working_dir"] = working_dir
+
+        search = ContextAwareSearch()
+        results = search.search(query, context=context, limit=limit)
+
+        return {
+            "success": True,
+            "query": query,
+            "results": [
+                {
+                    "page_path": r.page_path,
+                    "title": r.title,
+                    "snippet": r.snippet,
+                    "score": round(r.score, 3),
+                }
+                for r in results
+            ],
+            "count": len(results),
+        }
+
+    def _tool_intent_route(self, user_input: str) -> Dict:
+        """
+        意图路由 — 规则匹配（不调 LLM），4 种意图分类
+
+        返回意图类型和数据源建议：
+        - recall: 回忆上下文 → 查 Memos
+        - knowledge: 知识查询 → 查 Wiki
+        - task: 任务执行 → 直接执行
+        - chat: 闲聊/其他 → 直接回复
+        """
+        from core.app.intent_router import IntentRouter
+
+        router = IntentRouter()
+        decision = router.route(user_input)
+
+        return {
+            "success": True,
+            "intent": decision.intent,
+            "confidence": round(decision.confidence, 2),
+            "data_source": decision.data_source,
+            "matched_keywords": decision.matched_keywords,
+            "needs_correction": decision.needs_correction,
+        }
+
+    def _tool_blindspot_check(self, query: str) -> Dict:
+        """
+        盲点检查 — 搜索时检测知识空白
+
+        当用户搜索某个主题但知识库中缺少相关记录时，返回盲点提醒。
+        24 小时冷却期，每天最多 1 条即时提醒。
+        """
+        from core.app.blindspot_discovery import BlindspotDiscovery
+
+        bd = BlindspotDiscovery()
+        reminder = bd.check_blind_spot(query)
+
+        if not reminder:
+            return {
+                "success": True,
+                "blindspot_found": False,
+                "message": "未发现盲点",
+            }
+
+        return {
+            "success": True,
+            "blindspot_found": True,
+            "topic": reminder.topic,
+            "description": reminder.description,
+            "confidence": round(reminder.confidence, 2),
+            "status": reminder.status,
+        }
+
+    def _tool_predictive_push(self, user_input: str,
+                               working_dir: str = "") -> Dict:
+        """
+        预测性知识推送 — 两层信号检测
+
+        Layer 1: 正则关键词检测（<1ms）
+        Layer 2: LLM 确认（仅中低置信度，~500ms）
+        冷启动：COLD 不推送，WARM 每天1条标注beta
+        """
+        from core.app.predictive_push import PredictivePush
+
+        push = PredictivePush()
+        context = {"working_dir": working_dir} if working_dir else {}
+        decisions = push.detect_and_decide(user_input, context=context)
+
+        if not decisions:
+            return {
+                "success": True,
+                "push_available": False,
+                "message": "无推送信号",
+            }
+
+        return {
+            "success": True,
+            "push_available": True,
+            "pushes": [
+                {
+                    "title": d.title,
+                    "page_path": d.page_path,
+                    "reason": d.reason,
+                    "confidence": round(d.confidence, 2),
+                }
+                for d in decisions
+            ],
+            "count": len(decisions),
+        }
+
+    def _tool_freshness_check(self, entity_name: str) -> Dict:
+        """
+        知识新鲜度检查 — 版本绑定 + 上下文过期
+
+        检查特定实体的知识是否过时：
+        - 版本绑定知识：与最新版本对比
+        - 上下文知识：90 天未更新则标记过期
+        - 罕见访问：60 天未被查询
+
+        搜索附加型：只在搜索时展示，不主动弹出。
+        """
+        from core.app.freshness_alert import FreshnessAlertChecker
+
+        checker = FreshnessAlertChecker()
+        alert = checker.check_knowledge_freshness(entity_name)
+
+        if not alert:
+            return {
+                "success": True,
+                "fresh": True,
+                "message": f"「{entity_name}」知识新鲜",
+            }
+
+        return {
+            "success": True,
+            "fresh": False,
+            "entity_name": alert.entity_name,
+            "alert_type": alert.alert_type,
+            "message": alert.message,
+            "confidence": round(alert.confidence, 2),
+            "current_version": alert.current_version,
+            "latest_version": alert.latest_version,
+        }
+
     def _tool_health_check(self) -> Dict:
         """
         系统健康检查
@@ -1336,6 +1496,64 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
+                },
+            },
+            {
+                "name": "context_aware_search",
+                "description": "上下文感知搜索 — 知识图谱召回 + 画像加权评分。相比 wiki_search，增加了用户画像加权（领域偏好、形态偏好、技术栈、时间模式），返回更精准的排序结果。当需要更精准的知识检索时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索查询"},
+                        "limit": {"type": "integer", "description": "最大结果数", "default": 10},
+                        "working_dir": {"type": "string", "description": "当前工作目录（用于上下文感知）", "default": ""},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "intent_route",
+                "description": "意图路由 — 规则匹配（不调 LLM），4 种意图分类：recall(回忆上下文→Memos)、knowledge(知识查询→Wiki)、task(任务执行→直接执行)、chat(闲聊→直接回复)。优先级：时间词>疑问词>动作词>默认。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "user_input": {"type": "string", "description": "用户输入文本"},
+                    },
+                    "required": ["user_input"],
+                },
+            },
+            {
+                "name": "blindspot_check",
+                "description": "盲点检查 — 搜索时检测知识空白。当用户搜索某个主题但知识库中缺少相关记录时返回盲点提醒。24小时冷却，每天最多1条即时提醒。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "搜索查询（检测是否为知识空白）"},
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "predictive_push",
+                "description": "预测性知识推送 — 两层信号检测（正则关键词<1ms + LLM确认~500ms）。当检测到用户可能需要某知识时主动推送。冷启动：COLD不推送，WARM每天1条标注beta。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "user_input": {"type": "string", "description": "用户输入文本（用于信号检测）"},
+                        "working_dir": {"type": "string", "description": "当前工作目录", "default": ""},
+                    },
+                    "required": ["user_input"],
+                },
+            },
+            {
+                "name": "freshness_check",
+                "description": "知识新鲜度检查 — 检查特定实体的知识是否过时。版本绑定知识与最新版本对比，上下文知识90天未更新标记过期。搜索附加型，不主动弹出。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "entity_name": {"type": "string", "description": "实体名称"},
+                    },
+                    "required": ["entity_name"],
                 },
             },
         ]

@@ -16,12 +16,14 @@ import hashlib
 import uuid
 import threading
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from core.config import get_config
 
 # 全局连接池（进程内共享）
 _session_lock = threading.Lock()
@@ -62,13 +64,40 @@ class Memory:
     created_at: str
     updated_at: str
     agent: str = ""
+    raw_source_path: Optional[str] = None
+
+
+# ==================== 自定义异常 ====================
+
+class MemosRateLimitError(Exception):
+    """429 速率限制错误，建议指数退避重试"""
+    def __init__(self, message: str, retry_after: Optional[int] = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class MemosAuthError(Exception):
+    """401/403 认证/授权错误，不建议重试"""
+    pass
+
+
+class MemosPayloadTooLargeError(Exception):
+    """413 请求体过大错误"""
+    pass
+
+
+class MemosServerError(Exception):
+    """5xx 服务器错误，建议重试"""
+    def __init__(self, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class MemosClient:
     """Memos HTTP API 客户端"""
 
-    # 脱敏规则
-    SENSITIVE_PATTERNS = [
+    # 脱敏规则（内置默认值，可被配置文件覆盖）
+    _DEFAULT_SANITIZE_PATTERNS = [
         (r'sk-[a-zA-Z0-9]{20,}', '[API-KEY]'),
         (r'gh[pousr]_[A-Za-z0-9_]{36,}', '[GITHUB-TOKEN]'),
         (r'AKID[0-9a-zA-Z]{10,}', '[CLOUD-KEY]'),
@@ -80,7 +109,8 @@ class MemosClient:
     # 自动分类关键词
     SHARED_KEYWORDS = ['我的', '我习惯', '我讨厌', '偏好', '约定', '规则']
 
-    def __init__(self, token: str = None, base_url: str = "", agent: str = None):
+    def __init__(self, token: str = None, base_url: str = "", agent: str = None,
+                 metrics_callback: Optional[Callable[[str, float, int], None]] = None):
         self.base_url = base_url.rstrip('/')
         self.token = token or os.getenv("MEMOS_TOKEN")
         # 优先从环境变量读取 agent，其次是传入的参数
@@ -88,6 +118,118 @@ class MemosClient:
         self.headers = {"Authorization": f"Bearer {self.token}"}
         # 使用连接池
         self.session = get_session(self.base_url)
+
+        # Config-driven 参数
+        cfg = get_config()
+        self.max_content_bytes = cfg.get("memos.max_content_bytes", 7792)
+        self.ingest_batch_size = cfg.get("memos.ingest_batch_size", 10)
+        self.ingest_batch_interval = cfg.get("memos.ingest_batch_interval", 10)
+
+        # 查询缓存
+        self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._cache_ttl = cfg.get("memos.query_cache_ttl", 30)
+
+        # metrics 回调
+        self._metrics_callback = metrics_callback
+
+        # 加载脱敏规则（优先从配置文件，否则用内置默认值）
+        self.SENSITIVE_PATTERNS = self._load_sanitize_patterns()
+
+    # ==================== 配置加载 ====================
+
+    @staticmethod
+    def _load_sanitize_patterns() -> List[Tuple[str, str]]:
+        """从 ~/.mnemos/configs/sanitize_patterns.json 加载脱敏规则，不存在则用内置默认值"""
+        cfg_dir = Path.home() / ".mnemos" / "configs"
+        patterns_file = cfg_dir / "sanitize_patterns.json"
+        if patterns_file.exists():
+            try:
+                with open(patterns_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 期望格式: [["regex", "replacement"], ...]
+                patterns = []
+                for item in data:
+                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                        patterns.append((item[0], item[1]))
+                if patterns:
+                    return patterns
+            except Exception:
+                pass
+        return list(MemosClient._DEFAULT_SANITIZE_PATTERNS)
+
+    # ==================== 缓存 ====================
+
+    def _cache_get(self, key: str) -> Optional[Any]:
+        """从缓存获取数据，过期返回 None"""
+        if key in self._cache:
+            ts, val = self._cache[key]
+            if time.time() - ts < self._cache_ttl:
+                return val
+            del self._cache[key]
+        return None
+
+    def _cache_set(self, key: str, value: Any):
+        """写入缓存"""
+        self._cache[key] = (time.time(), value)
+
+    def _cache_key(self, method: str, *args) -> str:
+        """生成缓存 key"""
+        return f"{method}:{':'.join(str(a) for a in args)}"
+
+    # ==================== 请求封装 ====================
+
+    def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """
+        统一请求入口，包含错误分类和 metrics 回调
+
+        Args:
+            method: HTTP 方法 (GET/POST/PATCH/DELETE)
+            url: 完整 URL
+            **kwargs: 传递给 requests 的额外参数
+
+        Returns:
+            requests.Response
+
+        Raises:
+            MemosRateLimitError: 429 速率限制
+            MemosAuthError: 401/403 认证失败
+            MemosPayloadTooLargeError: 413 请求体过大
+            MemosServerError: 5xx 服务器错误
+        """
+        start_time = time.time()
+        resp = getattr(self.session, method.lower())(url, headers=self.headers, **kwargs)
+        elapsed = time.time() - start_time
+
+        # metrics 回调
+        if self._metrics_callback:
+            try:
+                self._metrics_callback(method, elapsed, resp.status_code)
+            except Exception:
+                pass  # metrics 不应影响主流程
+
+        # 错误分类
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            retry_secs = int(retry_after) if retry_after and retry_after.isdigit() else None
+            raise MemosRateLimitError(
+                f"速率限制 (429)，建议指数退避重试{f'，Retry-After: {retry_secs}s' if retry_secs else ''}",
+                retry_after=retry_secs
+            )
+        elif resp.status_code in (401, 403):
+            raise MemosAuthError(
+                f"认证/授权失败 ({resp.status_code})，请检查 token 是否有效，不建议重试"
+            )
+        elif resp.status_code == 413:
+            raise MemosPayloadTooLargeError(
+                f"请求体过大 (413)，请减少内容长度"
+            )
+        elif resp.status_code >= 500:
+            raise MemosServerError(
+                f"服务器错误 ({resp.status_code})，建议重试",
+                status_code=resp.status_code
+            )
+
+        return resp
 
     def _sanitize(self, content: str) -> str:
         """脱敏处理"""
@@ -111,10 +253,6 @@ class MemosClient:
         return tags
 
     # ==================== 核心 API ====================
-
-    # Memos API 限制：最大 8192 字节（UTF-8 编码）
-    # 留出 400 字节给标签和格式
-    MAX_CONTENT_BYTES = 7792
 
     def _truncate_content(self, content: str, max_bytes: int) -> Tuple[str, bool, int]:
         """
@@ -191,7 +329,7 @@ class MemosClient:
         total_overhead = header_overhead + tag_overhead + 600  # 增加缓冲
 
         # 每片内容可用空间（字节）
-        available_per_chunk = self.MAX_CONTENT_BYTES - total_overhead
+        available_per_chunk = self.max_content_bytes - total_overhead
 
         if available_per_chunk < 3000:
             available_per_chunk = 3000
@@ -339,7 +477,7 @@ class MemosClient:
 
         # 4. 计算可用空间（留出空间给标签和提示）
         # Memos API 限制 8192 字节
-        available_bytes = self.MAX_CONTENT_BYTES - tag_bytes - 200
+        available_bytes = self.max_content_bytes - tag_bytes - 200
         if available_bytes < 3000:
             available_bytes = 3000
 
@@ -355,10 +493,10 @@ class MemosClient:
         else:
             final_content = f"{truncated_content}\n\n{tag_str}".strip()
 
-        # 7. 调用 API（使用连接池）
-        resp = self.session.post(
+        # 7. 调用 API（使用统一请求入口）
+        resp = self._make_request(
+            "POST",
             f"{self.base_url}/api/v1/memos",
-            headers=self.headers,
             json={
                 "content": final_content,
                 "visibility": visibility
@@ -390,6 +528,78 @@ class MemosClient:
             agent=self.agent
         )
 
+    def idempotent_save(self, content: str, tags: List[str], visibility: str = "PUBLIC") -> Memory:
+        """
+        幂等保存：仅在内容不存在时保存（按 hash 去重）
+
+        Args:
+            content: 内容文本
+            tags: 标签列表
+            visibility: 可见性
+
+        Returns:
+            Memory 对象（如果已存在则返回标记了 id=0 的占位 Memory）
+        """
+        content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        existing = self.get_full_content_by_hash(content_hash)
+        if existing:
+            # Return a dummy Memory indicating skip
+            return Memory(
+                id=0, uid="", content=existing, tags=tags,
+                visibility=visibility, created_at="", updated_at="",
+                agent=self.agent, raw_source_path=None
+            )
+        return self.save(content=content, tags=tags, visibility=visibility)
+
+    def update_tags(self, memo_uid: str, add_tags: List[str] = None, remove_tags: List[str] = None) -> bool:
+        """
+        增量更新标签：对已有 memo 添加或移除标签
+
+        Args:
+            memo_uid: 记忆 UID
+            add_tags: 要添加的标签列表
+            remove_tags: 要移除的标签列表
+
+        Returns:
+            是否更新成功
+        """
+        if not add_tags and not remove_tags:
+            return True
+
+        # 1. 获取当前 memo
+        current = self.get_by_uid(memo_uid)
+        if not current:
+            return False
+
+        # 2. 合并标签
+        current_tags = set(current.tags)
+        if add_tags:
+            current_tags.update(add_tags)
+        if remove_tags:
+            current_tags -= set(remove_tags)
+
+        # 3. 重新构建内容（Memos 从内容中提取标签）
+        # 保留原始内容（不含标签行），追加新标签行
+        clean_content = current.content.rstrip()
+        # 移除旧的标签行（以 # 开头的行）
+        lines = clean_content.split('\n')
+        content_lines = [l for l in lines if not re.match(r'^\s*#[^\s]', l)]
+        clean_content = '\n'.join(content_lines).rstrip()
+
+        tag_line = " ".join([f"#{t}" for t in current_tags])
+        new_content = f"{clean_content}\n\n{tag_line}"
+
+        # 4. PATCH 更新
+        try:
+            resp = self._make_request(
+                "PATCH",
+                f"{self.base_url}/api/v1/memos/{memo_uid}",
+                json={"content": new_content}
+            )
+            return resp.ok
+        except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+            return False
+
     def list_all_memos(self, max_records: int = None, filter_fn=None) -> List[Dict]:
         """
         获取所有记忆记录（自动处理分页）
@@ -411,11 +621,14 @@ class MemosClient:
             if page_token:
                 params["pageToken"] = page_token
 
-            resp = self.session.get(
-                f"{self.base_url}/api/v1/memos",
-                headers=self.headers,
-                params=params
-            )
+            try:
+                resp = self._make_request(
+                    "GET",
+                    f"{self.base_url}/api/v1/memos",
+                    params=params
+                )
+            except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                break
 
             if not resp.ok:
                 break
@@ -452,6 +665,12 @@ class MemosClient:
         Returns:
             匹配的记忆列表
         """
+        # 查询缓存
+        cache_key = self._cache_key("list_by_tags", ",".join(sorted(tags)), limit)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         memories = []
         seen_uids = set()
 
@@ -485,6 +704,8 @@ class MemosClient:
                     agent=self.agent
                 ))
 
+        # 写入缓存
+        self._cache_set(cache_key, memories)
         return memories
 
     def search(self, query: str, limit: int = None) -> List[Memory]:
@@ -498,6 +719,12 @@ class MemosClient:
         Returns:
             匹配的记忆列表
         """
+        # 查询缓存
+        cache_key = self._cache_key("search", query, limit)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         memories = []
         seen_uids = set()
         page_token = None
@@ -512,11 +739,14 @@ class MemosClient:
             if page_token:
                 params["pageToken"] = page_token
 
-            resp = self.session.get(
-                f"{self.base_url}/api/v1/memos",
-                headers=self.headers,
-                params=params
-            )
+            try:
+                resp = self._make_request(
+                    "GET",
+                    f"{self.base_url}/api/v1/memos",
+                    params=params
+                )
+            except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                break
 
             if not resp.ok:
                 break
@@ -557,6 +787,8 @@ class MemosClient:
             if not page_token or len(memos) == 0:
                 break
 
+        # 写入缓存
+        self._cache_set(cache_key, memories)
         return memories
 
     def list_all(self, limit: int = None) -> List[Memory]:
@@ -600,12 +832,15 @@ class MemosClient:
 
     def delete(self, memo_uid: str) -> bool:
         """删除记忆（使用 uid）"""
-        resp = self.session.patch(
-            f"{self.base_url}/api/v1/memos/{memo_uid}",
-            headers=self.headers,
-            json={"rowStatus": "ARCHIVED"}
-        )
-        return resp.ok
+        try:
+            resp = self._make_request(
+                "PATCH",
+                f"{self.base_url}/api/v1/memos/{memo_uid}",
+                json={"rowStatus": "ARCHIVED"}
+            )
+            return resp.ok
+        except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+            return False
 
     def update_memo(self, memo_uid: str, content: str = None, tags: List[str] = None) -> Optional[Memory]:
         """
@@ -646,11 +881,14 @@ class MemosClient:
         update_data["content"] = new_content
 
         # 3. 调用 API 更新
-        resp = self.session.patch(
-            f"{self.base_url}/api/v1/memos/{memo_uid}",
-            headers=self.headers,
-            json=update_data
-        )
+        try:
+            resp = self._make_request(
+                "PATCH",
+                f"{self.base_url}/api/v1/memos/{memo_uid}",
+                json=update_data
+            )
+        except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+            return None
 
         if not resp.ok:
             return None
@@ -673,10 +911,14 @@ class MemosClient:
 
     def get_by_uid(self, memo_uid: str) -> Optional[Memory]:
         """根据 UID 获取记忆"""
-        resp = self.session.get(
-            f"{self.base_url}/api/v1/memos/{memo_uid}",
-            headers=self.headers
-        )
+        try:
+            resp = self._make_request(
+                "GET",
+                f"{self.base_url}/api/v1/memos/{memo_uid}"
+            )
+        except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+            return None
+
         if not resp.ok:
             return None
 
@@ -700,9 +942,6 @@ class MemosClient:
         )
 
     # ==================== 批量 Ingest 接口（Clean/Expand模式）====================
-
-    INGEST_BATCH_SIZE = 10      # 单次最大更新页数
-    INGEST_BATCH_INTERVAL = 10  # 批次间隔（秒）
 
     def batch_save(
         self,
@@ -734,10 +973,10 @@ class MemosClient:
             "batches": []
         }
 
-        for i in range(0, len(contents), self.INGEST_BATCH_SIZE):
-            batch = contents[i:i + self.INGEST_BATCH_SIZE]
-            batch_num = i // self.INGEST_BATCH_SIZE + 1
-            total_batches = (len(contents) + self.INGEST_BATCH_SIZE - 1) // self.INGEST_BATCH_SIZE
+        for i in range(0, len(contents), self.ingest_batch_size):
+            batch = contents[i:i + self.ingest_batch_size]
+            batch_num = i // self.ingest_batch_size + 1
+            total_batches = (len(contents) + self.ingest_batch_size - 1) // self.ingest_batch_size
 
             print(f"[Ingest] 批次 {batch_num}/{total_batches}: {len(batch)} 条")
 
@@ -768,9 +1007,9 @@ class MemosClient:
             })
 
             # 批次间隔（非最后一批）
-            if i + self.INGEST_BATCH_SIZE < len(contents):
-                print(f"[Ingest] 等待 {self.INGEST_BATCH_INTERVAL}s...")
-                sleep(self.INGEST_BATCH_INTERVAL)
+            if i + self.ingest_batch_size < len(contents):
+                print(f"[Ingest] 等待 {self.ingest_batch_interval}s...")
+                sleep(self.ingest_batch_interval)
 
         print(f"[Ingest] 完成: {len(results['successful'])}/{len(contents)} 成功")
         return results
@@ -952,11 +1191,11 @@ class MemosClient:
 
             # 如果单组仍超限，压缩处理
             content_bytes = len(content.encode("utf-8"))
-            if content_bytes > self.MAX_CONTENT_BYTES - 500:
+            if content_bytes > self.max_content_bytes - 500:
                 # 去掉缩进
                 content = json.dumps(payload, ensure_ascii=False)
                 content_bytes = len(content.encode("utf-8"))
-                if content_bytes > self.MAX_CONTENT_BYTES - 500:
+                if content_bytes > self.max_content_bytes - 500:
                     # 截断超长消息
                     for msg in payload["messages"]:
                         c = msg.get("content", "")
@@ -1244,6 +1483,92 @@ class MemosClient:
         merged = self._merge_segments_to_memory(segments)
 
         return merged.content if merged else None
+
+    # ==================== MCP 集成存根 ====================
+
+    @classmethod
+    def as_mcp_server(cls) -> Dict[str, Any]:
+        """
+        返回 MCP Server 能力描述（存根）
+
+        Returns:
+            描述 MCP server 能力的字典，包含名称、版本、工具列表等
+        """
+        return {
+            "name": "styx-memos",
+            "version": "0.1.0",
+            "description": "Memos knowledge store MCP server (stub)",
+            "capabilities": {
+                "tools": True,
+                "resources": False,
+                "prompts": False,
+            },
+            "tools": [
+                {
+                    "name": "memos_save",
+                    "description": "Save a new memory to Memos",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "Memory content"},
+                            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
+                            "visibility": {"type": "string", "enum": ["PUBLIC", "PRIVATE"], "default": "PUBLIC"},
+                        },
+                        "required": ["content"],
+                    },
+                },
+                {
+                    "name": "memos_search",
+                    "description": "Search memories by query",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query"},
+                            "limit": {"type": "integer", "description": "Max results"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": "memos_list_by_tags",
+                    "description": "List memories by tags",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags to filter"},
+                            "limit": {"type": "integer", "description": "Max results"},
+                        },
+                        "required": ["tags"],
+                    },
+                },
+                {
+                    "name": "memos_idempotent_save",
+                    "description": "Save only if content doesn't already exist (by hash)",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "Memory content"},
+                            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags"},
+                            "visibility": {"type": "string", "enum": ["PUBLIC", "PRIVATE"], "default": "PUBLIC"},
+                        },
+                        "required": ["content", "tags"],
+                    },
+                },
+                {
+                    "name": "memos_update_tags",
+                    "description": "Add or remove tags from an existing memo",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "memo_uid": {"type": "string", "description": "Memo UID"},
+                            "add_tags": {"type": "array", "items": {"type": "string"}, "description": "Tags to add"},
+                            "remove_tags": {"type": "array", "items": {"type": "string"}, "description": "Tags to remove"},
+                        },
+                        "required": ["memo_uid"],
+                    },
+                },
+            ],
+        }
 
 
 # ==================== 测试 ====================

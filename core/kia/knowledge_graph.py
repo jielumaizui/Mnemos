@@ -149,7 +149,11 @@ class KnowledgePath:
 
 
 class KnowledgeGraph:
-    """知识图谱管理器"""
+    """知识图谱门面 — 委托给 EntityManager + RelationManager
+
+    保留原有 CRUD + 发现 + 路径 + 导出接口，
+    新增：entity_manager / relation_manager / context_query / event_handler 子系统。
+    """
 
     def __init__(self, db_path: str = None, wiki_base: str = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
@@ -158,6 +162,39 @@ class KnowledgeGraph:
         self.db_path = Path(db_path) if db_path else Path(DB_PATH)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        # 子系统（延迟初始化）
+        self._entity_manager = None
+        self._relation_manager = None
+        self._context_query = None
+        self._event_handler = None
+
+    @property
+    def entity_manager(self):
+        if self._entity_manager is None:
+            from .entity_manager import EntityManager
+            self._entity_manager = EntityManager()
+        return self._entity_manager
+
+    @property
+    def relation_manager(self):
+        if self._relation_manager is None:
+            from .relation_manager import RelationManager
+            self._relation_manager = RelationManager(str(self.db_path))
+        return self._relation_manager
+
+    @property
+    def context_query(self):
+        if self._context_query is None:
+            from .context_query import ContextAwareQuery
+            self._context_query = ContextAwareQuery(self.wiki_base)
+        return self._context_query
+
+    @property
+    def event_handler(self):
+        if self._event_handler is None:
+            from .kg_event_handler import KGEventHandler
+            self._event_handler = KGEventHandler()
+        return self._event_handler
 
     def _init_db(self):
         """初始化数据库"""

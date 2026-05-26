@@ -39,9 +39,19 @@ env/
 user_signals.db
 .env
 
+# Mnemos runtime data
+.mnemos/
+.claude/
+
 # Wiki content (user's private knowledge)
 wiki/
+
+# Logs
+*.log
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Prompt templates cache
+prompts/__pycache__/

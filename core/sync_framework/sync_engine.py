@@ -4,31 +4,42 @@ SyncEngine — 统一同步协调层
 
 AgentSource 和 MemosClient 之间的统一协调层。
 插件只负责：发现会话 + 解析消息。
-引擎负责：防重、过滤、构建、标签、分片、存储、信号采集。
+引擎负责：增量跳过→噪音过滤→内容构建→脱敏→去重→标签组装→存储分片→信号采集。
 
-TODO: 当前为骨架实现，待逐步完善：
-  - 统一防重数据库（从各 Agent 独立库迁移到 ~/.mnemos/sync_log.db）
-  - 画像信号采集（写入 ~/.mnemos/user_signals.db）
-  - TriggerDispatcher（WatchdogTrigger / PollingTrigger / HybridTrigger）
-  - 分片决策（>7792 bytes 自动分片）
-  - KIA Hook 集成
+8 步流水线:
+  1. 增量跳过 — 基于 turn_number 跳过已同步轮次
+  2. 噪音过滤 — 统一 is_noise_message()
+  3. 内容构建 — Markdown 格式化
+  4. 脱敏 — 复用 MemosClient._sanitize()
+  5. 去重检查 — content_hash 对比
+  6. 标签组装 — 七维标签 + 插件扩展 + 自动检测
+  7. 存储分片 — Config 驱动阈值，超长自动分片
+  8. 信号采集 — 画像行为信号 + sync_log 状态记录
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from integrations.styx import MemosClient
+from integrations.styx import (
+    MemosClient,
+    MemosRateLimitError,
+    MemosAuthError,
+    MemosServerError,
+)
 from core.config import get_config
 from core.kia.ingest_helpers import is_noise_message
 from core.task_id_parser import TagBuilder, TaskIdParser
 
 from .agent_source import AgentSource, SessionInfo, Turn, SyncResult
+
+logger = logging.getLogger(__name__)
 
 
 class SyncEngine:
@@ -39,6 +50,7 @@ class SyncEngine:
     - 插件不可见内部逻辑，只提供原始数据
     - 所有同步数据统一经过此引擎，不绕路
     - 画像信号在同步成功后统一采集
+    - 统一防重：一个 SQLite 库管所有 Agent
     """
 
     def __init__(
@@ -46,24 +58,27 @@ class SyncEngine:
         client: Optional[MemosClient] = None,
         db_path: Optional[str] = None,
     ):
+        self.config = get_config()
         self.client = client or self._build_default_client()
-        self.db_path = Path(db_path or "~/.mnemos/sync_log.db").expanduser()
+        self.db_path = Path(db_path or self.config.data_dir / "sync_log.db").expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._shard_threshold = self.config.get("memos.max_content_bytes", 7792)
         self._init_db()
 
     # ---------- 内部工厂 ----------
 
     def _build_default_client(self) -> MemosClient:
-        config = get_config()
         return MemosClient(
-            token=config.memos_token,
-            base_url=config.memos_api_url,
+            token=self.config.memos_token,
+            base_url=self.config.memos_api_url,
             agent="sync-engine",
         )
 
     def _init_db(self):
         """初始化统一防重数据库"""
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sync_log (
@@ -72,9 +87,14 @@ class SyncEngine:
                     session_id TEXT NOT NULL,
                     turn_number INTEGER NOT NULL,
                     content_hash TEXT NOT NULL,
-                    memos_uids TEXT,           -- JSON list
+                    memos_uids TEXT,
                     status TEXT DEFAULT 'synced',
                     synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    distill_status TEXT DEFAULT 'pending',
+                    distill_job_id TEXT,
+                    distilled_at TIMESTAMP,
+                    wiki_page_paths TEXT,
+                    distill_error TEXT,
                     UNIQUE(agent_name, session_id, turn_number)
                 )
             """)
@@ -82,7 +102,7 @@ class SyncEngine:
                 CREATE INDEX IF NOT EXISTS idx_sync_lookup
                 ON sync_log(agent_name, session_id, turn_number)
             """)
-            # 画像信号表（统一采集，所有 Agent 自动参与）
+            # 画像信号表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_signals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +153,7 @@ class SyncEngine:
             if incremental and turn.turn_number < last_synced:
                 continue
 
-            # 2. 噪音过滤（统一标准）
+            # 2. 噪音过滤
             if self._is_noise(turn):
                 results.append(SyncResult(
                     session_id=session_info.session_id,
@@ -144,9 +164,13 @@ class SyncEngine:
 
             # 3. 内容构建
             content = self._build_markdown(turn, session_info.session_id, source.model_tag)
+
+            # 4. 脱敏
+            content = self._sanitize_content(content)
+
             content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
 
-            # 4. 去重检查
+            # 5. 去重检查
             existing = self._check_synced(
                 source.name, session_info.session_id, turn.turn_number
             )
@@ -159,22 +183,23 @@ class SyncEngine:
                 ))
                 continue
 
-            # 5. 标签组装（七维标签 + 插件扩展 + 自动检测）
+            # 6. 标签组装
             tags = self._build_tags(source, turn, session_info)
             tags.extend(source.build_extra_tags(turn))
 
-            # 6. 存储 + 分片
+            # 7. 存储 + 分片
             title = f"{source.name}-{session_info.session_id[:8]}-turn{turn.turn_number + 1}"
             try:
                 memories = self._save_content(content, tags, title)
                 uids = [m.uid for m in memories] if memories else []
                 status_str = "updated" if existing else "new"
+
+                # 8. 状态记录 + 信号采集
                 self._record_sync(
                     source.name, session_info.session_id,
                     turn.turn_number, content_hash, uids, status_str,
                 )
-                # 7. 画像信号采集
-                self._collect_persona_signal(source, turn)
+                self._collect_persona_signal(source, turn, session_info.session_id)
 
                 results.append(SyncResult(
                     session_id=session_info.session_id,
@@ -183,7 +208,35 @@ class SyncEngine:
                     memos_uids=uids,
                     content_hash=content_hash,
                 ))
+            except MemosRateLimitError as e:
+                logger.warning(f"[SyncEngine] 速率限制: {e}")
+                results.append(SyncResult(
+                    session_id=session_info.session_id,
+                    turn_number=turn.turn_number,
+                    action="failed",
+                    content_hash=content_hash,
+                    error=f"rate_limit: {e}",
+                ))
+            except MemosAuthError as e:
+                logger.error(f"[SyncEngine] 认证失败: {e}")
+                results.append(SyncResult(
+                    session_id=session_info.session_id,
+                    turn_number=turn.turn_number,
+                    action="failed",
+                    content_hash=content_hash,
+                    error=f"auth_error: {e}",
+                ))
+            except MemosServerError as e:
+                logger.warning(f"[SyncEngine] 服务器错误: {e}")
+                results.append(SyncResult(
+                    session_id=session_info.session_id,
+                    turn_number=turn.turn_number,
+                    action="failed",
+                    content_hash=content_hash,
+                    error=f"server_error: {e}",
+                ))
             except Exception as e:
+                logger.error(f"[SyncEngine] 同步失败: {e}")
                 results.append(SyncResult(
                     session_id=session_info.session_id,
                     turn_number=turn.turn_number,
@@ -194,10 +247,99 @@ class SyncEngine:
 
         # KIA Hook: session_end
         all_messages = [
-            {"role": "user" if i % 2 == 0 else "assistant", "content": t.user_content if i % 2 == 0 else t.assistant_content}
+            {"role": "user" if i % 2 == 0 else "assistant",
+             "content": t.user_content if i % 2 == 0 else t.assistant_content}
             for i, t in enumerate(turns)
         ]
         source.on_session_end(session_info.session_id, all_messages)
+
+        return results
+
+    def sync_batch(
+        self,
+        source: AgentSource,
+        sessions: List[SessionInfo],
+        incremental: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        批量同步多个会话，支持部分成功。
+
+        Args:
+            source: AgentSource 实例
+            sessions: 会话列表
+            incremental: 是否增量同步
+
+        Returns:
+            批量同步结果，含成功/失败/跳过统计
+        """
+        batch_results = {
+            "agent": source.name,
+            "total_sessions": len(sessions),
+            "successful": [],
+            "failed": [],
+            "turn_stats": {"new": 0, "updated": 0, "skipped": 0, "noise": 0, "failed": 0},
+        }
+
+        for session_info in sessions:
+            try:
+                results = self.sync_session(source, session_info, incremental)
+                session_summary = {
+                    "session_id": session_info.session_id,
+                    "results": results,
+                }
+                batch_results["successful"].append(session_summary)
+
+                for r in results:
+                    if r.action in batch_results["turn_stats"]:
+                        batch_results["turn_stats"][r.action] += 1
+
+            except Exception as e:
+                logger.error(f"[SyncEngine] 批量同步 session 失败 {session_info.session_id}: {e}")
+                batch_results["failed"].append({
+                    "session_id": session_info.session_id,
+                    "error": str(e),
+                })
+                batch_results["turn_stats"]["failed"] += 1
+
+        return batch_results
+
+    def retry_failed(self, agent_name: Optional[str] = None, limit: int = 50) -> List[SyncResult]:
+        """
+        重试失败的同步记录。
+
+        扫描 sync_log 中 status='failed' 的记录，重新同步。
+        仅重试可重试类型的错误（排除 auth_error）。
+
+        Args:
+            agent_name: 指定 Agent 重试，None 则重试所有
+            limit: 最大重试数
+
+        Returns:
+            重试结果列表
+        """
+        failed_records = self._get_failed_records(agent_name, limit)
+        if not failed_records:
+            return []
+
+        results = []
+        for record in failed_records:
+            # auth_error 不重试
+            if record.get("error", "").startswith("auth_error:"):
+                continue
+
+            source = self._get_source(record["agent_name"])
+            if not source:
+                continue
+
+            session_info = SessionInfo(
+                session_id=record["session_id"],
+                source_path=Path(record.get("source_path", "")),
+            )
+            try:
+                session_results = self.sync_session(source, session_info)
+                results.extend(session_results)
+            except Exception as e:
+                logger.error(f"[SyncEngine] 重试失败 {record['session_id']}: {e}")
 
         return results
 
@@ -226,6 +368,10 @@ class SyncEngine:
         ]
         return "\n".join(lines)
 
+    def _sanitize_content(self, content: str) -> str:
+        """脱敏处理 — 复用 MemosClient 的规则"""
+        return self.client._sanitize(content)
+
     def _build_tags(
         self,
         source: AgentSource,
@@ -233,30 +379,42 @@ class SyncEngine:
         session_info: SessionInfo,
     ) -> List[str]:
         """构建七维标签 + 自动检测"""
-        tags = [
-            f"source={source.name}",
-            f"time={datetime.now().strftime('%Y%m%d')}",
-            f"model={source.model_tag}",
-            "scope=public",
-            "status=raw",
-            "content_type=session-record",
-            "layer=L1",
-            f"session={session_info.session_id}",
-            f"turn={turn.turn_number + 1}",
-        ]
+        # 解析 task_id（从用户消息中）
+        task_id = TaskIdParser.parse(turn.user_content)
+        is_private = TaskIdParser.is_private_request(turn.user_content)
+        scope = "private" if is_private else "public"
+
+        tags = TagBuilder.build_tags(
+            source=source.name,
+            model=source.model_tag,
+            task_id=task_id,
+            scope=scope,
+        )
+
+        # 七维标签补充
+        tags.append("status=raw")
+        tags.append("content_type=session-record")
+        tags.append("layer=L1")
+        tags.append(f"session={session_info.session_id}")
+        tags.append(f"turn={turn.turn_number + 1}")
+
+        # 自动检测标签
         combined = f"{turn.user_content}\n{turn.assistant_content}"
         if "```" in combined:
             tags.append("has-code=true")
         if "[TOOL_RESULT]" in combined or turn.metadata.get("tool_calls"):
             tags.append("has-tools=true")
+
+        # 回流防护：wiki 生成内容不蒸馏
+        if "<wiki-context" in combined or "<!-- wiki-generated -->" in combined:
+            tags.append("skip-distill=true")
+
         return tags
 
     def _save_content(self, content: str, tags: List[str], title: str):
-        """保存内容到 Memos（含分片决策）"""
+        """保存内容到 Memos（含分片决策，阈值从 Config 读取）"""
         content_bytes = len(content.encode("utf-8"))
-        # TODO: 分片阈值应从配置读取（当前蓝图建议 7792 bytes）
-        if content_bytes > 7792:
-            # 分片保存
+        if content_bytes > self._shard_threshold:
             return self.client.save_long_content(
                 content=content,
                 tags=tags,
@@ -266,34 +424,24 @@ class SyncEngine:
         else:
             return [self.client.save(content, tags, "PUBLIC")]
 
-    def _collect_persona_signal(self, source: AgentSource, turn: Turn):
+    def _collect_persona_signal(self, source: AgentSource, turn: Turn, session_id: str):
         """采集用户行为信号，供画像系统分析"""
         combined = f"{turn.user_content}\n{turn.assistant_content}"
-        signal = {
-            "timestamp": datetime.now().isoformat(),
-            "agent": source.name,
-            "session_id": getattr(turn, "session_id", ""),
-            "turn_number": turn.turn_number,
-            "content_length": len(combined),
-            "has_code": 1 if "```" in combined else 0,
-            "has_tools": 1 if "[TOOL_RESULT]" in combined else 0,
-            "user_questions": combined.count("?"),
-        }
         try:
             with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
+                conn.execute("""
                     INSERT INTO user_signals
                     (timestamp, agent, session_id, turn_number, content_length, has_code, has_tools, user_questions)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    signal["timestamp"], signal["agent"], signal["session_id"],
-                    signal["turn_number"], signal["content_length"],
-                    signal["has_code"], signal["has_tools"], signal["user_questions"],
+                    datetime.now().isoformat(), source.name, session_id,
+                    turn.turn_number, len(combined),
+                    1 if "```" in combined else 0,
+                    1 if "[TOOL_RESULT]" in combined else 0,
+                    combined.count("?"),
                 ))
                 conn.commit()
         except Exception:
-            # 信号采集失败不应阻塞同步流程
             pass
 
     # ---------- 数据库操作 ----------
@@ -341,18 +489,47 @@ class SyncEngine:
         memos_uids: List[str],
         status: str,
     ):
-        """记录同步状态"""
+        """记录同步状态（含蒸馏扩展字段）"""
         try:
             with sqlite3.connect(str(self.db_path), timeout=10) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT OR REPLACE INTO sync_log
-                    (agent_name, session_id, turn_number, content_hash, memos_uids, status, synced_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (agent_name, session_id, turn_number, content_hash, memos_uids,
+                     status, synced_at, distill_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     agent_name, session_id, turn_number, content_hash,
                     json.dumps(memos_uids), status, datetime.now().isoformat(),
+                    "pending" if status in ("new", "updated") else "skipped",
                 ))
                 conn.commit()
         except Exception:
             pass
+
+    def _get_failed_records(self, agent_name: Optional[str], limit: int) -> List[Dict]:
+        """获取失败的同步记录"""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+                cursor = conn.cursor()
+                if agent_name:
+                    cursor.execute(
+                        "SELECT agent_name, session_id, turn_number, content_hash FROM sync_log WHERE status = 'failed' AND agent_name = ? ORDER BY synced_at DESC LIMIT ?",
+                        (agent_name, limit),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT agent_name, session_id, turn_number, content_hash FROM sync_log WHERE status = 'failed' ORDER BY synced_at DESC LIMIT ?",
+                        (limit,),
+                    )
+                return [
+                    {"agent_name": r[0], "session_id": r[1], "turn_number": r[2], "content_hash": r[3]}
+                    for r in cursor.fetchall()
+                ]
+        except Exception:
+            return []
+
+    def _get_source(self, agent_name: str) -> Optional[AgentSource]:
+        """获取 AgentSource 实例"""
+        from .registry import AgentRegistry
+        return AgentRegistry.get(agent_name)

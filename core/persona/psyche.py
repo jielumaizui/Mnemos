@@ -287,6 +287,7 @@ class SessionSignal:
     duration_seconds: int = 0
     working_dir: str = ""
     agent: str = "claude"
+    context_tags: List[str] = None
 
 
 @dataclass

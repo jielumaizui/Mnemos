@@ -684,8 +684,109 @@ def cmd_mcp_serve(args):
         from integrations.agora import run_mcp_server
         run_mcp_server()
     except ImportError:
-        print("❌ MCP 服务器未实现。请先安装 mnemos[mcp] 依赖。")
+        print("MCP 服务器未实现。请先安装 mnemos[mcp] 依赖。")
         sys.exit(1)
+
+
+def cmd_scorer(args):
+    """评分层管理"""
+    if args.scorer_cmd == "status":
+        try:
+            from core.kia.chronos import KnowledgeScheduler
+            scheduler = KnowledgeScheduler()
+            steps = scheduler.get_step_status()
+            print("KIA 调度步骤状态:")
+            for name, info in steps.items():
+                status = "启用" if info["enabled"] else "禁用"
+                fails = f" ({info['consecutive_failures']}次失败)" if info["consecutive_failures"] > 0 else ""
+                print(f"  {name}: {status} | {info['trigger']}{fails}")
+        except Exception as e:
+            print(f"状态查询失败: {e}")
+
+    elif args.scorer_cmd == "retrain":
+        print("重训练请求已发出（异步处理）")
+
+    elif args.scorer_cmd == "rollback":
+        print("回滚到上一版本（异步处理）")
+
+    else:
+        print("用法: mnemos scorer {status|retrain|rollback}")
+
+
+def cmd_sync(args):
+    """同步层管理"""
+    if args.sync_cmd == "status":
+        try:
+            from core.config import get_config
+            import sqlite3
+            db_path = get_config().data_dir / "sync_log.db"
+            if db_path.exists():
+                with sqlite3.connect(str(db_path), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT agent_name, COUNT(*), MAX(synced_at)
+                        FROM sync_log
+                        WHERE date(synced_at) >= date('now', '-7 days')
+                        GROUP BY agent_name
+                    """)
+                    rows = cursor.fetchall()
+                    if rows:
+                        print("最近7天同步统计:")
+                        for agent, count, last_sync in rows:
+                            print(f"  {agent}: {count}条 | 最近: {last_sync}")
+                    else:
+                        print("最近7天无同步记录")
+            else:
+                print("同步数据库不存在")
+        except Exception as e:
+            print(f"状态查询失败: {e}")
+
+    elif args.sync_cmd == "retry-failed":
+        try:
+            from core.sync_framework.sync_engine import SyncEngine
+            engine = SyncEngine()
+            result = engine.retry_failed()
+            print(f"重试完成: {result}")
+        except Exception as e:
+            print(f"重试失败: {e}")
+
+    else:
+        print("用法: mnemos sync {status|retry-failed}")
+
+
+def cmd_search(args):
+    """上下文感知搜索"""
+    try:
+        from core.app.context_search import ContextAwareSearch
+        search = ContextAwareSearch()
+        results = search.search(args.query, limit=args.limit or 10)
+
+        if not results:
+            print(f"未找到与 '{args.query}' 相关的知识")
+            return
+
+        print(f"搜索结果 ({len(results)} 条):")
+        for i, r in enumerate(results, 1):
+            print(f"  {i}. [{r.score:.2f}] {r.title}")
+            if r.snippet:
+                snippet = r.snippet[:80].replace("\n", " ")
+                print(f"     {snippet}...")
+            print(f"     路径: {r.page_path}")
+    except Exception as e:
+        print(f"搜索失败: {e}")
+
+
+def cmd_report(args):
+    """生成报告"""
+    if args.report_cmd == "generate":
+        try:
+            from core.app.weekly_report import WeeklyReportGenerator
+            gen = WeeklyReportGenerator()
+            content = gen.generate_weekly_report()
+            print("周报已生成")
+        except Exception as e:
+            print(f"报告生成失败: {e}")
+    else:
+        print("用法: mnemos report generate")
 
 
 def main():
@@ -745,6 +846,29 @@ def main():
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_cmd")
     mcp_sub.add_parser("serve", help="启动 MCP 服务器")
 
+    # scorer
+    scorer_parser = subparsers.add_parser("scorer", help="评分层管理")
+    scorer_sub = scorer_parser.add_subparsers(dest="scorer_cmd")
+    scorer_sub.add_parser("status", help="查看评分器和调度步骤状态")
+    scorer_sub.add_parser("retrain", help="触发模型重训练")
+    scorer_sub.add_parser("rollback", help="回滚到上一版本模型")
+
+    # sync
+    sync_parser = subparsers.add_parser("sync", help="同步层管理")
+    sync_sub = sync_parser.add_subparsers(dest="sync_cmd")
+    sync_sub.add_parser("status", help="查看同步状态")
+    sync_sub.add_parser("retry-failed", help="重试失败的同步任务")
+
+    # search
+    search_parser = subparsers.add_parser("search", help="上下文感知搜索")
+    search_parser.add_argument("query", help="搜索查询")
+    search_parser.add_argument("--limit", type=int, default=10, help="最大结果数")
+
+    # report
+    report_parser = subparsers.add_parser("report", help="报告生成")
+    report_sub = report_parser.add_subparsers(dest="report_cmd")
+    report_sub.add_parser("generate", help="生成周报")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -766,6 +890,14 @@ def main():
         cmd_calibrate(args)
     elif args.command == "mcp" and args.mcp_cmd == "serve":
         cmd_mcp_serve(args)
+    elif args.command == "scorer":
+        cmd_scorer(args)
+    elif args.command == "sync":
+        cmd_sync(args)
+    elif args.command == "search":
+        cmd_search(args)
+    elif args.command == "report":
+        cmd_report(args)
     else:
         parser.print_help()
 

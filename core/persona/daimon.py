@@ -149,8 +149,19 @@ class SignalCollector:
         # 产出类型
         output_type = self._infer_output_type(messages, data)
 
+        # 上下文标签（从 SyncEngine persona signal 阶段提供）
+        context_tags = data.get("context_tags", [])
+        if isinstance(context_tags, str):
+            try:
+                context_tags = json.loads(context_tags)
+            except (json.JSONDecodeError, TypeError):
+                context_tags = []
+
         # 时间
         created_at = data.get("created_at", datetime.now().isoformat())
+
+        # 会话时长估算
+        duration = self._estimate_duration(messages)
 
         return SessionSignal(
             session_id=data.get("session_id", ""),
@@ -165,7 +176,77 @@ class SignalCollector:
             output_type=output_type,
             working_dir=data.get("working_dir", ""),
             agent=data.get("agent", "claude"),
+            context_tags=context_tags,
+            duration_seconds=int(duration),
         )
+
+    def _estimate_duration(self, messages: List[Dict]) -> float:
+        """从消息时间戳估算会话时长（秒）"""
+        timestamps = []
+        for m in messages:
+            ts = m.get("timestamp") or m.get("created_at")
+            if ts:
+                try:
+                    timestamps.append(datetime.fromisoformat(ts.replace("Z", "+00:00")))
+                except (ValueError, AttributeError):
+                    continue
+        if len(timestamps) >= 2:
+            delta = max(timestamps) - min(timestamps)
+            return delta.total_seconds()
+        return 0.0
+
+    def collect_from_sync_engine(self) -> int:
+        """
+        从 SyncEngine 的 sync_log 采集 SessionMetadata 信号。
+        Phase 2 的 persona signal collection 步骤写入的元数据。
+        """
+        count = 0
+        try:
+            from core.config import get_config
+            db_path = get_config().data_dir / "sync_log.db"
+            if not db_path.exists():
+                return count
+
+            with sqlite3.connect(str(db_path), timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT session_id, agent_name, working_dir,
+                           turn_count, synced_at, tags
+                    FROM sync_log
+                    WHERE synced_at >= date('now', '-30 days')
+                      AND persona_collected = 0
+                    ORDER BY synced_at DESC
+                """)
+                for row in cursor.fetchall():
+                    data = dict(row)
+                    tags = data.get("tags", "")
+                    if isinstance(tags, str):
+                        try:
+                            tags = json.loads(tags)
+                        except (json.JSONDecodeError, TypeError):
+                            tags = []
+                    signal = SessionSignal(
+                        session_id=data.get("session_id", ""),
+                        timestamp=data.get("synced_at", datetime.now().isoformat()),
+                        task_type="",
+                        working_dir=data.get("working_dir", ""),
+                        agent=data.get("agent_name", "unknown"),
+                        context_tags=tags if isinstance(tags, list) else [],
+                        user_msg_count=data.get("turn_count", 0),
+                    )
+                    if self.store.session_exists(signal.session_id):
+                        continue
+                    self.store.insert_session_signal(signal)
+                    # 标记已采集
+                    conn.execute("""
+                        UPDATE sync_log SET persona_collected = 1
+                        WHERE session_id = ?
+                    """, (signal.session_id,))
+                    count += 1
+        except Exception as e:
+            logger.warning(f"SyncEngine 信号采集失败: {e}")
+
+        return count
 
     def _parse_wiki_state_to_signal(self, data: Dict) -> Optional[SessionSignal]:
         """从 wiki_state 记录解析信号"""
@@ -638,11 +719,11 @@ class SignalCollector:
         all_sources = {
             "session": self.collect_from_distill_queue,
             "wiki_state": self.collect_from_wiki_state,
+            "sync_engine": self.collect_from_sync_engine,
             "git": self.collect_from_git,
             "wiki": self.collect_from_wiki,
             "file_system": self.collect_from_file_system,
             "memos": self.collect_from_memos,
-            # "wechat": wechat_collector.collect,  # 由 Task #81 提供
         }
 
         if sources is None:
@@ -670,7 +751,7 @@ class SignalCollector:
         enabled = []
         ds = config.persona_data_sources
         if ds.get("session", {}).get("enabled", True):
-            enabled.extend(["session", "wiki_state"])
+            enabled.extend(["session", "wiki_state", "sync_engine"])
         if ds.get("git", {}).get("enabled", False):
             enabled.append("git")
         if ds.get("memos", {}).get("enabled", False):

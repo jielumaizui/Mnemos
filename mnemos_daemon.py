@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Mnemos Daemon — 后台守护进程 (v2.0)
+Mnemos Daemon — 后台守护进程 (v2.0.0)
 
 职责（全自动闭环）：
 1. L1同步：监控Claude session文件变化 → 自动进Memos
@@ -98,65 +98,76 @@ def remove_pid():
 
 def service_l1_sync(stop_event: threading.Event):
     """
-    服务1: L1同步 — 监控Claude session文件变化，自动同步到Memos
-    使用watchdog实时监控，回退到定时轮询
+    服务1: L1同步 — 通过 SyncEngine 监控所有 Agent 源文件变化，自动同步到 Memos
+    使用 watchdog 实时监控（通过 Trigger 系统），回退到定时轮询
     """
     logger.info("[L1同步] 服务启动")
     try:
-        from integrations.claude_live_sync import start_monitoring, ClaudeSessionHandler
+        from core.sync_framework.sync_engine import SyncEngine
+        from core.sync_framework.registry import AgentLifecycleManager
         from core.config import get_config
 
-        watch_dir = get_config().claude_data_dir / "projects"
-        if not watch_dir.exists():
-            logger.warning(f"[L1同步] 目录不存在: {watch_dir}，跳过")
-            return
+        config = get_config()
+        sync_engine = SyncEngine()
+        lifecycle_mgr = AgentLifecycleManager()
 
-        # 检查watchdog是否可用
-        try:
-            from watchdog.observers import Observer
-            handler = ClaudeSessionHandler()
-            observer = Observer()
-            observer.schedule(handler, str(watch_dir), recursive=True)
-            observer.start()
-            logger.info(f"[L1同步] watchdog监控已启动: {watch_dir}")
+        # 发现并注册所有 Agent 源
+        lifecycle_mgr.discover_agents()
+        sources = lifecycle_mgr.get_active_sources()
+        logger.info(f"[L1同步] 已注册 {len(sources)} 个 Agent 源")
 
-            while not stop_event.is_set():
-                stop_event.wait(timeout=1)
+        # 定时轮询模式（watchdog 由 TriggerDispatcher 管理）
+        poll_interval = 30  # 30秒轮询一次
 
-            observer.stop()
-            observer.join(timeout=5)
-            logger.info("[L1同步] 已停止")
-        except ImportError:
-            logger.info("[L1同步] watchdog不可用，使用轮询模式")
-            handler = ClaudeSessionHandler()
-            while not stop_event.is_set():
-                try:
-                    handler.scan_all_sessions()
-                except Exception as e:
-                    logger.error(f"[L1同步] 轮询失败: {e}")
-                stop_event.wait(timeout=30)  # 30秒轮询一次
+        while not stop_event.is_set():
+            try:
+                for source in sources:
+                    try:
+                        result = sync_engine.sync_batch(source)
+                        if result.get("synced", 0) > 0 or result.get("skipped", 0) > 0:
+                            logger.info(f"[L1同步] {source.name}: "
+                                       f"synced={result.get('synced',0)}, "
+                                       f"skipped={result.get('skipped',0)}, "
+                                       f"failed={result.get('failed',0)}")
+                    except Exception as e:
+                        logger.error(f"[L1同步] {source.name} 同步失败: {e}")
+            except Exception as e:
+                logger.error(f"[L1同步] 轮询失败: {e}")
+
+            stop_event.wait(timeout=poll_interval)
+
+        logger.info("[L1同步] 已停止")
     except Exception as e:
         logger.error(f"[L1同步] 服务异常: {e}")
 
 
 def service_distill_and_merge(stop_event: threading.Event):
     """
-    服务2: 蒸馏+合并 — 高频处理 distill_queue + 定时运行 Orchestrator
+    服务2: 蒸馏+合并 — 高频处理 distill_queue + 定时运行 KIA 调度器
 
     高频（每60秒）：
     - 处理 distill_queue 中的待蒸馏任务
     - 收集已完成的蒸馏结果
 
-    低频（每30分钟）：
-    - 运行 Orchestrator 全流程（DNA、图谱、免疫等）
+    中频（每5分钟）：
+    - 运行 KnowledgeScheduler.tick() 并行调度 KIA 步骤
     """
     logger.info("[蒸馏合并] 服务启动")
     from core.config import get_config
 
-    poll_interval = 60       # 60秒轮询一次
-    orch_interval = 30 * 60  # 30分钟运行一次 Orchestrator
-    orch_counter = 0
-    first_run = True
+    poll_interval = 60        # 60秒轮询一次
+    tick_interval = 5 * 60    # 5分钟运行一次 KIA 调度
+    tick_counter = 0
+
+    # 初始化 KnowledgeScheduler
+    scheduler = None
+    try:
+        from core.kia.chronos import KnowledgeScheduler
+        scheduler = KnowledgeScheduler(max_workers=4)
+        scheduler.register_all_default_steps()
+        logger.info("[蒸馏合并] KnowledgeScheduler 已初始化（16 步骤）")
+    except Exception as e:
+        logger.warning(f"[蒸馏合并] KnowledgeScheduler 初始化失败: {e}，回退到 Orchestrator")
 
     while not stop_event.is_set():
         try:
@@ -171,25 +182,24 @@ def service_distill_and_merge(stop_event: threading.Event):
             if collected > 0:
                 logger.info(f"[蒸馏合并] 收集了 {collected} 个完成的蒸馏结果")
 
-            # 低频：运行 Orchestrator 全流程
-            if first_run:
-                first_run = False
-                stop_event.wait(timeout=min(poll_interval, 5 * 60))
-                orch_counter += poll_interval
-                if stop_event.is_set():
-                    break
-                continue
+            # 中频：运行 KIA 调度器
+            tick_counter += poll_interval
+            if tick_counter >= tick_interval:
+                tick_counter = 0
+                if scheduler:
+                    results = scheduler.tick()
+                    if results:
+                        ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
+                        err_count = sum(1 for r in results.values() if r.get("status") == "error")
+                        skip_count = sum(1 for r in results.values() if r.get("status") == "skipped")
+                        logger.info(f"[蒸馏合并] KIA tick: {ok_count}成功, {err_count}失败, {skip_count}跳过")
+                else:
+                    # 回退到 Orchestrator
+                    from core.orchestrator import Orchestrator
+                    orch = Orchestrator(wiki_dir=get_config().wiki_dir)
+                    report = orch.run_full()
+                    logger.info(f"[蒸馏合并] Orchestrator 完成: {len(report.get('errors', []))} 错误")
 
-            orch_counter += poll_interval
-            if orch_counter >= orch_interval:
-                orch_counter = 0
-                from core.orchestrator import Orchestrator
-                orch = Orchestrator(wiki_dir=get_config().wiki_dir)
-                report = orch.run_full()
-                stages_done = report.get("stages_completed", 0)
-                stages_failed = report.get("stages_failed", 0)
-                if stages_done > 0 or stages_failed > 0:
-                    logger.info(f"[蒸馏合并] Orchestrator完成: {stages_done}阶段成功, {stages_failed}阶段失败")
         except Exception as e:
             logger.error(f"[蒸馏合并] 运行失败: {e}")
 
@@ -200,16 +210,32 @@ def service_distill_and_merge(stop_event: threading.Event):
 
 def service_heartbeat(stop_event: threading.Event):
     """
-    服务3: 心跳守护 — 健康检查 + 热力衰减 + 全量索引
+    服务3: 心跳守护 — OpsScorer 健康评分 + 热力衰减
     每60秒运行一次
     """
     logger.info("[心跳] 服务启动")
-    try:
-        from core.heartbeat import HeartbeatDaemon
-        daemon = HeartbeatDaemon()
-        daemon.run_loop(stop_event=stop_event)
-    except Exception as e:
-        logger.error(f"[心跳] 服务异常: {e}")
+    interval = 60
+
+    while not stop_event.is_set():
+        try:
+            # 优先使用 OpsScorer
+            try:
+                from core.scoring.scorers.ops_scorer import OpsScorer
+                scorer = OpsScorer()
+                result = scorer.score_system()
+                health = result.get("health_score", 0)
+                if health > 0:
+                    logger.debug(f"[心跳] 系统健康度: {health:.1f}")
+            except ImportError:
+                # 回退到 HeartbeatDaemon
+                from core.heartbeat import HeartbeatDaemon
+                daemon = HeartbeatDaemon()
+                daemon.run_once()
+        except Exception as e:
+            logger.error(f"[心跳] 运行失败: {e}")
+
+        stop_event.wait(timeout=interval)
+
     logger.info("[心跳] 服务已停止")
 
 
@@ -492,6 +518,42 @@ def service_event_bus(stop_event: threading.Event):
     processor.register("session.end", _handle_session_end)
     processor.register("distill.request", _handle_distill_request)
 
+    # KIA 事件触发步骤：由事件总线直接调用
+    def _handle_page_created(event):
+        """页面创建 → 直接触发 connect_worker"""
+        try:
+            from core.kia.chronos import KnowledgeScheduler
+            scheduler = KnowledgeScheduler()
+            result = scheduler.trigger_event("page.created", event.payload)
+            logger.info(f"[事件总线] connect_worker: {result.get('status')}")
+        except Exception as e:
+            logger.warning(f"[事件总线] page.created 处理失败: {e}")
+
+    def _handle_page_modified(event):
+        """页面修改 → 直接触发 iteration_tracker"""
+        try:
+            from core.kia.chronos import KnowledgeScheduler
+            scheduler = KnowledgeScheduler()
+            result = scheduler.trigger_event("page.modified", event.payload)
+            logger.info(f"[事件总线] iteration_tracker: {result.get('status')}")
+        except Exception as e:
+            logger.warning(f"[事件总线] page.modified 处理失败: {e}")
+
+    def _handle_message_exchanged(event):
+        """消息交换 → 直接触发 KIA 守护"""
+        try:
+            from core.kia.chronos import KnowledgeScheduler
+            scheduler = KnowledgeScheduler()
+            result = scheduler.trigger_event("message.exchanged", event.payload)
+            if result.get("status") == "error":
+                logger.warning(f"[事件总线] KIA guard: {result.get('error')}")
+        except Exception as e:
+            logger.debug(f"[事件总线] message.exchanged 处理: {e}")
+
+    processor.register("page.created", _handle_page_created)
+    processor.register("page.modified", _handle_page_modified)
+    processor.register("message.exchanged", _handle_message_exchanged)
+
     while not stop_event.is_set():
         try:
             stats_before = bus.stats()
@@ -567,7 +629,7 @@ def _run_preflight_checks() -> List[str]:
 def run_daemon():
     """主循环 — 启动所有自动化服务"""
     logger.info("=" * 50)
-    logger.info("Mnemos daemon v2.0 starting...")
+    logger.info("Mnemos daemon v2.0.0 starting...")
     logger.info("=" * 50)
     write_pid()
 
@@ -828,7 +890,7 @@ def uninstall_windows_task() -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Mnemos Daemon v2.0")
+    parser = argparse.ArgumentParser(description="Mnemos Daemon v2.0.0")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("start", help="启动守护进程（全自动模式）")
     sub.add_parser("stop", help="停止守护进程")

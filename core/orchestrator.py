@@ -1,5 +1,5 @@
 """
-Memos-Wiki v6.0 Orchestrator - 主控脚本
+Memos-Wiki v2.0.0 Orchestrator - 主控脚本
 
 串联所有模块形成完整的知识进化循环：
 
@@ -472,7 +472,7 @@ class Orchestrator:
     def run_full(self, push_context: str | None = None) -> Dict:
         """运行完整循环"""
         self.log("=" * 50)
-        self.log("Memos-Wiki v6.0 完整循环开始")
+        self.log("Memos-Wiki v2.0.0 完整循环开始")
         self.log(f"Wiki 路径: {self.wiki_base}")
         self.log(f"Dry run: {self.dry_run}, Limit: {self.limit}")
         self.log("=" * 50)
@@ -521,7 +521,7 @@ class Orchestrator:
     def generate_report(self, results: Dict) -> str:
         """生成 Markdown 报告"""
         lines = [
-            "# Memos-Wiki v6.0 运行报告",
+            "# Memos-Wiki v2.0.0 运行报告",
             f"时间: {results.get('timestamp', '')}",
             f"路径: {results.get('wiki_base', '')}",
             f"Dry run: {results.get('dry_run', False)}",
@@ -576,7 +576,7 @@ class Orchestrator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Memos-Wiki v6.0 Orchestrator")
+    parser = argparse.ArgumentParser(description="Memos-Wiki v2.0.0 Orchestrator")
     parser.add_argument("--mode", default="full",
                         choices=["full", "distill", "dna", "graph", "immune",
                                 "entropy", "stress", "dark", "entangle",
