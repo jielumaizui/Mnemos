@@ -142,6 +142,16 @@ class SyncEngine:
         last_synced = self._get_last_synced_turn(source.name, session_info.session_id)
         results: List[SyncResult] = []
 
+        # 发射 polled 事件
+        try:
+            from core.mnemos_bus import publish_event
+            publish_event("polled", source.name, {
+                "file_path": str(session_info.source_path),
+                "session_id": session_info.session_id,
+            })
+        except Exception:
+            pass
+
         # KIA Hook: session_start
         context = source.on_session_start(
             session_info.session_id,

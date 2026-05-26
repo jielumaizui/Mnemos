@@ -157,6 +157,19 @@ class AdaptiveScorer:
             self._stats.update(f"{dim}.value", card.value)
             self._stats.update(f"{dim}.confidence", card.confidence)
 
+        # 发射 content_scored 事件
+        try:
+            from core.mnemos_bus import publish_event
+            memory_id = str(getattr(item, "memory_id", getattr(item, "id", hash(str(item)) & 0xFFFFFFFF)))
+            publish_event("content_scored", "scoring", {
+                "memory_id": memory_id,
+                "posterior": round(sum(c.value for c in cards) / len(cards), 4) if cards else 0.0,
+                "confidence": round(sum(c.confidence for c in cards) / len(cards), 4) if cards else 0.0,
+                "dimensions": [c.dimension for c in cards],
+            })
+        except Exception:
+            pass
+
         return cards
 
     def feedback(self, fb: Feedback) -> None:
@@ -572,6 +585,15 @@ class AdaptiveScorer:
             pass
         except Exception as e:
             logger.debug(f"[AdaptiveScorer] 模型加载失败: {e}")
+            try:
+                from core.mnemos_bus import publish_event
+                publish_event("model_load_failed", "scoring", {
+                    "model_version": getattr(self, '_model_version', 0),
+                    "error": str(e),
+                    "context": {"model_dir": str(self._model_dir)},
+                })
+            except Exception:
+                pass
 
     def _cleanup_old_versions(self, keep: int) -> None:
         """保留最近 N 个版本"""

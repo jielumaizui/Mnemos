@@ -1042,6 +1042,20 @@ class DistillationEngine:
                                 {"signals": len(feedback_signals)}),
         )
 
+        # 发射 knowledge_distilled 事件
+        if result.judgment == "knowledge" and result.fragments:
+            try:
+                from core.mnemos_bus import publish_event
+                for frag in result.fragments:
+                    publish_event("knowledge_distilled", "distill", {
+                        "fragment_id": f"{session_id}_{frag.form}",
+                        "form": frag.form,
+                        "title": frag.title,
+                        "session_id": session_id,
+                    })
+            except Exception:
+                pass
+
         return result
 
     def write_pages(self, result: DistillationResult) -> List[str]:

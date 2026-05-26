@@ -492,6 +492,18 @@ class InProcessGuard:
         """记录告警"""
         if self.session:
             self.session.triggered_alerts.append(alert)
+        # 发射 guard_alert 事件
+        try:
+            from core.mnemos_bus import publish_event
+            publish_event("guard_alert", "aegis", {
+                "level": alert.level.value,
+                "checklist_item": alert.checklist_item.item,
+                "triggered_by": alert.triggered_by,
+                "trigger_text": alert.trigger_text[:200],
+                "session_id": getattr(self.session, 'task_type', 'unknown') if self.session else 'unknown',
+            })
+        except Exception:
+            pass
 
     def get_silent_summary(self) -> str:
         """获取静默记录汇总（任务完成后报告）"""
