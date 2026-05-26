@@ -667,6 +667,14 @@ def run_daemon():
     config.data_dir.mkdir(parents=True, exist_ok=True)
     (config.data_dir / "inbox").mkdir(parents=True, exist_ok=True)
 
+    # 初始化所有数据库表（幂等）
+    try:
+        from core.db_init import init_all_tables
+        init_all_tables()
+        logger.info("[DB] 数据库表初始化完成")
+    except Exception as e:
+        logger.warning(f"[DB] 数据库表初始化失败（非阻塞）: {e}")
+
     # 启动补偿：检查关机期间过期的复盘预约
     _run_startup_compensation()
 

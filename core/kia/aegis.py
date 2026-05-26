@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple, Set
 
 from .prophasis import ChecklistItem, LoadedKnowledge
 from core.persona.hamartia import BlindSpotProfileManager, BlindSpot, ChallengeBalancer
@@ -28,6 +28,157 @@ class GuardLevel(Enum):
     SILENT = "silent"       # 轻微：静默记录
     HINT = "hint"           # 中等：自然融入
     INTERRUPT = "interrupt" # 严重：打断确认
+
+
+# ==================== SmartMatcher 三层匹配引擎 ====================
+
+class SmartMatcher:
+    """三层级联匹配引擎
+
+    【E14 三层匹配引擎补全】
+    层级1 — 精确匹配：文本完全相等（最高置信度）
+    层级2 — 关键词匹配：子串包含（当前已有）
+    层级3 — 语义匹配：基于词袋 Jaccard 相似度（零 API 成本）
+    """
+
+    def __init__(self, semantic_threshold: float = 0.65):
+        self.semantic_threshold = semantic_threshold
+
+    def match_exact(self, text: str, candidates: List[str]) -> Optional[Tuple[str, float]]:
+        """精确匹配：文本与候选完全相等"""
+        text_lower = text.strip().lower()
+        for cand in candidates:
+            if cand.strip().lower() == text_lower:
+                return cand, 1.0
+        return None
+
+    def match_keyword(self, text: str, keywords: List[str]) -> Optional[Tuple[str, float]]:
+        """关键词匹配：子串包含"""
+        text_lower = text.lower()
+        for kw in keywords:
+            if kw.lower() in text_lower:
+                return kw, 0.85
+        return None
+
+    def match_semantic(self, text: str, references: List[str]) -> Optional[Tuple[str, float]]:
+        """语义匹配：词袋 Jaccard 相似度（零 API 成本）"""
+        text_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', text.lower()))
+        if not text_words:
+            return None
+
+        best_ref = None
+        best_score = 0.0
+
+        for ref in references:
+            ref_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', ref.lower()))
+            if not ref_words:
+                continue
+            intersection = text_words & ref_words
+            union = text_words | ref_words
+            score = len(intersection) / len(union) if union else 0.0
+            if score > best_score and score >= self.semantic_threshold:
+                best_score = score
+                best_ref = ref
+
+        if best_ref:
+            return best_ref, best_score
+        return None
+
+    def match_three_tier(self, text: str,
+                         exact_candidates: List[str] = None,
+                         keywords: List[str] = None,
+                         semantic_refs: List[str] = None) -> Optional[Dict]:
+        """三层级联匹配：依次尝试精确 → 关键词 → 语义"""
+        # Layer 1: Exact
+        if exact_candidates:
+            result = self.match_exact(text, exact_candidates)
+            if result:
+                return {"layer": 1, "type": "exact", "match": result[0], "score": result[1]}
+
+        # Layer 2: Keyword
+        if keywords:
+            result = self.match_keyword(text, keywords)
+            if result:
+                return {"layer": 2, "type": "keyword", "match": result[0], "score": result[1]}
+
+        # Layer 3: Semantic
+        if semantic_refs:
+            result = self.match_semantic(text, semantic_refs)
+            if result:
+                return {"layer": 3, "type": "semantic", "match": result[0], "score": result[1]}
+
+        return None
+
+
+class DuplicateWorkDetector:
+    """重复工作检测器
+
+    检测用户是否在做之前已经做过/讨论过的工作。
+    基于消息指纹 + 关键词重叠 + 语义相似度。
+    """
+
+    def __init__(self, history_messages: List[str] = None):
+        self.history = history_messages or []
+        self.matcher = SmartMatcher(semantic_threshold=0.55)
+
+    def _fingerprint(self, text: str) -> str:
+        """生成文本指纹"""
+        cleaned = re.sub(r'[^\w\u4e00-\u9fa5]', '', text.lower())
+        return cleaned[:100]
+
+    def is_duplicate(self, message: str, threshold: float = 0.70) -> Tuple[bool, float, str]:
+        """
+        检测消息是否与历史记录重复
+
+        Returns:
+            (是否重复, 相似度, 原因)
+        """
+        if not self.history:
+            return False, 0.0, "No history"
+
+        msg_fp = self._fingerprint(message)
+
+        for hist in self.history:
+            hist_fp = self._fingerprint(hist)
+
+            # 1. 指纹精确匹配
+            if msg_fp == hist_fp and len(msg_fp) > 10:
+                return True, 1.0, f"Exact fingerprint match with history"
+
+            # 2. 语义相似度
+            result = self.matcher.match_semantic(message, [hist])
+            if result:
+                score = result[1]
+                if score >= threshold:
+                    return True, score, f"Semantic similarity {score:.2f} with history"
+
+        # 3. 关键词重叠率（快速过滤）
+        msg_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', message.lower()))
+        if len(msg_words) < 3:
+            return False, 0.0, "Too few words"
+
+        best_overlap = 0.0
+        best_hist = ""
+        for hist in self.history:
+            hist_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', hist.lower()))
+            if not hist_words:
+                continue
+            overlap = len(msg_words & hist_words) / len(msg_words | hist_words)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_hist = hist[:50]
+
+        if best_overlap >= threshold:
+            return True, best_overlap, f"Keyword overlap {best_overlap:.2f} with: {best_hist}..."
+
+        return False, best_overlap, "No significant overlap"
+
+    def add_message(self, message: str):
+        """添加消息到历史"""
+        self.history.append(message)
+        # 限制历史长度，防止内存膨胀
+        if len(self.history) > 1000:
+            self.history = self.history[-500:]
 
 
 @dataclass
@@ -71,6 +222,8 @@ class InProcessGuard:
         self.session = None
         self.blindspot_manager = BlindSpotProfileManager()
         self.challenge_balancer = ChallengeBalancer()
+        self.smart_matcher = SmartMatcher()
+        self.duplicate_detector = DuplicateWorkDetector()
         self.contextual_mode = "normal"  # normal/exploration/execution/fatigue/urgency
         self.session_messages = []  # 记录session消息用于情境推断
         if knowledge:
@@ -85,6 +238,8 @@ class InProcessGuard:
         )
         self.session_messages = []
         self.contextual_mode = "normal"
+        # 重置重复检测器历史
+        self.duplicate_detector = DuplicateWorkDetector()
 
     def _infer_contextual_mode(self, user_message: str) -> str:
         """
@@ -157,6 +312,7 @@ class InProcessGuard:
 
         # 记录消息用于情境推断
         self.session_messages.append(user_message)
+        self.duplicate_detector.add_message(user_message)
 
         # 推断当前情境模式
         self.contextual_mode = self._infer_contextual_mode(user_message)
@@ -167,26 +323,44 @@ class InProcessGuard:
             # 严重偏差不受情境模式影响，始终告警
             return critical
 
-        # 2. 检查 checklist 中的风险点
+        # 2. 重复工作检测（SmartMatcher Layer 3 语义匹配）
+        is_dup, dup_score, dup_reason = self.duplicate_detector.is_duplicate(user_message)
+        if is_dup and dup_score >= 0.80:
+            return GuardAlert(
+                level=GuardLevel.HINT,
+                checklist_item=ChecklistItem(
+                    item="重复工作提醒",
+                    source="system",
+                    severity="medium"
+                ),
+                triggered_by="user",
+                trigger_text=user_message[:100],
+                suggestion=f"💡 检测到可能与之前工作重复（相似度 {dup_score:.0%}）：{dup_reason}"
+            )
+
+        # 3. 检查 checklist 中的风险点（三层匹配引擎）
         for item in self.session.checklist:
             # 跳过已触发的严重项
             if item.item in [a.checklist_item.item for a in self.session.triggered_alerts
                             if a.level == GuardLevel.INTERRUPT]:
                 continue
 
-            # 检查用户消息中的触发关键词
+            # 检查用户消息中的触发关键词（三层匹配）
             if item.trigger_keywords:
-                matched_kw = self._match_keywords(user_message, item.trigger_keywords)
-                if matched_kw:
+                match_result = self._match_three_tier(user_message, item.trigger_keywords)
+                if match_result:
                     level = self._determine_level(item, "user")
                     # 根据情境调整级别
                     level = self._adjust_level_by_context(level, self.contextual_mode)
+                    # 语义匹配降低一级（减少误报）
+                    if match_result.get("layer") == 3 and level == GuardLevel.INTERRUPT:
+                        level = GuardLevel.HINT
 
                     alert = GuardAlert(
                         level=level,
                         checklist_item=item,
                         triggered_by="user",
-                        trigger_text=matched_kw,
+                        trigger_text=match_result["match"],
                         suggestion=self._generate_suggestion(item)
                     )
                     self._record_alert(alert)
@@ -194,17 +368,20 @@ class InProcessGuard:
 
             # 检查 AI 回复中的风险模式
             if ai_response and item.risk_patterns:
-                matched_pattern = self._match_keywords(ai_response, item.risk_patterns)
-                if matched_pattern:
+                match_result = self._match_three_tier(ai_response, item.risk_patterns)
+                if match_result:
                     level = self._determine_level(item, "ai")
                     # 根据情境调整级别
                     level = self._adjust_level_by_context(level, self.contextual_mode)
+                    # 语义匹配降低一级
+                    if match_result.get("layer") == 3 and level == GuardLevel.INTERRUPT:
+                        level = GuardLevel.HINT
 
                     alert = GuardAlert(
                         level=level,
                         checklist_item=item,
                         triggered_by="ai",
-                        trigger_text=matched_pattern,
+                        trigger_text=match_result["match"],
                         suggestion=self._generate_suggestion(item)
                     )
                     self._record_alert(alert)
@@ -230,10 +407,17 @@ class InProcessGuard:
                 continue
 
             matched = None
+            match_layer = 0
             if item.trigger_keywords:
-                matched = self._match_keywords(user_message, item.trigger_keywords)
+                result = self._match_three_tier(user_message, item.trigger_keywords)
+                if result:
+                    matched = result["match"]
+                    match_layer = result.get("layer", 2)
             if not matched and ai_response and item.risk_patterns:
-                matched = self._match_keywords(ai_response, item.risk_patterns)
+                result = self._match_three_tier(ai_response, item.risk_patterns)
+                if result:
+                    matched = result["match"]
+                    match_layer = result.get("layer", 2)
 
             if matched:
                 record = {
@@ -268,13 +452,22 @@ class InProcessGuard:
 
         return None
 
-    def _match_keywords(self, text: str, keywords: List[str]) -> Optional[str]:
-        """匹配关键词，返回第一个匹配的"""
-        text_lower = text.lower()
-        for kw in keywords:
-            if kw.lower() in text_lower:
-                return kw
-        return None
+    def _match_three_tier(self, text: str, keywords: List[str]) -> Optional[Dict]:
+        """三层级联匹配引擎（精确 → 关键词 → 语义）
+
+        Args:
+            text: 待检测文本
+            keywords: 关键词/模式列表
+
+        Returns:
+            {"layer": int, "type": str, "match": str, "score": float} 或 None
+        """
+        return self.smart_matcher.match_three_tier(
+            text,
+            exact_candidates=keywords,
+            keywords=keywords,
+            semantic_refs=keywords
+        )
 
     def _determine_level(self, item: ChecklistItem, triggered_by: str) -> GuardLevel:
         """确定守护级别"""

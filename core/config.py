@@ -136,6 +136,36 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "heartbeat_interval_seconds": 300,
         "inbox_scan_interval_seconds": 600,
         "persona_analysis_interval_seconds": 86400,
+        "health_check_interval": 60,
+        "default_timeout": 30,
+        "save_interval_sec": 300,
+        "backup_retention_days": 30,
+    },
+    # === 系统运维 ===
+    "system": {
+        "retention_days": 365,
+        "archive_days": 90,
+        "trigger_buffer_size": 100,
+        "feedback_min_interval": 300,
+        "index_rebuild_interval": 86400,
+    },
+    # === Skill 飞轮 ===
+    "skill": {
+        "time_window_days": 30,
+        "wiki_jaccard_threshold": 0.6,
+        "min_usage_count": 3,
+        "min_age_days": 7,
+        "cleanup_days": 90,
+        "grace_period_days": 14,
+    },
+    # === Embedding 缓存 ===
+    "embedding": {
+        "ttl_days": 7,
+        "similarity_threshold": 0.75,
+    },
+    # === 增量批处理 ===
+    "incremental": {
+        "batch_interval": 300,
     },
 }
 
