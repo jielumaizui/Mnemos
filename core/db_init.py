@@ -242,36 +242,76 @@ def init_guard_tables():
         logger.debug("Guard tables initialized")
 
 
-# ==================== 评分层 ====================
+# ==================== 评分层（ADR-016 / 蓝图V2） ====================
 
 def init_scorer_tables():
-    """创建评分层相关表：scorer_models, scorer_training_queue"""
+    """创建评分层相关表：scorer_models, scorer_training_queue, ground_truth_signals"""
     with _conn() as conn:
+        # 模型版本持久化（替代 joblib 文件存储，SQLite 更可控）
         conn.execute("""
             CREATE TABLE IF NOT EXISTS scorer_models (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                model_name TEXT NOT NULL,
-                version TEXT NOT NULL,
-                model_path TEXT,
-                metrics TEXT,
-                is_active BOOLEAN DEFAULT 0,
-                created_at TEXT NOT NULL,
-                UNIQUE(model_name, version)
+                dimension TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                model_type TEXT NOT NULL DEFAULT 'complement_nb',
+                model_blob BLOB,
+                model_hash TEXT,
+                feature_schema_hash TEXT,
+                train_samples INTEGER,
+                val_auc REAL,
+                is_active INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(dimension, model_version)
             )
         """)
         conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_models_active ON scorer_models(dimension, is_active)
+        """)
+
+        # 延迟标签回填缓冲队列
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS scorer_training_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sample_id TEXT NOT NULL,
-                label REAL,
-                features TEXT,
+                session_id TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                priority INTEGER DEFAULT 0,
+                earliest_train_at TEXT,
                 status TEXT DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                processed_at TEXT
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_status ON scorer_training_queue(status, earliest_train_at)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_queue_dimension ON scorer_training_queue(dimension, status)
+        """)
+
+        # 外部真实信号（训练标签来源，禁止自举）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ground_truth_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                signal_value INTEGER NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                latency_hours INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(session_id, signal_type) ON CONFLICT REPLACE
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_gt_session ON ground_truth_signals(session_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_gt_type ON ground_truth_signals(signal_type, created_at)
+        """)
+
         conn.commit()
-        logger.debug("Scorer tables initialized")
+        logger.debug("Scorer tables initialized (V2 schema with ground_truth_signals)")
 
 
 # ==================== Skill 飞轮 ====================

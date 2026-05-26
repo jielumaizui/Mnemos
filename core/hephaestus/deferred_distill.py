@@ -321,6 +321,21 @@ class DeferredDistillationQueue:
             domain = self._infer_domain(outcome.get("session_id", ""))
             self._weight_adapter.update(domain, outcome.get("outcome", 0.5))
 
+            # 【V2 数据积累】将蒸馏结果写入 ground_truth_signals，供 AdaptiveScorerV2 训练
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            session_id = outcome.get("session_id", "")
+            outcome_score = outcome.get("outcome", 0.5)
+            # outcome > 0.5 视为正例（蒸馏质量高），否则负例
+            label = 1 if outcome_score > 0.5 else 0
+            signal_type = "distill_complete" if label == 1 else "distill_skip"
+            AdaptiveScorerV2.insert_ground_truth(
+                session_id=session_id,
+                signal_type=signal_type,
+                label=label,
+                confidence=min(1.0, abs(outcome_score - 0.5) * 2),  # 离0.5越远置信度越高
+                latency_hours=0,
+            )
+
         return stats
 
     def _load_pending(self) -> List[DeferredRecord]:
