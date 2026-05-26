@@ -161,7 +161,8 @@ class PersonaEvolutionTimeline:
         """生成 Mermaid xychart-beta 时序图"""
         lines = ["```mermaid", "xychart-beta"]
         lines.append(f'  title "画像演化趋势"')
-        lines.append(f'  x-axis [{", ".join(f"\"{s['date']}\"" for s in self._snapshots[-6:])}]')
+        dates = ", ".join(f'"{s["date"]}"' for s in self._snapshots[-6:])
+        lines.append(f'  x-axis [{dates}]')
 
         for label, attr_path in TRACKED_DIMENSIONS[:5]:  # 最多5条线
             values = []

@@ -260,7 +260,7 @@ class AdaptiveScorer:
             if X is not None and hasattr(model, "predict_proba"):
                 proba = model.predict_proba(X)[0]
                 # 取正类概率
-                return float(proa[-1]) if len(proba) > 1 else float(proba[0])
+                return float(proba[-1]) if len(proba) > 1 else float(proba[0])
         except Exception as e:
             logger.debug(f"[AdaptiveScorer] ML 预测失败 {dimension}: {e}")
 
