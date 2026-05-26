@@ -161,7 +161,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
             ))
 
         # 清理 30 天前的
-        scheduler.cleanup_old(days=30)
+        scheduler.cleanup_old_tasks(days=30)
         tasks = scheduler.list_all()
         self.assertEqual(len(tasks), 0)
 

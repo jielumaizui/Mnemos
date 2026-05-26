@@ -1,44 +1,50 @@
+# -*- coding: utf-8 -*-
 """
-Distillation Engine - LLM 直接蒸馏原始对话为结构化 wiki 页面
+DistillationEngine — 七层蒸馏流水线
 
-职责：
-- 从 Memos 会话中读取原始对话
-- 调用 LLM 进行阶段1（价值判断）+ 阶段2（知识提取）
-- 解析 JSON 输出，生成 wiki 页面
-- 写入 Obsidian 目录
+将原始 AI 对话提炼为结构化 Wiki 知识页面的核心引擎。
 
-设计原则：
-- LLM 调用可插拔（支持 OpenAI/Anthropic/本地模型）
-- 失败隔离：单个 session 失败不影响其他 session
-- JSON 解析容错：LLM 输出不合法时尝试修复
+七层架构：
+  L1 噪音过滤   — 规则级，<1ms，复用 ingest_helpers.is_noise_message()
+  L2 价值预判   — 规则 + 贝叶斯，CERTAINLY_YES / CERTAINLY_NO / MAYBE
+  L3 LLM判断    — 宿主Agent调用，knowledge / skill / skip
+  L4 知识提取   — LLM + assertion_extractor 验证，6种知识形态
+  L5 自检       — 断言验证 / 代码语法 / 链接有效性 / 时间范围
+  L6 跨Agent关联 — Jaccard关键词重叠，自动注入 [[反向链接]]
+  L7 反馈循环   — AdaptiveScorer + 用户画像信号驱动
+
+同源复用原则：Mnemos 不直接调用 LLM API，所有 LLM 工作委托给宿主 Agent。
 """
 
-import os
-import sys
+from __future__ import annotations
+
 import json
+import logging
+import os
 import re
+import sqlite3
+import subprocess
+import time
 import traceback
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
+from math import log1p
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-# 导入 prompts
-from .distillation_prompts import DISTILLATION_PROMPT, RECONFIRM_PROMPT
-
-# 配置系统
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core.config import get_config
+from core.kia.ingest_helpers import is_noise_message
+
+logger = logging.getLogger(__name__)
 
 
 def _get_wiki_dir() -> Path:
-    """Lazy-load wiki directory from config"""
     return get_config().wiki_dir
 
 
-def _get_inbox_dir() -> Path:
-    """Lazy-load inbox directory from config"""
-    return _get_wiki_dir() / "00-Inbox"
+def _get_wiki_db() -> Path:
+    return Path.home() / ".mnemos" / "wiki_state.db"
 
 
 # ========== 数据模型 ==========
@@ -54,6 +60,20 @@ class KnowledgeFragment:
     boundaries: Dict[str, str]
     anti_patterns: List[str]
     related_concepts: List[str]
+    # 七层流水线扩展字段
+    self_check_passed: bool = True
+    self_check_issues: List[str] = field(default_factory=list)
+    cross_agent_links: List[str] = field(default_factory=list)
+    keywords: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PipelineLayerResult:
+    """流水线单层执行结果"""
+    layer: int
+    name: str
+    passed: bool
+    detail: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -69,68 +89,15 @@ class DistillationResult:
     fragments: List[KnowledgeFragment] = field(default_factory=list)
     raw_response: str = ""
     error: str = ""
-    # 二次确认相关字段
     needs_reconfirm: bool = False
     reconfirm_question: str = ""
-
-
-# ========== LLM 调用接口 ==========
-
-class LLMProvider:
-    """LLM 调用抽象基类"""
-
-    def call(self, prompt: str, max_tokens: int = 8000) -> str:
-        raise NotImplementedError
-
-
-class AgentDelegateProvider(LLMProvider):
-    """
-    【同源复用】委托本地 Agent 执行蒸馏
-
-    将蒸馏任务委托给用户本地的 AI Agent。
-    委托方式：通过 AgentDelegate 写入任务文件，由 Agent 后台处理。
-    """
-
-    def __init__(self, timeout: int = 300):
-        self.timeout = timeout
-
-    def call(self, prompt: str, max_tokens: int = 8000) -> str:
-        from core.prometheus_fire import AgentDelegate, DistillTask
-
-        delegate = AgentDelegate()
-        task = DistillTask(
-            session_id=f"distill-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-            messages=[{"role": "user", "content": prompt}],
-            meta={
-                "source": "distillation-engine",
-                "task_type": "knowledge_distill",
-                "full_prompt": prompt,
-            },
-        )
-        output_path = Path.home() / ".mnemos" / "distill_output" / f"{task.session_id}.md"
-        ok = delegate.delegate(task, output_path)
-        if not ok:
-            raise RuntimeError("无可用 Agent 执行蒸馏任务")
-
-        result = delegate.wait_for_result(output_path, timeout=self.timeout)
-        if not result:
-            raise RuntimeError("蒸馏任务超时或 Agent 未返回结果")
-        return result
-
-
-def create_llm_provider(provider_type: str = None, **kwargs) -> LLMProvider:
-    """[已废弃] 创建 LLM 提供者
-
-    ⚠️ 警告：此函数已废弃。Mnemos 遵循同源复用原则，不直接调用任何 LLM API。
-    所有蒸馏任务应通过 core.hephaestus_worker.HephaestusWorker 异步委托给宿主 Agent。
-
-    保留此函数仅作兼容性提示，调用将抛出 RuntimeError。
-    """
-    raise RuntimeError(
-        "create_llm_provider is deprecated. "
-        "Use HephaestusWorker to delegate distillation tasks asynchronously. "
-        "See core/hephaestus_worker.py:process_all() for the correct entry point."
-    )
+    # 七层流水线追踪
+    layer_results: List[PipelineLayerResult] = field(default_factory=list)
+    prejudgment: str = ""  # CERTAINLY_YES / CERTAINLY_NO / MAYBE
+    prejudgment_confidence: float = 0.0
+    self_check_passed: bool = True
+    self_check_issues: List[str] = field(default_factory=list)
+    cross_agent_links: List[str] = field(default_factory=list)
 
 
 # ========== 内容清洗 ==========
@@ -139,29 +106,18 @@ def clean_message_content(content: str) -> str:
     """清理消息内容"""
     if not content:
         return ""
-
-    # 移除 thinking 块
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
-
-    # 移除代码块
     content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
-
-    # 移除单行 shell 命令
     content = re.sub(
         r'^(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\s+.+$',
-        '', content, flags=re.MULTILINE
+        '', content, flags=re.MULTILINE,
     )
-
-    # 移除纯数字/编号行
     content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
-
-    # 清理多余空行
     content = re.sub(r'\n{3,}', '\n\n', content)
-
     return content.strip()
 
 
-def build_session_text(messages: List[Dict]) -> str:
+def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
     """从消息列表构建对话文本"""
     lines = []
     for msg in messages:
@@ -172,17 +128,13 @@ def build_session_text(messages: List[Dict]) -> str:
         content = clean_message_content(content)
         if not content:
             continue
-        # 截断超长消息
         if len(content) > 1000:
             content = content[:1000] + "...(truncated)"
         lines.append(f"[{role}] {content}")
 
     full_text = "\n\n".join(lines)
-
-    # 如果总长度超过 12000，截断到 12000
-    if len(full_text) > 12000:
-        full_text = full_text[:12000] + "\n\n...(session truncated)"
-
+    if len(full_text) > max_chars:
+        full_text = full_text[:max_chars] + "\n\n...(session truncated)"
     return full_text
 
 
@@ -190,13 +142,13 @@ def build_session_text(messages: List[Dict]) -> str:
 
 def extract_json(text: str) -> Optional[Dict]:
     """从文本中提取 JSON，带容错处理"""
-    # 尝试直接解析
+    if not text:
+        return None
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 尝试提取 markdown 代码块中的 JSON
     match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
     if match:
         try:
@@ -204,7 +156,6 @@ def extract_json(text: str) -> Optional[Dict]:
         except json.JSONDecodeError:
             pass
 
-    # 尝试提取最外层的大括号内容
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -213,10 +164,7 @@ def extract_json(text: str) -> Optional[Dict]:
         except json.JSONDecodeError:
             pass
 
-    # 尝试修复常见的 JSON 错误
-    # 1. 尾部多余的逗号
     fixed = re.sub(r',(\s*[}\]])', r'\1', text)
-    # 2. 单引号替换为双引号（简单处理）
     fixed = fixed.replace("'", '"')
     try:
         return json.loads(fixed)
@@ -226,127 +174,918 @@ def extract_json(text: str) -> Optional[Dict]:
     return None
 
 
+# ========== HostAgentCaller — 宿主 Agent 调用器 ==========
+
+class HostAgentCaller:
+    """宿主 Agent 调用器 — 同源复用
+
+    优先级：claude -p → kimi --print → AgentDelegate 异步
+    """
+
+    MAX_RETRIES = 2
+    TIMEOUT = 60
+
+    def __init__(self, timeout: int = None):
+        self._timeout = timeout or self.TIMEOUT
+
+    def call(self, prompt: str, expect_json: bool = True,
+             max_retries: int = None, timeout: int = None) -> Optional[Dict]:
+        """调用宿主 Agent，返回解析后的 JSON 或原始文本"""
+        retries = max_retries if max_retries is not None else self.MAX_RETRIES
+        timeout = timeout or self._timeout
+
+        for attempt in range(retries + 1):
+            try:
+                raw = self._invoke(prompt, timeout)
+                if raw is None:
+                    continue
+
+                if expect_json:
+                    parsed = extract_json(raw)
+                    if parsed is not None:
+                        self._log_call(prompt, raw, True)
+                        return parsed
+                    if attempt < retries:
+                        continue
+                else:
+                    self._log_call(prompt, raw, True)
+                    return {"raw": raw}
+            except subprocess.TimeoutExpired:
+                logger.warning(f"HostAgentCaller timeout (attempt {attempt + 1})")
+            except Exception as e:
+                logger.warning(f"HostAgentCaller error (attempt {attempt + 1}): {e}")
+
+        self._log_call(prompt, "", False)
+        return None
+
+    def _invoke(self, prompt: str, timeout: int) -> Optional[str]:
+        raw = self._try_cli("claude", ["-p", prompt], timeout)
+        if raw is not None:
+            return raw
+        raw = self._try_cli("kimi", ["--print", prompt], timeout)
+        if raw is not None:
+            return raw
+        return self._try_delegate(prompt, timeout)
+
+    def _try_cli(self, cmd: str, args: List[str], timeout: int) -> Optional[str]:
+        try:
+            proc = subprocess.run(
+                [cmd] + args,
+                capture_output=True, text=True, timeout=timeout,
+                env={**os.environ, "NO_COLOR": "1"},
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip()
+        except FileNotFoundError:
+            pass
+        except subprocess.TimeoutExpired:
+            raise
+        return None
+
+    def _try_delegate(self, prompt: str, timeout: int) -> Optional[str]:
+        from core.prometheus_fire import AgentDelegate, DistillTask
+        delegate = AgentDelegate()
+        task = DistillTask(
+            session_id=f"distill-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+            messages=[{"role": "user", "content": prompt}],
+            meta={"source": "distillation-engine", "task_type": "knowledge_distill",
+                  "full_prompt": prompt},
+        )
+        output_path = Path.home() / ".mnemos" / "distill_output" / f"{task.session_id}.md"
+        ok = delegate.delegate(task, output_path)
+        if not ok:
+            return None
+        return delegate.wait_for_result(output_path, timeout=timeout)
+
+    def _log_call(self, prompt: str, response: str, success: bool):
+        try:
+            db_path = _get_wiki_db()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(str(db_path), timeout=5) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS prompt_call_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT, prompt_preview TEXT, response_preview TEXT,
+                        success INTEGER, duration_ms INTEGER
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO prompt_call_log (timestamp, prompt_preview, response_preview, success, duration_ms) VALUES (?, ?, ?, ?, ?)",
+                    (datetime.now().isoformat(), prompt[:500], response[:500], int(success), 0),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+
+# ========== 第1层：噪音过滤 ==========
+
+class NoiseFilter:
+    """第1层：噪音过滤 — 规则级，<1ms
+
+    复用 ingest_helpers.is_noise_message()，纯规则无 LLM。
+    """
+
+    def filter(self, messages: List[Dict]) -> Tuple[List[Dict], Dict]:
+        filtered = []
+        noise_count = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            role = msg.get("role", "")
+            if role == "system":
+                filtered.append(msg)
+                continue
+            if is_noise_message(content):
+                noise_count += 1
+                continue
+            filtered.append(msg)
+
+        stats = {"total": len(messages), "noise": noise_count, "kept": len(filtered)}
+        return filtered, stats
+
+
+# ========== 第2层：价值预判 ==========
+
+class ValuePrejudgment:
+    """第2层：价值预判 — 规则 + 贝叶斯
+
+    输出三种结论：
+      CERTAINLY_YES — 高置信度有价值，可跳过 LLM 判断
+      CERTAINLY_NO  — 高置信度无价值，直接跳过
+      MAYBE         — 需 LLM 语义判断
+    """
+
+    CERTAINLY_YES = "CERTAINLY_YES"
+    CERTAINLY_NO = "CERTAINLY_NO"
+    MAYBE = "MAYBE"
+
+    # 知识信号关键词（中文 + 英文）
+    _KNOWLEDGE_SIGNALS = [
+        "原来", "本质", "根因", "因为", "所以", "导致", "解决", "修复",
+        "选", "决定", "采用", "而非", "避免", "不要", "切忌", "步骤",
+        "方法", "原则", "经验", "教训", "踩坑", "最佳实践",
+        "because", "therefore", "solution", "decided", "avoid",
+        "best practice", "root cause", "lesson", "pitfall",
+    ]
+
+    _NOISE_SIGNALS = [
+        "好的", "收到", "谢谢", "嗯", "哦", "了解",
+        "ok", "thanks", "got it", "sure", "fine",
+    ]
+
+    def __init__(self):
+        self._distill_scorer = None
+
+    def _get_scorer(self):
+        if self._distill_scorer is None:
+            try:
+                from core.scoring.scorers.distill_scorer import DistillScorer
+                self._distill_scorer = DistillScorer()
+            except Exception:
+                pass
+        return self._distill_scorer
+
+    def judge(self, messages: List[Dict]) -> Tuple[str, float]:
+        """预判会话价值，返回 (结论, 置信度)"""
+        session_text = build_session_text(messages)
+        if not session_text:
+            return self.CERTAINLY_NO, 0.9
+
+        rule_score = self._rule_assessment(session_text)
+
+        scorer = self._get_scorer()
+        if scorer:
+            try:
+                cards = scorer.score(session_text)
+                distill_card = next(
+                    (c for c in cards if c.dimension == "distill_score"), None,
+                )
+                if distill_card:
+                    bayesian_score = distill_card.value
+                    combined = 0.4 * rule_score + 0.6 * bayesian_score
+                else:
+                    combined = rule_score
+            except Exception:
+                combined = rule_score
+        else:
+            combined = rule_score
+
+        if combined >= 0.7:
+            return self.CERTAINLY_YES, combined
+        elif combined <= 0.3:
+            return self.CERTAINLY_NO, 1.0 - combined
+        return self.MAYBE, combined
+
+    def _rule_assessment(self, text: str) -> float:
+        """规则级快速评估"""
+        lower = text.lower()
+        score = 0.3
+
+        # 知识信号检测
+        knowledge_hits = sum(1 for sig in self._KNOWLEDGE_SIGNALS if sig in lower)
+        score += min(0.4, knowledge_hits * 0.08)
+
+        # 噪声信号检测
+        noise_hits = sum(1 for sig in self._NOISE_SIGNALS if sig in lower)
+        score -= min(0.2, noise_hits * 0.05)
+
+        # 长度信号：太短 (<200) 降分，适中 (500-3000) 加分
+        length = len(text)
+        if length < 200:
+            score -= 0.15
+        elif 500 <= length <= 3000:
+            score += 0.1
+
+        # 代码/技术内容加分
+        if re.search(r'```|def |class |import |function ', text):
+            score += 0.1
+
+        # 问答模式加分
+        if re.search(r'\?.*\n.*\n', text) or re.search(r'？.*\n.*\n', text):
+            score += 0.05
+
+        return max(0.0, min(1.0, score))
+
+
+# ========== 第3层：LLM 语义判断 ==========
+
+class LLMValueJudge:
+    """第3层：LLM 语义判断 — 宿主 Agent 调用
+
+    输出 knowledge / skill / skip + 置信度。
+    """
+
+    def __init__(self, caller: HostAgentCaller = None):
+        self._caller = caller or HostAgentCaller()
+
+    def judge(self, session_text: str, session_id: str = "") -> Tuple[str, str, float]:
+        """LLM 价值判断，返回 (判断, 理由, 置信度)"""
+        from .distillation_prompts import STAGE1_FILTER_PROMPT
+
+        prompt = STAGE1_FILTER_PROMPT.replace("{session_content}", session_text)
+        result = self._caller.call(prompt, expect_json=True)
+
+        if result is None:
+            return "skip", "LLM调用失败", 0.0
+
+        judgment = result.get("judgment", "skip")
+        reason = result.get("reason", "")
+        confidence = 0.5
+        if judgment == "knowledge":
+            confidence = 0.7
+        elif judgment == "skill":
+            confidence = 0.6
+
+        return judgment, reason, confidence
+
+
+# ========== 第4层：知识提取 ==========
+
+class KnowledgeExtractor:
+    """第4层：知识提取 — LLM + assertion_extractor 验证
+
+    六种知识形态：decision / pattern / pitfall / snippet / reference / todo
+    """
+
+    def __init__(self, caller: HostAgentCaller = None):
+        self._caller = caller or HostAgentCaller()
+
+    def extract(self, session_text: str, session_id: str = "",
+                analysis_type: str = "standard") -> List[KnowledgeFragment]:
+        """提取知识片段"""
+        prompt = self._build_prompt(session_text, session_id, analysis_type)
+        result = self._caller.call(prompt, expect_json=True)
+
+        if result is None:
+            return self._fallback_extract(session_text, session_id)
+
+        fragments = self._parse_fragments(result, session_id)
+
+        # assertion_extractor 验证
+        if fragments:
+            fragments = self._validate_with_assertions(fragments, session_text)
+
+        return fragments
+
+    def _build_prompt(self, session_text: str, session_id: str,
+                      analysis_type: str) -> str:
+        from .distillation_prompts import DISTILLATION_PROMPT
+        prompt = DISTILLATION_PROMPT
+        prompt = prompt.replace("{session_id}", session_id or "unknown")
+        prompt = prompt.replace("{session_content}", session_text)
+        return prompt
+
+    def _parse_fragments(self, data: Dict, session_id: str) -> List[KnowledgeFragment]:
+        """从 LLM JSON 输出解析知识片段"""
+        fragments = []
+        for frag_data in data.get("fragments", []):
+            try:
+                fm = frag_data.get("frontmatter", {})
+                kw = fm.get("关键词", {})
+                keywords = []
+                for layer_words in kw.values():
+                    if isinstance(layer_words, list):
+                        keywords.extend(layer_words)
+                    elif isinstance(layer_words, str):
+                        keywords.append(layer_words)
+
+                fragment = KnowledgeFragment(
+                    form=frag_data.get("form", "未知"),
+                    title=frag_data.get("title", "无标题"),
+                    frontmatter=fm,
+                    background=frag_data.get("background", ""),
+                    core_content=frag_data.get("core_content", ""),
+                    boundaries=frag_data.get("boundaries", {}),
+                    anti_patterns=frag_data.get("anti_patterns", []),
+                    related_concepts=frag_data.get("related_concepts", []),
+                    keywords=keywords,
+                )
+                fragments.append(fragment)
+            except Exception:
+                continue
+        return fragments
+
+    def _validate_with_assertions(self, fragments: List[KnowledgeFragment],
+                                  session_text: str) -> List[KnowledgeFragment]:
+        """用 assertion_extractor 交叉验证提取结果"""
+        try:
+            from core.kia.assertion_extractor import extract_assertions
+            assertions = extract_assertions(session_text)
+            if not assertions:
+                return fragments
+
+            assertion_claims = {a.claim[:60] for a in assertions if a.confidence >= 0.5}
+            for frag in fragments:
+                content_lower = frag.core_content.lower() + frag.title.lower()
+                overlap = sum(1 for claim in assertion_claims if claim.lower() in content_lower)
+                if overlap == 0 and len(assertion_claims) > 3:
+                    frag.frontmatter["assertion_validated"] = False
+                    frag.frontmatter["置信度"] = min(
+                        frag.frontmatter.get("置信度", 0.6), 0.4,
+                    )
+                else:
+                    frag.frontmatter["assertion_validated"] = True
+        except Exception:
+            pass
+        return fragments
+
+    def _fallback_extract(self, session_text: str,
+                          session_id: str) -> List[KnowledgeFragment]:
+        """LLM 不可用时的规则级降级提取"""
+        try:
+            from core.kia.assertion_extractor import extract_assertions, merge_similar_assertions
+            assertions = extract_assertions(session_text, source=session_id)
+            assertions = merge_similar_assertions(assertions)
+            assertions = [a for a in assertions if a.confidence >= 0.4]
+        except Exception:
+            return []
+
+        if not assertions:
+            return []
+
+        from collections import defaultdict
+        by_form = defaultdict(list)
+        for a in assertions:
+            by_form[a.form.value].append(a)
+
+        fragments = []
+        for form_value, form_assertions in by_form.items():
+            best = max(form_assertions, key=lambda a: a.confidence)
+            fragments.append(KnowledgeFragment(
+                form=form_value,
+                title=best.claim[:80],
+                frontmatter={
+                    "类型": form_value,
+                    "置信度": best.confidence,
+                    "证据级别": best.evidence_level,
+                    "时效性": best.temporal_scope or "contextual",
+                    "提取方式": "rule_fallback",
+                },
+                background=best.context[:300] if best.context else "",
+                core_content="\n".join(f"- {a.claim}" for a in form_assertions[:10]),
+                boundaries={"applies": best.boundary_hint} if best.boundary_hint else {},
+                anti_patterns=[a.claim for a in form_assertions if a.is_negated],
+                related_concepts=[],
+                keywords=re.findall(r'[a-zA-Z_]{3,}', best.claim),
+            ))
+        return fragments
+
+
+# ========== 第5层：自检 ==========
+
+class DistillSelfCheck:
+    """第5层：自检 — 规则验证
+
+    检查项：
+    1. 断言可验证性（是否有具体数据/条件支撑）
+    2. 代码语法正确性
+    3. Wiki 链接有效性
+    4. 时间范围合理性
+    不通过时标记 pending-verification，仍允许入库。
+    """
+
+    def check(self, fragments: List[KnowledgeFragment],
+              messages: List[Dict]) -> Tuple[bool, List[str]]:
+        """自检，返回 (是否全部通过, 问题列表)"""
+        all_issues = []
+        for frag in fragments:
+            issues = self._check_fragment(frag, messages)
+            frag.self_check_issues = issues
+            frag.self_check_passed = len(issues) == 0
+            all_issues.extend(issues)
+
+        overall_passed = len(all_issues) == 0
+        if not overall_passed:
+            for frag in fragments:
+                if not frag.self_check_passed:
+                    frag.frontmatter["verification"] = "pending-verification"
+        return overall_passed, all_issues
+
+    def _check_fragment(self, frag: KnowledgeFragment,
+                        messages: List[Dict]) -> List[str]:
+        issues = []
+        # 1. 标题质量
+        if not frag.title or frag.title in ("无标题", "未知"):
+            issues.append("标题缺失或无效")
+        elif len(frag.title) < 5:
+            issues.append("标题过短，缺乏可搜索性")
+
+        # 2. 核心内容质量
+        if not frag.core_content or len(frag.core_content) < 20:
+            issues.append("核心内容过短或缺失")
+        elif len(frag.core_content) > 5000 and not frag.boundaries:
+            issues.append("内容过长且缺少边界定义")
+
+        # 3. 断言可验证性
+        content = frag.core_content + frag.background
+        has_specific_data = bool(re.search(
+            r'\d+\.?\d*[%％]|v\d+\.\d+|version\s+\d+|>=|<=|!=|==', content,
+        ))
+        has_assertion_words = bool(re.search(
+            r'(必须|一定|never|always|应该|should|导致|因为|由于)', content, re.I,
+        ))
+        if has_assertion_words and not has_specific_data:
+            issues.append("包含断言但缺少具体数据支撑")
+
+        # 4. 代码块语法检查
+        code_blocks = re.findall(r'```(\w*)\n(.*?)```', frag.core_content, re.DOTALL)
+        for lang, code in code_blocks:
+            if lang in ("python", "py"):
+                if self._check_python_syntax(code):
+                    issues.append(f"Python代码块可能存在语法错误")
+
+        # 5. Wiki 链接有效性
+        wiki_links = re.findall(r'\[\[([^\]]+)\]\]', content)
+        for link in wiki_links:
+            if len(link) < 2 or link.startswith("待"):
+                issues.append(f"可疑的Wiki链接: [[{link}]]")
+
+        # 6. 时间范围合理性
+        temporal = frag.frontmatter.get("时效性", "")
+        if temporal == "version-bound" and not frag.frontmatter.get("版本标记"):
+            issues.append("标记为版本绑定但未指定版本标记")
+
+        # 7. 回流检测
+        if "<wiki-context" in content or "skip-distill" in content:
+            issues.append("检测到回流内容，不应再次蒸馏")
+
+        return issues
+
+    def _check_python_syntax(self, code: str) -> bool:
+        """简单 Python 语法检查，返回 True 表示有错误"""
+        try:
+            compile(code, "<distill-check>", "exec")
+            return False
+        except SyntaxError:
+            return True
+
+
+# ========== 第6层：跨 Agent 关联 ==========
+
+class CrossAgentLinker:
+    """第6层：跨 Agent 关联 — Jaccard 关键词重叠
+
+    自动注入 [[反向链接]]，连接不同 Agent 产出的相关知识。
+    """
+
+    JACCARD_THRESHOLD = 0.3
+
+    def __init__(self):
+        self._db_path = _get_wiki_db()
+
+    def link(self, fragments: List[KnowledgeFragment]) -> List[KnowledgeFragment]:
+        """为每个 fragment 查找跨 Agent 关联并注入链接"""
+        existing_pages = self._load_existing_pages()
+        if not existing_pages:
+            return fragments
+
+        for frag in fragments:
+            frag_keywords = self._extract_keywords(frag)
+            if not frag_keywords:
+                continue
+
+            links = []
+            for page_id, page_keywords, page_source in existing_pages:
+                jaccard = self._jaccard(frag_keywords, page_keywords)
+                if jaccard >= self.JACCARD_THRESHOLD:
+                    links.append(page_id)
+                    if page_id not in frag.related_concepts:
+                        frag.related_concepts.append(page_id)
+
+            frag.cross_agent_links = links
+
+        return fragments
+
+    def _load_existing_pages(self) -> List[Tuple[str, set, str]]:
+        """从 Wiki 目录加载已有页面的关键词"""
+        pages = []
+        wiki_dir = _get_wiki_dir()
+
+        for subdir in ["00-Inbox", "01-Projects", "02-Areas", "03-Tech", "04-Concepts"]:
+            md_dir = wiki_dir / subdir
+            if not md_dir.exists():
+                continue
+            for md_file in md_dir.glob("*.md"):
+                try:
+                    content = md_file.read_text(encoding="utf-8")[:2000]
+                    source = ""
+                    m = re.search(r'^source_agent:\s*(.+)$', content, re.MULTILINE)
+                    if m:
+                        source = m.group(1).strip()
+                    keywords = self._text_to_keywords(content)
+                    pages.append((md_file.stem, keywords, source))
+                except Exception:
+                    continue
+        return pages
+
+    def _extract_keywords(self, frag: KnowledgeFragment) -> set:
+        """从 fragment 提取关键词集合"""
+        kw = set(frag.keywords) if frag.keywords else set()
+        title_words = re.findall(r'[a-zA-Z_]{3,}', frag.title)
+        kw.update(w.lower() for w in title_words)
+        content_words = re.findall(r'[一-龥]{2,4}', frag.core_content[:500])
+        kw.update(content_words)
+        return kw
+
+    def _text_to_keywords(self, text: str) -> set:
+        """从文本提取关键词集合"""
+        kw = set()
+        kw.update(w.lower() for w in re.findall(r'[a-zA-Z_]{3,}', text))
+        kw.update(re.findall(r'[一-龥]{2,4}', text))
+        return kw
+
+    @staticmethod
+    def _jaccard(a: set, b: set) -> float:
+        if not a or not b:
+            return 0.0
+        intersection = len(a & b)
+        union = len(a | b)
+        return intersection / union if union > 0 else 0.0
+
+
+# ========== 第7层：反馈循环 ==========
+
+class DistillFeedbackLoop:
+    """第7层：反馈循环 — 评分驱动
+
+    基于蒸馏结果生成反馈信号，反馈给 AdaptiveScorer：
+    - 高价值但被跳过 → 修正预判阈值
+    - 低价值但被提取 → 修正提取阈值
+    - 自检失败 → 修正提取质量
+    """
+
+    def __init__(self):
+        self._scorer = None
+
+    def _get_scorer(self):
+        if self._scorer is None:
+            try:
+                from core.scoring.scorers.distill_scorer import DistillScorer
+                self._scorer = DistillScorer()
+            except Exception:
+                pass
+        return self._scorer
+
+    def evaluate(self, result: DistillationResult) -> List[Dict]:
+        """评估蒸馏结果，生成反馈信号"""
+        signals = []
+
+        # 信号1：预判与最终判断不一致
+        if result.prejudgment == ValuePrejudgment.CERTAINLY_NO and result.judgment == "knowledge":
+            signals.append({
+                "type": "prejudgment_mismatch",
+                "dimension": "distill_score",
+                "expected": 0.3,
+                "actual": 0.7,
+                "reason": "预判为低价值但LLM判断为知识，应调高预判阈值",
+            })
+
+        # 信号2：预判为高价值但LLM跳过
+        if result.prejudgment == ValuePrejudgment.CERTAINLY_YES and result.judgment == "skip":
+            signals.append({
+                "type": "prejudgment_mismatch",
+                "dimension": "distill_score",
+                "expected": 0.7,
+                "actual": 0.3,
+                "reason": "预判为高价值但LLM判断为跳过，应调低预判阈值",
+            })
+
+        # 信号3：自检失败率
+        if result.fragments:
+            failed_count = sum(1 for f in result.fragments if not f.self_check_passed)
+            fail_rate = failed_count / len(result.fragments)
+            if fail_rate > 0.5:
+                signals.append({
+                    "type": "self_check_failure",
+                    "dimension": "quality_score",
+                    "expected": 0.7,
+                    "actual": 1.0 - fail_rate,
+                    "reason": f"自检失败率 {fail_rate:.0%}，提取质量需改善",
+                })
+
+        # 信号4：零提取（有价值判断但无片段）
+        if result.judgment == "knowledge" and not result.fragments:
+            signals.append({
+                "type": "zero_extraction",
+                "dimension": "distill_score",
+                "expected": 0.6,
+                "actual": 0.2,
+                "reason": "判断为知识但提取无片段，提取逻辑需改善",
+            })
+
+        # 将信号反馈给 AdaptiveScorer
+        scorer = self._get_scorer()
+        if scorer and signals:
+            try:
+                from core.scoring.adaptive_scorer import Feedback
+                for sig in signals:
+                    fb = Feedback(
+                        dimension=sig["dimension"],
+                        expected=sig["expected"],
+                        actual=sig["actual"],
+                        source="self_observation",
+                        context={"reason": sig["reason"], "type": sig["type"]},
+                        weight=0.3,
+                    )
+                    scorer._scorer.feedback(fb)
+            except Exception:
+                pass
+
+        return signals
+
+
 # ========== Wiki 页面生成 ==========
 
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
                        source: str = "") -> str:
     """生成 wiki 页面 Markdown"""
-
     fm = fragment.frontmatter
-
-    # 构建 frontmatter
-    frontmatter_lines = ["---"]
-    frontmatter_lines.append(f"类型: {fm.get('类型', '未知')}")
-    frontmatter_lines.append(f"领域: {fm.get('领域', '其他')}")
+    lines = ["---"]
+    lines.append(f"类型: {fm.get('类型', '未知')}")
+    lines.append(f"领域: {fm.get('领域', '其他')}")
 
     roles = fm.get("适用角色", [])
     if roles:
-        frontmatter_lines.append(f"适用角色: {json.dumps(roles, ensure_ascii=False)}")
+        lines.append(f"适用角色: {json.dumps(roles, ensure_ascii=False)}")
 
     scenes = fm.get("触发场景", [])
     if scenes:
-        frontmatter_lines.append(f"触发场景: {json.dumps(scenes, ensure_ascii=False)}")
+        lines.append(f"触发场景: {json.dumps(scenes, ensure_ascii=False)}")
 
-    frontmatter_lines.append(f"复杂度: {fm.get('复杂度', '入门')}")
-    frontmatter_lines.append(f"置信度: {fm.get('置信度', 0.5)}")
-    frontmatter_lines.append(f"证据级别: {fm.get('证据级别', '单源')}")
-    frontmatter_lines.append(f"时效性: {fm.get('时效性', '上下文相关')}")
+    lines.append(f"复杂度: {fm.get('复杂度', '入门')}")
+    lines.append(f"置信度: {fm.get('置信度', 0.5)}")
+    lines.append(f"证据级别: {fm.get('证据级别', '单源')}")
+    lines.append(f"时效性: {fm.get('时效性', '上下文相关')}")
+    lines.append(f"情感倾向: {fm.get('情感倾向', '中性')}")
+    lines.append(f"创建日期: {fm.get('创建日期', datetime.now().strftime('%Y-%m-%d'))}")
+    lines.append(f"来源会话: {session_id[:8]}")
 
     if fm.get("版本标记"):
-        frontmatter_lines.append(f"版本标记: {fm['版本标记']}")
+        lines.append(f"版本标记: {fm['版本标记']}")
+    if fm.get("提取方式"):
+        lines.append(f"提取方式: {fm['提取方式']}")
+    if not fragment.self_check_passed:
+        lines.append(f"验证状态: pending-verification")
 
-    frontmatter_lines.append(f"情感倾向: {fm.get('情感倾向', '中性')}")
-    frontmatter_lines.append(f"创建日期: {fm.get('创建日期', datetime.now().strftime('%Y-%m-%d'))}")
-    frontmatter_lines.append(f"来源会话: {session_id[:8]}")
-
-    # 关键词
-    keywords = fm.get("关键词", {})
-    if keywords:
-        frontmatter_lines.append("关键词:")
-        for layer, words in keywords.items():
+    kw = fm.get("关键词", {})
+    if kw:
+        lines.append("关键词:")
+        for layer, words in kw.items():
             if words:
-                frontmatter_lines.append(f"  {layer}: {json.dumps(words, ensure_ascii=False)}")
+                lines.append(f"  {layer}: {json.dumps(words, ensure_ascii=False)}")
 
-    frontmatter_lines.append("---")
+    lines.append("---")
 
-    # 构建 body
-    body_lines = [f"# {fragment.title}", ""]
+    body = [f"# {fragment.title}", ""]
 
     if fragment.background:
-        body_lines.append("## 背景")
-        body_lines.append("")
-        body_lines.append(fragment.background)
-        body_lines.append("")
+        body.extend(["## 背景", "", fragment.background, ""])
 
     if fragment.core_content:
-        body_lines.append("## 核心内容")
-        body_lines.append("")
-        body_lines.append(fragment.core_content)
-        body_lines.append("")
+        body.extend(["## 核心内容", "", fragment.core_content, ""])
 
     if fragment.boundaries:
-        body_lines.append("### 适用边界")
-        body_lines.append("")
+        body.extend(["### 适用边界", ""])
         if fragment.boundaries.get("applies"):
-            body_lines.append(f"- 适用于：{fragment.boundaries['applies']}")
+            body.append(f"- 适用于：{fragment.boundaries['applies']}")
         if fragment.boundaries.get("not_applies"):
-            body_lines.append(f"- 不适用于：{fragment.boundaries['not_applies']}")
-        body_lines.append("")
+            body.append(f"- 不适用于：{fragment.boundaries['not_applies']}")
+        body.append("")
 
     if fragment.anti_patterns:
-        body_lines.append("### 反模式/注意事项")
-        body_lines.append("")
+        body.extend(["### 反模式/注意事项", ""])
         for ap in fragment.anti_patterns:
-            body_lines.append(f"- {ap}")
-        body_lines.append("")
+            body.append(f"- {ap}")
+        body.append("")
 
-    # 演化历史
-    body_lines.append("## 演化历史")
-    body_lines.append("")
-    body_lines.append(f"- v1: 初始记录（{datetime.now().strftime('%Y-%m-%d')}）")
-    body_lines.append("")
+    if fragment.self_check_issues:
+        body.extend(["### 待验证项", ""])
+        for issue in fragment.self_check_issues:
+            body.append(f"- ⚠️ {issue}")
+        body.append("")
 
-    # 相关链接
-    if fragment.related_concepts:
-        body_lines.append("## 相关链接")
-        body_lines.append("")
-        for concept in fragment.related_concepts:
-            body_lines.append(f"- [[{concept}]]")
-        body_lines.append("")
+    body.extend(["## 演化历史", "",
+                 f"- v1: 初始记录（{datetime.now().strftime('%Y-%m-%d')}）", ""])
 
-    return "\n".join(frontmatter_lines + [""] + body_lines)
+    all_related = list(fragment.related_concepts)
+    for link in fragment.cross_agent_links:
+        if link not in all_related:
+            all_related.append(link)
+    if all_related:
+        body.extend(["## 相关链接", ""])
+        for concept in all_related:
+            body.append(f"- [[{concept}]]")
+        body.append("")
+
+    return "\n".join(lines + [""] + body)
 
 
 # ========== 蒸馏引擎 ==========
 
 class DistillationEngine:
-    """知识蒸馏引擎"""
+    """七层蒸馏流水线引擎"""
 
-    def __init__(self, llm_provider: LLMProvider = None, wiki_base: str = None):
-        # [已废弃] DistillationEngine 不再直接调用 LLM
-        # 同源复用：所有蒸馏任务通过 HephaestusWorker 异步委托给宿主 Agent
-        if llm_provider is not None:
-            raise RuntimeError(
-                "DistillationEngine no longer accepts llm_provider. "
-                "Use HephaestusWorker to delegate distillation tasks."
-            )
+    def __init__(self, wiki_base: str = None, caller: HostAgentCaller = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else _get_wiki_dir()
         self.inbox_dir = self.wiki_base / "00-Inbox"
+        self._caller = caller or HostAgentCaller()
+        self._noise_filter = NoiseFilter()
+        self._value_prejudgment = ValuePrejudgment()
+        self._llm_judge = LLMValueJudge(self._caller)
+        self._extractor = KnowledgeExtractor(self._caller)
+        self._self_check = DistillSelfCheck()
+        self._cross_linker = CrossAgentLinker()
+        self._feedback_loop = DistillFeedbackLoop()
+
+    def process(self, session_id: str, messages: List[Dict],
+                meta: Dict = None) -> DistillationResult:
+        """运行七层蒸馏流水线
+
+        Args:
+            session_id: 会话 ID
+            messages: 消息列表 [{role, content}, ...]
+            meta: 元数据 {source, model, cwd, ...}
+
+        Returns:
+            DistillationResult 包含所有层的执行结果
+        """
+        result = DistillationResult(session_id=session_id)
+        meta = meta or {}
+
+        # ===== L1: 噪音过滤 =====
+        filtered, noise_stats = self._noise_filter.filter(messages)
+        result.layer_results.append(
+            PipelineLayerResult(1, "noise_filter", True, noise_stats),
+        )
+        if not filtered:
+            result.judgment = "skip"
+            result.judgment_reason = "全部消息为噪声"
+            return result
+
+        # ===== L2: 价值预判 =====
+        verdict, confidence = self._value_prejudgment.judge(filtered)
+        result.prejudgment = verdict
+        result.prejudgment_confidence = confidence
+        result.layer_results.append(
+            PipelineLayerResult(2, "value_prejudgment", True,
+                                {"verdict": verdict, "confidence": round(confidence, 3)}),
+        )
+
+        if verdict == ValuePrejudgment.CERTAINLY_NO:
+            result.judgment = "skip"
+            result.judgment_reason = f"预判无价值 (confidence={confidence:.2f})"
+            return result
+
+        # ===== L3: LLM 语义判断 =====
+        # CERTAINLY_YES 且高置信度时跳过 LLM，直接判 knowledge
+        if verdict == ValuePrejudgment.CERTAINLY_YES and confidence > 0.85:
+            judgment, judgment_reason = "knowledge", "预判高价值，跳过LLM判断"
+            judgment_confidence = confidence
+        else:
+            session_text = build_session_text(filtered)
+            judgment, judgment_reason, judgment_confidence = self._llm_judge.judge(
+                session_text, session_id,
+            )
+
+        result.judgment = judgment
+        result.judgment_reason = judgment_reason
+        result.layer_results.append(
+            PipelineLayerResult(3, "llm_value_judge", True,
+                                {"judgment": judgment, "confidence": round(judgment_confidence, 3)}),
+        )
+
+        if judgment == "skill":
+            result.skill_suggestion = self._extract_skill_suggestion(filtered)
+            return result
+
+        if judgment != "knowledge":
+            return result
+
+        # ===== L4: 知识提取 =====
+        session_text = build_session_text(filtered)
+        fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
+        result.fragments = fragments
+        result.layer_results.append(
+            PipelineLayerResult(4, "knowledge_extraction", bool(fragments),
+                                {"fragment_count": len(fragments)}),
+        )
+
+        if not fragments:
+            result.judgment = "skip"
+            result.judgment_reason = "提取无有效知识片段"
+            return result
+
+        # ===== L5: 自检 =====
+        check_passed, issues = self._self_check.check(fragments, filtered)
+        result.self_check_passed = check_passed
+        result.self_check_issues = issues
+        result.layer_results.append(
+            PipelineLayerResult(5, "self_check", check_passed,
+                                {"issues": issues[:5]}),
+        )
+
+        # ===== L6: 跨 Agent 关联 =====
+        linked_fragments = self._cross_linker.link(fragments)
+        result.fragments = linked_fragments
+        result.cross_agent_links = [
+            link for f in linked_fragments for link in f.cross_agent_links
+        ]
+        result.layer_results.append(
+            PipelineLayerResult(6, "cross_agent_linking", True,
+                                {"links": len(result.cross_agent_links)}),
+        )
+
+        # ===== L7: 反馈循环 =====
+        feedback_signals = self._feedback_loop.evaluate(result)
+        result.layer_results.append(
+            PipelineLayerResult(7, "feedback_loop", True,
+                                {"signals": len(feedback_signals)}),
+        )
+
+        return result
+
+    def write_pages(self, result: DistillationResult) -> List[str]:
+        """将蒸馏结果写入 Wiki 页面"""
+        written = []
+        if result.judgment != "knowledge" or not result.fragments:
+            return written
+
+        self.inbox_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, fragment in enumerate(result.fragments):
+            page_id = f"{result.session_id[:8]}_{fragment.form}_{i + 1}"
+            page_content = generate_wiki_page(fragment, result.session_id)
+            file_path = self.inbox_dir / f"{page_id}.md"
+            try:
+                file_path.write_text(page_content, encoding="utf-8")
+                written.append(str(file_path))
+            except Exception:
+                continue
+
+        return written
+
+    def _extract_skill_suggestion(self, messages: List[Dict]) -> str:
+        """尝试从对话中提取 Skill 建议"""
+        session_text = build_session_text(messages, max_chars=3000)
+        prompt = (
+            "从以下对话中，如果存在重复性任务，请给出一个简短的 Skill 名称和用途。\n"
+            '输出 JSON: {"skill_name": "...", "skill_purpose": "..."}\n\n'
+            f"对话内容：\n{session_text}"
+        )
+        result = self._caller.call(prompt, expect_json=True)
+        if result and "skill_name" in result:
+            return f"{result['skill_name']}: {result.get('skill_purpose', '')}"
+        return ""
+
+    # ---- 向后兼容接口 ----
 
     def process_session(self, session_id: str, messages: List[Dict],
                         meta: Dict = None) -> DistillationResult:
-        """
-        [已废弃] 处理单个 session
-
-        ⚠️ 此方法已废弃。请使用 HephaestusWorker 异步委托蒸馏任务。
-        """
-        raise RuntimeError(
-            "DistillationEngine.process_session is deprecated. "
-            "Use HephaestusWorker.process_all() or core.kia.amphora.enqueue() instead."
-        )
+        """处理单个 session（兼容接口，委托给 process()）"""
+        return self.process(session_id, messages, meta)
 
     def _parse_fragments(self, data: Dict) -> List[KnowledgeFragment]:
-        """从解析后的 JSON 数据中提取知识片段（供 HephaestusWorker 复用）"""
+        """从解析后的 JSON 数据中提取知识片段（供外部复用）"""
         fragments = []
         for frag_data in data.get("fragments", []):
             try:
@@ -361,194 +1100,43 @@ class DistillationEngine:
                     related_concepts=frag_data.get("related_concepts", []),
                 )
                 fragments.append(fragment)
-            except Exception as e:
-                # 跳过解析失败的 fragment
-                continue
-
-        return fragments
-
-    def _generate_reconfirm_question(self, result: DistillationResult,
-                                      session_text: str) -> str:
-        """生成二次确认的询问文案"""
-        reason = result.judgment_reason
-        preview = session_text[:500] + "..." if len(session_text) > 500 else session_text
-
-        question = f"""## ⚠️ 这段内容被评估为「无需入库」
-
-**跳过理由**：{reason}
-
-**内容预览**：
-```
-{preview}
-```
-
----
-
-**如果你认为这段内容有价值，请告诉我：**
-
-1. **你为什么要保存这个？**（比如："这是我和团队的对齐记录"、"我要追踪这个系统的变化"、"这是我反复参考的检查清单"）
-2. **你希望它以后怎么被使用？**（比如："快速检索"、"AI 帮我分析规律"、"对比不同版本的变化"、"整理成可复用流程"）
-
-**或者**：直接回复 "确认跳过"，我会丢弃这段内容并记录原因。
-"""
-        return question
-
-    def reconfirm_skip(self, session_id: str, messages: List[Dict],
-                       original_result: DistillationResult,
-                       user_intent: str, expected_output: str = "") -> DistillationResult:
-        """
-        基于用户意图重新评估被跳过的内容
-
-        Args:
-            session_id: 会话 ID
-            messages: 原始消息列表
-            original_result: 第一次蒸馏结果
-            user_intent: 用户补充的意图说明
-            expected_output: 用户期望的输出效果
-
-        Returns:
-            重新评估后的 DistillationResult
-        """
-        result = DistillationResult(session_id=session_id)
-
-        # 1. 构建对话文本
-        session_text = build_session_text(messages)
-        if not session_text:
-            result.judgment = "skip"
-            result.judgment_reason = "清洗后无有效内容"
-            return result
-
-        # 2. 构建二次确认 prompt
-        prompt = RECONFIRM_PROMPT
-        prompt = prompt.replace("{original_reason}", original_result.judgment_reason)
-        prompt = prompt.replace("{session_content}", session_text)
-        prompt = prompt.replace("{user_intent}", user_intent)
-        prompt = prompt.replace("{expected_output}", expected_output or "用户未明确说明期望输出")
-
-        # 3. 调用 LLM
-        try:
-            if self.llm is None:
-                result.error = "LLM provider not configured"
-                return result
-
-            response = self.llm.call(prompt, max_tokens=8000)
-            result.raw_response = response
-        except Exception as e:
-            result.error = f"LLM reconfirm call failed: {e}"
-            return result
-
-        # 4. 解析 JSON
-        data = extract_json(response)
-        if data is None:
-            result.error = "Failed to parse JSON from reconfirm response"
-            return result
-
-        # 5. 填充重新评估结果
-        result.judgment = data.get("rejudgment", "skip")
-        result.judgment_reason = data.get("rejudgment_reason", "")
-
-        # 6. 如果仍判 skip，保留详细分析
-        if result.judgment == "skip":
-            result.judgment_reason = data.get("why_still_skip", result.judgment_reason)
-            result.analysis_type = "reconfirmed_skip"
-            return result
-
-        # 7. 如果判为 knowledge，解析 fragments
-        for frag_data in data.get("fragments", []):
-            try:
-                # 将用户意图写入 background
-                background = frag_data.get("background", "")
-                if user_intent and "用户意图" not in background:
-                    background = f"**用户意图**：{user_intent}\n\n{background}"
-
-                # 标记为基于用户意图的条目
-                frontmatter = frag_data.get("frontmatter", {})
-                frontmatter["来源类型"] = "user_intent_guided"
-                frontmatter["原始判断"] = "skip"
-                frontmatter["重新评估理由"] = data.get("analysis", "")
-                # 基于用户意图的条目，置信度适当降低
-                frontmatter["置信度"] = min(frontmatter.get("置信度", 0.6), 0.7)
-
-                fragment = KnowledgeFragment(
-                    form=frag_data.get("form", "用户意图驱动"),
-                    title=frag_data.get("title", "无标题"),
-                    frontmatter=frontmatter,
-                    background=background,
-                    core_content=frag_data.get("core_content", ""),
-                    boundaries=frag_data.get("boundaries", {}),
-                    anti_patterns=frag_data.get("anti_patterns", []),
-                    related_concepts=frag_data.get("related_concepts", []),
-                )
-                result.fragments.append(fragment)
             except Exception:
                 continue
-
-        return result
-
-    def write_pages(self, result: DistillationResult) -> List[str]:
-        """
-        将蒸馏结果写入 wiki 页面
-
-        Returns:
-            写入的文件路径列表
-        """
-        written = []
-
-        if result.judgment != "knowledge" or not result.fragments:
-            return written
-
-        self.inbox_dir.mkdir(parents=True, exist_ok=True)
-
-        for i, fragment in enumerate(result.fragments):
-            # 生成页面 ID
-            page_id = f"{result.session_id[:8]}_{fragment.form}_{i + 1}"
-
-            # 生成页面内容
-            page_content = generate_wiki_page(
-                fragment, result.session_id
-            )
-
-            # 写入文件
-            file_path = self.inbox_dir / f"{page_id}.md"
-            try:
-                file_path.write_text(page_content, encoding="utf-8")
-                written.append(str(file_path))
-            except Exception as e:
-                continue
-
-        return written
+        return fragments
 
 
-# ========== 便捷函数 ==========
+# ========== 向后兼容 ==========
+
+class LLMProvider:
+    """LLM 调用抽象基类（已废弃，保留兼容）"""
+    def call(self, prompt: str, max_tokens: int = 8000) -> str:
+        raise NotImplementedError
+
+
+class AgentDelegateProvider(LLMProvider):
+    """委托本地 Agent 执行蒸馏（已废弃，保留兼容）"""
+    def __init__(self, timeout: int = 300):
+        self.timeout = timeout
+
+    def call(self, prompt: str, max_tokens: int = 8000) -> str:
+        caller = HostAgentCaller(timeout=self.timeout)
+        result = caller.call(prompt, expect_json=False)
+        if result and "raw" in result:
+            return result["raw"]
+        raise RuntimeError("无可用 Agent 执行蒸馏任务")
+
 
 def distill_session(session_id: str, messages: List[Dict],
-                    llm_provider: LLMProvider = None,
                     wiki_base: str = None) -> DistillationResult:
-    """[已废弃] 便捷函数：蒸馏单个 session
-
-    ⚠️ 警告：此函数已废弃。请使用 core.hephaestus_worker.HephaestusWorker 异步委托。
-    """
-    raise RuntimeError(
-        "distill_session is deprecated. "
-        "Use HephaestusWorker.process_all() or enqueue() to delegate distillation."
-    )
+    """便捷函数：蒸馏单个 session"""
+    engine = DistillationEngine(wiki_base=wiki_base)
+    return engine.process(session_id, messages)
 
 
 def distill_and_write(session_id: str, messages: List[Dict],
-                      llm_provider: LLMProvider = None,
                       wiki_base: str = None) -> Tuple[DistillationResult, List[str]]:
-    """[已废弃] 便捷函数：蒸馏并写入 wiki
-
-    ⚠️ 警告：此函数已废弃。请使用 core.hephaestus_worker.HephaestusWorker 异步委托。
-    """
-    raise RuntimeError(
-        "distill_and_write is deprecated. "
-        "Use HephaestusWorker.process_all() or enqueue() to delegate distillation."
-    )
-
-
-if __name__ == "__main__":
-    # 测试
-    print("Distillation Engine loaded.")
-    print(f"Wiki base: {_get_wiki_dir()}")
-    print(f"Prompt length: {len(DISTILLATION_PROMPT)} chars")
+    """便捷函数：蒸馏并写入 Wiki"""
+    engine = DistillationEngine(wiki_base=wiki_base)
+    result = engine.process(session_id, messages)
+    written = engine.write_pages(result)
+    return result, written

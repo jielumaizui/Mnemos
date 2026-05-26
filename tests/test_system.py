@@ -57,7 +57,7 @@ def test_imports():
     modules = [
         # 核心 SDK 与集成
         ("integrations.styx", "MemosClient"),
-        ("integrations.claude_live_sync", "ClaudeSessionHandler"),
+        ("integrations.sources.claude_source", "ClaudeSource"),
 
         # KIA 闭环系统
         ("core.kia.ananke", "TaskClassifier"),

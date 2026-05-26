@@ -3,13 +3,10 @@
 ClaudeSource — Claude Code Agent 同步插件
 
 实现 AgentSource 接口，接入 SyncFramework。
-
-TODO: 当前为骨架实现，需从 claude_live_sync.py 迁移以下逻辑：
-  - JSONL 消息解析（_standardize_message）
+从 claude_live_sync.py 迁移的完整 JSONL 消息解析逻辑：
+  - thinking/tool_use/tool_result 内容块提取
   - 增量同步（offset 追踪）
-  - 工具调用/thinking 内容提取
-
-迁移完成后，claude_live_sync.py 将退化为兼容层（直接委托给 SyncEngine）。
+  - 工具调用/推理内容提取
 """
 
 from __future__ import annotations
@@ -82,6 +79,7 @@ class ClaudeSource(AgentSource):
 
         current_user = ""
         current_assistant = ""
+        current_meta: Dict[str, Any] = {}
         turn_number = 0
 
         for line in lines:
@@ -101,26 +99,32 @@ class ClaudeSource(AgentSource):
             content = standardized.get("content", "")
 
             if role == "user":
-                # 如果已有 assistant 内容，保存上一轮
                 if current_assistant:
                     turns.append(Turn(
                         turn_number=turn_number,
                         user_content=current_user,
                         assistant_content=current_assistant,
-                        timestamp=standardized.get("timestamp"),
+                        timestamp=current_meta.get("timestamp"),
                         metadata={
-                            "tool_calls": standardized.get("tool_calls", []),
-                            "tool_results": standardized.get("tool_results", []),
-                            "reasoning": standardized.get("reasoning", ""),
+                            "tool_calls": current_meta.get("tool_calls", []),
+                            "tool_results": current_meta.get("tool_results", []),
+                            "reasoning": current_meta.get("reasoning", ""),
                         },
                     ))
                     turn_number += 1
                     current_user = content
                     current_assistant = ""
+                    current_meta = {}
                 else:
                     current_user = content
             elif role == "assistant":
                 current_assistant = content
+                current_meta = {
+                    "timestamp": standardized.get("timestamp"),
+                    "tool_calls": standardized.get("tool_calls", []),
+                    "tool_results": standardized.get("tool_results", []),
+                    "reasoning": standardized.get("reasoning", ""),
+                }
 
         # 保存最后一轮
         if current_user or current_assistant:
@@ -128,15 +132,25 @@ class ClaudeSource(AgentSource):
                 turn_number=turn_number,
                 user_content=current_user,
                 assistant_content=current_assistant,
-                metadata={},
+                timestamp=current_meta.get("timestamp"),
+                metadata={
+                    "tool_calls": current_meta.get("tool_calls", []),
+                    "tool_results": current_meta.get("tool_results", []),
+                    "reasoning": current_meta.get("reasoning", ""),
+                },
             ))
 
         return turns
 
     def _standardize_message(self, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """标准化 Claude Code JSONL 消息格式
+        """
+        标准化 Claude Code JSONL 消息格式。
 
-        TODO: 当前为简化版，需从 claude_live_sync.py 完整迁移。
+        从 claude_live_sync.py 完整迁移，支持：
+        - 嵌套 message 字段
+        - content 为字符串或数组
+        - thinking/reasoning 内容块
+        - tool_calls / tool_results
         """
         if not isinstance(msg, dict):
             return None
@@ -147,14 +161,37 @@ class ClaudeSource(AgentSource):
             role = msg.get("type", "")
 
         raw_content = message_data.get("content", "")
+        tool_calls = message_data.get("tool_calls", msg.get("tool_calls", []))
+        tool_results = msg.get("toolUseResult") or msg.get("tool_results")
+        reasoning = ""
+
+        # 处理 content（可能是字符串或内容块数组）
         if isinstance(raw_content, list):
             content_parts = []
             for part in raw_content:
-                if isinstance(part, dict):
-                    if part.get("type") == "text":
-                        content_parts.append(part.get("text", ""))
-                    elif "content" in part:
-                        content_parts.append(str(part["content"]))
+                if not isinstance(part, dict):
+                    continue
+                part_type = part.get("type", "")
+                if part_type == "text":
+                    content_parts.append(part.get("text", ""))
+                elif part_type in ("thinking", "reasoning"):
+                    reasoning = part.get("thinking", part.get("text", ""))[:2000]
+                elif part_type == "tool_use":
+                    # 工具调用信息提取到 tool_calls
+                    if not tool_calls:
+                        tool_calls = []
+                    tool_calls.append({
+                        "name": part.get("name", "unknown"),
+                        "input": part.get("input", {}),
+                    })
+                elif part_type == "tool_result":
+                    if not tool_results:
+                        tool_results = []
+                    tool_results.append({
+                        "stdout": str(part.get("content", ""))[:500],
+                    })
+                elif "content" in part:
+                    content_parts.append(str(part["content"]))
             content = "\n".join(content_parts)
         else:
             content = str(raw_content)
@@ -162,11 +199,35 @@ class ClaudeSource(AgentSource):
         if not role or not content:
             return None
 
-        return {
+        result = {
             "role": role,
             "content": content,
             "timestamp": msg.get("timestamp", ""),
         }
+
+        if tool_calls:
+            if isinstance(tool_calls, list):
+                result["tool_calls"] = [
+                    {
+                        "name": t.get("name", t.get("function", {}).get("name", "unknown")),
+                        "input": t.get("input", t.get("arguments", t.get("function", {}).get("arguments", {}))),
+                    }
+                    for t in tool_calls[:10]
+                ]
+
+        if tool_results:
+            if isinstance(tool_results, dict):
+                result["tool_results"] = [{
+                    "stdout": str(tool_results.get("stdout", ""))[:500],
+                    "stderr": str(tool_results.get("stderr", ""))[:200],
+                }]
+            elif isinstance(tool_results, list):
+                result["tool_results"] = tool_results
+
+        if reasoning:
+            result["reasoning"] = reasoning
+
+        return result
 
     def build_extra_tags(self, turn: Turn) -> List[str]:
         """Claude 自定义标签"""
