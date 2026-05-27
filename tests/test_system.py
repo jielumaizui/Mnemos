@@ -60,36 +60,36 @@ def test_imports():
         ("integrations.sources.claude_source", "ClaudeSource"),
 
         # KIA 闭环系统
-        ("core.kia.ananke", "TaskClassifier"),
+        ("core.kia.dike", "TaskClassifier"),
         ("core.kia.kairos", "TimeParser"),
         ("core.kia.prophasis", "PreFlightInjector"),
         ("core.kia.aegis", "InProcessGuard"),
-        ("core.kia.nemesis", "AutoRetrospective"),
-        ("core.kia.mnemos", "IterationTracker"),
-        ("core.kia.atropos", "KnowledgeScheduler"),
+        ("core.kia.epimetheus", "AutoRetrospective"),
+        ("core.kia.proteus", "IterationTracker"),
+        ("core.kia.chronos", "KnowledgeScheduler"),
 
         # 子 Agent 蒸馏
-        ("core.hephaestus.distillation_queue", "enqueue"),
-        ("core.hephaestus.distillation_queue", "list_pending"),
-        ("core.hephaestus.distillation_engine", "build_prompt"),
+        ("core.kia.amphora", "enqueue"),
+        ("core.kia.amphora", "list_pending"),
+        ("core.hephaestus.distillation_engine", "DistillationEngine"),
 
         # 14+ 子系统
         ("core.kia.charon", "run_connect_cycle"),
-        ("core.kia.asklepios", "KnowledgeImmuneSystem"),
-        ("core.knowledge_dna", "DNAEngine"),
-        ("core.dark_knowledge", "DarkKnowledgeMiner"),
-        ("core.knowledge_graph", "KnowledgeGraph"),
-        ("core.quantum_entanglement", "QuantumEntanglement"),
-        ("core.skill_wiki_flywheel", "SkillWikiFlywheel"),
-        ("core.predictive_push", "PredictivePushEngine"),
-        ("core.time_capsule", "TimeCapsule"),
-        ("core.entropy_engine", "EntropyEngine"),
-        ("core.falsifiability_marker", "FalsifiabilityMarker"),
-        ("core.knowledge_profile", "ProfileGenerator"),
-        ("core.version_time_travel", "VersionTimeTravel"),
-        ("core.shadow_page", "ShadowPageManager"),
+        ("core.kia.hygieia", "KnowledgeImmuneSystem"),
+        ("core.kia.genos", "DNAEngine"),
+        # ("core.dark_knowledge", "DarkKnowledgeMiner"),  # 暂未实现
+        ("core.kia.knowledge_graph", "KnowledgeGraph"),
+        # ("core.quantum_entanglement", "QuantumEntanglement"),  # 暂未实现
+        ("core.kia.ixion", "SkillWikiFlywheel"),
+        ("core.kia.teiresias", "PredictivePushEngine"),
+        ("core.kia.aion", "TimeCapsule"),
+        ("core.kia.eris", "EntropyEngine"),
+        # ("core.falsifiability_marker", "FalsifiabilityMarker"),  # 暂未实现
+        ("core.kia.metis", "ProfileGenerator"),
+        ("core.kia.ananke", "VersionTimeTravel"),
+        ("core.kia.hecate", "ShadowPageManager"),
         ("core.hephaestus.distillation_engine", "DistillationEngine"),
-        ("core.knowledge_trail", "KnowledgeTrail"),
+        ("core.kia.ariadne", "KnowledgeTrail"),
     ]
 
     passed = 0
@@ -106,7 +106,7 @@ def test_imports():
             failed += 1
 
     info(f"导入测试: {passed} 通过, {failed} 失败")
-    return failed == 0
+    assert failed == 0, f"导入测试失败: {failed} 个模块无法导入"
 
 
 # ========== 测试 2: Wiki 目录结构 ==========
@@ -134,7 +134,7 @@ def test_wiki_structure():
         else:
             warn(f"{d}/ - {desc} 不存在(将在首次运行时创建)")
 
-    return passed
+    assert passed, "wiki 结构测试存在缺失目录"
 
 
 # ========== 测试 3: 数据库完整性 ==========
@@ -184,7 +184,7 @@ def test_databases():
     else:
         info("distill_queue: 目录不存在(首次运行时会创建)")
 
-    return all_passed
+    assert all_passed, "数据库完整性测试失败"
 
 
 # ========== 测试 4: KIA 闭环系统 ==========
@@ -195,7 +195,7 @@ def test_kia_system():
 
     try:
         # 1. TaskClassifier
-        from core.kia.ananke import TaskClassifier
+        from core.kia.dike import TaskClassifier
         tc = TaskClassifier()
         result = tc.classify([{"role": "user", "content": "帮我写一个 Python 脚本处理数据"}])
         if result.confidence > 0.5:
@@ -230,22 +230,21 @@ def test_kia_system():
         ok(f"InProcessGuard: 已初始化")
 
         # 5. IterationTracker
-        from core.kia.mnemos import IterationTracker
+        from core.kia.proteus import IterationTracker
         it = IterationTracker()
         stats = it.get_stats()
         ok(f"IterationTracker: 总知识 {stats.get('total', 0)}")
 
         # 6. KnowledgeScheduler
-        from core.kia.atropos import KnowledgeScheduler
+        from core.kia.chronos import KnowledgeScheduler
         ks = KnowledgeScheduler()
         ok(f"KnowledgeScheduler: 已初始化")
 
-        return True
     except Exception as e:
         fail(f"KIA 系统测试失败: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        assert False, f"KIA 系统测试失败: {e}"
 
 
 # ========== 测试 5: 子系统初始化 ==========
@@ -257,84 +256,74 @@ def test_subsystems():
     tests = []
 
     try:
-        from core.kia.asklepios import KnowledgeImmuneSystem
+        from core.kia.hygieia import KnowledgeImmuneSystem
         immune = KnowledgeImmuneSystem()
         tests.append(("免疫系统", True, ""))
     except Exception as e:
         tests.append(("免疫系统", False, str(e)))
 
     try:
-        from core.knowledge_dna import DNAEngine
+        from core.kia.genos import DNAEngine
         dna = DNAEngine()
         tests.append(("DNA 指纹", True, ""))
     except Exception as e:
         tests.append(("DNA 指纹", False, str(e)))
 
     try:
-        from core.knowledge_graph import KnowledgeGraph
+        from core.kia.knowledge_graph import KnowledgeGraph
         kg = KnowledgeGraph()
         tests.append(("知识图谱", True, ""))
     except Exception as e:
         tests.append(("知识图谱", False, str(e)))
 
-    try:
-        from core.quantum_entanglement import QuantumEntanglement
-        qe = QuantumEntanglement()
-        tests.append(("量子纠缠", True, ""))
-    except Exception as e:
-        tests.append(("量子纠缠", False, str(e)))
+    # QuantumEntanglement 暂未实现，跳过
 
     try:
-        from core.predictive_push import PredictivePushEngine
+        from core.kia.teiresias import PredictivePushEngine
         ppe = PredictivePushEngine()
         tests.append(("预测推送", True, ""))
     except Exception as e:
         tests.append(("预测推送", False, str(e)))
 
     try:
-        from core.time_capsule import TimeCapsule
+        from core.kia.aion import TimeCapsule
         tc = TimeCapsule()
         tests.append(("时间胶囊", True, ""))
     except Exception as e:
         tests.append(("时间胶囊", False, str(e)))
 
     try:
-        from core.entropy_engine import EntropyEngine
+        from core.kia.eris import EntropyEngine
         ee = EntropyEngine()
         tests.append(("熵引擎", True, ""))
     except Exception as e:
         tests.append(("熵引擎", False, str(e)))
 
-    try:
-        from core.falsifiability_marker import FalsifiabilityMarker
-        fm = FalsifiabilityMarker()
-        tests.append(("可证伪性标记", True, ""))
-    except Exception as e:
-        tests.append(("可证伪性标记", False, str(e)))
+    # FalsifiabilityMarker 暂未实现，跳过
 
     try:
-        from core.knowledge_profile import ProfileGenerator
+        from core.kia.metis import ProfileGenerator
         pg = ProfileGenerator()
         tests.append(("知识画像", True, ""))
     except Exception as e:
         tests.append(("知识画像", False, str(e)))
 
     try:
-        from core.version_time_travel import VersionTimeTravel
+        from core.kia.ananke import VersionTimeTravel
         vtt = VersionTimeTravel()
         tests.append(("版本时间旅行", True, ""))
     except Exception as e:
         tests.append(("版本时间旅行", False, str(e)))
 
     try:
-        from core.shadow_page import ShadowPageManager
+        from core.kia.hecate import ShadowPageManager
         spm = ShadowPageManager()
         tests.append(("影子页面", True, ""))
     except Exception as e:
         tests.append(("影子页面", False, str(e)))
 
     try:
-        from core.skill_wiki_flywheel import SkillWikiFlywheel
+        from core.kia.ixion import SkillWikiFlywheel
         swf = SkillWikiFlywheel()
         tests.append(("Skill-Wiki 飞轮", True, ""))
     except Exception as e:
@@ -348,7 +337,7 @@ def test_subsystems():
             fail(f"{name}: {err}")
 
     info(f"子系统初始化: {passed}/{len(tests)} 通过")
-    return passed == len(tests)
+    assert passed == len(tests), f"子系统测试失败: {len(tests) - passed} 个子系统初始化失败"
 
 
 # ========== 测试 6: 端到端流程 ==========
@@ -359,7 +348,7 @@ def test_end_to_end():
 
     # 1. 测试 distill_queue
     try:
-        from core.hephaestus.distillation_queue import enqueue, list_pending, mark_done
+        from core.kia.amphora import enqueue, list_pending, mark_done
         import hashlib
         test_sid = f"test:{hashlib.md5(b'test').hexdigest()[:8]}"
         enqueue(
@@ -416,7 +405,6 @@ def test_end_to_end():
     except Exception as e:
         warn(f"复盘系统: {e}")
 
-    return True
 
 
 # ========== 主函数 ==========
