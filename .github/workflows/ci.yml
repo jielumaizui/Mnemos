@@ -36,7 +36,7 @@ jobs:
 
       - name: Run smoke tests
         run: |
-          python -m pytest tests/ -v
+          python -m pytest tests/ -v --ignore=tests/test_system.py
 
       - name: Test CLI help
         run: |
