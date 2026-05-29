@@ -26,8 +26,30 @@ if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]); then
 fi
 
 echo "✓ Python 版本满足 >= 3.10"
+
+# 优先使用虚拟环境 Python（如果存在）
+if [ -f "$PROJECT_ROOT/.venv/bin/python" ]; then
+    PYTHON="$PROJECT_ROOT/.venv/bin/python"
+    echo "✓ 使用虚拟环境 Python: $PYTHON"
+elif [ -f "$PROJECT_ROOT/.venv/Scripts/python.exe" ]; then
+    PYTHON="$PROJECT_ROOT/.venv/Scripts/python.exe"
+    echo "✓ 使用虚拟环境 Python: $PYTHON"
+else
+    PYTHON="python3"
+    echo "使用系统 Python: $PYTHON"
+fi
 echo ""
 
 # 运行 Python 部署脚本
 cd "$PROJECT_ROOT"
-python3 scripts/auto_setup.py "$@"
+"$PYTHON" scripts/auto_setup.py "$@"
+
+# 如果虚拟环境不存在但 auto_setup.py 创建了它，提示用户
+cd "$PROJECT_ROOT"
+if [ -f ".venv/bin/python" ] && [ "$PYTHON" = "python3" ]; then
+    echo ""
+    echo "提示: 已创建虚拟环境 .venv"
+    echo "后续请使用以下命令运行 Mnemos:"
+    echo "  .venv/bin/python mnemos_cli.py ..."
+    echo "  source .venv/bin/activate && python mnemos_cli.py ..."
+fi

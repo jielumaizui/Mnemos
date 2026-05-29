@@ -43,6 +43,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 当前使用的 Python 解释器（可能被虚拟环境替换）
+_PYTHON_EXE = sys.executable
+
 # 跨平台 Obsidian Vault 常见路径
 OBSIDIAN_VAULT_PATHS = {
     "Darwin": [
@@ -119,6 +122,29 @@ def check_python() -> bool:
 
 # ── 步骤 2: 安装依赖 ──
 
+def _ensure_venv() -> Optional[Path]:
+    """在项目根目录创建 .venv，返回 venv 中的 python 路径"""
+    venv_dir = PROJECT_ROOT / ".venv"
+    if not venv_dir.exists():
+        print("  创建虚拟环境 .venv ...")
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print_err(f"创建虚拟环境失败: {result.stderr[:200]}")
+            return None
+    # 确定虚拟环境的 python 路径
+    if platform.system() == "Windows":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_python = venv_dir / "bin" / "python"
+    if venv_python.exists():
+        return venv_python
+    print_err(f"虚拟环境 Python 未找到: {venv_python}")
+    return None
+
+
 def install_dependencies(yes_mode: bool = False) -> bool:
     print("  安装项目依赖...")
     req_file = PROJECT_ROOT / "requirements.txt"
@@ -126,37 +152,39 @@ def install_dependencies(yes_mode: bool = False) -> bool:
         print_warn("requirements.txt 不存在，跳过")
         return True
 
-    # Windows PowerShell 中 [dev] 会被解释为通配符，用引号包裹
+    global _PYTHON_EXE
     extras = f"{PROJECT_ROOT}[dev]"
-    cmd = [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
-    if yes_mode:
-        print(f"  执行: pip install -e {PROJECT_ROOT} -e '{extras}'")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            print_ok("依赖安装完成")
-            return True
-        # 回退: 不带 [dev] 先装核心依赖
-        print_warn(f"完整安装失败，尝试仅核心依赖...")
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT)],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print_ok("核心依赖安装完成 (可选 dev 依赖需手动安装)")
-            return True
-        print_err(f"安装失败: {result.stderr[:200]}")
-        return False
+    cmd = [_PYTHON_EXE, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
 
-    ans = ask_yes_no("是否安装依赖？(pip install -e .[dev])", default=True, yes_mode=yes_mode)
-    if not ans:
-        print_warn("跳过依赖安装")
-        return True
+    def _try_install(python: str) -> tuple[bool, str]:
+        c = [python, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
+        r = subprocess.run(c, capture_output=True, text=True)
+        return r.returncode == 0, r.stderr
 
-    result = subprocess.run(cmd, capture_output=False)
-    if result.returncode == 0:
+    # 先尝试直接安装
+    ok, err = _try_install(_PYTHON_EXE)
+    if ok:
         print_ok("依赖安装完成")
         return True
-    print_err("依赖安装失败")
+
+    # 检测 externally-managed-environment
+    if "externally-managed-environment" in err or "externally managed" in err:
+        print_warn("检测到系统 Python 外部管理限制，尝试创建虚拟环境...")
+        venv_python = _ensure_venv()
+        if venv_python:
+            _PYTHON_EXE = str(venv_python)
+            ok, err2 = _try_install(_PYTHON_EXE)
+            if ok:
+                print_ok(f"依赖已在虚拟环境安装: {venv_python}")
+                print("  后续操作将使用虚拟环境 Python")
+                return True
+            print_err(f"虚拟环境安装失败: {err2[:200]}")
+            return False
+        print_err("无法创建虚拟环境")
+        return False
+
+    # 其他错误
+    print_err(f"安装失败: {err[:200]}")
     return False
 
 
@@ -509,7 +537,7 @@ def start_daemon(yes_mode: bool = False) -> bool:
         return True
 
     result = subprocess.run(
-        [sys.executable, str(PROJECT_ROOT / "mnemos_daemon.py"), "start"],
+        [_PYTHON_EXE, str(PROJECT_ROOT / "mnemos_daemon.py"), "start"],
         capture_output=True, text=True
     )
     if result.returncode == 0:
@@ -547,7 +575,7 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
     def _xml_esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    exe = _xml_esc(str(sys.executable))
+    exe = _xml_esc(str(_PYTHON_EXE))
     script = _xml_esc(str(PROJECT_ROOT / "mnemos_daemon.py"))
     log_out = _xml_esc(str(Path.home() / ".mnemos" / "logs" / "daemon.launchd.log"))
     log_err = _xml_esc(str(Path.home() / ".mnemos" / "logs" / "daemon.launchd.err"))
@@ -598,7 +626,7 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
 
 
 def _setup_linux_scheduler(yes_mode: bool = False) -> bool:
-    cron_line = f"*/5 * * * * {sys.executable} {PROJECT_ROOT / 'mnemos_daemon.py'} run >> {Path.home() / '.mnemos' / 'logs' / 'daemon.cron.log'} 2>&1"
+    cron_line = f"*/5 * * * * {_PYTHON_EXE} {PROJECT_ROOT / 'mnemos_daemon.py'} run >> {Path.home() / '.mnemos' / 'logs' / 'daemon.cron.log'} 2>&1"
     print_warn("Linux 定时任务请手动配置 cron:")
     print(f"    echo '{cron_line}' | crontab -")
     return True
@@ -612,6 +640,11 @@ def main():
     parser.add_argument("--skip-memos", action="store_true", help="跳过 Memos 配置")
     parser.add_argument("--skip-obsidian", action="store_true", help="跳过 Obsidian 配置")
     args = parser.parse_args()
+
+    # 非交互式终端自动启用 --yes，避免 input() 抛 EOFError
+    if not sys.stdin.isatty():
+        args.yes = True
+        print("检测到非交互式终端，自动启用 --yes 模式")
 
     yes_mode = args.yes
     total_steps = 9
