@@ -51,7 +51,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "settings_json_path": None,
         },
-        "mcp": {"enabled": False},
+        "mcp": {"enabled": True},
     },
     # === 评分层常量 ===
     "scoring": {

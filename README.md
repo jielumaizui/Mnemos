@@ -244,6 +244,10 @@ setup.bat         # Windows
 # 1. 克隆并安装
 git clone https://github.com/jielumaizui/mnemos.git
 cd mnemos
+
+# 建议创建虚拟环境（避免 PEP 668 系统环境限制）
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
 # 2. 复制并编辑配置
@@ -254,6 +258,8 @@ cp config/config.example.json ~/.mnemos/configs/main.json
 # 3. 系统诊断
 python3 mnemos_cli.py doctor
 ```
+
+> **注意**：若使用 `setup.sh` 一键安装，依赖已安装在 `.venv` 中，后续命令请用 `.venv/bin/python mnemos_cli.py ...` 运行。
 
 `mnemos doctor` 会自动检测系统状态，检查依赖是否就绪。
 

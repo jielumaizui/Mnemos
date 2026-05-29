@@ -133,7 +133,9 @@ If you prefer manual configuration:
 git clone https://github.com/jielumaizui/mnemos.git
 cd mnemos
 
-# Install dependencies
+# Create virtual environment (avoids PEP 668 system restrictions)
+python3 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
 # Copy and edit configuration
@@ -144,6 +146,8 @@ cp config/config.example.json ~/.mnemos/configs/main.json
 # Run system diagnosis
 python3 mnemos_cli.py doctor
 ```
+
+> **Note**: If you used `setup.sh` for installation, dependencies are installed in `.venv`. Use `.venv/bin/python mnemos_cli.py ...` for subsequent commands.
 
 ### Verify System is Working
 

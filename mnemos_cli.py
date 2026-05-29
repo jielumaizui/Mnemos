@@ -823,7 +823,7 @@ def cmd_mcp_serve(args):
         from integrations.agora import run_mcp_server
         run_mcp_server()
     except ImportError:
-        print("MCP 服务器未实现。请先安装 mnemos[mcp] 依赖。")
+        print("MCP SDK 导入失败。请检查安装是否完整：pip install -e .", file=sys.stderr)
         sys.exit(1)
 
 

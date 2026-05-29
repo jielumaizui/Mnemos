@@ -108,7 +108,7 @@ class DocumentProcessor:
                 config = get_config()
                 if config.memos_enabled and config.memos_token:
                     self.client = MemosClient(
-                        host=config.memos_api_url,
+                        base_url=config.memos_api_url,
                         token=config.memos_token,
                     )
             except Exception:
