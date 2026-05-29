@@ -409,7 +409,8 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
     from core.config import DEFAULT_CONFIG
 
     data = copy.deepcopy(DEFAULT_CONFIG)
-    if config_file.exists():
+    # --yes 模式：使用新默认值，不合并旧配置（确保升级用户获得新默认值）
+    if config_file.exists() and not yes_mode:
         try:
             existing = json.loads(config_file.read_text(encoding="utf-8"))
             if isinstance(existing, dict):
@@ -711,9 +712,9 @@ def main():
         print(f"  Memos: {memos_url}")
     print()
     print("后续操作:")
-    print("  python3 mnemos_cli.py doctor    # 系统诊断")
-    print("  python3 mnemos_cli.py status    # 查看状态")
-    print("  python3 mnemos_cli.py init      # 交互式调整配置")
+    print("  .venv/bin/python mnemos_cli.py doctor    # 系统诊断")
+    print("  .venv/bin/python mnemos_cli.py status    # 查看状态")
+    print("  .venv/bin/python mnemos_cli.py init      # 交互式调整配置")
     print()
     print("Claude Code 重启后 hooks 生效。")
     print("=" * 60)

@@ -113,8 +113,10 @@ class MemosClient:
 
     def __init__(self, token: str = None, base_url: str = "", agent: str = None,
                  metrics_callback: Optional[Callable[[str, float, int], None]] = None):
-        self.base_url = base_url.rstrip('/')
-        self.token = token or os.getenv("MEMOS_TOKEN")
+        # 当未传入参数时，自动从配置读取
+        cfg = get_config()
+        self.base_url = (base_url or cfg.memos_api_url or "").rstrip('/')
+        self.token = token or os.getenv("MEMOS_TOKEN") or cfg.memos_token
         # 优先从环境变量读取 agent，其次是传入的参数
         self.agent = os.getenv("MEMOS_AGENT") or agent or "unknown"
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -122,7 +124,6 @@ class MemosClient:
         self.session = get_session(self.base_url)
 
         # Config-driven 参数
-        cfg = get_config()
         self.max_content_bytes = cfg.get("memos.max_content_bytes", 7792)
         self.ingest_batch_size = cfg.get("memos.ingest_batch_size", 10)
         self.ingest_batch_interval = cfg.get("memos.ingest_batch_interval", 10)
