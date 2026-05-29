@@ -616,12 +616,10 @@ class TestCaptureSessionStatusPriority(unittest.TestCase):
 
         with patch("core.sync_framework.capture_service.get_config", return_value=fake_cfg), \
              patch("core.sync_framework.capture_queue.get_config", return_value=fake_cfg):
-            service = CaptureService(queue=queue)
+            service = CaptureService(queue=queue, start_worker=False)
             # 先占满队列（不经过 capture_turn 避免 dedupe_key 冲突）
             queue.enqueue("k0", "codex", "s0", None, 0, {}, "h0")
             queue.enqueue("k1", "codex", "s0", None, 1, {}, "h1")
-            # 停止 worker，避免它消费队列
-            service.worker_pool.stop()
 
             result = service.capture_session(
                 source_agent="codex",
