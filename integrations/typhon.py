@@ -38,7 +38,7 @@ class OpenClawAdapter(AgentAdapter):
 
     def is_available(self) -> bool:
         """检测 OpenClaw 是否安装"""
-        return self._sqlite_path().exists()
+        return self.get_data_dir().exists()
 
     def get_data_dir(self) -> Optional[Path]:
         return Path.home() / ".openclaw"

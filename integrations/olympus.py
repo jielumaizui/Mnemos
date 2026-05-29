@@ -148,6 +148,7 @@ class AgentRegistry:
             "integrations.daedalus",
             "integrations.musae",
             "integrations.typhon",
+            "integrations.kimi_adapter",
         ]
         for mod_name in adapter_modules:
             try:
