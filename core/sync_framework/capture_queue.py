@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from core.config import get_config
+from core.db_utils import SqlitePool
 
 logger = logging.getLogger(__name__)
 
@@ -33,62 +34,67 @@ class CaptureQueue:
         self.db_path = Path(db_path or config.data_dir / "capture_queue.db").expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._pool = SqlitePool(self.db_path)
         self._init_db()
+
+    def close(self):
+        """关闭持久连接"""
+        self._pool.close()
 
     def _init_db(self):
         """初始化队列数据库"""
-        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS capture_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    dedupe_key TEXT UNIQUE,
-                    source_agent TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    turn_id TEXT,
-                    turn_number INTEGER,
-                    payload_json TEXT,
-                    content_hash TEXT,
-                    status TEXT DEFAULT 'pending',
-                    retry_count INTEGER DEFAULT 0,
-                    created_at TEXT,
-                    processed_at TEXT,
-                    error TEXT
-                )
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_dedupe_key
-                ON capture_events(dedupe_key)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_source_status
-                ON capture_events(source_agent, status)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_session_turn
-                ON capture_events(session_id, turn_number)
-            """)
-            # 退避状态表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS source_backoff (
-                    source_agent TEXT PRIMARY KEY,
-                    error_count INTEGER DEFAULT 0,
-                    last_retry_at TEXT
-                )
-            """)
-            # session 结束标记表（供 end_session 异步 flush 用）
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS session_end_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_agent TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    created_at TEXT,
-                    UNIQUE(source_agent, session_id)
-                )
-            """)
-            conn.commit()
+        conn = self._pool.get_conn()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS capture_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dedupe_key TEXT UNIQUE,
+                source_agent TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                turn_id TEXT,
+                turn_number INTEGER,
+                payload_json TEXT,
+                content_hash TEXT,
+                status TEXT DEFAULT 'pending',
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT,
+                processed_at TEXT,
+                error TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_dedupe_key
+            ON capture_events(dedupe_key)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_source_status
+            ON capture_events(source_agent, status)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_turn
+            ON capture_events(session_id, turn_number)
+        """)
+        # 退避状态表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS source_backoff (
+                source_agent TEXT PRIMARY KEY,
+                error_count INTEGER DEFAULT 0,
+                last_retry_at TEXT
+            )
+        """)
+        # session 结束标记表（供 end_session 异步 flush 用）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_end_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_agent TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at TEXT,
+                UNIQUE(source_agent, session_id)
+            )
+        """)
+        conn.commit()
 
     def enqueue(
         self,
@@ -111,57 +117,56 @@ class CaptureQueue:
 
         with self._lock:
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    cursor = conn.cursor()
+                conn = self._pool.get_conn()
+                cursor = conn.cursor()
 
-                    # 检查全局队列深度
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM capture_events WHERE status = 'pending'"
+                # 检查全局队列深度
+                cursor.execute(
+                    "SELECT COUNT(*) FROM capture_events WHERE status = 'pending'"
+                )
+                pending_count = cursor.fetchone()[0]
+                if pending_count >= max_depth:
+                    logger.warning(
+                        f"[CaptureQueue] 全局队列已满 ({pending_count}/{max_depth}), "
+                        f"source={source_agent}, session={session_id}"
                     )
-                    pending_count = cursor.fetchone()[0]
-                    if pending_count >= max_depth:
-                        logger.warning(
-                            f"[CaptureQueue] 全局队列已满 ({pending_count}/{max_depth}), "
-                            f"source={source_agent}, session={session_id}"
-                        )
-                        return "backpressure"
+                    return "backpressure"
 
-                    # 检查单来源队列深度
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM capture_events WHERE status = 'pending' AND source_agent = ?",
-                        (source_agent,),
+                # 检查单来源队列深度
+                cursor.execute(
+                    "SELECT COUNT(*) FROM capture_events WHERE status = 'pending' AND source_agent = ?",
+                    (source_agent,),
+                )
+                source_pending = cursor.fetchone()[0]
+                if source_pending >= per_source_max:
+                    logger.warning(
+                        f"[CaptureQueue] 来源队列已满 ({source_pending}/{per_source_max}), "
+                        f"source={source_agent}, session={session_id}"
                     )
-                    source_pending = cursor.fetchone()[0]
-                    if source_pending >= per_source_max:
-                        logger.warning(
-                            f"[CaptureQueue] 来源队列已满 ({source_pending}/{per_source_max}), "
-                            f"source={source_agent}, session={session_id}"
-                        )
-                        return "backpressure"
+                    return "backpressure"
 
-                    # 尝试插入（dedupe_key 唯一）
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO capture_events
-                        (dedupe_key, source_agent, session_id, turn_id, turn_number,
-                         payload_json, content_hash, status, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        dedupe_key,
-                        source_agent,
-                        session_id,
-                        turn_id,
-                        turn_number,
-                        json.dumps(payload, ensure_ascii=False),
-                        content_hash,
-                        "pending",
-                        datetime.now().isoformat(),
-                    ))
-                    conn.commit()
+                # 尝试插入（dedupe_key 唯一）
+                cursor.execute("""
+                    INSERT OR IGNORE INTO capture_events
+                    (dedupe_key, source_agent, session_id, turn_id, turn_number,
+                     payload_json, content_hash, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dedupe_key,
+                    source_agent,
+                    session_id,
+                    turn_id,
+                    turn_number,
+                    json.dumps(payload, ensure_ascii=False),
+                    content_hash,
+                    "pending",
+                    datetime.now().isoformat(),
+                ))
+                conn.commit()
 
-                    if cursor.rowcount == 0:
-                        return "duplicate"
-                    return "queued"
+                if cursor.rowcount == 0:
+                    return "duplicate"
+                return "queued"
 
             except sqlite3.IntegrityError:
                 return "duplicate"
@@ -184,49 +189,48 @@ class CaptureQueue:
         """
         with self._lock:
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
+                conn = self._pool.get_conn()
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
 
-                    if source_agent:
-                        cursor.execute("""
-                            SELECT * FROM capture_events
-                            WHERE status = 'pending' AND source_agent = ?
-                            ORDER BY session_id, turn_number
-                            LIMIT ?
-                        """, (source_agent, limit))
-                    else:
-                        cursor.execute("""
-                            SELECT * FROM capture_events
-                            WHERE status = 'pending'
-                            ORDER BY source_agent, session_id, turn_number
-                            LIMIT ?
-                        """, (limit,))
+                if source_agent:
+                    cursor.execute("""
+                        SELECT * FROM capture_events
+                        WHERE status = 'pending' AND source_agent = ?
+                        ORDER BY session_id, turn_number
+                        LIMIT ?
+                    """, (source_agent, limit))
+                else:
+                    cursor.execute("""
+                        SELECT * FROM capture_events
+                        WHERE status = 'pending'
+                        ORDER BY source_agent, session_id, turn_number
+                        LIMIT ?
+                    """, (limit,))
 
-                    rows = cursor.fetchall()
-                    results = []
-                    ids = []
-                    for row in rows:
-                        record = dict(row)
-                        try:
-                            record["payload"] = json.loads(record["payload_json"])
-                        except Exception:
-                            record["payload"] = {}
-                        results.append(record)
-                        ids.append(record["id"])
+                rows = cursor.fetchall()
+                results = []
+                ids = []
+                for row in rows:
+                    record = dict(row)
+                    try:
+                        record["payload"] = json.loads(record["payload_json"])
+                    except Exception:
+                        record["payload"] = {}
+                    results.append(record)
+                    ids.append(record["id"])
 
-                    # 标记为 processing（带状态校验，防止跨进程/跨线程 race）
-                    if ids:
-                        placeholders = ",".join("?" * len(ids))
-                        cursor.execute(f"""
-                            UPDATE capture_events
-                            SET status = 'processing', processed_at = ?
-                            WHERE id IN ({placeholders}) AND status = 'pending'
-                        """, (datetime.now().isoformat(), *ids))
-                        conn.commit()
+                # 标记为 processing（带状态校验，防止跨进程/跨线程 race）
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    cursor.execute(f"""
+                        UPDATE capture_events
+                        SET status = 'processing', processed_at = ?
+                        WHERE id IN ({placeholders}) AND status = 'pending'
+                    """, (datetime.now().isoformat(), *ids))
+                    conn.commit()
 
-                    return results
+                return results
 
             except Exception as e:
                 logger.error(f"[CaptureQueue] 出队失败: {e}")
@@ -246,87 +250,86 @@ class CaptureQueue:
         """
         with self._lock:
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
+                conn = self._pool.get_conn()
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
 
-                    # 1. 获取所有有 pending 的来源
+                # 1. 获取所有有 pending 的来源
+                cursor.execute("""
+                    SELECT DISTINCT source_agent FROM capture_events
+                    WHERE status = 'pending'
+                """)
+                sources = [row[0] for row in cursor.fetchall()]
+                if not sources:
+                    return []
+
+                per_source_limit = max(1, limit // len(sources))
+                results = []
+                ids = []
+                slots_remaining = limit
+
+                # 2. Round-robin 每个来源取一部分，严格不超过 limit
+                for src in sources:
+                    if slots_remaining <= 0:
+                        break
+                    fetch_limit = min(per_source_limit, slots_remaining)
                     cursor.execute("""
-                        SELECT DISTINCT source_agent FROM capture_events
-                        WHERE status = 'pending'
-                    """)
-                    sources = [row[0] for row in cursor.fetchall()]
-                    if not sources:
-                        return []
+                        SELECT * FROM capture_events
+                        WHERE status = 'pending' AND source_agent = ?
+                        ORDER BY session_id, turn_number
+                        LIMIT ?
+                    """, (src, fetch_limit))
+                    fetched = cursor.fetchall()
+                    for row in fetched:
+                        record = dict(row)
+                        try:
+                            record["payload"] = json.loads(record["payload_json"])
+                        except Exception:
+                            record["payload"] = {}
+                        results.append(record)
+                        ids.append(record["id"])
+                    slots_remaining -= len(fetched)
 
-                    per_source_limit = max(1, limit // len(sources))
-                    results = []
-                    ids = []
-                    slots_remaining = limit
-
-                    # 2. Round-robin 每个来源取一部分，严格不超过 limit
-                    for src in sources:
-                        if slots_remaining <= 0:
-                            break
-                        fetch_limit = min(per_source_limit, slots_remaining)
-                        cursor.execute("""
-                            SELECT * FROM capture_events
-                            WHERE status = 'pending' AND source_agent = ?
-                            ORDER BY session_id, turn_number
-                            LIMIT ?
-                        """, (src, fetch_limit))
-                        fetched = cursor.fetchall()
-                        for row in fetched:
-                            record = dict(row)
-                            try:
-                                record["payload"] = json.loads(record["payload_json"])
-                            except Exception:
-                                record["payload"] = {}
-                            results.append(record)
-                            ids.append(record["id"])
-                        slots_remaining -= len(fetched)
-
-                    # 3. 如果还有余量，按全局顺序补充
-                    remaining = limit - len(results)
-                    if remaining > 0:
-                        # 排除已经取过的 id
-                        if ids:
-                            placeholders = ",".join("?" * len(ids))
-                            cursor.execute(f"""
-                                SELECT * FROM capture_events
-                                WHERE status = 'pending' AND id NOT IN ({placeholders})
-                                ORDER BY source_agent, session_id, turn_number
-                                LIMIT ?
-                            """, (*ids, remaining))
-                        else:
-                            cursor.execute("""
-                                SELECT * FROM capture_events
-                                WHERE status = 'pending'
-                                ORDER BY source_agent, session_id, turn_number
-                                LIMIT ?
-                            """, (remaining,))
-
-                        for row in cursor.fetchall():
-                            record = dict(row)
-                            try:
-                                record["payload"] = json.loads(record["payload_json"])
-                            except Exception:
-                                record["payload"] = {}
-                            results.append(record)
-                            ids.append(record["id"])
-
-                    # 标记为 processing（带状态校验，防止 race）
+                # 3. 如果还有余量，按全局顺序补充
+                remaining = limit - len(results)
+                if remaining > 0:
+                    # 排除已经取过的 id
                     if ids:
                         placeholders = ",".join("?" * len(ids))
                         cursor.execute(f"""
-                            UPDATE capture_events
-                            SET status = 'processing', processed_at = ?
-                            WHERE id IN ({placeholders}) AND status = 'pending'
-                        """, (datetime.now().isoformat(), *ids))
-                        conn.commit()
+                            SELECT * FROM capture_events
+                            WHERE status = 'pending' AND id NOT IN ({placeholders})
+                            ORDER BY source_agent, session_id, turn_number
+                            LIMIT ?
+                        """, (*ids, remaining))
+                    else:
+                        cursor.execute("""
+                            SELECT * FROM capture_events
+                            WHERE status = 'pending'
+                            ORDER BY source_agent, session_id, turn_number
+                            LIMIT ?
+                        """, (remaining,))
 
-                    return results
+                    for row in cursor.fetchall():
+                        record = dict(row)
+                        try:
+                            record["payload"] = json.loads(record["payload_json"])
+                        except Exception:
+                            record["payload"] = {}
+                        results.append(record)
+                        ids.append(record["id"])
+
+                # 标记为 processing（带状态校验，防止 race）
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    cursor.execute(f"""
+                        UPDATE capture_events
+                        SET status = 'processing', processed_at = ?
+                        WHERE id IN ({placeholders}) AND status = 'pending'
+                    """, (datetime.now().isoformat(), *ids))
+                    conn.commit()
+
+                return results
 
             except Exception as e:
                 logger.error(f"[CaptureQueue] 公平出队失败: {e}")
@@ -341,39 +344,39 @@ class CaptureQueue:
         """更新事件状态"""
         with self._lock:
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                    cursor = conn.cursor()
-                    if error:
-                        cursor.execute("""
-                            UPDATE capture_events
-                            SET status = ?, error = ?, retry_count = retry_count + 1
-                            WHERE id = ?
-                        """, (status, error, event_id))
-                    else:
-                        cursor.execute("""
-                            UPDATE capture_events
-                            SET status = ?, processed_at = ?
-                            WHERE id = ?
-                        """, (status, datetime.now().isoformat(), event_id))
-                    conn.commit()
+                conn = self._pool.get_conn()
+                cursor = conn.cursor()
+                if error:
+                    cursor.execute("""
+                        UPDATE capture_events
+                        SET status = ?, error = ?, retry_count = retry_count + 1
+                        WHERE id = ?
+                    """, (status, error, event_id))
+                else:
+                    cursor.execute("""
+                        UPDATE capture_events
+                        SET status = ?, processed_at = ?
+                        WHERE id = ?
+                    """, (status, datetime.now().isoformat(), event_id))
+                conn.commit()
             except Exception as e:
                 logger.error(f"[CaptureQueue] 更新状态失败: {e}")
 
     def get_pending_count(self, source_agent: Optional[str] = None) -> int:
         """获取 pending 数量"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                if source_agent:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM capture_events WHERE status = 'pending' AND source_agent = ?",
-                        (source_agent,),
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM capture_events WHERE status = 'pending'"
-                    )
-                return cursor.fetchone()[0]
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            if source_agent:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM capture_events WHERE status = 'pending' AND source_agent = ?",
+                    (source_agent,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM capture_events WHERE status = 'pending'"
+                )
+            return cursor.fetchone()[0]
         except Exception as e:
             logger.error(f"[CaptureQueue] 统计失败: {e}")
             return 0
@@ -386,25 +389,25 @@ class CaptureQueue:
     ) -> Optional[Dict[str, Any]]:
         """查询指定事件状态"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                if turn_number is not None:
-                    cursor.execute("""
-                        SELECT * FROM capture_events
-                        WHERE source_agent = ? AND session_id = ? AND turn_number = ?
-                        ORDER BY created_at DESC LIMIT 1
-                    """, (source_agent, session_id, turn_number))
-                else:
-                    cursor.execute("""
-                        SELECT * FROM capture_events
-                        WHERE source_agent = ? AND session_id = ?
-                        ORDER BY created_at DESC LIMIT 1
-                    """, (source_agent, session_id))
-                row = cursor.fetchone()
-                if row:
-                    return dict(row)
-                return None
+            conn = self._pool.get_conn()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if turn_number is not None:
+                cursor.execute("""
+                    SELECT * FROM capture_events
+                    WHERE source_agent = ? AND session_id = ? AND turn_number = ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (source_agent, session_id, turn_number))
+            else:
+                cursor.execute("""
+                    SELECT * FROM capture_events
+                    WHERE source_agent = ? AND session_id = ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (source_agent, session_id))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
         except Exception as e:
             logger.error(f"[CaptureQueue] 查询状态失败: {e}")
             return None
@@ -413,14 +416,14 @@ class CaptureQueue:
         """检查 dedupe_key 是否已存在（30 天内）"""
         cutoff = (datetime.now() - timedelta(days=ttl_days)).isoformat()
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT 1 FROM capture_events
-                    WHERE dedupe_key = ? AND created_at > ?
-                    LIMIT 1
-                """, (dedupe_key, cutoff))
-                return cursor.fetchone() is not None
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 1 FROM capture_events
+                WHERE dedupe_key = ? AND created_at > ?
+                LIMIT 1
+            """, (dedupe_key, cutoff))
+            return cursor.fetchone() is not None
         except Exception as e:
             logger.error(f"[CaptureQueue] 查重失败: {e}")
             return False
@@ -428,20 +431,20 @@ class CaptureQueue:
     def reset_processing_to_pending(self) -> int:
         """启动时恢复：将所有卡住的 processing 状态回退到 pending"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE capture_events
-                    SET status = 'pending', processed_at = NULL
-                    WHERE status = 'processing'
-                """)
-                conn.commit()
-                reset_count = cursor.rowcount
-                if reset_count > 0:
-                    logger.warning(
-                        f"[CaptureQueue] 崩溃恢复: {reset_count} 个 processing 事件已回退到 pending"
-                    )
-                return reset_count
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE capture_events
+                SET status = 'pending', processed_at = NULL
+                WHERE status = 'processing'
+            """)
+            conn.commit()
+            reset_count = cursor.rowcount
+            if reset_count > 0:
+                logger.warning(
+                    f"[CaptureQueue] 崩溃恢复: {reset_count} 个 processing 事件已回退到 pending"
+                )
+            return reset_count
         except Exception as e:
             logger.error(f"[CaptureQueue] 恢复 processing 失败: {e}")
             return 0
@@ -455,38 +458,37 @@ class CaptureQueue:
         """按 session 过滤出队（用于 end_session flush）"""
         with self._lock:
             try:
-                with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT * FROM capture_events
-                        WHERE status = 'pending' AND source_agent = ? AND session_id = ?
-                        ORDER BY turn_number
-                        LIMIT ?
-                    """, (source_agent, session_id, limit))
-                    rows = cursor.fetchall()
-                    results = []
-                    ids = []
-                    for row in rows:
-                        record = dict(row)
-                        try:
-                            record["payload"] = json.loads(record["payload_json"])
-                        except Exception:
-                            record["payload"] = {}
-                        results.append(record)
-                        ids.append(record["id"])
+                conn = self._pool.get_conn()
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM capture_events
+                    WHERE status = 'pending' AND source_agent = ? AND session_id = ?
+                    ORDER BY turn_number
+                    LIMIT ?
+                """, (source_agent, session_id, limit))
+                rows = cursor.fetchall()
+                results = []
+                ids = []
+                for row in rows:
+                    record = dict(row)
+                    try:
+                        record["payload"] = json.loads(record["payload_json"])
+                    except Exception:
+                        record["payload"] = {}
+                    results.append(record)
+                    ids.append(record["id"])
 
-                    if ids:
-                        placeholders = ",".join("?" * len(ids))
-                        cursor.execute(f"""
-                            UPDATE capture_events
-                            SET status = 'processing', processed_at = ?
-                            WHERE id IN ({placeholders}) AND status = 'pending'
-                        """, (datetime.now().isoformat(), *ids))
-                        conn.commit()
+                if ids:
+                    placeholders = ",".join("?" * len(ids))
+                    cursor.execute(f"""
+                        UPDATE capture_events
+                        SET status = 'processing', processed_at = ?
+                        WHERE id IN ({placeholders}) AND status = 'pending'
+                    """, (datetime.now().isoformat(), *ids))
+                    conn.commit()
 
-                    return results
+                return results
             except Exception as e:
                 logger.error(f"[CaptureQueue] 按 session 出队失败: {e}")
                 return []
@@ -494,15 +496,15 @@ class CaptureQueue:
     def get_backoff_state(self, source_agent: str) -> Dict[str, Any]:
         """读取来源退避状态"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT error_count, last_retry_at FROM source_backoff WHERE source_agent = ?",
-                    (source_agent,),
-                )
-                row = cursor.fetchone()
-                if row:
-                    return {"error_count": row[0], "last_retry_at": row[1]}
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT error_count, last_retry_at FROM source_backoff WHERE source_agent = ?",
+                (source_agent,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {"error_count": row[0], "last_retry_at": row[1]}
         except Exception as e:
             logger.error(f"[CaptureQueue] 读取退避状态失败: {e}")
         return {"error_count": 0, "last_retry_at": None}
@@ -510,29 +512,29 @@ class CaptureQueue:
     def set_backoff_state(self, source_agent: str, error_count: int, last_retry_at: str):
         """写入来源退避状态"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO source_backoff (source_agent, error_count, last_retry_at)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(source_agent) DO UPDATE SET
-                        error_count = excluded.error_count,
-                        last_retry_at = excluded.last_retry_at
-                """, (source_agent, error_count, last_retry_at))
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO source_backoff (source_agent, error_count, last_retry_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(source_agent) DO UPDATE SET
+                    error_count = excluded.error_count,
+                    last_retry_at = excluded.last_retry_at
+            """, (source_agent, error_count, last_retry_at))
+            conn.commit()
         except Exception as e:
             logger.error(f"[CaptureQueue] 写入退避状态失败: {e}")
 
     def clear_backoff_state(self, source_agent: str):
         """清除来源退避状态"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM source_backoff WHERE source_agent = ?",
-                    (source_agent,),
-                )
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM source_backoff WHERE source_agent = ?",
+                (source_agent,),
+            )
+            conn.commit()
         except Exception as e:
             logger.error(f"[CaptureQueue] 清除退避状态失败: {e}")
 
@@ -541,40 +543,44 @@ class CaptureQueue:
     def mark_session_end(self, source_agent: str, session_id: str):
         """标记 session 已结束，worker 会优先 flush 该 session"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO session_end_events (source_agent, session_id, created_at)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(source_agent, session_id) DO UPDATE SET
-                        created_at = excluded.created_at
-                """, (source_agent, session_id, datetime.now().isoformat()))
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO session_end_events (source_agent, session_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(source_agent, session_id) DO UPDATE SET
+                    created_at = excluded.created_at
+            """, (source_agent, session_id, datetime.now().isoformat()))
+            conn.commit()
         except Exception as e:
             logger.error(f"[CaptureQueue] 标记 session end 失败: {e}")
 
     def get_session_end_markers(self) -> List[Dict[str, str]]:
         """获取所有待处理的 session end 标记"""
+        conn = None
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT source_agent, session_id FROM session_end_events")
-                return [dict(row) for row in cursor.fetchall()]
+            conn = self._pool.get_conn()
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT source_agent, session_id FROM session_end_events")
+            return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"[CaptureQueue] 读取 session end 标记失败: {e}")
             return []
+        finally:
+            if conn is not None:
+                conn.row_factory = None
 
     def clear_session_end_marker(self, source_agent: str, session_id: str):
         """清除指定 session 的 end 标记"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM session_end_events WHERE source_agent = ? AND session_id = ?",
-                    (source_agent, session_id),
-                )
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM session_end_events WHERE source_agent = ? AND session_id = ?",
+                (source_agent, session_id),
+            )
+            conn.commit()
         except Exception as e:
             logger.error(f"[CaptureQueue] 清除 session end 标记失败: {e}")
 
@@ -582,12 +588,12 @@ class CaptureQueue:
         """清理旧记录"""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    DELETE FROM capture_events
-                    WHERE created_at < ? AND status IN ('done', 'duplicate', 'failed')
-                """, (cutoff,))
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM capture_events
+                WHERE created_at < ? AND status IN ('done', 'duplicate', 'failed')
+            """, (cutoff,))
+            conn.commit()
         except Exception as e:
             logger.error(f"[CaptureQueue] 清理失败: {e}")

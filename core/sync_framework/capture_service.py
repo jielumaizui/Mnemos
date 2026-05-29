@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from core.config import get_config
+from core.db_utils import SqlitePool
 from core.sync_framework.capture_queue import CaptureQueue
 from core.sync_framework.capture_worker import CaptureWorkerPool
 from core.sync_framework.sync_engine import compute_content_hash
@@ -67,10 +68,21 @@ class CaptureService:
             self.worker_pool = worker_pool or CaptureWorkerPool(queue=self.queue)
             self.max_payload_bytes = self.config.get("capture.max_payload_bytes", 200000)
             self.duplicate_ttl_days = self.config.get("capture.duplicate_ttl_days", 30)
+            self._sync_pool = SqlitePool(self.config.data_dir / "sync_log.db")
 
             # 启动 worker 池（consumer 进程才启动；MCP producer 传 start_worker=False）
             if start_worker:
                 self.worker_pool.start()
+
+    def close(self):
+        """关闭持久连接"""
+        if hasattr(self, '_sync_pool'):
+            self._sync_pool.close()
+        if hasattr(self, 'queue') and self.queue is not None:
+            try:
+                self.queue.close()
+            except Exception:
+                pass
 
     def capture_turn(
         self,
@@ -277,19 +289,19 @@ class CaptureService:
             db_path = self.config.data_dir / "sync_log.db"
             if not db_path.exists():
                 return False
-            with sqlite3.connect(str(db_path), timeout=5) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT content_hash FROM sync_log
-                    WHERE agent_name = ? AND session_id = ? AND turn_number = ?
-                    LIMIT 1
-                    """,
-                    (source_agent, session_id, turn_number),
-                )
-                row = cursor.fetchone()
-                if row and row[0] == content_hash:
-                    return True
+            conn = self._sync_pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT content_hash FROM sync_log
+                WHERE agent_name = ? AND session_id = ? AND turn_number = ?
+                LIMIT 1
+                """,
+                (source_agent, session_id, turn_number),
+            )
+            row = cursor.fetchone()
+            if row and row[0] == content_hash:
+                return True
         except Exception as e:
             logger.debug(f"[CaptureService] sync_log 查重失败: {e}")
         return False

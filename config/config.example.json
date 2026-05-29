@@ -1,0 +1,60 @@
+{
+  "wiki": {
+    "vault_path": "~/Documents/Obsidian Vault/wiki"
+  },
+  "memos": {
+    "enabled": true,
+    "api_url": "https://your-memos-instance.com",
+    "token": ""
+  },
+  "persona": {
+    "enabled": true,
+    "data_sources": {
+      "session": {
+        "enabled": true,
+        "description": "AI对话信号（核心）"
+      },
+      "git": {
+        "enabled": false,
+        "description": "Git提交记录"
+      },
+      "memos": {
+        "enabled": false,
+        "description": "Memos笔记"
+      },
+      "wiki": {
+        "enabled": false,
+        "description": "知识库交互"
+      },
+      "file_system": {
+        "enabled": false,
+        "description": "文件系统活动"
+      }
+    }
+  },
+  "daemon": {
+    "services": {
+      "capture_worker": true,
+      "l1_sync": false,
+      "distill_merge": true,
+      "heartbeat": true,
+      "inbox_scanner": true,
+      "signal_collector": true,
+      "persona_analyzer": true,
+      "event_bus": true
+    }
+  },
+  "sync": {
+    "l1_scan_poll_interval_seconds": 60,
+    "l1_scan_max_sources_per_cycle": 3,
+    "l1_scan_max_sessions_per_source": 20,
+    "l1_scan_max_turns_per_session": 50,
+    "l1_scan_max_file_bytes": 2097152,
+    "l1_scan_recent_hours": 24
+  },
+  "event_bus": {
+    "queue_depth_alert": 1000,
+    "max_queue_depth": 10000,
+    "max_recover_events": 1000
+  }
+}

@@ -300,6 +300,25 @@ class WikiReader:
                 results.append(page_id)
         return results
 
+    def search(self, query: str, limit: int = 10) -> List[Dict]:
+        """搜索知识库（MCP / Agora 兼容接口）
+
+        等同于 search_all_relevant，但返回数量受 limit 限制。
+        """
+        results = self.search_all_relevant(query)
+        return results[:limit]
+
+    def read_page(self, page_path: str) -> Optional[Dict]:
+        """读取指定 wiki 页面（MCP / Agora 兼容接口）
+
+        page_path 可以是相对路径或 page_id。
+        """
+        # 如果传入的是文件路径，提取 page_id
+        page_id = page_path
+        if "/" in page_path or "\\" in page_path:
+            page_id = Path(page_path).stem
+        return self.read_page_by_heat(page_id)
+
     def search_all_relevant(self, query: str) -> List[Dict]:
         """
         搜索所有相关页面（不限制数量，返回全部）
@@ -352,7 +371,15 @@ class WikiReader:
 
         # 按热力值和关联度双重排序
         # 优先热力值高，其次关联度
-        results.sort(key=lambda x: (x["heat_score"], x["relevance_score"]), reverse=True)
+        # 00-Inbox 中的原始碎片降权，优先展示结构化知识页面
+        def _sort_key(x):
+            base_score = (x["heat_score"], x["relevance_score"])
+            if x.get("type") == "00-Inbox":
+                # Inbox 原始文件降权：heat_score 取 10%，确保结构化页面优先
+                return (x["heat_score"] * 0.1, x["relevance_score"])
+            return base_score
+
+        results.sort(key=_sort_key, reverse=True)
         return results
 
     def read_page_by_heat(self, page_id: str) -> Optional[Dict]:

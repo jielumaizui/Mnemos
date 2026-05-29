@@ -212,7 +212,7 @@ class SignalCollector:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("""
                     SELECT session_id, agent_name, working_dir,
-                           turn_count, synced_at, tags
+                           turn_number, synced_at, tags
                     FROM sync_log
                     WHERE synced_at >= date('now', '-30 days')
                       AND persona_collected = 0
@@ -233,7 +233,7 @@ class SignalCollector:
                         working_dir=data.get("working_dir", ""),
                         agent=data.get("agent_name", "unknown"),
                         context_tags=tags if isinstance(tags, list) else [],
-                        user_msg_count=data.get("turn_count", 0),
+                        user_msg_count=data.get("turn_number", 0),
                     )
                     if self.store.session_exists(signal.session_id):
                         continue

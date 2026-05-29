@@ -87,6 +87,20 @@ class CaptureWorkerPool:
         self._worker_threads.clear()
         logger.info("[CaptureWorkerPool] 已停止")
 
+    def close(self):
+        """关闭所有持久连接"""
+        self.stop()
+        if hasattr(self, 'queue') and self.queue is not None:
+            try:
+                self.queue.close()
+            except Exception:
+                pass
+        if hasattr(self, 'engine') and self.engine is not None:
+            try:
+                self.engine.close()
+            except Exception:
+                pass
+
     def flush_session(self, source_agent: str, session_id: str) -> Dict[str, Any]:
         """
         立即 flush 指定 session 的所有 pending 事件。

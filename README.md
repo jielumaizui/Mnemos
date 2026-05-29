@@ -220,7 +220,7 @@ setup.bat         # Windows
 2. 安装依赖
 3. 自动检测 Memos 服务器（如有）
 4. 自动检测 Obsidian Vault（如有）
-5. 生成 `~/.mnemos/config.yaml`
+5. 生成 `~/.mnemos/configs/main.json`
 6. 初始化标准 wiki 目录结构
 7. 安装 AI Agent hooks
 8. 启动后台守护进程
@@ -247,8 +247,9 @@ cd mnemos
 pip install -e ".[dev]"
 
 # 2. 复制并编辑配置
-cp config/config.example.yaml ~/.mnemos/config.yaml
-# 编辑 ~/.mnemos/config.yaml，设置你的 wiki 路径
+mkdir -p ~/.mnemos/configs
+cp config/config.example.json ~/.mnemos/configs/main.json
+# 编辑 ~/.mnemos/configs/main.json，设置你的 wiki 路径
 
 # 3. 系统诊断
 python3 mnemos_cli.py doctor
@@ -411,38 +412,39 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 
 ## 配置
 
-配置文件位于 `~/.mnemos/config.yaml`（跨平台统一路径）。
+运行时权威配置文件位于 `~/.mnemos/configs/main.json`（跨平台统一路径）。
+旧版 `~/.mnemos/config.yaml` 仅作为迁移来源，系统会在首次读取时迁移到 JSON。
 
 关键配置项：
 
-```yaml
-wiki:
-  # 知识库路径，留空则使用平台默认值
-  vault_path: "~/Documents/Obsidian Vault/wiki"
-
-memos:
-  enabled: true
-  api_url: "https://your-memos-instance.com"
-  # token 建议通过 MEMOS_TOKEN 环境变量设置，不要明文写在配置文件中
-  token: ""
-
-persona:
-  enabled: true
-  data_sources:
-    session: { enabled: true }       # AI对话信号（核心）
-    git: { enabled: false }          # Git提交记录
-    memos: { enabled: false }        # Memos笔记
-    wiki: { enabled: false }         # 知识库交互
-    file_system: { enabled: false }  # 文件系统活动
-    wechat: { enabled: false }       # 微信聊天记录
-
-scoring:
-  mode: auto                         # auto / cold / warm / hot
-  feedback_enabled: true             # 启用反馈闭环
-
-distillation:
-  incremental_enabled: true          # 启用增量蒸馏
-  deferred_enabled: true             # 启用延迟蒸馏
+```json
+{
+  "wiki": {
+    "vault_path": "~/Documents/Obsidian Vault/wiki"
+  },
+  "memos": {
+    "enabled": true,
+    "api_url": "https://your-memos-instance.com",
+    "token": ""
+  },
+  "persona": {
+    "enabled": true,
+    "data_sources": {
+      "session": { "enabled": true },
+      "git": { "enabled": false },
+      "memos": { "enabled": false },
+      "wiki": { "enabled": false },
+      "file_system": { "enabled": false }
+    }
+  },
+  "daemon": {
+    "services": {
+      "capture_worker": true,
+      "l1_sync": false,
+      "event_bus": true
+    }
+  }
+}
 ```
 
 ## 数据源与隐私

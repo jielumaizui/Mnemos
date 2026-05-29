@@ -22,6 +22,114 @@ from datetime import datetime
 from core.config import get_config, Config
 
 
+def _format_bytes(size: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{size}B"
+
+
+def _sqlite_group_counts(db_path: Path, table: str, group_cols: str, where: str = ""):
+    if not db_path.exists():
+        return []
+    try:
+        import sqlite3
+        sql = f"SELECT {group_cols}, COUNT(*) FROM {table}"
+        if where:
+            sql += f" WHERE {where}"
+        sql += f" GROUP BY {group_cols} ORDER BY COUNT(*) DESC"
+        with sqlite3.connect(str(db_path), timeout=5) as conn:
+            return conn.execute(sql).fetchall()
+    except Exception:
+        logger.debug(f"读取 SQLite 统计失败: {db_path}", exc_info=True)
+        return []
+
+
+def _daemon_processes():
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["pgrep", "-af", "mnemos_daemon.py"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode not in (0, 1):
+            return []
+        lines = []
+        for line in result.stdout.splitlines():
+            if "pgrep" in line:
+                continue
+            if "mnemos_daemon.py" in line:
+                lines.append(line)
+        return lines
+    except Exception:
+        return []
+
+
+def _print_config_contract(config, warnings=None):
+    print("配置契约:")
+    print(f"  当前读取: {config.config_path}")
+    print(f"  配置存在: {'是' if config.config_path.exists() else '否（使用代码默认值）'}")
+    print(f"  数据目录: {config.data_dir}")
+    legacy_paths = []
+    if hasattr(config, "_legacy_config_paths"):
+        legacy_paths = [p for p in config._legacy_config_paths() if p.exists()]
+    if legacy_paths:
+        print("  旧 YAML: " + ", ".join(str(p) for p in legacy_paths))
+        if warnings is not None:
+            warnings.append("检测到旧 YAML 配置；运行时权威配置为 configs/main.json")
+    services = config.get("daemon.services", {})
+    if services:
+        print("  daemon 服务:")
+        for key in sorted(services):
+            mark = "✓" if services[key] else "☐"
+            print(f"    {mark} {key}")
+
+
+def _print_runtime_health(config, warnings=None):
+    print("运行态:")
+    processes = _daemon_processes()
+    print(f"  daemon 进程数: {len(processes)}")
+    if len(processes) > 1 and warnings is not None:
+        warnings.append(f"检测到重复 daemon 进程: {len(processes)}")
+
+    log_path = config.data_dir / "daemon.log"
+    if log_path.exists():
+        log_size = log_path.stat().st_size
+        print(f"  daemon.log: {_format_bytes(log_size)}")
+        max_log = int(config.get("ops.daemon_log_max_bytes", 10 * 1024 * 1024))
+        if log_size > max_log and warnings is not None:
+            warnings.append(f"daemon.log 超过阈值: {_format_bytes(log_size)}")
+    else:
+        print("  daemon.log: 未创建")
+
+    events_db = config.data_dir / "events.db"
+    if events_db.exists():
+        print(f"  events.db: {_format_bytes(events_db.stat().st_size)}")
+        rows = _sqlite_group_counts(events_db, "events", "event_type, status")
+        pending_total = sum(c for _, status, c in rows if status in ("pending", "processing"))
+        print(f"  events pending/processing: {pending_total}")
+        for event_type, status, count in rows[:5]:
+            print(f"    - {event_type}/{status}: {count}")
+        alert = int(config.get("event_bus.queue_depth_alert", 1000))
+        if pending_total > alert and warnings is not None:
+            warnings.append(f"events.db 积压超过阈值: {pending_total}")
+    else:
+        print("  events.db: 未创建")
+
+    capture_db = config.data_dir / "capture_queue.db"
+    if capture_db.exists():
+        rows = _sqlite_group_counts(capture_db, "capture_events", "status")
+        pending = sum(c for status, c in rows if status in ("pending", "processing"))
+        print(f"  capture_queue pending/processing: {pending}")
+        for status, count in rows[:5]:
+            print(f"    - {status}: {count}")
+
+
 def cmd_init(args):
     """交互式配置向导"""
     print("=" * 60)
@@ -167,6 +275,9 @@ def cmd_doctor(args):
     config = get_config()
     issues = []
     warnings = []
+
+    _print_config_contract(config, warnings)
+    print()
 
     # 1. Python 版本
     py_version = sys.version_info
@@ -335,7 +446,8 @@ def cmd_doctor(args):
                                     src = "Git历史"
                         sources[src] = sources.get(src, 0) + 1
                     except Exception:
-                        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+                        # 单个页面 frontmatter 不合法时跳过，不污染 doctor 输出。
+                        logger.debug("跳过无法解析 frontmatter 的页面", exc_info=True)
                         continue
                 print("  知识来源分布:")
                 for src_name, cnt in sources.items():
@@ -343,7 +455,7 @@ def cmd_doctor(args):
                         pct = cnt / md_count * 100
                         print(f"    - {src_name}: {cnt} ({pct:.0f}%)")
             except Exception:
-                logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+                logger.debug("知识来源分布统计失败", exc_info=True)
                 pass
 
         # 最近修改时间
@@ -360,7 +472,7 @@ def cmd_doctor(args):
                     if days_since > 30:
                         warnings.append(f"知识库已 {int(days_since)} 天未更新")
             except Exception:
-                logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+                logger.debug("最近修改时间统计失败", exc_info=True)
                 pass
     else:
         print(f"  Wiki 未初始化")
@@ -382,7 +494,7 @@ def cmd_doctor(args):
         elif total < 50:
             print(f"  ⚠️  画像信号较少，建议积累更多对话数据以获得精准画像")
     except Exception:
-        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+        logger.debug("画像数据库统计失败", exc_info=True)
         print(f"  ☐ 画像数据库未初始化")
 
     # 11. MCP 服务器状态
@@ -417,7 +529,7 @@ def cmd_doctor(args):
         if stats['pending'] > 10:
             warnings.append(f"蒸馏队列积压: {stats['pending']} 个任务")
     except Exception:
-        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+        logger.debug("蒸馏链路统计失败", exc_info=True)
         print(f"  ☐ 蒸馏链路未初始化")
 
     # 检查 Charon 自动触发
@@ -425,7 +537,7 @@ def cmd_doctor(args):
         from core.kia.charon import run_connect_cycle
         print(f"  ✓ Charon 知识解析: 可用")
     except Exception:
-        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+        logger.debug("Charon 可用性检查失败", exc_info=True)
         print(f"  ☐ Charon 知识解析: 未就绪")
 
     # 13. 可选依赖与功能影响报告
@@ -444,6 +556,9 @@ def cmd_doctor(args):
         except ImportError:
             has_optional_gap = True
             print(f"  ✗ {name}: {feature} 不可用 → {install_cmd}")
+
+    print()
+    _print_runtime_health(config, warnings)
 
     # 汇总
     print()
@@ -469,11 +584,17 @@ def cmd_status(args):
 
     print("Mnemos 状态")
     print("=" * 40)
+    print(f"配置文件:      {config.config_path}")
     print(f"Wiki 目录:     {config.wiki_dir}")
     print(f"Memos 集成:    {'✓' if config.memos_enabled else '✗'}")
     print(f"画像系统:      {'✓' if config.persona_enabled else '✗'}")
     print(f"Claude Code:   {'✓' if config.claude_code_enabled else '✗'}")
     print(f"MCP 协议:      {'✓' if config.mcp_enabled else '✗'}")
+    services = config.get("daemon.services", {})
+    if services:
+        enabled = [k for k, v in services.items() if v]
+        disabled = [k for k, v in services.items() if not v]
+        print(f"daemon 服务:   开 {len(enabled)} / 关 {len(disabled)}")
     print()
 
     # 知识库统计
@@ -490,8 +611,11 @@ def cmd_status(args):
         total = sum(v for v in stats.values() if v > 0)
         print(f"最近30天信号: {total}")
     except Exception:
-        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
+        logger.debug("状态页画像统计失败", exc_info=True)
         print("画像数据库:    未初始化")
+
+    print()
+    _print_runtime_health(config)
 
 
 def cmd_config(args):
@@ -692,8 +816,9 @@ def cmd_agent(args):
 
 def cmd_mcp_serve(args):
     """启动 MCP 服务器"""
-    print("启动 MCP 服务器 (stdin/stdout 模式)...")
-    print("按 Ctrl+C 停止")
+    # MCP stdio 协议要求 stdout 只能输出 JSON，所有日志/提示走 stderr
+    print("启动 MCP 服务器 (stdin/stdout 模式)...", file=sys.stderr)
+    print("按 Ctrl+C 停止", file=sys.stderr)
 
     try:
         from integrations.agora import run_mcp_server
@@ -711,6 +836,8 @@ def cmd_scorer(args):
             scheduler = KnowledgeScheduler()
             steps = scheduler.get_step_status()
             print("KIA 调度步骤状态:")
+            if not steps:
+                print("  (暂无已注册步骤。建议运行初始化或检查配置)")
             for name, info in steps.items():
                 status = "启用" if info["enabled"] else "禁用"
                 fails = f" ({info['consecutive_failures']}次失败)" if info["consecutive_failures"] > 0 else ""
@@ -804,6 +931,86 @@ def cmd_report(args):
         print("用法: mnemos report generate")
 
 
+def cmd_events(args):
+    """事件总线管理"""
+    from core.config import get_config
+    import sqlite3
+
+    config = get_config()
+    events_db = config.data_dir / "events.db"
+
+    if args.events_cmd == "stats":
+        if not events_db.exists():
+            print("events.db 不存在")
+            return
+        try:
+            with sqlite3.connect(str(events_db), timeout=5) as conn:
+                total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE status IN ('pending', 'processing')"
+                ).fetchone()[0]
+                dl = conn.execute("SELECT COUNT(*) FROM dead_letters").fetchone()[0]
+                rows = conn.execute(
+                    "SELECT event_type, status, COUNT(*) FROM events "
+                    "GROUP BY event_type, status ORDER BY COUNT(*) DESC LIMIT 10"
+                ).fetchall()
+            print(f"events.db 统计:")
+            print(f"  总数: {total}")
+            print(f"  pending/processing: {pending}")
+            print(f"  dead_letters: {dl}")
+            print(f"  Top 10 事件类型:")
+            for event_type, status, count in rows:
+                print(f"    - {event_type}/{status}: {count}")
+        except Exception as e:
+            print(f"统计失败: {e}")
+
+    elif args.events_cmd == "cleanup":
+        if not events_db.exists():
+            print("events.db 不存在")
+            return
+        try:
+            with sqlite3.connect(str(events_db), timeout=10) as conn:
+                # 1. 删除已完成超过 7 天的事件
+                cursor = conn.execute(
+                    "DELETE FROM events WHERE status = 'done' "
+                    "AND created_at < datetime('now', '-7 days')"
+                )
+                done_removed = cursor.rowcount
+
+                # 2. 删除死信超过 30 天的事件
+                cursor = conn.execute(
+                    "DELETE FROM dead_letters WHERE timestamp < datetime('now', '-30 days')"
+                )
+                dl_removed = cursor.rowcount
+
+                # 3. 对无处理器且长期 pending 的事件，标记为 dead-letter 或删除
+                # 先找出 pending 超过 3 天的事件
+                cursor = conn.execute(
+                    "SELECT id, event_type, trace_id, timestamp FROM events "
+                    "WHERE status = 'pending' AND created_at < datetime('now', '-3 days')"
+                )
+                old_pending = cursor.fetchall()
+                orphaned_removed = 0
+                for row in old_pending:
+                    # 简单处理：直接删除（这些事件没有处理器，daemon 也无法消费）
+                    conn.execute("DELETE FROM events WHERE id = ?", (row[0],))
+                    orphaned_removed += 1
+
+                conn.execute("VACUUM")
+                conn.commit()
+
+            print(f"清理完成:")
+            print(f"  删除已完成旧事件: {done_removed}")
+            print(f"  删除死信旧事件: {dl_removed}")
+            print(f"  删除 orphaned pending 事件: {orphaned_removed}")
+            print(f"  已执行 VACUUM 释放磁盘空间")
+        except Exception as e:
+            print(f"清理失败: {e}")
+
+    else:
+        print("用法: mnemos events {stats|cleanup}")
+
+
 def main():
     # Fix Windows console encoding (cp1252 can't handle Chinese/emoji)
     if sys.platform == "win32":
@@ -884,6 +1091,12 @@ def main():
     report_sub = report_parser.add_subparsers(dest="report_cmd")
     report_sub.add_parser("generate", help="生成周报")
 
+    # events
+    events_parser = subparsers.add_parser("events", help="事件总线管理")
+    events_sub = events_parser.add_subparsers(dest="events_cmd")
+    events_sub.add_parser("cleanup", help="清理旧事件和死信（释放磁盘空间）")
+    events_sub.add_parser("stats", help="查看事件总线统计")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -913,6 +1126,8 @@ def main():
         cmd_search(args)
     elif args.command == "report":
         cmd_report(args)
+    elif args.command == "events":
+        cmd_events(args)
     else:
         parser.print_help()
 

@@ -1,5 +1,5 @@
-# Mnemos 配置文件
-# 复制此文件为 config.yaml 并修改为你的实际路径
+# Mnemos 旧版 YAML 配置参考
+# 运行时权威配置为 ~/.mnemos/configs/main.json；新安装请优先使用 config.example.json
 
 wiki:
   # Obsidian Vault 中的 wiki 目录路径
@@ -49,6 +49,27 @@ distill:
   max_tasks_per_cycle: 5
   max_collect_per_cycle: 20
   min_task_interval_seconds: 1.0
+
+daemon:
+  services:
+    # 默认只消费 MCP/Hook 入队，不主动扫描本机历史聊天文件
+    capture_worker: true
+    l1_sync: false
+    distill_merge: true
+    heartbeat: true
+    inbox_scanner: true
+    signal_collector: true
+    persona_analyzer: true
+    event_bus: true
+
+sync:
+  # 如需开启 daemon L1 扫描，请先把 daemon.services.l1_sync 设为 true
+  l1_scan_poll_interval_seconds: 60
+  l1_scan_max_sources_per_cycle: 3
+  l1_scan_max_sessions_per_source: 20
+  l1_scan_max_turns_per_session: 50
+  l1_scan_max_file_bytes: 2097152
+  l1_scan_recent_hours: 24
 
 event_bus:
   # 真实环境保护：事件积压时只分批恢复到内存队列，剩余保持 pending

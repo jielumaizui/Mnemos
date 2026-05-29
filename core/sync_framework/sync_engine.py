@@ -37,6 +37,7 @@ from integrations.styx import (
     MemosServerError,
 )
 from core.config import get_config
+from core.db_utils import SqlitePool
 from core.kia.ingest_helpers import is_noise_message
 from core.task_id_parser import TagBuilder, TaskIdParser
 
@@ -136,7 +137,13 @@ class SyncEngine:
         self.db_path = Path(db_path or self.config.data_dir / "sync_log.db").expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._shard_threshold = self.config.get("memos.max_content_bytes", 7792)
+        self._pool = SqlitePool(self.db_path)
         self._init_db()
+
+    def close(self):
+        """关闭持久连接"""
+        if hasattr(self, '_pool'):
+            self._pool.close()
 
     # ---------- 内部工厂 ----------
 
@@ -149,55 +156,61 @@ class SyncEngine:
 
     def _init_db(self):
         """初始化统一防重数据库"""
-        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS sync_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    agent_name TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    turn_number INTEGER NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    memos_uids TEXT,
-                    status TEXT DEFAULT 'synced',
-                    synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    distill_status TEXT DEFAULT 'pending',
-                    distill_job_id TEXT,
-                    distilled_at TIMESTAMP,
-                    wiki_page_paths TEXT,
-                    distill_error TEXT,
-                    error TEXT,
-                    UNIQUE(agent_name, session_id, turn_number)
-                )
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_sync_lookup
-                ON sync_log(agent_name, session_id, turn_number)
-            """)
-            # 向后兼容：为旧数据库添加 error 列
-            try:
-                cursor.execute("SELECT error FROM sync_log LIMIT 1")
-            except sqlite3.OperationalError:
-                cursor.execute("ALTER TABLE sync_log ADD COLUMN error TEXT")
-                conn.commit()
-            # 画像信号表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_signals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    agent TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    turn_number INTEGER,
-                    content_length INTEGER,
-                    has_code INTEGER,
-                    has_tools INTEGER,
-                    user_questions INTEGER,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+        conn = self._pool.get_conn()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                turn_number INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                memos_uids TEXT,
+                status TEXT DEFAULT 'synced',
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                distill_status TEXT DEFAULT 'pending',
+                distill_job_id TEXT,
+                distilled_at TIMESTAMP,
+                wiki_page_paths TEXT,
+                distill_error TEXT,
+                error TEXT,
+                UNIQUE(agent_name, session_id, turn_number)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sync_lookup
+            ON sync_log(agent_name, session_id, turn_number)
+        """)
+        # 向后兼容：为旧数据库添加 error 列
+        try:
+            cursor.execute("SELECT error FROM sync_log LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE sync_log ADD COLUMN error TEXT")
             conn.commit()
+        # 向后兼容：为旧数据库添加 persona_collected 列（画像信号采集用）
+        try:
+            cursor.execute("SELECT persona_collected FROM sync_log LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE sync_log ADD COLUMN persona_collected INTEGER DEFAULT 0")
+            conn.commit()
+        # 画像信号表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                agent TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                turn_number INTEGER,
+                content_length INTEGER,
+                has_code INTEGER,
+                has_tools INTEGER,
+                user_questions INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
 
     # ---------- 公共 API ----------
 
@@ -544,19 +557,19 @@ class SyncEngine:
         """采集用户行为信号，供画像系统分析"""
         combined = f"{turn.user_content}\n{turn.assistant_content}"
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.execute("""
-                    INSERT INTO user_signals
-                    (timestamp, agent, session_id, turn_number, content_length, has_code, has_tools, user_questions)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    datetime.now().isoformat(), source.name, session_id,
-                    turn.turn_number, len(combined),
-                    1 if "```" in combined else 0,
-                    1 if "[TOOL_RESULT]" in combined else 0,
-                    combined.count("?"),
-                ))
-                conn.commit()
+            conn = self._pool.get_conn()
+            conn.execute("""
+                INSERT INTO user_signals
+                (timestamp, agent, session_id, turn_number, content_length, has_code, has_tools, user_questions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().isoformat(), source.name, session_id,
+                turn.turn_number, len(combined),
+                1 if "```" in combined else 0,
+                1 if "[TOOL_RESULT]" in combined else 0,
+                combined.count("?"),
+            ))
+            conn.commit()
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at sync_engine.py", exc_info=True)
             pass
@@ -566,14 +579,14 @@ class SyncEngine:
     def _get_last_synced_turn(self, agent_name: str, session_id: str) -> int:
         """获取上次同步到的轮次号"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT MAX(turn_number) FROM sync_log WHERE agent_name = ? AND session_id = ?",
-                    (agent_name, session_id),
-                )
-                row = cursor.fetchone()
-                return (row[0] + 1) if row[0] is not None else 0
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT MAX(turn_number) FROM sync_log WHERE agent_name = ? AND session_id = ?",
+                (agent_name, session_id),
+            )
+            row = cursor.fetchone()
+            return (row[0] + 1) if row[0] is not None else 0
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at sync_engine.py", exc_info=True)
             return 0
@@ -581,19 +594,19 @@ class SyncEngine:
     def _check_synced(self, agent_name: str, session_id: str, turn_number: int) -> Optional[Dict]:
         """检查某轮次是否已同步"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT content_hash, memos_uids, status FROM sync_log WHERE agent_name = ? AND session_id = ? AND turn_number = ?",
-                    (agent_name, session_id, turn_number),
-                )
-                row = cursor.fetchone()
-                if row:
-                    return {
-                        "content_hash": row[0],
-                        "memos_uids": json.loads(row[1]) if row[1] else [],
-                        "status": row[2],
-                    }
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT content_hash, memos_uids, status FROM sync_log WHERE agent_name = ? AND session_id = ? AND turn_number = ?",
+                (agent_name, session_id, turn_number),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "content_hash": row[0],
+                    "memos_uids": json.loads(row[1]) if row[1] else [],
+                    "status": row[2],
+                }
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
@@ -611,42 +624,42 @@ class SyncEngine:
     ):
         """记录同步状态（含蒸馏扩展字段）"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT OR REPLACE INTO sync_log
-                    (agent_name, session_id, turn_number, content_hash, memos_uids,
-                     status, synced_at, distill_status, error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    agent_name, session_id, turn_number, content_hash,
-                    json.dumps(memos_uids), status, datetime.now().isoformat(),
-                    "pending" if status in ("new", "updated") else "skipped",
-                    error,
-                ))
-                conn.commit()
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO sync_log
+                (agent_name, session_id, turn_number, content_hash, memos_uids,
+                 status, synced_at, distill_status, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                agent_name, session_id, turn_number, content_hash,
+                json.dumps(memos_uids), status, datetime.now().isoformat(),
+                "pending" if status in ("new", "updated") else "skipped",
+                error,
+            ))
+            conn.commit()
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
     def _get_failed_records(self, agent_name: Optional[str], limit: int) -> List[Dict]:
         """获取失败的同步记录"""
         try:
-            with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                cursor = conn.cursor()
-                if agent_name:
-                    cursor.execute(
-                        "SELECT agent_name, session_id, turn_number, content_hash, error FROM sync_log WHERE status = 'failed' AND agent_name = ? ORDER BY synced_at DESC LIMIT ?",
-                        (agent_name, limit),
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT agent_name, session_id, turn_number, content_hash, error FROM sync_log WHERE status = 'failed' ORDER BY synced_at DESC LIMIT ?",
-                        (limit,),
-                    )
-                return [
-                    {"agent_name": r[0], "session_id": r[1], "turn_number": r[2], "content_hash": r[3], "error": r[4]}
-                    for r in cursor.fetchall()
-                ]
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            if agent_name:
+                cursor.execute(
+                    "SELECT agent_name, session_id, turn_number, content_hash, error FROM sync_log WHERE status = 'failed' AND agent_name = ? ORDER BY synced_at DESC LIMIT ?",
+                    (agent_name, limit),
+                )
+            else:
+                cursor.execute(
+                    "SELECT agent_name, session_id, turn_number, content_hash, error FROM sync_log WHERE status = 'failed' ORDER BY synced_at DESC LIMIT ?",
+                    (limit,),
+                )
+            return [
+                {"agent_name": r[0], "session_id": r[1], "turn_number": r[2], "content_hash": r[3], "error": r[4]}
+                for r in cursor.fetchall()
+            ]
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at sync_engine.py", exc_info=True)
             return []

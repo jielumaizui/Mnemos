@@ -108,7 +108,7 @@ setup.bat         # Windows
 2. Installs dependencies
 3. Auto-detects Memos server (if running)
 4. Auto-detects Obsidian Vault (if found)
-5. Generates `~/.mnemos/config.yaml`
+5. Generates `~/.mnemos/configs/main.json`
 6. Initializes standard wiki directory structure
 7. Installs AI Agent hooks
 8. Starts background daemon
@@ -137,8 +137,9 @@ cd mnemos
 pip install -e ".[dev]"
 
 # Copy and edit configuration
-cp config/config.example.yaml ~/.mnemos/config.yaml
-# Edit ~/.mnemos/config.yaml with your paths
+mkdir -p ~/.mnemos/configs
+cp config/config.example.json ~/.mnemos/configs/main.json
+# Edit ~/.mnemos/configs/main.json with your paths
 
 # Run system diagnosis
 python3 mnemos_cli.py doctor
@@ -248,27 +249,27 @@ Each agent connects via its own adapter mechanism (Poll / SQLite / JSON Config /
 
 ## Configuration
 
-Config file: `~/.mnemos/config.yaml`
+Runtime config file: `~/.mnemos/configs/main.json`.
+Legacy `~/.mnemos/config.yaml` is only used as a migration source.
 
-```yaml
-wiki:
-  vault_path: "~/Documents/Obsidian Vault/wiki"
-
-memos:
-  enabled: true
-  api_url: "https://your-memos-instance.com"
-  token: ""  # Use MEMOS_TOKEN env var instead
-
-persona:
-  enabled: true
-  data_sources:
-    session: { enabled: true }
-    git: { enabled: false }
-
-integrations:
-  claude_code:
-    enabled: true
-    settings_json_path: "~/.claude/settings.json"
+```json
+{
+  "wiki": {
+    "vault_path": "~/Documents/Obsidian Vault/wiki"
+  },
+  "memos": {
+    "enabled": true,
+    "api_url": "https://your-memos-instance.com",
+    "token": ""
+  },
+  "daemon": {
+    "services": {
+      "capture_worker": true,
+      "l1_sync": false,
+      "event_bus": true
+    }
+  }
+}
 ```
 
 ---

@@ -33,6 +33,26 @@ class OpsScorer:
             "anomaly_score", "health_score", "capacity_risk",
         ])
 
+    def score_system(self) -> Dict[str, float]:
+        """系统级健康评分（daemon 心跳调用）
+
+        读取 daemon 日志并评分；若日志不可读则返回保守默认值。
+        """
+        from core.config import get_config
+        log_path = get_config().data_dir.parent / "daemon.log"
+        content = ""
+        if log_path.exists():
+            try:
+                content = log_path.read_text(encoding="utf-8", errors="ignore")[-4096:]
+            except Exception:
+                pass
+        cards = self.score(content) if content else []
+        return {
+            "health_score": next((c.value for c in cards if c.dimension == "health_score"), 1.0),
+            "anomaly_score": next((c.value for c in cards if c.dimension == "anomaly_score"), 0.0),
+            "capacity_risk": next((c.value for c in cards if c.dimension == "capacity_risk"), 0.0),
+        }
+
     def _anomaly_rule(self, features: Dict) -> float:
         """异常分数规则：错误/失败/超时 = 高异常"""
         content = features.get("content", "").lower()

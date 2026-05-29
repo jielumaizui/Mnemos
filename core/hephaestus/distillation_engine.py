@@ -954,6 +954,20 @@ class DistillFeedbackLoop:
 
 # ========== Wiki 页面生成 ==========
 
+def _yaml_safe(value):
+    """对 frontmatter 字符串值进行 YAML 安全转义。
+
+    若值包含 YAML 特殊字符（冒号、井号、引号等），用双引号包裹并转义内部引号。
+    """
+    if not isinstance(value, str):
+        return str(value)
+    special_chars = ":#{}[]|&*!?,-<>=%@'`\"\n\r\t"
+    if any(c in value for c in special_chars):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
                        source: str = "") -> str:
     """生成 wiki 页面 Markdown"""
@@ -986,7 +1000,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         if isinstance(value, (list, dict)):
             lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
         else:
-            lines.append(f"{key}: {value}")
+            lines.append(f"{key}: {_yaml_safe(value)}")
 
     # 保留少量历史中文字段，避免旧 Prompt 输出的信息丢失。
     for key in ("适用角色", "触发场景", "复杂度", "情感倾向", "提取方式"):
@@ -995,7 +1009,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
             if isinstance(value, (list, dict)):
                 lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
             else:
-                lines.append(f"{key}: {value}")
+                lines.append(f"{key}: {_yaml_safe(value)}")
 
     if not fragment.self_check_passed:
         lines.append(f"验证状态: pending-verification")

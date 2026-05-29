@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Any
 
 from core.config import get_config
+from core.db_utils import SqlitePool
 
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,7 @@ class PollingTrigger(BaseTrigger):
         self._thread: Optional[threading.Thread] = None
         self._seen: Dict[str, float] = {}  # path → mtime
         self._db_path = get_config().data_dir / "polling_state.db"
+        self._pool = SqlitePool(self._db_path)
 
     def start(self, watch_path: Path):
         self._running = True
@@ -218,38 +220,44 @@ class PollingTrigger(BaseTrigger):
 
         self._save_state()
 
+    def close(self):
+        """关闭持久连接"""
+        if hasattr(self, '_pool'):
+            self._pool.close()
+
     def _load_state(self):
         """从 SQLite 加载已扫描文件状态"""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with sqlite3.connect(str(self._db_path), timeout=5) as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS polling_state (
-                        source TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        mtime REAL NOT NULL,
-                        PRIMARY KEY (source, path)
-                    )
-                """)
-                cursor = conn.execute(
-                    "SELECT path, mtime FROM polling_state WHERE source = ?",
-                    (self._source_name,),
+            conn = self._pool.get_conn()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS polling_state (
+                    source TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    mtime REAL NOT NULL,
+                    PRIMARY KEY (source, path)
                 )
-                for row in cursor.fetchall():
-                    self._seen[row[0]] = row[1]
+            """)
+            cursor = conn.execute(
+                "SELECT path, mtime FROM polling_state WHERE source = ?",
+                (self._source_name,),
+            )
+            for row in cursor.fetchall():
+                self._seen[row[0]] = row[1]
+            conn.commit()
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
     def _save_state(self):
         """保存已扫描文件状态到 SQLite"""
         try:
-            with sqlite3.connect(str(self._db_path), timeout=5) as conn:
-                conn.execute("DELETE FROM polling_state WHERE source = ?", (self._source_name,))
-                conn.executemany(
-                    "INSERT OR REPLACE INTO polling_state (source, path, mtime) VALUES (?, ?, ?)",
-                    [(self._source_name, p, m) for p, m in self._seen.items()],
-                )
-                conn.commit()
+            conn = self._pool.get_conn()
+            conn.execute("DELETE FROM polling_state WHERE source = ?", (self._source_name,))
+            conn.executemany(
+                "INSERT OR REPLACE INTO polling_state (source, path, mtime) VALUES (?, ?, ?)",
+                [(self._source_name, p, m) for p, m in self._seen.items()],
+            )
+            conn.commit()
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass

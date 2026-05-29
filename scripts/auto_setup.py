@@ -7,7 +7,7 @@ Mnemos 自动部署脚本 — 一键开箱即用
 2. 安装项目依赖
 3. 自动检测 Memos 服务器（进程 / 端口 5230）
 4. 自动检测 Obsidian Vault（常见路径扫描）
-5. 生成 ~/.mnemos/config.yaml（基于检测结果 + 交互式确认）
+5. 生成 ~/.mnemos/configs/main.json（运行时权威配置）
 6. 初始化标准 wiki 目录结构（00-Inbox ~ 07-Shadow）
 7. 安装 AI Agent Hooks
 8. 启动后台守护进程
@@ -25,6 +25,8 @@ Mnemos 自动部署脚本 — 一键开箱即用
 from __future__ import annotations
 
 import argparse
+import copy
+import json
 import os
 import platform
 import re
@@ -156,13 +158,22 @@ def install_dependencies(yes_mode: bool = False) -> bool:
     extras = f"{PROJECT_ROOT}[dev]"
     cmd = [_PYTHON_EXE, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
 
-    def _try_install(python: str) -> tuple[bool, str]:
+    def _try_install(python: str, silent: bool = False) -> tuple[bool, str]:
         c = [python, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
-        r = subprocess.run(c, capture_output=True, text=True)
-        return r.returncode == 0, r.stderr
+        if silent:
+            r = subprocess.run(c, capture_output=True, text=True)
+            return r.returncode == 0, r.stderr
+        # 实时输出进度，避免用户长时间看不到反馈
+        print("  开始安装，请稍候...")
+        r = subprocess.run(c)
+        if r.returncode == 0:
+            return True, ""
+        # 失败后重试并捕获输出以诊断
+        r2 = subprocess.run(c, capture_output=True, text=True)
+        return False, r2.stderr
 
-    # 先尝试直接安装
-    ok, err = _try_install(_PYTHON_EXE)
+    # 先尝试直接安装（实时输出进度）
+    ok, err = _try_install(_PYTHON_EXE, silent=False)
     if ok:
         print_ok("依赖安装完成")
         return True
@@ -173,7 +184,7 @@ def install_dependencies(yes_mode: bool = False) -> bool:
         venv_python = _ensure_venv()
         if venv_python:
             _PYTHON_EXE = str(venv_python)
-            ok, err2 = _try_install(_PYTHON_EXE)
+            ok, err2 = _try_install(_PYTHON_EXE, silent=False)
             if ok:
                 print_ok(f"依赖已在虚拟环境安装: {venv_python}")
                 print("  后续操作将使用虚拟环境 Python")
@@ -372,100 +383,61 @@ def setup_obsidian(skip: bool = False, yes_mode: bool = False) -> Tuple[bool, Op
 
 # ── 步骤 5: 生成配置 ──
 
-def _safe_yaml_value(value: str) -> str:
-    """对 YAML 字符串值进行安全转义"""
-    return value.replace('"', '\\"').replace('\\', '\\\\')
+def _runtime_config_path() -> Path:
+    """运行时权威配置路径，与 core.config.Config 保持一致。"""
+    mnemos_dir = Path(os.environ.get("MNEMOS_DIR", Path.home() / ".mnemos")).expanduser()
+    return mnemos_dir / "configs" / "main.json"
+
+
+def _deep_merge(base: dict, override: dict) -> None:
+    for key, val in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(val, dict):
+            _deep_merge(base[key], val)
+        else:
+            base[key] = val
 
 
 def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False) -> Path:
-    config_dir = Path.home() / ".mnemos"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_file = config_dir / "config.yaml"
-
-    # 读取模板
-    example = PROJECT_ROOT / "config" / "config.example.yaml"
-    template = example.read_text(encoding="utf-8") if example.exists() else _default_config_template()
-
-    # 使用安全的行级替换（不依赖正则，精确匹配 key）
-    lines = template.split("\n")
-    out_lines = []
-    in_memos_block = False
-    for line in lines:
-        stripped = line.lstrip()
-        # wiki 路径
-        if stripped.startswith("vault_path:"):
-            indent = len(line) - len(line.lstrip())
-            out_lines.append(" " * indent + f'vault_path: "{_safe_yaml_value(str(wiki_dir))}"')
-            continue
-        # memos URL
-        if memos_url and stripped.startswith("api_url:"):
-            indent = len(line) - len(line.lstrip())
-            out_lines.append(" " * indent + f'api_url: "{_safe_yaml_value(memos_url)}"')
-            continue
-        # memos 启用状态
-        if memos_url and in_memos_block and stripped.startswith("enabled:"):
-            indent = len(line) - len(line.lstrip())
-            out_lines.append(" " * indent + "enabled: true")
-            continue
-        # 跟踪是否在 memos 块内（简单缩进判断）
-        if stripped.startswith("memos:"):
-            in_memos_block = True
-        elif in_memos_block and not line.strip().startswith("#") and line.strip() and not line.startswith(" ") and not line.startswith("\t"):
-            in_memos_block = False
-        out_lines.append(line)
-
-    body = "\n".join(out_lines)
+    config_file = _runtime_config_path()
+    config_file.parent.mkdir(parents=True, exist_ok=True)
 
     if config_file.exists() and not yes_mode:
         if not ask_yes_no(f"配置已存在: {config_file}，是否覆盖？", default=False, yes_mode=yes_mode):
             print_warn("保留现有配置")
             return config_file
 
-    config_file.write_text(body, encoding="utf-8")
+    from core.config import DEFAULT_CONFIG
+
+    data = copy.deepcopy(DEFAULT_CONFIG)
+    if config_file.exists():
+        try:
+            existing = json.loads(config_file.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                _deep_merge(data, existing)
+        except Exception as e:
+            print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
+
+    data.setdefault("wiki", {})["vault_path"] = str(wiki_dir)
+    data.setdefault("memos", {})
+    if memos_url:
+        data["memos"]["enabled"] = True
+        data["memos"]["api_url"] = memos_url
+    elif not config_file.exists():
+        data["memos"]["enabled"] = False
+        data["memos"]["api_url"] = ""
+
+    # 安装期安全默认值：允许消费 MCP/Hook 入队，但不主动扫描历史聊天文件。
+    services = data.setdefault("daemon", {}).setdefault("services", {})
+    services["capture_worker"] = True
+    services["l1_sync"] = False
+    services["event_bus"] = True
+
+    config_file.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print_ok(f"配置已写入: {config_file}")
     return config_file
-
-
-def _default_config_template() -> str:
-    """默认配置模板（当 config.example.yaml 不存在时）"""
-    return """wiki:
-  vault_path: "~/Documents/Obsidian Vault/wiki"
-
-memos:
-  enabled: true
-  api_url: "http://localhost:5230"
-  token: ""
-
-persona:
-  enabled: true
-  data_sources:
-    session:
-      enabled: true
-      description: "AI对话信号（核心）"
-    git:
-      enabled: false
-      description: "Git提交记录"
-    memos:
-      enabled: false
-      description: "Memos笔记"
-    wiki:
-      enabled: false
-      description: "知识库交互"
-    file_system:
-      enabled: false
-      description: "文件系统活动"
-    wechat:
-      enabled: false
-      description: "微信聊天记录"
-
-integrations:
-  claude_code:
-    enabled: true
-    settings_json_path: "~/.claude/settings.json"
-  mcp:
-    enabled: false
-"""
-
 
 # ── 步骤 6: 初始化 Wiki 目录 ──
 
@@ -639,12 +611,30 @@ def main():
     parser.add_argument("--yes", "-y", action="store_true", help="全自动模式，不提示")
     parser.add_argument("--skip-memos", action="store_true", help="跳过 Memos 配置")
     parser.add_argument("--skip-obsidian", action="store_true", help="跳过 Obsidian 配置")
+    parser.add_argument("--skip-daemon", action="store_true", help="跳过启动守护进程")
+    parser.add_argument("--skip-scheduler", action="store_true", help="跳过配置系统定时任务")
+    parser.add_argument("--skip-hooks", action="store_true", help="跳过安装 Agent Hooks")
+    parser.add_argument("--dry-run", action="store_true", help="只检查环境，不执行任何安装/启动操作")
     args = parser.parse_args()
 
     # 非交互式终端自动启用 --yes，避免 input() 抛 EOFError
     if not sys.stdin.isatty():
         args.yes = True
         print("检测到非交互式终端，自动启用 --yes 模式")
+
+    if args.dry_run:
+        print("=" * 60)
+        print("Mnemos 部署检查 (dry-run)")
+        print("=" * 60)
+        print(f"项目路径: {PROJECT_ROOT}")
+        print(f"平台: {platform.system()} {platform.release()}")
+        print(f"Python: {sys.version.split()[0]}")
+        print()
+        check_python()
+        print()
+        print("dry-run 完成，未执行任何安装或启动操作。")
+        print("如需实际部署，请去掉 --dry-run 参数。")
+        sys.exit(0)
 
     yes_mode = args.yes
     total_steps = 9
@@ -688,22 +678,34 @@ def main():
     init_wiki_structure(wiki_dir)
 
     # 步骤 7
-    print_step(7, total_steps, "安装 Agent Hooks")
-    install_agent_hooks(yes_mode=yes_mode)
+    if not args.skip_hooks:
+        print_step(7, total_steps, "安装 Agent Hooks")
+        install_agent_hooks(yes_mode=yes_mode)
+    else:
+        print_step(7, total_steps, "安装 Agent Hooks")
+        print_warn("已跳过 (--skip-hooks)")
 
     # 步骤 8
-    print_step(8, total_steps, "启动守护进程")
-    start_daemon(yes_mode=yes_mode)
+    if not args.skip_daemon:
+        print_step(8, total_steps, "启动守护进程")
+        start_daemon(yes_mode=yes_mode)
+    else:
+        print_step(8, total_steps, "启动守护进程")
+        print_warn("已跳过 (--skip-daemon)")
 
     # 步骤 9
-    print_step(9, total_steps, "配置定时任务")
-    setup_scheduler(yes_mode=yes_mode)
+    if not args.skip_scheduler:
+        print_step(9, total_steps, "配置定时任务")
+        setup_scheduler(yes_mode=yes_mode)
+    else:
+        print_step(9, total_steps, "配置定时任务")
+        print_warn("已跳过 (--skip-scheduler)")
 
     # 完成
     print("\n" + "=" * 60)
     print("部署完成！")
     print("=" * 60)
-    print(f"  配置: ~/.mnemos/config.yaml")
+    print(f"  配置: {_runtime_config_path()}")
     print(f"  Wiki: {wiki_dir}")
     if memos_url:
         print(f"  Memos: {memos_url}")

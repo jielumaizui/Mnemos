@@ -116,12 +116,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_payload_bytes": 200000,
         "duplicate_ttl_days": 30,
     },
+    # === daemon 服务开关 ===
+    "daemon": {
+        "services": {
+            "capture_worker": True,
+            # 默认不扫描本机历史 Agent 会话；MCP/Hook 入队仍会被 capture_worker 消费。
+            "l1_sync": False,
+            "distill_merge": True,
+            "heartbeat": True,
+            "inbox_scanner": True,
+            "signal_collector": True,
+            "persona_analyzer": True,
+            "event_bus": True,
+        },
+    },
     # === 同步层常量 ===
     "sync": {
         "interval_seconds": 10,
         "noise_threshold": 0.7,
         "debounce_stable_reads": 3,
         "polling_interval_openclaw": 3600,
+        "l1_scan_poll_interval_seconds": 60,
+        "l1_scan_max_sources_per_cycle": 3,
+        "l1_scan_max_sessions_per_source": 20,
+        "l1_scan_max_turns_per_session": 50,
+        "l1_scan_max_file_bytes": 2 * 1024 * 1024,
+        "l1_scan_recent_hours": 24,
     },
     # === 应用层常量 ===
     "app": {
@@ -192,10 +212,13 @@ class Config:
 
     def __init__(self, config_path: Optional[Path] = None):
         self._mnemos_dir = self._resolve_mnemos_dir()
+        self._use_default_config_path = config_path is None
         self.config_path = config_path or self._mnemos_dir / "configs" / "main.json"
+        self._migrated_from_legacy = False
         self._data = self._load()
-        # 迁移旧配置文件
-        self._migrate_legacy_config()
+        if self._migrated_from_legacy and not self.config_path.exists():
+            self.save()
+            logger.info(f"已自动迁移旧配置到 {self.config_path}")
 
     def _resolve_mnemos_dir(self) -> Path:
         """确定 Mnemos 数据目录"""
@@ -209,7 +232,7 @@ class Config:
         import copy
         data = copy.deepcopy(DEFAULT_CONFIG)
 
-        # 1. 从 JSON 文件加载
+        # 1. 从 JSON 文件加载；如果没有 JSON，再尝试旧 YAML 作为迁移来源。
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
@@ -217,6 +240,11 @@ class Config:
                 self._deep_merge(data, file_data)
             except Exception as e:
                 logger.warning(f"配置文件加载失败: {e}")
+        elif self._use_default_config_path:
+            legacy_data = self._load_legacy_config()
+            if legacy_data:
+                self._deep_merge(data, legacy_data)
+                self._migrated_from_legacy = True
 
         # 2. 环境变量覆盖 (MNEMOS_* 前缀)
         self._apply_env_overrides(data)
@@ -308,30 +336,40 @@ class Config:
         else:
             return Path.home() / ".config" / "claude" / "settings.json"
 
-    def _migrate_legacy_config(self):
-        """检测旧 YAML 配置文件并提示迁移"""
-        legacy_path = self._default_legacy_config_path()
-        if legacy_path.exists() and not self.config_path.exists():
-            logger.info(f"检测到旧配置文件 {legacy_path}，建议迁移到 {self.config_path}")
+    def _load_legacy_config(self) -> Dict:
+        """读取旧 YAML 配置。旧文件只作为迁移来源，运行时权威文件始终是 main.json。"""
+        for legacy_path in self._legacy_config_paths():
+            if not legacy_path.exists():
+                continue
             try:
                 import yaml
                 with open(legacy_path, "r", encoding="utf-8") as f:
-                    old_data = yaml.safe_load(f) or {}
-                self._deep_merge(self._data, old_data)
-                # 自动保存为 JSON
-                self.save()
-                logger.info(f"已自动迁移配置到 {self.config_path}")
+                    loaded = yaml.safe_load(f) or {}
+                if isinstance(loaded, dict):
+                    logger.info(f"检测到旧配置文件 {legacy_path}，将迁移到 {self.config_path}")
+                    return loaded
             except Exception as e:
-                logger.warning(f"自动迁移失败: {e}，请手动迁移")
+                logger.warning(f"旧配置读取失败 {legacy_path}: {e}")
+        return {}
 
-    def _default_legacy_config_path(self) -> Path:
+    def _legacy_config_paths(self) -> list[Path]:
+        paths = [self._mnemos_dir / "config.yaml"]
         if sys.platform == "win32":
             base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         elif sys.platform == "darwin":
             base = Path.home() / "Library" / "Application Support"
         else:
             base = Path.home() / ".config"
-        return base / "mnemos" / "config.yaml"
+        paths.append(base / "mnemos" / "config.yaml")
+        # 去重但保持顺序
+        unique = []
+        seen = set()
+        for path in paths:
+            key = str(path)
+            if key not in seen:
+                unique.append(path)
+                seen.add(key)
+        return unique
 
     def save(self):
         """保存配置到 JSON 文件"""

@@ -22,22 +22,29 @@ import time
 import json
 import signal
 import logging
+import logging.handlers
 import argparse
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List
+from typing import Any, Dict, List, Optional, Tuple
 
-# 配置日志
+# 配置日志（使用 RotatingFileHandler 避免单文件无限膨胀）
 log_dir = Path.home() / ".mnemos"
 log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "daemon.log"
+
+# 默认保留 5 个备份文件，单个文件最大 10MB
+max_bytes = 10 * 1024 * 1024
+backup_count = 5
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [daemon] %(levelname)s: %(message)s",
     handlers=[
-        logging.FileHandler(log_file, encoding="utf-8"),
+        logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+        ),
         logging.StreamHandler(sys.stderr),
     ],
 )
@@ -47,6 +54,170 @@ PID_FILE = log_dir / "daemon.pid"
 
 # 全局停止事件
 _stop_event = threading.Event()
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """配置布尔值归一化，兼容 JSON/env 中的字符串写法。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "enabled")
+    return bool(value)
+
+
+def _config_int(config: Any, key: str, default: int) -> int:
+    try:
+        return int(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _config_float(config: Any, key: str, default: float) -> float:
+    try:
+        return float(config.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _service_enabled(config: Any, key: str, default: bool = True) -> bool:
+    return _as_bool(config.get(key, default), default)
+
+
+class _L1ScanState:
+    """记录 L1 扫描游标，避免 daemon 每轮重复解析历史文件。"""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._data: Dict[str, Dict[str, Any]] = {}
+        self._dirty = False
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if self.path.exists():
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    self._data = loaded
+        except Exception as e:
+            logger.warning(f"[L1同步] 扫描游标读取失败，使用空游标: {e}")
+            self._data = {}
+
+    def _key(self, source_name: str, session_info: Any) -> str:
+        return f"{source_name}:{session_info.session_id}:{session_info.source_path}"
+
+    def is_unchanged(
+        self,
+        source_name: str,
+        session_info: Any,
+        file_state: Dict[str, Any],
+    ) -> bool:
+        record = self._data.get(self._key(source_name, session_info))
+        if not record:
+            return False
+        return (
+            record.get("mtime") == file_state.get("mtime")
+            and record.get("size") == file_state.get("size")
+        )
+
+    def mark_scanned(
+        self,
+        source_name: str,
+        session_info: Any,
+        file_state: Dict[str, Any],
+        status: str,
+    ) -> None:
+        self._data[self._key(source_name, session_info)] = {
+            "path": str(session_info.source_path),
+            "session_id": session_info.session_id,
+            "mtime": file_state.get("mtime"),
+            "size": file_state.get("size"),
+            "status": status,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._dirty = True
+
+    def save(self) -> None:
+        if not self._dirty:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp_path.write_text(
+            json.dumps(self._data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp_path.replace(self.path)
+        self._dirty = False
+
+
+def _l1_scan_limits(config: Any) -> Dict[str, Any]:
+    return {
+        "poll_interval": max(10, _config_int(config, "sync.l1_scan_poll_interval_seconds", 60)),
+        "max_sources_per_cycle": max(0, _config_int(config, "sync.l1_scan_max_sources_per_cycle", 3)),
+        "max_sessions_per_source": max(1, _config_int(config, "sync.l1_scan_max_sessions_per_source", 20)),
+        "max_turns_per_session": max(1, _config_int(config, "sync.l1_scan_max_turns_per_session", 50)),
+        "max_file_bytes": max(0, _config_int(config, "sync.l1_scan_max_file_bytes", 2 * 1024 * 1024)),
+        "recent_hours": max(0.0, _config_float(config, "sync.l1_scan_recent_hours", 24.0)),
+    }
+
+
+def _l1_session_file_state(session_info: Any) -> Optional[Dict[str, Any]]:
+    try:
+        stat = session_info.source_path.stat()
+        return {
+            "mtime": session_info.mtime if session_info.mtime is not None else stat.st_mtime,
+            "size": stat.st_size,
+        }
+    except OSError:
+        return None
+
+
+def _select_l1_sessions(
+    source_name: str,
+    sessions: List[Any],
+    state: _L1ScanState,
+    limits: Dict[str, Any],
+) -> Tuple[List[Tuple[Any, Dict[str, Any]]], Dict[str, int]]:
+    """按安全策略选择本轮允许解析的 session。"""
+    now = time.time()
+    recent_seconds = float(limits["recent_hours"]) * 3600
+    max_file_bytes = int(limits["max_file_bytes"])
+    max_sessions = int(limits["max_sessions_per_source"])
+    stats = {
+        "discovered": len(sessions),
+        "selected": 0,
+        "skipped_missing": 0,
+        "skipped_large": 0,
+        "skipped_stale": 0,
+        "skipped_unchanged": 0,
+        "skipped_over_limit": 0,
+    }
+
+    candidates: List[Tuple[float, Any, Dict[str, Any]]] = []
+    for session_info in sessions:
+        file_state = _l1_session_file_state(session_info)
+        if file_state is None:
+            stats["skipped_missing"] += 1
+            continue
+        if max_file_bytes and file_state["size"] > max_file_bytes:
+            stats["skipped_large"] += 1
+            continue
+        if recent_seconds and (now - float(file_state["mtime"])) > recent_seconds:
+            stats["skipped_stale"] += 1
+            continue
+        if state.is_unchanged(source_name, session_info, file_state):
+            stats["skipped_unchanged"] += 1
+            continue
+        candidates.append((float(file_state["mtime"]), session_info, file_state))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    selected = candidates[:max_sessions]
+    stats["selected"] = len(selected)
+    stats["skipped_over_limit"] = max(0, len(candidates) - len(selected))
+    return [(session_info, file_state) for _, session_info, file_state in selected], stats
 
 
 def _is_process_running(pid: int) -> bool:
@@ -71,15 +242,51 @@ def _is_process_running(pid: int) -> bool:
             return False
 
 
+def _count_daemon_processes() -> int:
+    """通过 pgrep/tasklist 统计实际运行的 mnemos_daemon 进程数（不依赖 pid 文件）"""
+    if sys.platform == "win32":
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+            return sum(1 for line in result.stdout.splitlines() if "mnemos_daemon" in line)
+        except Exception:
+            return 0
+    else:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["pgrep", "-af", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return 0
+            return sum(
+                1 for line in result.stdout.splitlines()
+                if "mnemos_daemon.py" in line and "pgrep" not in line
+            )
+        except Exception:
+            return 0
+
+
 def is_daemon_running() -> bool:
-    """检查 daemon 是否已在运行"""
-    if not PID_FILE.exists():
-        return False
-    try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-        return _is_process_running(pid)
-    except (ValueError, OSError, ProcessLookupError):
-        return False
+    """检查 daemon 是否已在运行（pid 文件 + 进程扫描双重验证）"""
+    # 1. 先检查 pid 文件
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            if _is_process_running(pid):
+                return True
+            # pid 文件存在但进程已死，清理脏文件
+            PID_FILE.unlink()
+        except (ValueError, OSError, ProcessLookupError):
+            pass
+
+    # 2. 再扫描实际进程（防止 pid 文件被删除或覆盖后重复启动）
+    return _count_daemon_processes() > 0
 
 
 def write_pid():
@@ -107,26 +314,36 @@ def service_l1_sync(stop_event: threading.Event):
     - 原始 L0 解析能力复用（discover_sessions + parse_turns），写入路径废弃/下沉
     """
     logger.info("[L1同步] 服务启动")
+    capture_service = None
     try:
         from core.sync_framework.capture_service import CaptureService
         from core.sync_framework.registry import AgentRegistry
         from core.config import get_config
 
         config = get_config()
+        limits = _l1_scan_limits(config)
+        state = _L1ScanState(config.data_dir / "l1_scan_state.json")
 
         # 1. 先注册内置 Agent（确保 Worker 能正确解析来源标签）
         AgentRegistry.register_builtin_agents()
 
-        # 2. 初始化 CaptureService（consumer 模式，启动 WorkerPool 消费 pending 队列）
-        capture_service = CaptureService(start_worker=True)
+        # 2. 初始化 CaptureService（producer 模式）。
+        # CaptureQueue consumer 已由独立的 service_capture_worker 负责，避免 L1 扫描和队列消费互相拖死。
+        capture_service = CaptureService(start_worker=False)
 
         # 定时轮询模式（watchdog 由 TriggerDispatcher 管理）
-        poll_interval = 30  # 30秒轮询一次
+        poll_interval = limits["poll_interval"]
 
         while not stop_event.is_set():
             try:
                 # 重新发现活跃 Agent
                 agents = AgentRegistry.auto_discover()
+                max_sources = limits["max_sources_per_cycle"]
+                if max_sources and len(agents) > max_sources:
+                    logger.info(
+                        f"[L1同步] 本轮发现 {len(agents)} 个 Agent，仅扫描前 {max_sources} 个"
+                    )
+                    agents = agents[:max_sources]
                 logger.debug(f"[L1同步] 发现 {len(agents)} 个活跃 Agent 源")
 
                 for source in agents:
@@ -135,29 +352,34 @@ def service_l1_sync(stop_event: threading.Event):
                         if not sessions:
                             continue
 
+                        selected_sessions, scan_stats = _select_l1_sessions(
+                            source.name, sessions, state, limits
+                        )
+                        if not selected_sessions:
+                            if any(v for k, v in scan_stats.items() if k.startswith("skipped_")):
+                                logger.debug(f"[L1同步] {source.name}: {scan_stats}")
+                            continue
+
                         queued_count = 0
                         dup_count = 0
                         bp_count = 0
                         error_count = 0
+                        scanned_count = 0
+                        parsed_turns = 0
 
-                        for session_info in sessions:
+                        for session_info, file_state in selected_sessions:
                             try:
                                 turns = source.parse_turns(session_info.source_path)
                                 if not turns:
+                                    state.mark_scanned(source.name, session_info, file_state, "empty")
                                     continue
 
                                 # 确保按 turn_number 顺序入队，避免增量跳过逻辑错乱
                                 turns = sorted(turns, key=lambda t: t.turn_number)
-
-                                # 复用旧 sync_session 的 session lifecycle hooks
-                                try:
-                                    from core.mnemos_bus import publish_event
-                                    publish_event("polled", source.name, {
-                                        "file_path": str(session_info.source_path),
-                                        "session_id": session_info.session_id,
-                                    })
-                                except Exception:
-                                    pass
+                                max_turns = limits["max_turns_per_session"]
+                                if max_turns and len(turns) > max_turns:
+                                    turns = turns[-max_turns:]
+                                parsed_turns += len(turns)
 
                                 context = source.on_session_start(
                                     session_info.session_id,
@@ -189,6 +411,8 @@ def service_l1_sync(stop_event: threading.Event):
 
                                     # 触发异步 end_session，让 Worker 优先 flush 该 session
                                     capture_service.end_session(source.name, session_info.session_id)
+                                    scanned_count += 1
+                                    state.mark_scanned(source.name, session_info, file_state, "scanned")
                                 finally:
                                     # KIA Hook: session_end（无论入队是否成功都执行，避免泄漏）
                                     all_messages = []
@@ -200,18 +424,45 @@ def service_l1_sync(stop_event: threading.Event):
                                     source.on_session_end(session_info.session_id, all_messages)
 
                             except Exception as e:
+                                error_count += 1
+                                state.mark_scanned(source.name, session_info, file_state, "error")
                                 logger.error(
                                     f"[L1同步] {source.name}/{session_info.session_id} 解析失败: {e}"
                                 )
 
+                        try:
+                            state.save()
+                        except Exception as e:
+                            logger.warning(f"[L1同步] 扫描游标保存失败: {e}")
+
                         if queued_count > 0 or dup_count > 0 or bp_count > 0 or error_count > 0:
                             logger.info(
                                 f"[L1同步] {source.name}: "
+                                f"discovered={scan_stats['discovered']}, "
+                                f"selected={scan_stats['selected']}, "
+                                f"scanned={scanned_count}, "
+                                f"turns={parsed_turns}, "
                                 f"queued={queued_count}, "
                                 f"duplicate={dup_count}, "
                                 f"backpressure={bp_count}, "
-                                f"error={error_count}"
+                                f"error={error_count}, "
+                                f"skipped={{{', '.join(f'{k[8:]}={v}' for k, v in scan_stats.items() if k.startswith('skipped_') and v)}}}"
                             )
+                            try:
+                                from core.mnemos_bus import publish_event
+                                publish_event("polled", source.name, {
+                                    "sessions_discovered": scan_stats["discovered"],
+                                    "sessions_selected": scan_stats["selected"],
+                                    "sessions_scanned": scanned_count,
+                                    "turns_seen": parsed_turns,
+                                    "queued": queued_count,
+                                    "duplicate": dup_count,
+                                    "backpressure": bp_count,
+                                    "errors": error_count,
+                                    "limits": limits,
+                                })
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.error(f"[L1同步] {source.name} 同步失败: {e}")
             except Exception as e:
@@ -222,6 +473,48 @@ def service_l1_sync(stop_event: threading.Event):
         logger.info("[L1同步] 已停止")
     except Exception as e:
         logger.error(f"[L1同步] 服务异常: {e}")
+    finally:
+        if capture_service is not None:
+            try:
+                capture_service.close()
+            except Exception as e:
+                logger.warning(f"[L1同步] 关闭 capture_service 失败: {e}")
+
+
+def service_capture_worker(stop_event: threading.Event):
+    """
+    服务0: CaptureQueue 消费者 — 独立消费 MCP / L1 producer 入队的 capture_events。
+
+    这个服务不扫描任何 Agent 历史文件，只负责把 pending 队列写入 Memos。
+    这样 daemon 可以在 L1 扫描关闭时仍然消费 MCP/Hook 上报，避免“扫描爆炸”和“队列堵塞”绑定。
+    """
+    logger.info("[捕获消费] 服务启动")
+    worker = None
+    queue = None
+    try:
+        from core.sync_framework.capture_queue import CaptureQueue
+        from core.sync_framework.capture_worker import CaptureWorkerPool
+
+        queue = CaptureQueue()
+        worker = CaptureWorkerPool(queue=queue)
+        worker.start()
+
+        while not stop_event.is_set():
+            stop_event.wait(timeout=1)
+    except Exception as e:
+        logger.error(f"[捕获消费] 服务异常: {e}", exc_info=True)
+    finally:
+        if worker is not None:
+            try:
+                worker.close()
+            except Exception as e:
+                logger.warning(f"[捕获消费] 停止 worker 失败: {e}")
+        if queue is not None:
+            try:
+                queue.close()
+            except Exception as e:
+                logger.warning(f"[捕获消费] 关闭队列连接失败: {e}")
+        logger.info("[捕获消费] 服务已停止")
 
 
 def service_distill_and_merge(stop_event: threading.Event):
@@ -305,10 +598,13 @@ def service_heartbeat(stop_event: threading.Event):
             try:
                 from core.scoring.scorers.ops_scorer import OpsScorer
                 scorer = OpsScorer()
-                result = scorer.score_system()
-                health = result.get("health_score", 0)
-                if health > 0:
-                    logger.debug(f"[心跳] 系统健康度: {health:.1f}")
+                if hasattr(scorer, "score_system"):
+                    result = scorer.score_system()
+                    health = result.get("health_score", 0)
+                    if health > 0:
+                        logger.debug(f"[心跳] 系统健康度: {health:.1f}")
+                else:
+                    logger.debug("[心跳] OpsScorer 未提供 score_system，跳过系统评分")
             except ImportError:
                 # 回退到 HeartbeatDaemon
                 from core.heartbeat import HeartbeatDaemon
@@ -600,9 +896,18 @@ def service_event_bus(stop_event: threading.Event):
         except Exception as e:
             logger.warning(f"[事件总线] distill.request 处理失败: {e}")
 
+    def _handle_polled(event):
+        """L1 轮询审计事件：已完成同步侧处理，这里只确认消费。"""
+        return {
+            "status": "ack",
+            "source": event.source,
+            "session_id": event.payload.get("session_id"),
+        }
+
     processor.register("session.start", _handle_session_start)
     processor.register("session.end", _handle_session_end)
     processor.register("distill.request", _handle_distill_request)
+    processor.register("polled", _handle_polled)
 
     # KIA 事件触发步骤：由事件总线直接调用
     def _handle_page_created(event):
@@ -643,7 +948,10 @@ def service_event_bus(stop_event: threading.Event):
     while not stop_event.is_set():
         try:
             stats_before = bus.stats()
-            processed = processor.process_all(limit=50)
+            processed = processor.process_all(
+                event_types=list(processor._handlers.keys()),
+                limit=50,
+            )
             if processed > 0:
                 logger.info(f"[事件总线] 处理 {processed} 个事件")
         except Exception as e:
@@ -723,7 +1031,28 @@ def _run_preflight_checks() -> List[str]:
     except Exception as e:
         warnings.append(f"Agent 检测失败: {e}")
 
-    # 4. 数据库可访问性
+    # 4. 资源健康检查（防止重复启动导致资源爆炸）
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        used_fd = len(os.listdir(f"/proc/{os.getpid()}/fd")) if os.path.exists(f"/proc/{os.getpid()}/fd") else 0
+        if soft - used_fd < 100:
+            warnings.append(f"文件句柄紧张: 已用 {used_fd}/{soft}，daemon 可能因 Too many open files 崩溃")
+    except Exception:
+        pass
+
+    try:
+        events_db = config.data_dir / "events.db"
+        if events_db.exists():
+            size_mb = events_db.stat().st_size / (1024 * 1024)
+            if size_mb > 500:
+                warnings.append(f"events.db 过大 ({size_mb:.0f}MB)，建议先运行 `mnemos events cleanup` 清理")
+            elif size_mb > 100:
+                logger.info(f"[前置检查] events.db {size_mb:.0f}MB，建议定期 cleanup")
+    except Exception:
+        pass
+
+    # 5. 数据库可访问性
     try:
         from core.persona.psyche import get_signal_store
         store = get_signal_store()
@@ -776,16 +1105,23 @@ def run_daemon():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # 启动所有服务线程
-    services = [
-        ("L1同步", service_l1_sync),
-        ("蒸馏合并", service_distill_and_merge),
-        ("心跳", service_heartbeat),
-        ("收件箱", service_inbox_scanner),
-        ("画像信号", service_signal_collector),
-        ("画像分析", service_persona_analyzer),
-        ("事件总线", service_event_bus),
+    # 启动所有服务线程。L1 扫描默认关闭：只消费 MCP/Hook 入队，避免首次运行全量扫历史会话。
+    service_defs = [
+        ("捕获消费", service_capture_worker, "daemon.services.capture_worker", True),
+        ("L1同步", service_l1_sync, "daemon.services.l1_sync", False),
+        ("蒸馏合并", service_distill_and_merge, "daemon.services.distill_merge", True),
+        ("心跳", service_heartbeat, "daemon.services.heartbeat", True),
+        ("收件箱", service_inbox_scanner, "daemon.services.inbox_scanner", True),
+        ("画像信号", service_signal_collector, "daemon.services.signal_collector", True),
+        ("画像分析", service_persona_analyzer, "daemon.services.persona_analyzer", True),
+        ("事件总线", service_event_bus, "daemon.services.event_bus", True),
     ]
+    services = []
+    for name, func, key, default in service_defs:
+        if _service_enabled(config, key, default):
+            services.append((name, func))
+        else:
+            logger.info(f"服务 [{name}] 已禁用 ({key}=false)")
 
     threads = []
     for name, func in services:
@@ -910,6 +1246,65 @@ def stop_daemon():
 
 def status_daemon():
     """查看守护进程状态"""
+    def _fmt(size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+            value /= 1024
+
+    def _daemon_process_count() -> int:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["pgrep", "-af", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return 0
+            return sum(
+                1 for line in result.stdout.splitlines()
+                if "mnemos_daemon.py" in line and "pgrep" not in line
+            )
+        except Exception:
+            return 0
+
+    def _print_runtime_stats(config):
+        print(f"\n配置:")
+        print(f"  当前读取: {config.config_path}")
+        print(f"  配置存在: {'是' if config.config_path.exists() else '否（使用默认值）'}")
+        print(f"  数据目录: {config.data_dir}")
+        print(f"  Wiki目录: {config.wiki_dir}")
+        print(f"  Memos: {'已配置' if config.memos_token else '未配置'}")
+        services = config.get("daemon.services", {})
+        if services:
+            print("  服务开关:")
+            for key in sorted(services):
+                print(f"    {'✓' if services[key] else '☐'} {key}")
+
+        print(f"\n运行态:")
+        print(f"  daemon 进程数: {_daemon_process_count()}")
+        if log_file.exists():
+            print(f"  daemon.log: {_fmt(log_file.stat().st_size)}")
+        events_db = config.data_dir / "events.db"
+        if events_db.exists():
+            print(f"  events.db: {_fmt(events_db.stat().st_size)}")
+            try:
+                import sqlite3
+                with sqlite3.connect(str(events_db), timeout=5) as conn:
+                    pending_total = conn.execute(
+                        "SELECT COUNT(*) FROM events WHERE status IN ('pending', 'processing')"
+                    ).fetchone()[0]
+                    rows = conn.execute(
+                        "SELECT event_type, status, COUNT(*) FROM events "
+                        "GROUP BY event_type, status ORDER BY COUNT(*) DESC LIMIT 5"
+                    ).fetchall()
+                print(f"  events pending/processing: {pending_total}")
+                for event_type, status, count in rows:
+                    print(f"    - {event_type}/{status}: {count}")
+            except Exception as e:
+                print(f"  events.db 统计失败: {e}")
+
     if is_daemon_running():
         pid = int(PID_FILE.read_text(encoding="utf-8").strip())
         print(f"Mnemos daemon 运行中 (PID: {pid})")
@@ -919,10 +1314,7 @@ def status_daemon():
         try:
             from core.config import get_config
             config = get_config()
-            print(f"\n配置:")
-            print(f"  数据目录: {config.data_dir}")
-            print(f"  Wiki目录: {config.wiki_dir}")
-            print(f"  Memos: {'已配置' if config.memos_token else '未配置'}")
+            _print_runtime_stats(config)
 
             from core.hephaestus_worker import HephaestusWorker
             worker = HephaestusWorker()
@@ -936,6 +1328,11 @@ def status_daemon():
     else:
         print("Mnemos daemon 未运行")
         print(f"日志文件: {log_file}")
+        try:
+            from core.config import get_config
+            _print_runtime_stats(get_config())
+        except Exception:
+            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
         if log_file.exists():
             print(f"\n最近日志:")
             lines = log_file.read_text(encoding="utf-8").strip().split("\n")
