@@ -211,7 +211,8 @@ python3 mnemos_cli.py scorer status
 ```bash
 git clone https://github.com/jielumaizui/mnemos.git
 cd mnemos
-./setup.sh
+./setup.sh        # macOS / Linux
+setup.bat         # Windows
 ```
 
 `setup.sh` 会自动完成：

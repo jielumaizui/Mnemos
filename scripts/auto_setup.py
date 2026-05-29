@@ -29,14 +29,19 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+# 确保项目根目录在 sys.path 中，支持从任意位置运行
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 跨平台 Obsidian Vault 常见路径
 OBSIDIAN_VAULT_PATHS = {
@@ -121,12 +126,23 @@ def install_dependencies(yes_mode: bool = False) -> bool:
         print_warn("requirements.txt 不存在，跳过")
         return True
 
-    cmd = [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", f"{PROJECT_ROOT}[dev]"]
+    # Windows PowerShell 中 [dev] 会被解释为通配符，用引号包裹
+    extras = f"{PROJECT_ROOT}[dev]"
+    cmd = [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
     if yes_mode:
-        print(f"  执行: {' '.join(cmd)}")
+        print(f"  执行: pip install -e {PROJECT_ROOT} -e '{extras}'")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             print_ok("依赖安装完成")
+            return True
+        # 回退: 不带 [dev] 先装核心依赖
+        print_warn(f"完整安装失败，尝试仅核心依赖...")
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", str(PROJECT_ROOT)],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print_ok("核心依赖安装完成 (可选 dev 依赖需手动安装)")
             return True
         print_err(f"安装失败: {result.stderr[:200]}")
         return False
@@ -160,25 +176,38 @@ def find_memos_process() -> Optional[Path]:
                 capture_output=True, text=True, timeout=5
             )
         else:
-            result = subprocess.run(
-                ["wmic", "process", "where", "name like '%memos%'", "get", "CommandLine"],
-                capture_output=True, text=True, timeout=5
-            )
-        if result.returncode == 0 and result.stdout:
+            # Windows: wmic 已弃用，改用 PowerShell Get-Process
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command", "Get-Process | Where-Object {$_.ProcessName -like '*memos*'} | Select-Object -ExpandProperty Path"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    for line in result.stdout.strip().split("\n"):
+                        line = line.strip()
+                        if line and Path(line).exists():
+                            return Path(line)
+            except Exception:
+                pass
+            # 回退: tasklist
+            try:
+                result = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq memos*", "/FO", "CSV"],
+                    capture_output=True, text=True, timeout=5
+                )
+            except Exception:
+                result = None
+        if result and result.returncode == 0 and result.stdout:
             for line in result.stdout.strip().split("\n"):
                 for pat in MEMOS_PROCESS_PATTERNS:
                     if pat in line.lower():
-                        # 尝试提取路径
-                        parts = line.split()
-                        for p in parts:
-                            if "memos" in p.lower() and (p.startswith("/") or p.startswith("C:\\")):
+                        # 尝试提取路径 (支持带空格的路径)
+                        for match in re.finditer(r'["\']?((?:[A-Za-z]:)?[/\\][^"\'\s]+(?:\s[^"\'\s]+)*)["\']?', line):
+                            p = match.group(1)
+                            if "memos" in p.lower():
                                 exe = Path(p)
                                 if exe.exists():
                                     return exe
-                                # 可能是带参数的命令行
-                                base = Path(p.split(" ")[0])
-                                if base.exists():
-                                    return base
             return Path("memos")  # 进程存在但路径不确定
     except Exception:
         pass
@@ -196,7 +225,7 @@ def detect_memos_port(port: int = 5230) -> bool:
 
 
 def detect_memos_data_dir() -> Optional[Path]:
-    """根据进程命令行提取 Memos 数据目录"""
+    """根据进程命令行提取 Memos 数据目录（支持带空格路径）"""
     try:
         if platform.system() in ("Darwin", "Linux"):
             result = subprocess.run(
@@ -205,11 +234,18 @@ def detect_memos_data_dir() -> Optional[Path]:
             )
             if result.returncode == 0:
                 for line in result.stdout.strip().split("\n"):
-                    m = re.search(r"--data\s+(\S+)", line)
+                    # 支持带空格的路径（引号包裹或到下一个参数前）
+                    m = re.search(r'--data\s+(["\'])(.+?)\1', line)
                     if m:
-                        path = Path(m.group(1)).expanduser()
+                        path = Path(m.group(2)).expanduser()
                         if path.exists():
                             return path
+                    else:
+                        m = re.search(r'--data\s+(\S+)', line)
+                        if m:
+                            path = Path(m.group(1)).expanduser()
+                            if path.exists():
+                                return path
     except Exception:
         pass
     # 默认猜测
@@ -308,6 +344,11 @@ def setup_obsidian(skip: bool = False, yes_mode: bool = False) -> Tuple[bool, Op
 
 # ── 步骤 5: 生成配置 ──
 
+def _safe_yaml_value(value: str) -> str:
+    """对 YAML 字符串值进行安全转义"""
+    return value.replace('"', '\\"').replace('\\', '\\\\')
+
+
 def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False) -> Path:
     config_dir = Path.home() / ".mnemos"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -315,39 +356,87 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
 
     # 读取模板
     example = PROJECT_ROOT / "config" / "config.example.yaml"
-    template = example.read_text(encoding="utf-8") if example.exists() else ""
+    template = example.read_text(encoding="utf-8") if example.exists() else _default_config_template()
 
-    # 修改关键值
-    if template:
-        # 替换 wiki 路径
-        template = re.sub(
-            r'vault_path:.*',
-            f'vault_path: "{wiki_dir}"',
-            template
-        )
-        # 替换 memos URL
-        if memos_url:
-            template = re.sub(
-                r'api_url:.*',
-                f'api_url: "{memos_url}"',
-                template
-            )
-        # 启用 memos（如果有 URL）
-        if memos_url:
-            template = re.sub(
-                r'enabled: false\s*(?=\n\s*api_url:)',
-                'enabled: true',
-                template
-            )
+    # 使用安全的行级替换（不依赖正则，精确匹配 key）
+    lines = template.split("\n")
+    out_lines = []
+    in_memos_block = False
+    for line in lines:
+        stripped = line.lstrip()
+        # wiki 路径
+        if stripped.startswith("vault_path:"):
+            indent = len(line) - len(line.lstrip())
+            out_lines.append(" " * indent + f'vault_path: "{_safe_yaml_value(str(wiki_dir))}"')
+            continue
+        # memos URL
+        if memos_url and stripped.startswith("api_url:"):
+            indent = len(line) - len(line.lstrip())
+            out_lines.append(" " * indent + f'api_url: "{_safe_yaml_value(memos_url)}"')
+            continue
+        # memos 启用状态
+        if memos_url and in_memos_block and stripped.startswith("enabled:"):
+            indent = len(line) - len(line.lstrip())
+            out_lines.append(" " * indent + "enabled: true")
+            continue
+        # 跟踪是否在 memos 块内（简单缩进判断）
+        if stripped.startswith("memos:"):
+            in_memos_block = True
+        elif in_memos_block and not line.strip().startswith("#") and line.strip() and not line.startswith(" ") and not line.startswith("\t"):
+            in_memos_block = False
+        out_lines.append(line)
+
+    body = "\n".join(out_lines)
 
     if config_file.exists() and not yes_mode:
         if not ask_yes_no(f"配置已存在: {config_file}，是否覆盖？", default=False, yes_mode=yes_mode):
             print_warn("保留现有配置")
             return config_file
 
-    config_file.write_text(template, encoding="utf-8")
+    config_file.write_text(body, encoding="utf-8")
     print_ok(f"配置已写入: {config_file}")
     return config_file
+
+
+def _default_config_template() -> str:
+    """默认配置模板（当 config.example.yaml 不存在时）"""
+    return """wiki:
+  vault_path: "~/Documents/Obsidian Vault/wiki"
+
+memos:
+  enabled: true
+  api_url: "http://localhost:5230"
+  token: ""
+
+persona:
+  enabled: true
+  data_sources:
+    session:
+      enabled: true
+      description: "AI对话信号（核心）"
+    git:
+      enabled: false
+      description: "Git提交记录"
+    memos:
+      enabled: false
+      description: "Memos笔记"
+    wiki:
+      enabled: false
+      description: "知识库交互"
+    file_system:
+      enabled: false
+      description: "文件系统活动"
+    wechat:
+      enabled: false
+      description: "微信聊天记录"
+
+integrations:
+  claude_code:
+    enabled: true
+    settings_json_path: "~/.claude/settings.json"
+  mcp:
+    enabled: false
+"""
 
 
 # ── 步骤 6: 初始化 Wiki 目录 ──
@@ -455,6 +544,14 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
             print_warn("保留现有 launchd 配置")
             return True
 
+    def _xml_esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    exe = _xml_esc(str(sys.executable))
+    script = _xml_esc(str(PROJECT_ROOT / "mnemos_daemon.py"))
+    log_out = _xml_esc(str(Path.home() / ".mnemos" / "logs" / "daemon.launchd.log"))
+    log_err = _xml_esc(str(Path.home() / ".mnemos" / "logs" / "daemon.launchd.err"))
+
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -463,8 +560,8 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
     <string>com.mnemos.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{sys.executable}</string>
-        <string>{PROJECT_ROOT / 'mnemos_daemon.py'}</string>
+        <string>{exe}</string>
+        <string>{script}</string>
         <string>run</string>
     </array>
     <key>RunAtLoad</key>
@@ -472,9 +569,9 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{Path.home() / '.mnemos' / 'logs' / 'daemon.launchd.log'}</string>
+    <string>{log_out}</string>
     <key>StandardErrorPath</key>
-    <string>{Path.home() / '.mnemos' / 'logs' / 'daemon.launchd.err'}</string>
+    <string>{log_err}</string>
 </dict>
 </plist>
 """
@@ -482,12 +579,21 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
     (Path.home() / ".mnemos" / "logs").mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist_content, encoding="utf-8")
 
-    # 加载
+    # 加载: 先 unload 再 load，避免重复加载报错
+    subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
     result = subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True)
     if result.returncode == 0:
         print_ok(f"macOS launchd 已配置: {plist_path}")
         return True
-    print_warn(f"launchctl load 返回非零: {result.stderr.decode()[:200]}")
+    # launchctl 在较新 macOS 上可能需要 domain/user 参数
+    result = subprocess.run(
+        ["launchctl", "load", "-w", str(plist_path)],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        print_ok(f"macOS launchd 已配置: {plist_path}")
+        return True
+    print_warn(f"launchctl load 返回非零: {result.stderr[:200]}")
     return False
 
 
