@@ -25,6 +25,7 @@ dependencies = [
     "watchdog>=3.0.0",
     "numpy>=1.24.0",
     "mcp>=1.0.0",
+    "tomli_w>=1.0.0",
 ]
 
 [project.optional-dependencies]
