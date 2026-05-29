@@ -24,11 +24,11 @@ dependencies = [
     "pyyaml>=6.0",
     "watchdog>=3.0.0",
     "numpy>=1.24.0",
+    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "black>=23.0.0", "flake8>=6.0.0", "mypy>=1.0.0"]
-mcp = ["mcp>=1.0.0"]
 
 [project.scripts]
 mnemos = "mnemos_cli:main"
