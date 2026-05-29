@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 
 
@@ -15,7 +16,7 @@ def test_context_search_supports_chinese_full_text_and_freshness_alert(tmp_path)
 
     result = ContextAwareSearch(wiki_base=str(tmp_path)).search("Redis 连接池踩坑", limit=1)[0]
 
-    assert result.page_path == "03-Tech/redis.md"
+    assert os.path.normpath(result.page_path) == os.path.normpath("03-Tech/redis.md")
     assert result.final_score == result.score
     assert "关键词匹配" in result.match_reason
     assert result.freshness_alert.type == "potentially_stale"

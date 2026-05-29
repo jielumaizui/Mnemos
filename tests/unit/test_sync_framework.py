@@ -479,7 +479,8 @@ class TestAgentRegistry(unittest.TestCase):
     def test_get_returns_instance(self):
         """get 返回已实例化的 AgentSource"""
         AgentRegistry.register("fake", FakeAgentSource)
-        with patch.object(PathDiscover, "find", return_value=Path("/tmp")):
+        fake_path = Path(tempfile.gettempdir())
+        with patch.object(PathDiscover, "find", return_value=fake_path):
             source = AgentRegistry.get("fake")
         self.assertIsInstance(source, FakeAgentSource)
 
@@ -525,8 +526,9 @@ class TestPathDiscover(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             claude_dir = Path(td) / ".claude"
             claude_dir.mkdir()
-            # 修改 HOME 环境变量使 ~ 扩展到临时目录
-            with patch.dict("os.environ", {"HOME": td}):
+            # 修改 HOME/USERPROFILE 环境变量使 ~ 扩展到临时目录（跨平台）
+            env_patch = {"HOME": td, "USERPROFILE": td}
+            with patch.dict("os.environ", env_patch):
                 result = PathDiscover.find("claude")
             self.assertEqual(result, claude_dir)
 

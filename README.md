@@ -2,7 +2,9 @@
 
 **Local Decision Brain & Behavior-Driven System**
 
-全自动 AI Agent 知识决策系统 —— 不只是记住，而是让 AI 懂得何时该想起、如何该行动。
+> 全自动 AI Agent 知识决策系统 —— 不只是记住，而是让 AI 懂得何时该想起、如何该行动。
+>
+> 🌍 [English Version](README-en.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -10,7 +12,21 @@
 
 ---
 
-Mnemos 是一套全自动的 AI Agent 行为操作系统。它以 AI 对话和用户文件为信号源，无需任何手动操作，即可完成知识的采集、蒸馏、评分、决策和进化。从对话记录到知识入库，从画像推断到策略注入，从过时预警到强制复盘——全链路自动运行，用户只需正常对话。
+**你是否也被这些问题困扰？**
+
+- 和 AI 聊完一个复杂项目，两周后再问，它已经完全忘了之前的上下文
+- 每次遇到同样的问题，都要重新搜索、重新踩一遍同样的坑
+- 花了很多时间记笔记、整理文档，但真正需要的时候永远找不到
+- 学了很多东西，过了一段时间就忘得一干二净
+- 知道自己有很多知识盲区，但不知道盲区在哪里
+
+**所有这些问题，本质上都是同一个问题：人类的认知能力是有限的。**
+
+Mnemos 是一套全自动的 AI Agent 行为操作系统，它连接你所有的 AI 助手，完整记录每一次对话，自动从中提取结构化知识，构建你的专属知识图谱，然后在你需要的时候，主动把正确的知识推送给你。
+
+**你不需要做任何额外的工作。** 不需要记笔记，不需要整理文档，不需要打标签，不需要搜索。你只需要正常地和 AI 聊天、正常工作，把文件交给 Mnemos，剩下的一切都全自动运行。
+
+灵感源自 [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)——让 LLM 增量构建并维护持久化的知识库。Mnemos 在此基础上走了更远的一步：**知识不是存完就完了，它应该在决策中活着。**
 
 灵感源自 [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)——让 LLM 增量构建并维护持久化的知识库。Mnemos 在此基础上走了更远的一步：**知识不是存完就完了，它应该在决策中活着。**
 
@@ -179,32 +195,33 @@ cat ~/Documents/Obsidian\ Vault/wiki/01-People/user-persona.md
 python3 mnemos_cli.py scorer status
 ```
 
-## 快速开始
+## 🚀 30 秒快速开始
+
+> 跟着走一遍，你就知道 Mnemos 在做什么。
 
 ### 前置条件
 
 - Python >= 3.10
 - 一个 AI Agent（Claude Code、Hermes、OpenClaw、OpenCode、Codex 等）
-- （可选）[Memos](https://github.com/usememos/memos) 实例 —— 原始资料入口
-- （可选）[Obsidian](https://obsidian.md) —— 知识库可视化
+- （可选）[Memos](https://github.com/usememos/memos) 实例
+- （可选）[Obsidian](https://obsidian.md) 知识库可视化
 
-> **注意**：本系统的设计前提是你已经在使用 AI Agent。没有 AI Agent，系统的核心价值（画像驱动、知识装载、决策辅助）无法体现。
+> **注意**：Mnemos 不直接调用任何 LLM API，所有蒸馏任务都委托给你的 AI Agent 处理。没有 AI Agent，核心功能无法运行。
 
-### 安装
+### 安装（3 步）
 
 ```bash
-# 方式一：pip 安装（推荐）
-pip install mnemos
-mnemos init
-mnemos doctor
-
-# 方式二：从源码安装
+# 1. 克隆并安装
 git clone https://github.com/jielumaizui/mnemos.git
 cd mnemos
 pip install -e ".[dev]"
+
+# 2. 复制并编辑配置
 cp config/config.example.yaml ~/.mnemos/config.yaml
-# 编辑配置后
-mnemos doctor
+# 编辑 ~/.mnemos/config.yaml，设置你的 wiki 路径
+
+# 3. 系统诊断
+python3 mnemos_cli.py doctor
 ```
 
 `mnemos doctor` 会自动检测系统状态，检查依赖是否就绪。
