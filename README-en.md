@@ -94,7 +94,39 @@ Our brains are great for thinking and creating, but terrible for memory and retr
 
 > **Note**: Mnemos is designed around the premise that you are already using an AI Agent. Without an AI Agent, core values (persona-driven, knowledge loading, decision assist) cannot be realized.
 
-### Installation
+### One-Command Install (Recommended)
+
+```bash
+git clone https://github.com/jielumaizui/mnemos.git
+cd mnemos
+./setup.sh        # macOS / Linux
+setup.bat         # Windows
+```
+
+`setup.sh` / `setup.bat` automatically:
+1. Checks Python >= 3.10
+2. Installs dependencies
+3. Auto-detects Memos server (if running)
+4. Auto-detects Obsidian Vault (if found)
+5. Generates `~/.mnemos/config.yaml`
+6. Initializes standard wiki directory structure
+7. Installs AI Agent hooks
+8. Starts background daemon
+9. Configures system scheduler (launchd / cron)
+
+Non-interactive mode (for CI):
+```bash
+./setup.sh --yes
+```
+
+Skip Memos/Obsidian detection:
+```bash
+./setup.sh --skip-memos --skip-obsidian
+```
+
+### Manual Install
+
+If you prefer manual configuration:
 
 ```bash
 # Clone the repository
