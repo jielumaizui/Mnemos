@@ -90,5 +90,6 @@ def test_duplicates_delegate_to_entropy_engine(tmp_path):
 
     assert len(issues) == 1
     assert issues[0].issue_type == "duplicate"
-    assert issues[0].page == str(a)
-    assert issues[0].related_pages == [str(b)]
+    # page_a/page_b 顺序取决于文件系统遍历顺序，不假定固定顺序
+    pages = {issues[0].page, issues[0].related_pages[0]}
+    assert pages == {str(a), str(b)}
