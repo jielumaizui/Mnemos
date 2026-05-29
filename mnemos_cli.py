@@ -176,13 +176,18 @@ def cmd_doctor(args):
         issues.append(f"Python 版本过低: {py_version.major}.{py_version.minor} (需要 >= 3.10)")
 
     # 2. 核心依赖
-    deps = ["requests", "yaml"]
-    for dep in deps:
+    deps = {
+        "requests": "requests",
+        "yaml": "pyyaml",
+        "watchdog": "watchdog",
+        "numpy": "numpy",
+    }
+    for name, pkg in deps.items():
         try:
-            __import__(dep)
-            print(f"✓ {dep}")
+            __import__(name)
+            print(f"✓ {name}")
         except ImportError:
-            issues.append(f"缺少依赖: {dep} (pip install {dep if dep != 'yaml' else 'pyyaml'})")
+            issues.append(f"缺少依赖: {name} (pip install {pkg})")
 
     # 3. Git（画像系统用到）
     try:

@@ -206,7 +206,38 @@ python3 mnemos_cli.py scorer status
 
 > **注意**：Mnemos 不直接调用任何 LLM API，所有蒸馏任务都委托给你的 AI Agent 处理。没有 AI Agent，核心功能无法运行。
 
-### 安装（3 步）
+### 一键安装（推荐）
+
+```bash
+git clone https://github.com/jielumaizui/mnemos.git
+cd mnemos
+./setup.sh
+```
+
+`setup.sh` 会自动完成：
+1. 检查 Python >= 3.10
+2. 安装依赖
+3. 自动检测 Memos 服务器（如有）
+4. 自动检测 Obsidian Vault（如有）
+5. 生成 `~/.mnemos/config.yaml`
+6. 初始化标准 wiki 目录结构
+7. 安装 AI Agent hooks
+8. 启动后台守护进程
+9. 配置系统定时任务
+
+全自动模式（无交互）：
+```bash
+./setup.sh --yes
+```
+
+跳过 Memos/Obsidian 检测：
+```bash
+./setup.sh --skip-memos --skip-obsidian
+```
+
+### 手动安装
+
+如果你偏好手动配置：
 
 ```bash
 # 1. 克隆并安装
