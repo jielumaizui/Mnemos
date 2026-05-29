@@ -161,7 +161,7 @@ class ConnectWorker:
             }
             self._relation_manager.add_from_distill(kg_input)
 
-        except Exception as e:
+        except Exception:
             # 写入失败不影响提取结果
             pass
 

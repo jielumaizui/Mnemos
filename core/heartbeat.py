@@ -10,8 +10,9 @@ Heartbeat - 系统心跳守护
 
 设计原则：全自动，无需人工审核。
 """
-
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import json
 import re
@@ -283,7 +284,7 @@ class HeartbeatDaemon:
             path = change["file_path"]
             ctype = change["change_type"]
             detail = f"config {ctype}: {path}"
-            print(f"[Heartbeat] {detail}")
+            logger.info(f"[Heartbeat] {detail}")
             self._log("config_changed", detail)
 
     def on_wiki_changed(self, changes: Dict):
@@ -295,7 +296,7 @@ class HeartbeatDaemon:
         detail = (f"added={len(changes['added'])}, "
                   f"modified={len(changes['modified'])}, "
                   f"removed={len(changes['removed'])}")
-        print(f"[Heartbeat] Wiki changed: {detail}")
+        logger.info(f"[Heartbeat] Wiki changed: {detail}")
         self._log("wiki_changed", detail)
 
         # 更新 wiki_metrics（记录文件变更）
@@ -308,20 +309,20 @@ class HeartbeatDaemon:
                     freshness_days=0,
                     heat_level="hot",
                 )
-            print("[Heartbeat] Wiki metrics 更新完成")
+            logger.info("[Heartbeat] Wiki metrics 更新完成")
         except Exception as e:
-            print(f"[Heartbeat] Metrics 更新失败: {e}")
+            logger.warning(f"[Heartbeat] Metrics 更新失败: {e}")
 
     def run_decay(self) -> Optional[Dict]:
         """执行热力衰减"""
         try:
             metrics = get_default_metrics()
             metrics.decay_all(decay_days=15)
-            print("[Heartbeat] 热力衰减完成")
+            logger.info("[Heartbeat] 热力衰减完成")
             self._log("decay", "completed")
             return {"status": "ok"}
         except Exception as e:
-            print(f"[Heartbeat] 热力衰减失败: {e}")
+            logger.warning(f"[Heartbeat] 热力衰减失败: {e}")
             self._log("decay_error", str(e))
             return None
 
@@ -333,7 +334,7 @@ class HeartbeatDaemon:
             self._log("full_index", f"pages={summary.get('total_pages', 0)}")
             return {"status": "ok", "pages": summary.get("total_pages", 0)}
         except Exception as e:
-            print(f"[Heartbeat] Metrics 扫描失败: {e}")
+            logger.warning(f"[Heartbeat] Metrics 扫描失败: {e}")
             self._log("full_index_error", str(e))
             return None
 
@@ -341,7 +342,7 @@ class HeartbeatDaemon:
 
     def run_once(self) -> Dict:
         """单次心跳检查"""
-        print(f"[Heartbeat] {datetime.now(timezone.utc).isoformat()} 开始检查...")
+        logger.info(f"[Heartbeat] {datetime.now(timezone.utc).isoformat()} 开始检查...")
 
         # 1. 配置变更检测
         config_changes = self.check_config_changes()
@@ -371,19 +372,19 @@ class HeartbeatDaemon:
         if stop_event is None:
             stop_event = threading.Event()
 
-        print(f"[Heartbeat] 启动守护循环，间隔 {self.interval}s")
+        logger.info(f"[Heartbeat] 启动守护循环，间隔 {self.interval}s")
 
         while not stop_event.is_set():
             try:
                 self.run_once()
             except Exception as e:
-                print(f"[Heartbeat] 检查异常: {e}")
+                logger.info(f"[Heartbeat] 检查异常: {e}")
                 self._log("error", str(e))
 
             # 用 wait 代替 sleep，可被 stop_event 立即唤醒
             stop_event.wait(timeout=self.interval)
 
-        print("[Heartbeat] 守护循环已退出")
+        logger.info("[Heartbeat] 守护循环已退出")
 
     # ==================== 辅助方法 ====================
 
@@ -416,6 +417,7 @@ class HeartbeatDaemon:
                 try:
                     fm = self._parse_simple_frontmatter(fm_text)
                 except Exception:
+                    logger.warning(f"Unexpected error in heartbeat.py", exc_info=True)
                     fm = {}
                 return fm, parts[2].strip()
         return {}, content
@@ -496,14 +498,14 @@ def main():
         daemon.run_loop()
     elif args.check:
         result = daemon.run_once()
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        logger.info(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.decay:
         daemon.run_decay()
     elif args.index:
         daemon.run_full_index()
     elif args.stats:
         stats = daemon.get_stats()
-        print(json.dumps(stats, indent=2, ensure_ascii=False))
+        logger.info(json.dumps(stats, indent=2, ensure_ascii=False))
     else:
         parser.print_help()
 

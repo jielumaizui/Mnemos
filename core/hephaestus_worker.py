@@ -32,6 +32,8 @@ class HephaestusWorker:
     自动处理 distill_queue，将原始对话蒸馏为结构化知识。
     """
 
+    _last_delegate_at: float = 0.0
+
     def __init__(
         self,
         queue_dir: Path = None,
@@ -45,6 +47,7 @@ class HephaestusWorker:
         self._output_dir = output_dir
         self._inbox_dir = inbox_dir
         self._archive_dir = archive_dir
+        self._completed_notified = set()
 
     @property
     def queue_dir(self) -> Path:
@@ -74,7 +77,7 @@ class HephaestusWorker:
             return self._archive_dir
         return Path.home() / ".mnemos" / "distill_archive"
 
-    def process_all(self) -> int:
+    def process_all(self, max_tasks: int = None) -> int:
         """处理队列中所有待蒸馏任务
 
         Returns:
@@ -87,7 +90,19 @@ class HephaestusWorker:
         # 先检查超时任务，恢复为待处理
         self._recover_expired_delegations()
 
-        task_files = sorted(self.queue_dir.glob("*.json"))
+        if max_tasks is None:
+            max_tasks = int(self.config.get("distill.max_tasks_per_cycle", 5) or 5)
+        if max_tasks <= 0:
+            logger.info("[Hephaestus] 本轮 max_tasks<=0，跳过队列处理")
+            return 0
+
+        all_task_files = sorted(self.queue_dir.glob("*.json"))
+        task_files = all_task_files[:max_tasks]
+        if len(all_task_files) > max_tasks:
+            logger.info(
+                "[Hephaestus] 队列积压 %d 个任务，本轮限量处理 %d 个",
+                len(all_task_files), max_tasks,
+            )
         processed = 0
 
         for task_file in task_files:
@@ -144,6 +159,7 @@ class HephaestusWorker:
         if not session_id:
             logger.warning(f"任务缺少 session_id: {task_file}")
             return False
+        self._emit_progress(session_id, "started", "正在提炼知识...")
 
         # 检查重试次数
         retry_count = data.get("retry_count", 0)
@@ -158,6 +174,7 @@ class HephaestusWorker:
         output_path = self.output_dir / f"{session_id}.md"
         if output_path.exists() and output_path.stat().st_size > 100:
             logger.info(f"蒸馏结果已存在，直接处理: {session_id}")
+            self._emit_progress(session_id, "extracted", "检测到已完成的蒸馏输出，准备写入 wiki")
             self._move_to_inbox(output_path, session_id, data)
             self._archive_task(task_file)
             return True
@@ -171,6 +188,7 @@ class HephaestusWorker:
 
         # 委托给 Agent
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self._rate_limit_delegate()
         ok = self.delegate.delegate(task, output_path)
         if not ok:
             logger.warning(f"无可用的 Agent 执行蒸馏，任务保留: {session_id}")
@@ -179,6 +197,7 @@ class HephaestusWorker:
         # 不阻塞等待 Agent 完成（异步模式）
         # 结果将在下次 process_all() 或 daemon 轮询时处理
         logger.info(f"蒸馏任务已委托，等待 Agent 完成: {session_id}")
+        self._emit_progress(session_id, "judged", "蒸馏任务已委托给宿主 Agent")
 
         # 将任务文件标记为"已委托"（重命名），记录重试次数
         delegated_file = task_file.with_suffix(".delegated")
@@ -191,7 +210,7 @@ class HephaestusWorker:
 
         return True
 
-    def collect_completed(self) -> int:
+    def collect_completed(self, max_files: int = None) -> int:
         """收集已完成的蒸馏结果并移入 Inbox
 
         Returns:
@@ -200,8 +219,21 @@ class HephaestusWorker:
         if not self.output_dir.exists():
             return 0
 
+        if max_files is None:
+            max_files = int(self.config.get("distill.max_collect_per_cycle", 20) or 20)
+        if max_files <= 0:
+            logger.info("[Hephaestus] 本轮 max_files<=0，跳过结果收集")
+            return 0
+
         collected = 0
-        for output_file in self.output_dir.glob("*.md"):
+        output_files = sorted(self.output_dir.glob("*.md"))
+        if len(output_files) > max_files:
+            logger.info(
+                "[Hephaestus] 完成结果积压 %d 个，本轮限量收集 %d 个",
+                len(output_files), max_files,
+            )
+
+        for output_file in output_files[:max_files]:
             session_id = output_file.stem
 
             # 检查对应的任务文件是否存在（.json 或 .delegated）
@@ -213,11 +245,13 @@ class HephaestusWorker:
                 try:
                     task_data = json.loads(task_file.read_text(encoding="utf-8"))
                 except Exception:
+                    logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
                     pass
             elif delegated_file.exists():
                 try:
                     task_data = json.loads(delegated_file.read_text(encoding="utf-8"))
                 except Exception:
+                    logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
                     pass
 
             # 检查输出是否已完成（不是占位符）
@@ -237,6 +271,12 @@ class HephaestusWorker:
                 if delegated_file.exists():
                     self._archive_task(delegated_file)
                 continue
+            parsed = self._parse_distill_output(content)
+            if parsed and parsed.get("judgment") == "skip":
+                self._emit_progress(session_id, "skipped", "本次对话无新知识可提炼")
+            elif parsed:
+                fragments = parsed.get("fragments") or []
+                self._emit_progress(session_id, "extracted", f"已提炼 {len(fragments)} 条知识")
 
             # 移入 Inbox
             self._move_to_inbox(output_file, session_id, task_data or {})
@@ -250,6 +290,69 @@ class HephaestusWorker:
             collected += 1
 
         return collected
+
+    def _rate_limit_delegate(self):
+        """宿主 Agent 委托限速，避免积压恢复时连续唤起高负载任务。"""
+        interval = float(self.config.get("distill.min_task_interval_seconds", 1.0) or 0)
+        if interval <= 0:
+            return
+        now = time.monotonic()
+        wait = interval - (now - HephaestusWorker._last_delegate_at)
+        if wait > 0:
+            time.sleep(wait)
+        HephaestusWorker._last_delegate_at = time.monotonic()
+
+    def _emit_progress(self, session_id: str, stage: str, message: str):
+        """发送蒸馏进度事件，不影响主流程"""
+        if stage == "completed" and session_id in self._completed_notified:
+            return
+        if stage == "completed":
+            self._completed_notified.add(session_id)
+
+        progress_map = {
+            "started": 0,
+            "judged": 25,
+            "extracted": 50,
+            "completed": 100,
+            "skipped": 0,
+        }
+        payload = {
+            "session_id": session_id,
+            "stage": stage,
+            "status": stage,
+            "progress_pct": progress_map.get(stage, 0),
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+        }
+        try:
+            from core.mnemos_bus import publish_event
+            publish_event("distillation_progress", "hephaestus_worker", payload)
+        except Exception as exc:
+            logger.debug("发送蒸馏进度事件失败: %s", exc)
+
+        try:
+            from core.kia import amphora
+            amphora_step = {
+                "started": "extracting",
+                "judged": "structuring",
+                "extracted": "verifying",
+                "completed": "done",
+                "skipped": "done",
+            }.get(stage)
+            if amphora_step:
+                amphora.update_progress(session_id, amphora_step, message)
+        except Exception:
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
+            pass
+
+    def _parse_distill_output(self, content: str) -> Optional[dict]:
+        try:
+            from core.hephaestus.distillation_engine import extract_json
+            parsed = extract_json(content)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
+            return None
 
     def _validate_distill_output(self, content: str) -> dict:
         """验证蒸馏输出是否为有效格式
@@ -368,6 +471,7 @@ tags: [distill-failed]
                 output_path.unlink()
                 return
         except Exception:
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
             pass
 
         # 构建 Inbox 文件名
@@ -396,6 +500,7 @@ tags: [distill-failed]
                     extra_path = self.inbox_dir / extra_name
                     extra_path.write_text(page_content, encoding="utf-8")
                     logger.info(f"结构化蒸馏结果已移入 Inbox: {extra_path}")
+            self._emit_progress(session_id, "completed", f"已写入 wiki：{len(structured_pages)} 个页面")
         else:
             # 回退：原始内容 + 基础 frontmatter
             meta = task_data.get("meta", {})
@@ -410,6 +515,7 @@ tags: [distilled, {meta.get('source', 'unknown')}]
 """
             inbox_path.write_text(fm + raw_content, encoding="utf-8")
             logger.info(f"蒸馏结果已移入 Inbox (原始格式): {inbox_path}")
+            self._emit_progress(session_id, "completed", f"已写入 wiki：{inbox_path.name}")
 
         # 删除输出文件
         output_path.unlink()

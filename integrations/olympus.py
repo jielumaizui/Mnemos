@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 
+import logging
+logger = logging.getLogger(__name__)
 class AgentAdapter(ABC):
     """AI Agent 适配器基类
 
@@ -131,6 +133,7 @@ class AgentRegistry:
                 if inst.is_available():
                     instances.append(inst)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at olympus.py", exc_info=True)
                 continue
         # 按优先级排序
         instances.sort(key=lambda a: a.priority)
@@ -150,8 +153,8 @@ class AgentRegistry:
             try:
                 __import__(mod_name)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
     @classmethod
     def get_host_agent(cls) -> Optional[AgentAdapter]:
         """根据 MNEMOS_HOST_AGENT 环境变量返回宿主 Agent"""

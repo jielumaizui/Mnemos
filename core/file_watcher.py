@@ -11,6 +11,8 @@ File Watcher - 文件监控与增量处理
 - 记录文件 mtime + size 作为变更检测依据
 - 批量处理，防抖间隔 5 秒
 """
+import logging
+logger = logging.getLogger(__name__)
 
 import sqlite3
 import hashlib
@@ -65,6 +67,7 @@ class FileWatcher:
             content = path.read_bytes()
             return hashlib.md5(content).hexdigest()[:16]
         except Exception:
+            logger.warning(f"Unexpected error in file_watcher.py", exc_info=True)
             return ""
 
     def _get_stored_state(self) -> Dict[str, Dict]:
@@ -124,6 +127,7 @@ class FileWatcher:
                     size = stat.st_size
                     fingerprint = self._file_fingerprint(file_path)
                 except Exception:
+                    logger.warning(f"Unexpected error in file_watcher.py", exc_info=True)
                     continue
 
                 if path_str not in stored:

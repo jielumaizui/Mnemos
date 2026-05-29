@@ -9,7 +9,7 @@ import re
 from typing import List, Dict, Optional
 from pathlib import Path
 
-from core.context_assembler import ContextAssembler
+from core.app.context_search import ContextAwareSearch, SearchResult
 
 
 class QuestionAnswerSearch:
@@ -17,7 +17,7 @@ class QuestionAnswerSearch:
 
     def __init__(self, wiki_dir: Path = None, retriever=None):
         self.wiki_dir = wiki_dir or Path.home() / "Documents" / "Obsidian Vault" / "wiki"
-        self.retriever = retriever or ContextAssembler(self.wiki_dir)
+        self.retriever = retriever or ContextAwareSearch(wiki_base=str(self.wiki_dir))
 
     def search(self, question: str, top_k: int = 5) -> List[Dict]:
         """
@@ -32,14 +32,13 @@ class QuestionAnswerSearch:
         """
         qtype = self.extract_question_type(question)
 
-        # 1. 检索相关页面
-        context = self.retriever.assemble(question, top_k=top_k * 2)
+        # 1. 复用画像感知搜索召回相关页面
+        results = self._search_results(question, top_k=top_k * 2)
 
-        # 2. 如果没有检索到内容，直接返回空
-        if not context or context.strip() == "":
+        if not results:
             return []
 
-        # 3. 从上下文抽取答案片段
+        context = self._results_to_context(results)
         snippets = self._extract_answer_snippets(context, question, qtype)
 
         # 4. 排序和格式化
@@ -53,6 +52,31 @@ class QuestionAnswerSearch:
             })
 
         return results
+
+    def _search_results(self, question: str, top_k: int) -> List[SearchResult]:
+        if hasattr(self.retriever, "search"):
+            return self.retriever.search(question, limit=top_k)
+        context = self.retriever.assemble(question, top_k=top_k)
+        return [
+            SearchResult(
+                page_path="unknown",
+                title="unknown",
+                snippet=context,
+                score=0.5,
+            )
+        ] if context else []
+
+    @staticmethod
+    def _results_to_context(results: List[SearchResult]) -> str:
+        lines = []
+        for result in results:
+            lines.append(f"### {result.page_title}")
+            lines.append(f"> 来源: {result.page_path}")
+            if result.freshness_alert:
+                lines.append(f"> 新鲜度提醒: {result.freshness_alert.message}")
+            lines.append(result.excerpt or result.snippet)
+            lines.append("")
+        return "\n".join(lines)
 
     def extract_question_type(self, question: str) -> str:
         """提取问题类型：what/why/how/who/when/compare"""
@@ -110,7 +134,7 @@ class QuestionAnswerSearch:
                 current_source = line.replace("> 来源:", "").replace("### ", "").strip()
                 continue
 
-            if len(line) > 20:
+            if len(line) > 8:
                 paragraphs.append({
                     "text": line,
                     "source": current_source,
@@ -202,3 +226,17 @@ class QuestionAnswerSearch:
             "confidence": best["confidence"],
             "question_type": best["question_type"],
         }
+
+    def answer_markdown(self, question: str, context: Dict = None) -> str:
+        """返回适合直接展示给用户的结构化 Markdown 答案。"""
+        results = self.search(question, top_k=5)
+        if not results:
+            return "根据当前 Wiki，没有找到足够相关的答案。"
+
+        lines = ["根据你的知识库：", ""]
+        for item in results[:3]:
+            lines.append(f"**{item['source'] or '未命名来源'}**")
+            lines.append(f"- {item['answer_snippet'][:240]}")
+            lines.append(f"- 置信度：{item['confidence']:.2f}")
+            lines.append("")
+        return "\n".join(lines).strip()

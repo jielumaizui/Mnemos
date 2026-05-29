@@ -11,8 +11,9 @@ AI Context Reader - AI上下文读取模块
 
 标签体系沿用现有，不做修改。
 """
-
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import os
 import sys
@@ -91,13 +92,13 @@ class AIContextReader:
 
         # 记录授权时间，用于过期检查
         self._auth_expire_at = datetime.now() + timedelta(minutes=duration_minutes)
-        print(f"[ContextReader] 已授权跨agent读取，有效期{duration_minutes}分钟")
+        logger.info(f"[ContextReader] 已授权跨agent读取，有效期{duration_minutes}分钟")
 
     def revoke_cross_agent_auth(self):
         """撤销跨agent授权"""
         self._cross_agent_authorized = False
         self._authorized_agents.clear()
-        print("[ContextReader] 已撤销跨agent授权")
+        logger.info("[ContextReader] 已撤销跨agent授权")
 
     def _is_cross_agent_authorized(self, target_agent: str) -> bool:
         """检查是否授权读取目标agent"""
@@ -219,7 +220,7 @@ class AIContextReader:
                 mem_time = datetime.fromisoformat(mem.created_at.replace('Z', '+00:00'))
                 if mem_time < cutoff:
                     continue
-            except:
+            except (ValueError, AttributeError):
                 pass
 
             # 检查权限
@@ -244,7 +245,7 @@ class AIContextReader:
 
         for target in target_agents:
             if not self._is_cross_agent_authorized(target):
-                print(f"[ContextReader] [WARN] 未授权读取 {target}，跳过")
+                logger.warning(f"[ContextReader] [WARN] 未授权读取 {target}，跳过")
                 continue
 
             # 读取目标agent的公开记录
@@ -287,7 +288,7 @@ class AIContextReader:
                         "reason": reason
                     })
         except Exception as e:
-            print(f"[ContextReader] API 搜索失败: {e}")
+            logger.warning(f"[ContextReader] API 搜索失败: {e}")
 
         # 2. 如授权，搜索其他agent
         if include_cross_agent and self._cross_agent_authorized:
@@ -306,6 +307,7 @@ class AIContextReader:
                                 "reason": reason
                             })
                 except Exception:
+                    logger.warning(f"Unexpected error in ai_context_reader.py", exc_info=True)
                     pass
 
         return results[:limit]
@@ -341,6 +343,7 @@ class AIContextReader:
                 else:
                     days_old = 999
             except Exception:
+                logger.warning(f"Unexpected error in ai_context_reader.py", exc_info=True)
                 days_old = 999
 
             # 按时间分层截断
@@ -425,24 +428,24 @@ def main():
 
     if args.read_my:
         memories = reader.read_my_context()
-        print(f"找到 {len(memories)} 条记录:")
-        print(reader.format_context(memories))
+        logger.info(f"找到 {len(memories)} 条记录:")
+        logger.info(reader.format_context(memories))
 
     if args.read_cross:
         if not reader._cross_agent_authorized:
-            print("错误: 未授权跨agent读取，先使用 --authorize")
+            logger.warning("错误: 未授权跨agent读取，先使用 --authorize")
             return
         results = reader.read_cross_agent(args.read_cross)
         for agent, memories in results.items():
-            print(f"\n=== {agent} ({len(memories)}条) ===")
-            print(reader.format_context(memories))
+            logger.info(f"\n=== {agent} ({len(memories)}条) ===")
+            logger.info(reader.format_context(memories))
 
     if args.search:
         results = reader.search_context(args.search, include_cross_agent=True)
-        print(f"找到 {len(results)} 条结果:")
+        logger.info(f"找到 {len(results)} 条结果:")
         for r in results:
-            print(f"\n[{r['source']}] {r['reason']}")
-            print(r['memory'].content[:300])
+            logger.info(f"\n[{r['source']}] {r['reason']}")
+            logger.info(r['memory'].content[:300])
 
 
 if __name__ == "__main__":

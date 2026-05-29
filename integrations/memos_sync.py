@@ -32,8 +32,8 @@ from typing import List, Dict, Optional
 from integrations.styx import MemosClient
 from core.kia.ingest_helpers import is_noise_message
 from core.config import get_config
-
 logger = logging.getLogger(__name__)
+
 
 
 # ==================== _LazyPath ====================
@@ -317,6 +317,7 @@ class MemosSyncBridge:
                 )
                 return cursor.fetchone() is not None
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at memos_sync.py", exc_info=True)
             return False
 
     def _record_hash(self, content_hash: str, memos_uid: str = None):
@@ -346,6 +347,7 @@ class MemosSyncBridge:
                 )
                 synced = cursor.fetchone()[0]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at memos_sync.py", exc_info=True)
             total = 0
             synced = 0
 

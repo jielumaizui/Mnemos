@@ -35,15 +35,16 @@ import json
 import sqlite3
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from core.config import get_config
+from core.pluggable import PluggableModule
 import logging
 
-logger = logging.getLogger(__name__)
 
 # 用户画像驱动（可选依赖）
+logger = logging.getLogger(__name__)
 try:
     from core.persona.pythia import (
         PreferenceProfile, EnergyProfile, CognitiveProfile, ValueProfile
@@ -70,9 +71,15 @@ class SkillRecord:
     usage_count: int = 0            # 总使用次数
     success_count: int = 0          # 成功次数
     failure_count: int = 0          # 失败次数
-    status: str = "proposed"        # proposed / active / deprecated
+    status: str = "proposed"        # proposed / auto_generated / active / stale / deprecated
     created_at: str = ""
     updated_at: str = ""
+    version: int = 1
+    generation_source: str = ""     # behavior / static / manual
+    last_used: str = ""
+    created_by: str = ""
+    parent_version: int = 0
+    deviation_log: List[Dict] = field(default_factory=list)
 
 
 @dataclass
@@ -101,6 +108,63 @@ class FlywheelInsight:
     reason: str                     # 判断理由
     suggested_action: str = ""      # 建议动作
     auto_applicable: bool = False   # 是否可自动应用
+
+
+class BehaviorDrivenSkillGenerator:
+    """行为驱动 Skill 生成器：识别 30 天内重复任务。"""
+
+    BEHAVIOR_TRIGGERS = {
+        "min_occurrences": 3,
+        "time_window_days": 30,
+        "wiki_jaccard_threshold": 0.7,
+    }
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+
+    def analyze(self) -> List[FlywheelInsight]:
+        if not self.db_path.exists():
+            return []
+        since = (datetime.now() - timedelta(days=self.BEHAVIOR_TRIGGERS["time_window_days"])).isoformat()
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.row_factory = sqlite3.Row
+            self._init_task_history(conn)
+            rows = conn.execute(
+                """SELECT task_type, subtype, COUNT(*) AS cnt
+                   FROM task_history
+                   WHERE completed_at >= ?
+                   GROUP BY task_type, subtype
+                   HAVING cnt >= ?""",
+                (since, self.BEHAVIOR_TRIGGERS["min_occurrences"]),
+            ).fetchall()
+
+        insights = []
+        for row in rows:
+            target = f"{row['task_type']}/{row['subtype']} 自动化助手"
+            insights.append(FlywheelInsight(
+                direction="behavior_to_skill",
+                source=f"{row['task_type']}/{row['subtype']}",
+                target=target,
+                confidence=0.75,
+                reason=f"近{self.BEHAVIOR_TRIGGERS['time_window_days']}天重复完成 {row['cnt']} 次同类任务",
+                suggested_action="生成 auto_generated SkillRecord，等待用户确认或进入手动优化",
+                auto_applicable=True,
+            ))
+        return insights
+
+    @staticmethod
+    def _init_task_history(conn: sqlite3.Connection):
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS task_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT NOT NULL,
+                subtype TEXT NOT NULL,
+                wiki_pages TEXT DEFAULT '[]',
+                input_summary TEXT DEFAULT '',
+                output_summary TEXT DEFAULT '',
+                completed_at TEXT NOT NULL
+            )
+        """)
 
 
 # ========== 画像驱动数据模型 ==========
@@ -595,8 +659,8 @@ class PersonaDrivenSkillEngine:
 
 # ========== 飞轮管理器 ==========
 
-class SkillWikiFlywheel:
-    """Skill-Wiki 双向飞轮"""
+class SkillWikiFlywheel(PluggableModule):
+    """Skill-Wiki 双向飞轮 — 实现 PluggableModule 热插拔接口"""
 
     # Wiki → Skill 的触发阈值
     WIKI_TO_SKILL_SIGNALS = {
@@ -624,15 +688,44 @@ class SkillWikiFlywheel:
             self.wiki_base / ".kg" / "flywheel.db"
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.behavior_generator = BehaviorDrivenSkillGenerator(self.db_path)
         self._init_db()
+        self._enabled = True
 
         # 画像驱动引擎（可选）
         self.persona_engine = None
         if PERSONA_AVAILABLE:
             self.persona_engine = PersonaDrivenSkillEngine(persona, blindspot)
-        elif persona or blindspot:
-            # 用户传了画像但依赖不可用
-            pass
+        else:
+            self.persona_engine = None
+
+    # ---- PluggableModule 接口 ----
+
+    def enable(self) -> None:
+        self._enabled = True
+
+    def disable(self) -> None:
+        self._enabled = False
+
+    def configure(self, cfg: Dict[str, Any]) -> None:
+        if "wiki_to_skill_signals" in cfg:
+            self.WIKI_TO_SKILL_SIGNALS.update(cfg["wiki_to_skill_signals"])
+        if "skill_to_wiki_signals" in cfg:
+            self.SKILL_TO_WIKI_SIGNALS.update(cfg["skill_to_wiki_signals"])
+
+    def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        if event_type == "task_completed":
+            self.behavior_generator.analyze()
+        elif event_type == "skill_executed":
+            self._log_skill_execution(data)
+        elif event_type == "skill_deviated":
+            self._record_deviation(data)
+        elif event_type == "page_accessed":
+            self.log_wiki_usage(data.get("page_path"), data.get("access_type", "read"))
+        elif event_type == "periodic_cleanup":
+            self._run_retention_cleanup()
 
     def _init_db(self):
         """初始化数据库"""
@@ -717,6 +810,31 @@ class SkillWikiFlywheel:
         """
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
+            skill_columns = {row[1] for row in conn.execute("PRAGMA table_info(skills)")}
+            extra_columns = {
+                "version": "INTEGER DEFAULT 1",
+                "generation_source": "TEXT DEFAULT ''",
+                "last_used": "TEXT DEFAULT ''",
+                "created_by": "TEXT DEFAULT ''",
+                "parent_version": "INTEGER DEFAULT 0",
+                "deviation_log": "TEXT DEFAULT '[]'",
+            }
+            for column, definition in extra_columns.items():
+                if column not in skill_columns:
+                    conn.execute(f"ALTER TABLE skills ADD COLUMN {column} {definition}")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS skill_versions (
+                    skill_name TEXT,
+                    version INTEGER,
+                    trigger_conditions TEXT,
+                    input_template TEXT,
+                    expected_output TEXT,
+                    change_summary TEXT,
+                    created_at TEXT,
+                    PRIMARY KEY (skill_name, version)
+                )
+            """)
+            self.behavior_generator._init_task_history(conn)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10)
@@ -739,6 +857,7 @@ class SkillWikiFlywheel:
             fm = self._extract_frontmatter(content)
             body = self._extract_body(content)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at ixion.py", exc_info=True)
             return None
 
         signals = []
@@ -799,12 +918,10 @@ class SkillWikiFlywheel:
     def scan_wiki_for_skills(self) -> List[FlywheelInsight]:
         """扫描所有 Wiki 页面，找出适合 Skill 化的知识"""
         insights = []
-        inbox = self.wiki_base / "00-Inbox"
-
-        if not inbox.exists():
+        if not self.wiki_base.exists():
             return insights
 
-        for page in inbox.glob("*.md"):
+        for page in self._scan_all_wiki_pages():
             insight = self.analyze_wiki_for_skill(page)
             if insight:
                 insights.append(insight)
@@ -812,6 +929,16 @@ class SkillWikiFlywheel:
         # 按置信度排序
         insights.sort(key=lambda x: x.confidence, reverse=True)
         return insights
+
+    def _scan_all_wiki_pages(self) -> List[Path]:
+        excluded = {".git", ".obsidian", ".kg", "99-Archive", "99-Reports", "__pycache__"}
+        pages = []
+        for page in self.wiki_base.rglob("*.md"):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in excluded or part.startswith(".") for part in rel_parts):
+                continue
+            pages.append(page)
+        return pages
 
     def _generate_skill_proposal(self, page_path: Path, frontmatter: Dict,
                                   title: str, body: str) -> str:
@@ -1027,8 +1154,9 @@ class SkillWikiFlywheel:
                 conn.execute(
                     """INSERT OR REPLACE INTO skills
                        (skill_name, description, trigger_conditions, input_template,
-                        expected_output, source_wiki_pages, status, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        expected_output, source_wiki_pages, status, created_at, updated_at,
+                        version, generation_source, last_used, created_by, parent_version, deviation_log)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         skill.skill_name, skill.description,
                         json.dumps(skill.trigger_conditions, ensure_ascii=False),
@@ -1037,6 +1165,27 @@ class SkillWikiFlywheel:
                         skill.status or "proposed",
                         skill.created_at or datetime.now().isoformat()[:19],
                         datetime.now().isoformat()[:19],
+                        skill.version,
+                        skill.generation_source,
+                        skill.last_used,
+                        skill.created_by,
+                        skill.parent_version,
+                        json.dumps(skill.deviation_log, ensure_ascii=False),
+                    )
+                )
+                conn.execute(
+                    """INSERT OR REPLACE INTO skill_versions
+                       (skill_name, version, trigger_conditions, input_template,
+                        expected_output, change_summary, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        skill.skill_name,
+                        skill.version,
+                        json.dumps(skill.trigger_conditions, ensure_ascii=False),
+                        skill.input_template,
+                        skill.expected_output,
+                        "initial create" if skill.parent_version == 0 else f"from v{skill.parent_version}",
+                        skill.created_at or datetime.now().isoformat()[:19],
                     )
                 )
                 conn.commit()
@@ -1067,6 +1216,12 @@ class SkillWikiFlywheel:
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            version=row["version"] or 1,
+            generation_source=row["generation_source"] or "",
+            last_used=row["last_used"] or "",
+            created_by=row["created_by"] or "",
+            parent_version=row["parent_version"] or 0,
+            deviation_log=json.loads(row["deviation_log"] or "[]"),
         )
 
     def list_skills(self, status: str = None) -> List[SkillRecord]:
@@ -1093,6 +1248,12 @@ class SkillWikiFlywheel:
                 status=row["status"],
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
+                version=row["version"] or 1,
+                generation_source=row["generation_source"] or "",
+                last_used=row["last_used"] or "",
+                created_by=row["created_by"] or "",
+                parent_version=row["parent_version"] or 0,
+                deviation_log=json.loads(row["deviation_log"] or "[]"),
             )
             for row in rows
         ]
@@ -1108,8 +1269,10 @@ class SkillWikiFlywheel:
         """
         results = {
             "wiki_to_skill": self.scan_wiki_for_skills(),
+            "behavior_to_skill": self.behavior_generator.analyze(),
             "skill_to_wiki": [],
             "persona_driven": {},
+            "cleanup": [],
         }
 
         # 扫描所有 Skill 的使用日志
@@ -1118,15 +1281,104 @@ class SkillWikiFlywheel:
             results["skill_to_wiki"].extend(insights)
 
         # 按置信度排序
-        for direction in ["wiki_to_skill", "skill_to_wiki"]:
+        results["cleanup"] = self.cleanup_stale_skills()
+
+        for direction in ["wiki_to_skill", "behavior_to_skill", "skill_to_wiki"]:
             results[direction].sort(key=lambda x: x.confidence, reverse=True)
 
         # 画像驱动分析
         if self.persona_engine:
             results["persona_driven"] = self._run_persona_driven_cycle()
             self._log_persona_cycle(results["persona_driven"])
+        else:
+            results["persona_driven"] = self._fallback_from_metis()
 
         return results
+
+    def _fallback_from_metis(self) -> Dict:
+        """画像依赖缺失时，用 Metis 知识画像生成简化飞轮参数。"""
+        try:
+            from core.kia.metis import ProfileGenerator
+            profile = ProfileGenerator(wiki_base=str(self.wiki_base)).generate()
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at ixion.py", exc_info=True)
+            return {"fallback": "metis_unavailable", "flywheel_params": PersonaDrivenSkillEngine.ENERGY_TO_FLYWHEEL_PARAMS["mixed"]}
+
+        entropy = getattr(profile, "domain_entropy", 0.0)
+        total = getattr(profile, "total_knowledge", 0)
+        intensity = "high" if total >= 50 and entropy > 0.5 else "medium"
+        return {
+            "fallback": "metis",
+            "domain_entropy": entropy,
+            "total_knowledge": total,
+            "flywheel_params": {
+                "cycle_days": 7,
+                "batch_size": 3 if intensity == "medium" else 5,
+                "intensity": intensity,
+                "max_parallel": 1,
+            },
+        }
+
+    def record_task_completed(self, task_type: str, subtype: str, wiki_pages: List[str] = None,
+                              input_summary: str = "", output_summary: str = ""):
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO task_history
+                   (task_type, subtype, wiki_pages, input_summary, output_summary, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    task_type,
+                    subtype,
+                    json.dumps(wiki_pages or [], ensure_ascii=False),
+                    input_summary,
+                    output_summary,
+                    datetime.now().isoformat(),
+                ),
+            )
+
+    def cleanup_stale_skills(self, cleanup_days: int = 60, grace_period_days: int = 7) -> List[str]:
+        cutoff = datetime.now() - timedelta(days=cleanup_days)
+        archived = []
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM skills
+                   WHERE status IN ('active', 'auto_generated', 'stale')
+                   AND COALESCE(NULLIF(last_used, ''), updated_at, created_at) < ?""",
+                (cutoff.isoformat()[:19],),
+            ).fetchall()
+            for row in rows:
+                skill = self.get_skill(row["skill_name"])
+                if not skill:
+                    continue
+                if skill.generation_source == "behavior" or skill.status == "stale":
+                    self._archive_skill(skill)
+                    conn.execute("UPDATE skills SET status='deprecated', updated_at=? WHERE skill_name=?",
+                                 (datetime.now().isoformat()[:19], skill.skill_name))
+                    archived.append(skill.skill_name)
+                else:
+                    conn.execute("UPDATE skills SET status='stale', updated_at=? WHERE skill_name=?",
+                                 (datetime.now().isoformat()[:19], skill.skill_name))
+            conn.commit()
+        return archived
+
+    def _archive_skill(self, skill: SkillRecord):
+        archive_path = self.wiki_base / "03-Archive" / "Skills" / f"{skill.skill_name}-归档.md"
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "---",
+            "type: skill_archive",
+            f"skill_name: {skill.skill_name}",
+            f"archived_at: {datetime.now().isoformat()[:19]}",
+            "---",
+            "",
+            f"# {skill.skill_name} 归档",
+            "",
+            skill.description,
+            "",
+            "## 来源页面",
+        ]
+        lines.extend(f"- {page}" for page in skill.source_wiki_pages)
+        archive_path.write_text("\n".join(lines), encoding="utf-8")
 
     def _run_persona_driven_cycle(self) -> Dict:
         """运行画像驱动的飞轮子周期"""

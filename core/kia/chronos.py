@@ -16,21 +16,23 @@ Chronos — 时间之神 — KIA 步骤调度中心
 from __future__ import annotations
 
 import logging
+import hashlib
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, is_dataclass
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
 
 
 # ============================================================
 # 原有任务调度/提醒功能（保留）
 # ============================================================
 
+logger = logging.getLogger(__name__)
 @dataclass
 class ScheduledTask:
     """调度任务"""
@@ -45,6 +47,7 @@ class ScheduledTask:
     context: str
     created_at: str
     reminded_at: Optional[str] = None
+    priority: int = 0
 
 
 # ============================================================
@@ -58,6 +61,7 @@ class Trigger:
         raise NotImplementedError
 
     def update_last_run(self, ts: Optional[str] = None) -> None:
+        # TODO: 子类可覆盖以持久化 last_run 时间戳（基类默认空实现）
         pass
 
     def describe(self) -> str:
@@ -153,6 +157,7 @@ class ConditionTrigger(Trigger):
         try:
             return self.predicate()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at chronos.py", exc_info=True)
             return False
 
     def describe(self) -> str:
@@ -239,11 +244,15 @@ class KnowledgeScheduler:
                     period TEXT,
                     status TEXT DEFAULT 'pending',
                     context TEXT,
+                    priority INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     reminded_at TIMESTAMP,
                     completed_at TIMESTAMP
                 )
             """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_scheduled_tasks)")}
+            if "priority" not in columns:
+                conn.execute("ALTER TABLE knowledge_scheduled_tasks ADD COLUMN priority INTEGER DEFAULT 0")
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_kst_status
                 ON knowledge_scheduled_tasks(status)
@@ -251,6 +260,10 @@ class KnowledgeScheduler:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_kst_reminder
                 ON knowledge_scheduled_tasks(reminder_date)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_kst_priority_reminder
+                ON knowledge_scheduled_tasks(status, priority, reminder_date)
             """)
             # 步骤执行日志
             conn.execute("""
@@ -309,15 +322,17 @@ class KnowledgeScheduler:
             trigger=CronTrigger("0 * * * *"),
             timeout=60,
         ))
-        self.register(ScheduledStep(
-            name="dark_knowledge",
-            func=lambda: self._run_kia_module("erebus", "DarkKnowledgeMiner", "mine_all", wiki_base=wiki_base),
-            trigger=CronTrigger("0 6 * * 0"),
-            timeout=600,
-        ))
+        # TODO: dark_knowledge 原由 erebus 模块执行，该模块已按蓝图合并到知识图谱。
+        # 如需恢复周度盲区扫描，请注册 hygieia.detect_knowledge_gaps 或 knowledge_graph 关系发现。
+        # self.register(ScheduledStep(
+        #     name="dark_knowledge",
+        #     func=lambda: self._run_kia_module("erebus", "DarkKnowledgeMiner", "mine_all", wiki_base=wiki_base),
+        #     trigger=CronTrigger("0 6 * * 0"),
+        #     timeout=600,
+        # ))
         self.register(ScheduledStep(
             name="shadow_page",
-            func=lambda: self._run_kia_module("hecate", "ShadowPageManager", "sync_all_inbox", wiki_base=wiki_base),
+            func=lambda: self._run_kia_module("hecate", "ShadowPageManager", "batch_sync", wiki_base=wiki_base),
             trigger=CronTrigger("0 7 * * 0"),
             timeout=600,
         ))
@@ -393,6 +408,22 @@ class KnowledgeScheduler:
             timeout=60,
         ))
 
+        # --- 问题处理流水线（每天扫描自动修复） ---
+        self.register(ScheduledStep(
+            name="issue_pipeline",
+            func=self._run_issue_pipeline,
+            trigger=CronTrigger("0 9 * * *"),
+            timeout=300,
+        ))
+
+        # --- 对话提醒清理（每天清理过期记录） ---
+        self.register(ScheduledStep(
+            name="dialog_reminder_cleanup",
+            func=self._run_dialog_reminder_cleanup,
+            trigger=CronTrigger("0 10 * * *"),
+            timeout=60,
+        ))
+
     def _flywheel_predicate(self) -> bool:
         """skill_flywheel 条件：画像信号数 >= 50"""
         try:
@@ -401,6 +432,7 @@ class KnowledgeScheduler:
             total = sum(v for v in stats.values() if v > 0)
             return total >= 50
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at chronos.py", exc_info=True)
             return False
 
     def _run_kia_module(self, module_name: str, class_name: str,
@@ -458,6 +490,52 @@ class KnowledgeScheduler:
             }
         except Exception as e:
             logger.error(f"ScorerV2 训练检查失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_issue_pipeline(self, registry=None) -> Dict:
+        """问题处理流水线：扫描并自动修复低风险问题"""
+        try:
+            from core.kia.issue_pipeline import IssueRegistry, AutoFixExecutor
+            if registry is None:
+                registry = IssueRegistry()
+            executor = AutoFixExecutor(registry=registry)
+            pending = registry.list_issues(status="detected", limit=100)
+            auto_fixable = [i for i in pending if executor.can_auto_fix(i)]
+            results = []
+            for issue in auto_fixable:
+                result = executor.execute(issue)
+                results.append({
+                    "issue_id": issue.issue_id,
+                    "type": issue.issue_type,
+                    "success": result.success,
+                    "skipped": result.skipped,
+                    "action": result.action,
+                })
+            return {
+                "status": "ok",
+                "scanned": len(pending),
+                "auto_fixable": len(auto_fixable),
+                "results": results,
+            }
+        except Exception as e:
+            logger.error(f"问题处理流水线失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_dialog_reminder_cleanup(self, queue=None) -> Dict:
+        """对话提醒清理：删除已解决/已忽略超过 30 天的旧记录"""
+        try:
+            from core.kia.dialog_reminder import DialogReminderQueue
+            if queue is None:
+                queue = DialogReminderQueue()
+            deleted = queue.cleanup_resolved(retention_days=30)
+            stats = queue.count_by_status()
+            return {
+                "status": "ok",
+                "deleted": deleted,
+                "current_stats": stats,
+            }
+        except Exception as e:
+            logger.error(f"对话提醒清理失败: {e}")
             return {"status": "error", "error": str(e)}
 
     # ----------------------------------------------------------
@@ -623,46 +701,79 @@ class KnowledgeScheduler:
         根据事件类型直接调用对应的 KIA 模块。
         """
         payload = payload or {}
-        event_step_map = {
-            "page.created": ("charon", "ConnectWorker", "process_page"),
-            "page.modified": ("proteus", "IterationTracker", "record_change"),
-            "session.start": ("dike", "TaskClassifier", "classify"),
-            "message.exchanged": ("aegis", "KIAGuard", "check_message"),
-        }
-
-        if event_type not in event_step_map:
-            return {"status": "unknown_event", "event_type": event_type}
-
-        module_name, class_name, method_name = event_step_map[event_type]
-        step = self.steps.get(event_step_map[event_type][0].replace("_", ""), None)
-
         try:
-            import importlib
-            from core.config import get_config
-            mod = importlib.import_module(f"core.kia.{module_name}")
-            cls = getattr(mod, class_name)
-            instance = cls(wiki_base=str(get_config().wiki_dir))
-            method = getattr(instance, method_name)
-
-            # 根据事件类型传递参数
             if event_type == "page.created":
-                result = method(payload.get("page_path", ""))
-            elif event_type == "page.modified":
-                result = method(payload.get("page_path", ""))
-            elif event_type == "session.start":
-                result = method(payload.get("user_message", ""))
-            elif event_type == "message.exchanged":
-                result = method(payload.get("message", ""), payload.get("context", ""))
-            else:
-                result = method()
-
-            if isinstance(result, dict):
-                return result
-            return {"status": "ok", "result": str(result)}
+                return self._trigger_page_created(payload)
+            if event_type == "page.modified":
+                return self._trigger_page_modified(payload)
+            if event_type == "session.start":
+                return self._trigger_session_start(payload)
+            if event_type == "message.exchanged":
+                return self._trigger_message_exchanged(payload)
+            return {"status": "unknown_event", "event_type": event_type}
 
         except Exception as e:
             logger.error(f"事件触发执行失败 {event_type}: {e}")
             return {"status": "error", "error": str(e)}
+
+    def _trigger_page_created(self, payload: Dict) -> Dict:
+        """页面创建事件：当前 Charon 只暴露批量构图入口。"""
+        from core.kia.charon import run_connect_cycle
+
+        result = run_connect_cycle(dry_run=bool(payload.get("dry_run", False)))
+        return {"status": "ok", "event_type": "page.created", "result": result}
+
+    def _trigger_page_modified(self, payload: Dict) -> Dict:
+        """页面修改事件：Proteus 需要复盘对象，单页事件契约尚未落地。"""
+        return {
+            "status": "skipped",
+            "event_type": "page.modified",
+            "reason": "iteration_tracker_requires_retrospective_result",
+            "page_path": payload.get("page_path", ""),
+        }
+
+    def _trigger_session_start(self, payload: Dict) -> Dict:
+        """会话开始事件：按 Dike 当前契约传入 messages 列表。"""
+        from core.kia.dike import TaskClassifier
+
+        user_message = payload.get("user_message") or payload.get("message") or ""
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            messages = [{"role": "user", "content": str(user_message)}]
+
+        result = TaskClassifier().classify(messages)
+        data = self._normalize_event_result(result)
+        data.setdefault("status", "ok")
+        data["event_type"] = "session.start"
+        return data
+
+    def _trigger_message_exchanged(self, payload: Dict) -> Dict:
+        """消息交换事件：按 Aegis 当前 InProcessGuard.check 契约执行。"""
+        from core.kia.aegis import InProcessGuard
+
+        guard = payload.get("guard")
+        if guard is None:
+            guard = InProcessGuard(payload.get("knowledge"))
+
+        alert = guard.check(
+            str(payload.get("message") or payload.get("user_message") or ""),
+            str(payload.get("ai_response") or payload.get("context") or ""),
+        )
+        return {
+            "status": "ok",
+            "event_type": "message.exchanged",
+            "alert": self._normalize_event_result(alert) if alert else None,
+        }
+
+    @staticmethod
+    def _normalize_event_result(result) -> Dict:
+        if result is None:
+            return {}
+        if isinstance(result, dict):
+            return result
+        if is_dataclass(result):
+            return asdict(result)
+        return {"result": str(result)}
 
     # ----------------------------------------------------------
     # 步骤管理
@@ -706,29 +817,14 @@ class KnowledgeScheduler:
 
     def schedule(self, task_type: str, subtype: str,
                  due_date: datetime, context: str = "",
-                 is_periodic: bool = False, period: Optional[str] = None) -> str:
-        task_id = f"{task_type}-{subtype}-{due_date.strftime('%Y%m%d')}"
-        days_until = (due_date - datetime.now()).days
-        if days_until <= 7:
-            reminder_days = 1
-        elif days_until <= 30:
-            reminder_days = 3
-        else:
-            reminder_days = 7
-        reminder_date = due_date - timedelta(days=reminder_days)
-
+                 is_periodic: bool = False, period: Optional[str] = None,
+                 priority: int = 0) -> str:
+        task_id = self._build_task_id(task_type, subtype, due_date, context)
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO knowledge_scheduled_tasks
-                (task_id, task_type, subtype, due_date, reminder_date,
-                 is_periodic, period, status, context, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-            """, (
-                task_id, task_type, subtype,
-                due_date.isoformat(), reminder_date.isoformat(),
-                1 if is_periodic else 0, period,
-                context, datetime.now().isoformat()
-            ))
+            self._insert_task(
+                conn, task_id, task_type, subtype, due_date, context,
+                is_periodic, period, priority
+            )
         return task_id
 
     def get_pending_reminders(self) -> List[ScheduledTask]:
@@ -736,11 +832,11 @@ class KnowledgeScheduler:
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
             cursor = conn.execute("""
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
-                       is_periodic, period, status, context, created_at, reminded_at
+                       is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'pending'
                   AND reminder_date <= ?
-                ORDER BY reminder_date ASC
+                ORDER BY priority DESC, reminder_date ASC
             """, (now,))
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
@@ -754,11 +850,31 @@ class KnowledgeScheduler:
 
     def mark_completed(self, task_id: str):
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+            row = conn.execute("""
+                SELECT task_type, subtype, due_date, is_periodic, period, context, priority
+                FROM knowledge_scheduled_tasks
+                WHERE task_id = ?
+            """, (task_id,)).fetchone()
             conn.execute("""
                 UPDATE knowledge_scheduled_tasks
                 SET status = 'completed', completed_at = ?
                 WHERE task_id = ?
             """, (datetime.now().isoformat(), task_id))
+            if row and row[3]:
+                next_due = self._next_periodic_due(datetime.fromisoformat(row[2]), row[4])
+                if next_due:
+                    next_id = self._build_task_id(row[0], row[1], next_due, row[5] or "")
+                    self._insert_task(
+                        conn,
+                        next_id,
+                        row[0],
+                        row[1],
+                        next_due,
+                        context=row[5] or "",
+                        is_periodic=True,
+                        period=row[4],
+                        priority=row[6] or 0,
+                    )
 
     def cancel(self, task_id: str):
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
@@ -775,22 +891,22 @@ class KnowledgeScheduler:
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
             cursor = conn.execute("""
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
-                       is_periodic, period, status, context, created_at, reminded_at
+                       is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'pending'
                   AND reminder_date <= ?
-                ORDER BY reminder_date ASC
+                ORDER BY priority DESC, reminder_date ASC
             """, (now,))
             missed.extend(self._row_to_task(row) for row in cursor.fetchall())
 
             three_days_ago = (datetime.now() - timedelta(days=3)).isoformat()
             cursor = conn.execute("""
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
-                       is_periodic, period, status, context, created_at, reminded_at
+                       is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'reminded'
                   AND reminded_at <= ?
-                ORDER BY reminded_at ASC
+                ORDER BY priority DESC, reminded_at ASC
             """, (three_days_ago,))
             missed.extend(self._row_to_task(row) for row in cursor.fetchall())
 
@@ -818,17 +934,17 @@ class KnowledgeScheduler:
             if status:
                 cursor = conn.execute("""
                     SELECT task_id, task_type, subtype, due_date, reminder_date,
-                           is_periodic, period, status, context, created_at, reminded_at
+                           is_periodic, period, status, context, created_at, reminded_at, priority
                     FROM knowledge_scheduled_tasks
                     WHERE status = ?
-                    ORDER BY due_date ASC
+                    ORDER BY priority DESC, due_date ASC
                 """, (status,))
             else:
                 cursor = conn.execute("""
                     SELECT task_id, task_type, subtype, due_date, reminder_date,
-                           is_periodic, period, status, context, created_at, reminded_at
+                           is_periodic, period, status, context, created_at, reminded_at, priority
                     FROM knowledge_scheduled_tasks
-                    ORDER BY due_date ASC
+                    ORDER BY priority DESC, due_date ASC
                 """)
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
@@ -854,7 +970,67 @@ class KnowledgeScheduler:
             context=row[8],
             created_at=row[9],
             reminded_at=row[10],
+            priority=row[11] if len(row) > 11 else 0,
         )
+
+    @staticmethod
+    def _reminder_date_for(due_date: datetime) -> datetime:
+        days_until = (due_date - datetime.now()).days
+        if days_until <= 7:
+            reminder_days = 1
+        elif days_until <= 30:
+            reminder_days = 3
+        else:
+            reminder_days = 7
+        return due_date - timedelta(days=reminder_days)
+
+    def _insert_task(
+        self,
+        conn: sqlite3.Connection,
+        task_id: str,
+        task_type: str,
+        subtype: str,
+        due_date: datetime,
+        context: str = "",
+        is_periodic: bool = False,
+        period: Optional[str] = None,
+        priority: int = 0,
+    ):
+        reminder_date = self._reminder_date_for(due_date)
+        conn.execute("""
+            INSERT INTO knowledge_scheduled_tasks
+            (task_id, task_type, subtype, due_date, reminder_date,
+             is_periodic, period, status, context, priority, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        """, (
+            task_id, task_type, subtype,
+            due_date.isoformat(), reminder_date.isoformat(),
+            1 if is_periodic else 0, period,
+            context, priority, datetime.now().isoformat()
+        ))
+
+    @staticmethod
+    def _build_task_id(task_type: str, subtype: str, due_date: datetime, context: str = "") -> str:
+        base = f"{task_type}-{subtype}-{due_date.strftime('%Y%m%d')}"
+        suffix_seed = f"{base}-{context}-{datetime.now().isoformat()}"
+        suffix = hashlib.md5(suffix_seed.encode("utf-8")).hexdigest()[:8]
+        return f"{base}-{suffix}"
+
+    @staticmethod
+    def _next_periodic_due(due_date: datetime, period: Optional[str]) -> Optional[datetime]:
+        if period == "daily":
+            return due_date + timedelta(days=1)
+        if period == "weekly":
+            return due_date + timedelta(days=7)
+        if period == "biweekly":
+            return due_date + timedelta(days=14)
+        if period == "monthly":
+            return due_date + timedelta(days=30)
+        if period == "quarterly":
+            return due_date + timedelta(days=90)
+        if period == "yearly":
+            return due_date + timedelta(days=365)
+        return None
 
 
 # ============================================================
@@ -863,9 +1039,10 @@ class KnowledgeScheduler:
 
 def schedule_task(task_type: str, subtype: str,
                   due_date: datetime, context: str = "",
-                  is_periodic: bool = False, period: Optional[str] = None) -> str:
+                  is_periodic: bool = False, period: Optional[str] = None,
+                  priority: int = 0) -> str:
     scheduler = KnowledgeScheduler()
-    return scheduler.schedule(task_type, subtype, due_date, context, is_periodic, period)
+    return scheduler.schedule(task_type, subtype, due_date, context, is_periodic, period, priority)
 
 
 def check_reminders() -> List[ScheduledTask]:

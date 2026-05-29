@@ -23,6 +23,9 @@ from .sync_engine import SyncEngine
 from .registry import AgentRegistry, PathDiscover, AgentLifecycleManager
 from .triggers import TriggerDispatcher, WatchdogTrigger, PollingTrigger, HybridTrigger
 from .file_ingestor import FileIngestor
+from .capture_queue import CaptureQueue
+from .capture_worker import CaptureWorkerPool
+from .capture_service import CaptureService
 
 __all__ = [
     "AgentSource",
@@ -38,4 +41,7 @@ __all__ = [
     "PollingTrigger",
     "HybridTrigger",
     "FileIngestor",
+    "CaptureQueue",
+    "CaptureWorkerPool",
+    "CaptureService",
 ]

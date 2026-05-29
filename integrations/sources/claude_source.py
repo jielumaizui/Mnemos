@@ -161,8 +161,11 @@ class ClaudeSource(AgentSource):
             role = msg.get("type", "")
 
         raw_content = message_data.get("content", "")
-        tool_calls = message_data.get("tool_calls", msg.get("tool_calls", []))
-        tool_results = msg.get("toolUseResult") or msg.get("tool_results")
+        # 防御：tool_calls/tool_results 可能被序列化为字符串而非列表
+        tool_calls_raw = message_data.get("tool_calls") or msg.get("tool_calls") or []
+        tool_calls = tool_calls_raw if isinstance(tool_calls_raw, list) else []
+        tool_results_raw = msg.get("toolUseResult") or msg.get("tool_results") or []
+        tool_results = tool_results_raw if isinstance(tool_results_raw, list) else []
         reasoning = ""
 
         # 处理 content（可能是字符串或内容块数组）

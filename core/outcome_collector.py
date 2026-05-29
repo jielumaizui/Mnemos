@@ -118,6 +118,7 @@ class OutcomeCollector:
                 age_days = (datetime.now() - datetime.fromisoformat(created_at)).days
                 decay = max(0.1, 1.0 - age_days / (days * 2))
             except Exception:
+                logger.warning(f"Unexpected error in outcome_collector.py", exc_info=True)
                 decay = 1.0
 
             score += (value or self.SIGNAL_WEIGHTS.get(signal_type, 0.0)) * decay
@@ -170,6 +171,7 @@ class OutcomeCollector:
                 links = re.findall(r'\[\[([^\]|]+)', content)
                 page_links[page_id] = links
             except Exception:
+                logger.warning(f"Unexpected error in outcome_collector.py", exc_info=True)
                 continue
 
         # 记录引用信号

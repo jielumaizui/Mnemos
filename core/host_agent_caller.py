@@ -183,6 +183,7 @@ class HostAgentCaller:
                 if result.returncode == 0:
                     return agent
             except Exception:
+                logger.warning(f"Unexpected error in host_agent_caller.py", exc_info=True)
                 continue
 
         if os.getenv("HOST_AGENT_CALL_TEMPLATE"):

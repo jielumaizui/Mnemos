@@ -15,7 +15,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import unittest
-from core.kia.cross_agent_linker import CrossAgentLinker, LinkAction
+from core.kia.cross_agent_linker import (
+    CrossAgentDivergenceDetector,
+    CrossAgentLinker,
+    DivergencePushManager,
+    LinkAction,
+)
+
+
+class FakeVectorIndex:
+    def __init__(self, result_path):
+        self.result_path = result_path
+        self.calls = []
+
+    def hybrid_search(self, **kwargs):
+        self.calls.append(kwargs)
+        return [{"path": str(self.result_path), "score": 0.91}]
 
 
 class TestCrossAgentLinker(unittest.TestCase):
@@ -86,6 +101,74 @@ class TestCrossAgentLinker(unittest.TestCase):
         actions = self.linker.link_after_distill(self.claude_page)
         # 至少应该找到 hermes 的 Redis 页面
         self.assertGreaterEqual(len(actions), 1)
+
+    def test_vector_search_filters_other_workspaces(self):
+        """向量检索按 workspace 过滤，并按 0.75 阈值建立双向链接"""
+        vector_index = FakeVectorIndex(self.hermes_page)
+        linker = CrossAgentLinker(wiki_root=self.wiki_root, vector_index=vector_index)
+
+        actions = linker.link_after_distill(self.claude_page)
+
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(vector_index.calls[0]["filters"]["workspace"], ["hermes", "kimi", "codex", "gpt"])
+        self.assertGreaterEqual(actions[0].similarity, 0.75)
+
+    def test_extract_agent_from_frontmatter(self):
+        """路径无 workspace 时，可从 source_agent frontmatter 识别来源"""
+        page = self.wiki_root / "mixed" / "Redis-Kimi.md"
+        page.parent.mkdir()
+        page.write_text("---\nsource_agent: kimi\n---\n# Redis\n", encoding="utf-8")
+
+        self.assertEqual(self.linker._extract_agent_from_path(page), "kimi")
+
+    def test_handle_event_distill_complete(self):
+        """distill_complete 事件触发跨 Agent 关联"""
+        actions = self.linker.handle_event("distill_complete", {"page_path": str(self.claude_page)})
+
+        self.assertGreaterEqual(len(actions), 1)
+
+    def test_divergence_detector_reports_conflicting_decisions(self):
+        """不同 Agent 对同一主题给出方向对立结论时生成分歧报告"""
+        self.claude_page.write_text(
+            "---\n"
+            "source_agent: claude\n"
+            "topic: Redis 集群方案\n"
+            "decision: 建议用 Sentinel 模式，主从自动故障转移\n"
+            "distilled_at: 2026-05-20\n"
+            "confidence: 0.8\n"
+            "---\n"
+            "# Redis 集群方案\n",
+            encoding="utf-8",
+        )
+        self.hermes_page.write_text(
+            "---\n"
+            "source_agent: hermes\n"
+            "topic: Redis 集群方案\n"
+            "decision: 建议用 Cluster 模式，支持数据分片\n"
+            "distilled_at: 2026-05-23\n"
+            "confidence: 0.8\n"
+            "---\n"
+            "# Redis 集群方案\n",
+            encoding="utf-8",
+        )
+
+        report = CrossAgentDivergenceDetector(wiki_root=self.wiki_root).detect("Redis 集群方案")
+
+        self.assertIsNotNone(report)
+        self.assertEqual(report.severity, "high")
+        self.assertIn("不同 Agent", report.to_push_message())
+        self.assertIn("Sentinel", report.to_push_message())
+        self.assertIn("Cluster", report.to_push_message())
+
+    def test_divergence_push_cooldown(self):
+        """同一主题 24 小时内不重复推送"""
+        report = CrossAgentDivergenceDetector(wiki_root=self.wiki_root).detect("not-exists")
+        manager = DivergencePushManager()
+        fake_report = report or type("Report", (), {"topic": "Redis 集群方案"})()
+
+        self.assertTrue(manager.should_push(fake_report))
+        manager.mark_pushed(fake_report.topic)
+        self.assertFalse(manager.should_push(fake_report))
 
 
 if __name__ == "__main__":

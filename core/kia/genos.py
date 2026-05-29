@@ -23,13 +23,19 @@ import hashlib
 import re
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from core.config import get_config
+from core.pluggable import PluggableModule
 import logging
 
+
 logger = logging.getLogger(__name__)
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
 
 
 # ========== DNA 数据模型 ==========
@@ -46,6 +52,10 @@ class KnowledgeDNA:
     # 维度2：结构指纹（主题相似）
     semantic_signature: str = ""    # 领域+类型+复杂度+情感的组合签名
     domain_type_hash: str = ""      # 领域和类型的哈希
+    domain: str = ""                # 领域（结构化属性，避免调用方解析 signature）
+    knowledge_type: str = ""        # 知识类型
+    complexity: str = ""            # 复杂度
+    emotion: str = ""               # 情感倾向
 
     # 维度3：关键词指纹（标签相似）
     keyword_set: Set[str] = field(default_factory=set)      # 所有关键词集合
@@ -74,6 +84,10 @@ class KnowledgeDNA:
             "content_simhash": self.content_simhash,
             "semantic_signature": self.semantic_signature,
             "domain_type_hash": self.domain_type_hash,
+            "domain": self.domain,
+            "knowledge_type": self.knowledge_type,
+            "complexity": self.complexity,
+            "emotion": self.emotion,
             "keyword_set": sorted(self.keyword_set),
             "core_concepts": sorted(self.core_concepts),
             "tool_entities": sorted(self.tool_entities),
@@ -96,6 +110,10 @@ class KnowledgeDNA:
             content_simhash=data.get("content_simhash", ""),
             semantic_signature=data.get("semantic_signature", ""),
             domain_type_hash=data.get("domain_type_hash", ""),
+            domain=data.get("domain", ""),
+            knowledge_type=data.get("knowledge_type", ""),
+            complexity=data.get("complexity", ""),
+            emotion=data.get("emotion", ""),
             keyword_set=set(data.get("keyword_set", [])),
             core_concepts=set(data.get("core_concepts", [])),
             tool_entities=set(data.get("tool_entities", [])),
@@ -205,8 +223,8 @@ class SimHash:
 
 # ========== DNA 计算引擎 ==========
 
-class DNAEngine:
-    """知识 DNA 计算引擎"""
+class DNAEngine(PluggableModule):
+    """知识 DNA 计算引擎 — 实现 PluggableModule 热插拔接口"""
 
     # 相似度阈值
     DUPLICATE_THRESHOLD = 0.90     # 疑似重复
@@ -222,6 +240,8 @@ class DNAEngine:
         "structure": 0.05,         # 结构匹配（置信度/证据级别）
     }
 
+    EXCLUDED_DIRS = {".git", ".obsidian", ".kg", "99-Reports", "07-Shadow", "__pycache__"}
+
     def __init__(self, db_path: str = None, wiki_base: str = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
@@ -231,6 +251,36 @@ class DNAEngine:
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self._enabled = True
+
+    # ---- PluggableModule 接口 ----
+
+    def enable(self) -> None:
+        self._enabled = True
+
+    def disable(self) -> None:
+        self._enabled = False
+
+    def configure(self, cfg: Dict[str, Any]) -> None:
+        if "weights" in cfg:
+            self.WEIGHTS.update(cfg["weights"])
+        if "duplicate_threshold" in cfg:
+            self.DUPLICATE_THRESHOLD = cfg["duplicate_threshold"]
+
+    def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        if event_type in ("knowledge.ingested", "knowledge.updated"):
+            page_path = data.get("page_path")
+            if page_path:
+                try:
+                    self.compute_dna(Path(page_path))
+                except Exception:
+                    logging.getLogger(__name__).warning("DNA 计算失败", exc_info=True)
+        elif event_type == "knowledge.deleted":
+            page_path = data.get("page_path")
+            if page_path:
+                self.delete_dna(Path(page_path))
 
     def _init_db(self):
         """初始化数据库"""
@@ -241,6 +291,10 @@ class DNAEngine:
             content_simhash TEXT,
             semantic_signature TEXT,
             domain_type_hash TEXT,
+            domain TEXT,
+            knowledge_type TEXT,
+            complexity TEXT,
+            emotion TEXT,
             keyword_set TEXT,        -- JSON array
             core_concepts TEXT,      -- JSON array
             tool_entities TEXT,      -- JSON array
@@ -259,6 +313,17 @@ class DNAEngine:
         """
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_dna)")}
+            migrations = {
+                "domain": "ALTER TABLE knowledge_dna ADD COLUMN domain TEXT",
+                "knowledge_type": "ALTER TABLE knowledge_dna ADD COLUMN knowledge_type TEXT",
+                "complexity": "ALTER TABLE knowledge_dna ADD COLUMN complexity TEXT",
+                "emotion": "ALTER TABLE knowledge_dna ADD COLUMN emotion TEXT",
+            }
+            for column, ddl in migrations.items():
+                if column not in columns:
+                    conn.execute(ddl)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_dna_domain_type ON knowledge_dna(domain, knowledge_type)")
 
     def compute_dna(self, page_path: Path) -> Optional[KnowledgeDNA]:
         """
@@ -276,6 +341,7 @@ class DNAEngine:
         try:
             content = page_path.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at genos.py", exc_info=True)
             return None
 
         frontmatter = self._extract_frontmatter(content)
@@ -289,10 +355,14 @@ class DNAEngine:
         dna.content_simhash = SimHash.compute(body)
 
         # 维度2：结构指纹
-        domain = frontmatter.get("领域", "其他")
-        knowledge_type = frontmatter.get("类型", "未知")
-        complexity = frontmatter.get("复杂度", "入门")
-        emotion = frontmatter.get("情感倾向", "中性")
+        domain = self._fm_get(frontmatter, "domain", "领域", default="其他")
+        knowledge_type = self._fm_get(frontmatter, "knowledge_type", "type", "类型", default="未知")
+        complexity = self._fm_get(frontmatter, "complexity", "复杂度", default="入门")
+        emotion = self._fm_get(frontmatter, "emotion", "sentiment", "情感倾向", default="中性")
+        dna.domain = domain
+        dna.knowledge_type = knowledge_type
+        dna.complexity = complexity
+        dna.emotion = emotion
         dna.semantic_signature = f"{domain}:{knowledge_type}:{complexity}:{emotion}"
         dna.domain_type_hash = hashlib.md5(
             f"{domain}:{knowledge_type}".encode("utf-8")
@@ -315,12 +385,19 @@ class DNAEngine:
         dna.title_pattern = self._classify_title_pattern(title)
 
         # 维度5：质量指纹
-        dna.confidence = float(frontmatter.get("置信度", 0.5))
-        dna.evidence_level = frontmatter.get("证据级别", "单源")
-        dna.temporal = frontmatter.get("时效性", "上下文相关")
+        dna.confidence = float(self._fm_get(frontmatter, "confidence", "置信度", default=0.5))
+        dna.evidence_level = self._fm_get(frontmatter, "evidence_level", "证据级别", default="single-source")
+        dna.temporal = self._fm_get(frontmatter, "temporal_scope", "时效性", default="contextual")
 
         dna.created_at = datetime.now().isoformat()[:19]
         dna.updated_at = dna.created_at
+
+        # 发布 DNA 计算完成事件
+        self._emit_event("dna.computed", {
+            "page_path": str(page_path),
+            "domain": dna.domain,
+            "knowledge_type": dna.knowledge_type,
+        })
 
         return dna
 
@@ -331,16 +408,21 @@ class DNAEngine:
                 conn.execute(
                     """INSERT OR REPLACE INTO knowledge_dna
                        (page_path, content_md5, content_simhash, semantic_signature,
-                        domain_type_hash, keyword_set, core_concepts, tool_entities,
+                        domain_type_hash, domain, knowledge_type, complexity, emotion,
+                        keyword_set, core_concepts, tool_entities,
                         scenario_tags, title_keywords, title_pattern, confidence,
                         evidence_level, temporal, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         dna.page_path,
                         dna.content_md5,
                         dna.content_simhash,
                         dna.semantic_signature,
                         dna.domain_type_hash,
+                        dna.domain,
+                        dna.knowledge_type,
+                        dna.complexity,
+                        dna.emotion,
                         json.dumps(sorted(dna.keyword_set), ensure_ascii=False),
                         json.dumps(sorted(dna.core_concepts), ensure_ascii=False),
                         json.dumps(sorted(dna.tool_entities), ensure_ascii=False),
@@ -378,6 +460,10 @@ class DNAEngine:
                 content_simhash=row["content_simhash"],
                 semantic_signature=row["semantic_signature"],
                 domain_type_hash=row["domain_type_hash"],
+                domain=row["domain"] if "domain" in row.keys() else "",
+                knowledge_type=row["knowledge_type"] if "knowledge_type" in row.keys() else "",
+                complexity=row["complexity"] if "complexity" in row.keys() else "",
+                emotion=row["emotion"] if "emotion" in row.keys() else "",
                 keyword_set=set(json.loads(row["keyword_set"] or "[]")),
                 core_concepts=set(json.loads(row["core_concepts"] or "[]")),
                 tool_entities=set(json.loads(row["tool_entities"] or "[]")),
@@ -391,6 +477,7 @@ class DNAEngine:
                 updated_at=row["updated_at"],
             )
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at genos.py", exc_info=True)
             return None
 
     def compare(self, dna1: KnowledgeDNA, dna2: KnowledgeDNA) -> SimilarityResult:
@@ -484,7 +571,13 @@ class DNAEngine:
         results = []
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM knowledge_dna").fetchall()
+            rows = conn.execute(
+                """SELECT * FROM knowledge_dna
+                   WHERE domain_type_hash = ?
+                      OR semantic_signature = ?
+                      OR content_md5 = ?""",
+                (dna.domain_type_hash, dna.semantic_signature, dna.content_md5)
+            ).fetchall()
 
         for row in rows:
             other_path = row["page_path"]
@@ -536,13 +629,12 @@ class DNAEngine:
         Returns:
             {状态: 数量} 统计
         """
-        inbox = self.wiki_base / "00-Inbox"
-        if not inbox.exists():
+        if not self.wiki_base.exists():
             return {"scanned": 0, "computed": 0, "failed": 0}
 
         stats = {"scanned": 0, "computed": 0, "failed": 0}
 
-        for page in inbox.glob("*.md"):
+        for page in self._list_pages():
             stats["scanned"] += 1
             dna = self.compute_dna(page)
             if dna:
@@ -554,6 +646,15 @@ class DNAEngine:
                 stats["failed"] += 1
 
         return stats
+
+    def _list_pages(self) -> List[Path]:
+        pages = []
+        for page in self.wiki_base.rglob("*.md"):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
+                continue
+            pages.append(page)
+        return pages
 
     def get_stats(self) -> Dict:
         """获取 DNA 库统计"""
@@ -581,15 +682,23 @@ class DNAEngine:
     @staticmethod
     def _extract_frontmatter(content: str) -> Dict:
         """提取 frontmatter"""
+        if yaml is None:
+            return {}
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 try:
-                    import yaml
                     return yaml.safe_load(parts[1]) or {}
                 except Exception as e:
                     logger.warning(f"忽略异常: {e}")
         return {}
+
+    @staticmethod
+    def _fm_get(fm: Dict, *keys, default=None):
+        for key in keys:
+            if key in fm:
+                return fm.get(key)
+        return default
 
     @staticmethod
     def _extract_body(content: str) -> str:
@@ -663,6 +772,10 @@ class DNAEngine:
             content_simhash=row["content_simhash"],
             semantic_signature=row["semantic_signature"],
             domain_type_hash=row["domain_type_hash"],
+            domain=row["domain"] if "domain" in row.keys() else "",
+            knowledge_type=row["knowledge_type"] if "knowledge_type" in row.keys() else "",
+            complexity=row["complexity"] if "complexity" in row.keys() else "",
+            emotion=row["emotion"] if "emotion" in row.keys() else "",
             keyword_set=set(json.loads(row["keyword_set"] or "[]")),
             core_concepts=set(json.loads(row["core_concepts"] or "[]")),
             tool_entities=set(json.loads(row["tool_entities"] or "[]")),

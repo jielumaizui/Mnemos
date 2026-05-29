@@ -19,6 +19,8 @@ Job Scheduler - 多层安全调度系统 (Hermes H16)
 """
 
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import json
 import sqlite3
@@ -338,11 +340,11 @@ class JobScheduler:
             ).fetchone()
 
             if not row:
-                print(f"[Scheduler] 依赖 {dep_name} 未执行过")
+                logger.info(f"[Scheduler] 依赖 {dep_name} 未执行过")
                 return False
 
             if row["status"] != JobStatus.SUCCESS.value:
-                print(f"[Scheduler] 依赖 {dep_name} 状态为 {row['status']}，不满足")
+                logger.info(f"[Scheduler] 依赖 {dep_name} 状态为 {row['status']}，不满足")
                 return False
 
         return True
@@ -455,7 +457,7 @@ class JobScheduler:
                 if attempt < job.max_retries:
                     # 指数退避等待
                     backoff = job.retry_backoff_base * (2 ** (attempt - 1))
-                    print(f"[Scheduler] {job_name} 第 {attempt} 次失败，{backoff}秒后重试...")
+                    logger.warning(f"[Scheduler] {job_name} 第 {attempt} 次失败，{backoff}秒后重试...")
                     time.sleep(backoff)
 
             return run
@@ -563,7 +565,7 @@ class JobScheduler:
             result = self.run_job(name, JobTrigger.DEPENDENCY)
             results.append(result)
             if result.status != JobStatus.SUCCESS:
-                print(f"[Scheduler] 任务链中断: {name} 失败")
+                logger.warning(f"[Scheduler] 任务链中断: {name} 失败")
                 break
         return results
 
@@ -655,33 +657,33 @@ def main():
 
     if args.run:
         result = js.run_job(args.run)
-        print(f"[{result.status.value}] {result.job_name} 耗时 {result.duration_ms}ms")
+        logger.info(f"[{result.status.value}] {result.job_name} 耗时 {result.duration_ms}ms")
         if result.error_message:
-            print(f"错误: {result.error_message}")
+            logger.warning(f"错误: {result.error_message}")
         return
 
     if args.chain:
         results = js.run_job_chain(args.chain)
         for r in results:
-            print(f"[{r.status.value}] {r.job_name}")
+            logger.info(f"[{r.status.value}] {r.job_name}")
         return
 
     if args.due:
         results = js.run_due_jobs()
-        print(f"执行 {len(results)} 个到期任务")
+        logger.info(f"执行 {len(results)} 个到期任务")
         for r in results:
-            print(f"  [{r.status.value}] {r.job_name}")
+            logger.info(f"  [{r.status.value}] {r.job_name}")
         return
 
     if args.stats:
-        print(json.dumps(js.get_stats(args.days), indent=2, ensure_ascii=False))
+        logger.info(json.dumps(js.get_stats(args.days), indent=2, ensure_ascii=False))
         return
 
     if args.health:
         health = js.health_check()
-        print(f"健康: {'✅' if health['healthy'] else '❌'}")
+        logger.info(f"健康: {'✅' if health['healthy'] else '❌'}")
         for issue in health["issues"]:
-            print(f"  ⚠️ {issue}")
+            logger.warning(f"  ⚠️ {issue}")
         return
 
     if args.history:

@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.config import get_config
-
 logger = logging.getLogger(__name__)
+
 
 
 def _get_db_path() -> Path:
@@ -64,6 +64,7 @@ class TemporalScope:
             if self.scope_type == "contextual":
                 return age_days > self.expires_after_days if self.expires_after_days > 0 else age_days > 90
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return False
 
@@ -117,6 +118,7 @@ class TemporalEvolutionTracker:
         try:
             content = wiki_page.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at evolution_tracker.py", exc_info=True)
             return None
 
         scope = self._extract_temporal_scope(content)
@@ -238,6 +240,7 @@ class TemporalEvolutionTracker:
             mtime = page.stat().st_mtime
             return datetime.fromtimestamp(mtime)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at evolution_tracker.py", exc_info=True)
             return None
 
     def _save_alert(self, alert: EvolutionAlert):
@@ -252,8 +255,8 @@ class TemporalEvolutionTracker:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
     def get_unresolved_alerts(self) -> List[EvolutionAlert]:
         try:
             with sqlite3.connect(str(self._db_path), timeout=5) as conn:
@@ -270,6 +273,7 @@ class TemporalEvolutionTracker:
                     for row in cursor
                 ]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at evolution_tracker.py", exc_info=True)
             return []
 
     def resolve_alert(self, entity: str, alert_type: str):
@@ -282,6 +286,7 @@ class TemporalEvolutionTracker:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at evolution_tracker.py", exc_info=True)
             pass
 
 
@@ -365,6 +370,7 @@ class DarkKnowledgeIntegration:
             entities.update(re.findall(r'[一-龥]{2,4}', content))
             return entities
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at evolution_tracker.py", exc_info=True)
             return set()
 
     @staticmethod

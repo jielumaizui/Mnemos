@@ -73,11 +73,11 @@ class PredictivePushEngine:
 
     # 匹配权重
     MATCH_WEIGHTS = {
-        "tool_match": 0.35,       # 工具实体匹配权重最高
-        "scenario_match": 0.25,   # 场景标签匹配
-        "keyword_match": 0.20,    # 核心概念匹配
-        "title_match": 0.15,      # 标题关键词匹配
-        "form_bonus": 0.05,       # 形态 bonus（问题-解决类在提问时加分）
+        "tool_entities": 0.30,    # 工具实体匹配权重最高
+        "scenario_tags": 0.25,    # 场景标签匹配
+        "core_concepts": 0.25,    # 核心概念匹配
+        "title_keywords": 0.15,   # 标题关键词匹配
+        "form_bonus": 0.10,       # 形态 bonus（问题-解决类在提问时加分）
     }
 
     # 推送阈值
@@ -110,7 +110,6 @@ class PredictivePushEngine:
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
-        self.inbox = self.wiki_base / "00-Inbox"
         self.db_path = Path(db_path) if db_path else (
             self.wiki_base / ".kg" / "push.db"
         )
@@ -202,7 +201,7 @@ class PredictivePushEngine:
             tool_overlap = page_tools & mentioned_tools
             if tool_overlap:
                 tool_score = len(tool_overlap) / max(len(page_tools), 1)
-                score += tool_score * self.MATCH_WEIGHTS["tool_match"]
+                score += tool_score * self.MATCH_WEIGHTS["tool_entities"]
                 reasons.append(f"工具匹配: {', '.join(tool_overlap)}")
 
             # 2. 场景标签匹配（支持模糊子串匹配）
@@ -211,7 +210,7 @@ class PredictivePushEngine:
             scenario_overlap = self._fuzzy_overlap(page_scenarios, msg_keywords)
             if scenario_overlap:
                 scenario_score = len(scenario_overlap) / max(len(page_scenarios), 1)
-                score += scenario_score * self.MATCH_WEIGHTS["scenario_match"]
+                score += scenario_score * self.MATCH_WEIGHTS["scenario_tags"]
                 reasons.append(f"场景匹配: {', '.join(scenario_overlap)}")
 
             # 3. 核心概念匹配（支持模糊子串匹配）
@@ -219,7 +218,7 @@ class PredictivePushEngine:
             concept_overlap = self._fuzzy_overlap(page_concepts, msg_keywords)
             if concept_overlap:
                 concept_score = len(concept_overlap) / max(len(page_concepts), 1)
-                score += concept_score * self.MATCH_WEIGHTS["keyword_match"]
+                score += concept_score * self.MATCH_WEIGHTS["core_concepts"]
                 reasons.append(f"概念匹配: {', '.join(concept_overlap)}")
 
             # 4. 标题关键词匹配（支持模糊子串匹配）
@@ -227,7 +226,7 @@ class PredictivePushEngine:
             title_overlap = self._fuzzy_overlap(title_keywords, msg_keywords)
             if title_overlap:
                 title_score = len(title_overlap) / max(len(title_keywords), 1)
-                score += title_score * self.MATCH_WEIGHTS["title_match"]
+                score += title_score * self.MATCH_WEIGHTS["title_keywords"]
                 reasons.append(f"标题匹配: {', '.join(title_overlap)}")
 
             # 5. 形态 bonus（提问时优先问题-解决类）
@@ -402,10 +401,12 @@ class PredictivePushEngine:
             return self._page_index
 
         pages = []
-        if not self.inbox.exists():
+        if not self.wiki_base.exists():
             return pages
 
-        for page in self.inbox.glob("*.md"):
+        for page in self.wiki_base.rglob("*.md"):
+            if any(part.startswith(".") for part in page.relative_to(self.wiki_base).parts):
+                continue
             try:
                 content = page.read_text(encoding="utf-8")
                 fm = self._extract_frontmatter(content)
@@ -428,7 +429,8 @@ class PredictivePushEngine:
                     "title_keywords": self._extract_keywords(self._extract_title(content) or ""),
                     "core_excerpt": core_excerpt,
                 })
-            except Exception:
+            except Exception as e:
+                logger.warning(f"索引页面失败 {page}: {e}")
                 continue
 
         self._page_index = pages
@@ -503,17 +505,15 @@ class PredictivePushEngine:
 
     def _get_last_push_time(self, session_id: str = "") -> Optional[datetime]:
         """获取上次推送时间"""
+        if not session_id:
+            return None
+
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            if session_id:
-                row = conn.execute(
-                    "SELECT timestamp FROM push_history WHERE session_id=? "
-                    "ORDER BY timestamp DESC LIMIT 1",
-                    (session_id,)
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT timestamp FROM push_history ORDER BY timestamp DESC LIMIT 1"
-                ).fetchone()
+            row = conn.execute(
+                "SELECT timestamp FROM push_history WHERE session_id=? "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (session_id,)
+            ).fetchone()
 
         if row:
             return datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")

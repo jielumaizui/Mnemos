@@ -4,6 +4,7 @@
 # 核心依赖
 requests>=2.28.0
 pyyaml>=6.0
+watchdog>=3.0.0
 
 # 可选：Claude API（用于蒸馏 Agent）
 # anthropic>=0.18.0

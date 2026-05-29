@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import logging
 """
 Document Processor - 文档处理器
 
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 # 使用当前项目的 MemosClient
+logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from integrations.styx import MemosClient
 from core.config import get_config
@@ -110,6 +112,7 @@ class DocumentProcessor:
                         token=config.memos_token,
                     )
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
                 pass
 
         # 检查依赖
@@ -179,8 +182,8 @@ class DocumentProcessor:
         # 打印依赖状态
         missing = [k for k, v in self.deps.items() if not v]
         if missing:
-            print(f"[DocumentProcessor] ⚠️ 缺失依赖: {', '.join(missing)}")
-            print(f"[DocumentProcessor] 安装: pip install {' '.join(missing)}")
+            logger.warning(f"[DocumentProcessor] ⚠️ 缺失依赖: {', '.join(missing)}")
+            logger.info(f"[DocumentProcessor] 安装: pip install {' '.join(missing)}")
 
     def _call_claude_vision(self, file_content: str, doc_type: DocumentType, prompt: str) -> Optional[str]:
         """
@@ -206,18 +209,18 @@ class DocumentProcessor:
             output_path = Path.home() / ".mnemos" / "distill_output" / f"{task.session_id}.md"
             ok = delegate.delegate(task, output_path)
             if not ok:
-                print(f"[DocumentProcessor] ⚠️ 无可用的 Agent 执行验证，回退到本地规则")
+                logger.warning(f"[DocumentProcessor] ⚠️ 无可用的 Agent 执行验证，回退到本地规则")
                 return None
 
             # 等待结果（短时间轮询）
             result = delegate.wait_for_result(output_path, timeout=60)
             if result:
                 return result
-            print(f"[DocumentProcessor] ⚠️ Agent 验证超时，回退到本地规则")
+            logger.warning(f"[DocumentProcessor] ⚠️ Agent 验证超时，回退到本地规则")
             return None
 
         except Exception as e:
-            print(f"[DocumentProcessor] ⚠️ Agent 委托验证失败: {e}")
+            logger.warning(f"[DocumentProcessor] ⚠️ Agent 委托验证失败: {e}")
             return None
 
     def validate_extraction(self, doc: ExtractedDocument, file_path: Path) -> Dict:
@@ -235,7 +238,7 @@ class DocumentProcessor:
         try:
             raw_content = self._get_raw_content_for_validation(file_path, doc.doc_type)
         except Exception as e:
-            print(f"[DocumentProcessor] ⚠️ 无法读取原始内容进行验证: {e}")
+            logger.warning(f"[DocumentProcessor] ⚠️ 无法读取原始内容进行验证: {e}")
             return {
                 "is_valid": True,
                 "confidence": 0.7,
@@ -303,7 +306,7 @@ class DocumentProcessor:
                 "suggested_action": result.get("suggested_action", "review")
             }
         except Exception as e:
-            print(f"[DocumentProcessor] ⚠️ 验证结果解析失败: {e}")
+            logger.warning(f"[DocumentProcessor] ⚠️ 验证结果解析失败: {e}")
             return {
                 "is_valid": False,
                 "confidence": 0.0,
@@ -326,10 +329,12 @@ class DocumentProcessor:
                             text = page.extract_text()
                             if text:
                                 text_parts.append(f"--- Page {i+1} ---\n{text}")
-                        except:
+                        except Exception:
+                            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                             pass
                     return "\n".join(text_parts) if text_parts else ""
-            except:
+            except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
                 return ""
         elif doc_type == DocumentType.WORD:
             try:
@@ -340,7 +345,8 @@ class DocumentProcessor:
                     if para.text.strip():
                         texts.append(para.text)
                 return "\n".join(texts)
-            except:
+            except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
                 return ""
         elif doc_type == DocumentType.HTML:
             content = file_path.read_text(encoding='utf-8', errors='ignore')
@@ -359,7 +365,7 @@ class DocumentProcessor:
         2. Claude Vision 验证提取准确性
         3. 根据验证结果决定：通过/重处理/标记人工审核
         """
-        print(f"[DocumentProcessor] 📄 开始处理（带验证）: {file_path.name}")
+        logger.info(f"[DocumentProcessor] 📄 开始处理（带验证）: {file_path.name}")
 
         # Step 1: 本地提取
         doc = self.process_document(file_path)
@@ -367,7 +373,7 @@ class DocumentProcessor:
             return None
 
         # Step 2: 验证提取结果
-        print(f"[DocumentProcessor] 🔎 使用Claude Vision验证提取结果...")
+        logger.info(f"[DocumentProcessor] 🔎 使用Claude Vision验证提取结果...")
         validation = self.validate_extraction(doc, file_path)
 
         confidence = validation.get("confidence", 0.0)
@@ -377,8 +383,8 @@ class DocumentProcessor:
 
         if suggested_action == "reject":
             # 严重不可信，拒绝入库
-            print(f"[DocumentProcessor] ❌ 验证拒绝 (置信度: {confidence:.2f})")
-            print(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '内容严重不可信'}")
+            logger.info(f"[DocumentProcessor] ❌ 验证拒绝 (置信度: {confidence:.2f})")
+            logger.info(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '内容严重不可信'}")
             doc.validation_status = "rejected"
             doc.needs_review = False
             doc.confidence = confidence
@@ -386,15 +392,15 @@ class DocumentProcessor:
 
         elif is_valid and confidence >= self.VALIDATION_CONFIDENCE_THRESHOLD:
             # 验证通过
-            print(f"[DocumentProcessor] ✅ 验证通过 (置信度: {confidence:.2f})")
+            logger.info(f"[DocumentProcessor] ✅ 验证通过 (置信度: {confidence:.2f})")
             doc.validation_status = "validated"
             doc.confidence = confidence
             doc.needs_review = False
 
         elif suggested_action == "reprocess" or confidence < self.REVIEW_CONFIDENCE_THRESHOLD:
             # 需要重新处理（使用云端）
-            print(f"[DocumentProcessor] ⚠️ 验证失败/置信度低，需要人工核对...")
-            print(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '未知'}")
+            logger.warning(f"[DocumentProcessor] ⚠️ 验证失败/置信度低，需要人工核对...")
+            logger.info(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '未知'}")
 
             # 对于文档，我们无法像图片那样云端重处理
             # 标记为需要人工审核
@@ -405,7 +411,7 @@ class DocumentProcessor:
 
         else:
             # 标记人工核对
-            print(f"[DocumentProcessor] ⚠️ 标记待人工核对 (置信度: {confidence:.2f})")
+            logger.warning(f"[DocumentProcessor] ⚠️ 标记待人工核对 (置信度: {confidence:.2f})")
             doc.validation_status = "review"
             doc.needs_review = True
             doc.confidence = confidence
@@ -439,16 +445,16 @@ class DocumentProcessor:
         自动检测类型并提取内容
         """
         if not file_path.exists():
-            print(f"[DocumentProcessor] ❌ 文件不存在: {file_path}")
+            logger.info(f"[DocumentProcessor] ❌ 文件不存在: {file_path}")
             return None
 
         doc_type = self.detect_type(file_path)
 
         if doc_type == DocumentType.UNKNOWN:
-            print(f"[DocumentProcessor] ❌ 不支持的文件类型: {file_path.suffix}")
+            logger.warning(f"[DocumentProcessor] ❌ 不支持的文件类型: {file_path.suffix}")
             return None
 
-        print(f"[DocumentProcessor] 📄 处理 {doc_type.value}: {file_path.name}")
+        logger.info(f"[DocumentProcessor] 📄 处理 {doc_type.value}: {file_path.name}")
 
         # 根据类型处理
         processors = {
@@ -466,7 +472,7 @@ class DocumentProcessor:
         try:
             return processor(file_path)
         except Exception as e:
-            print(f"[DocumentProcessor] ❌ 处理失败: {e}")
+            logger.warning(f"[DocumentProcessor] ❌ 处理失败: {e}")
             return None
 
     def _process_excel(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -546,7 +552,7 @@ class DocumentProcessor:
 
     def _process_excel_fallback(self, file_path: Path) -> Optional[ExtractedDocument]:
         """Excel 处理回退方案（使用系统命令）"""
-        print(f"[DocumentProcessor] ⚠️ 使用回退方案处理 Excel...")
+        logger.warning(f"[DocumentProcessor] ⚠️ 使用回退方案处理 Excel...")
 
         import tempfile
         tmp_dir = Path(tempfile.gettempdir())
@@ -609,7 +615,7 @@ class DocumentProcessor:
                     )
 
         except Exception as e:
-            print(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
+            logger.warning(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
 
         return None
 
@@ -620,8 +626,8 @@ class DocumentProcessor:
         提取每页的标题和内容
         """
         if not self.deps['pptx']:
-            print(f"[DocumentProcessor] ❌ 缺少 python-pptx，无法处理 PPT")
-            print(f"[DocumentProcessor] 安装: pip install python-pptx")
+            logger.info(f"[DocumentProcessor] ❌ 缺少 python-pptx，无法处理 PPT")
+            logger.info(f"[DocumentProcessor] 安装: pip install python-pptx")
             return None
 
         from pptx import Presentation
@@ -726,7 +732,7 @@ class DocumentProcessor:
                         content_lines.append("")
 
         except Exception as e:
-            print(f"[DocumentProcessor] ❌ PDF 处理失败: {e}")
+            logger.warning(f"[DocumentProcessor] ❌ PDF 处理失败: {e}")
             return self._process_pdf_fallback(file_path)
 
         summary = f"PDF文件：{metadata['pages']}页，成功提取{metadata['extracted_pages']}页"
@@ -747,11 +753,11 @@ class DocumentProcessor:
 
     def _process_pdf_fallback(self, file_path: Path) -> Optional[ExtractedDocument]:
         """PDF 处理回退方案（使用 pdftotext）"""
-        print(f"[DocumentProcessor] ⚠️ 使用回退方案处理 PDF...")
+        logger.warning(f"[DocumentProcessor] ⚠️ 使用回退方案处理 PDF...")
 
         # 检查 pdftotext 是否可用
         if not shutil.which("pdftotext"):
-            print(f"[DocumentProcessor] ⚠️ pdftotext 未安装，跳过 PDF 回退处理")
+            logger.warning(f"[DocumentProcessor] ⚠️ pdftotext 未安装，跳过 PDF 回退处理")
             return None
 
         try:
@@ -784,7 +790,7 @@ class DocumentProcessor:
                 )
 
         except Exception as e:
-            print(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
+            logger.warning(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
 
         return None
 
@@ -795,8 +801,8 @@ class DocumentProcessor:
         提取段落和表格
         """
         if not self.deps['docx']:
-            print(f"[DocumentProcessor] ❌ 缺少 python-docx，无法处理 Word")
-            print(f"[DocumentProcessor] 安装: pip install python-docx")
+            logger.info(f"[DocumentProcessor] ❌ 缺少 python-docx，无法处理 Word")
+            logger.info(f"[DocumentProcessor] 安装: pip install python-docx")
             return None
 
         from docx import Document
@@ -819,7 +825,7 @@ class DocumentProcessor:
                     try:
                         level_num = int(level)
                         content_lines.append(f"{'#' * level_num} {text}")
-                    except:
+                    except ValueError:
                         content_lines.append(f"## {text}")
                 else:
                     content_lines.append(text)
@@ -978,10 +984,10 @@ class DocumentProcessor:
         try:
             result = self.client.save(content=full_content, tags=tags)
             memos_uid = result.uid if hasattr(result, 'uid') else str(result)
-            print(f"[DocumentProcessor] ✅ 已保存: {memos_uid[:16]}...")
+            logger.info(f"[DocumentProcessor] ✅ 已保存: {memos_uid[:16]}...")
             return memos_uid
         except Exception as e:
-            print(f"[DocumentProcessor] ❌ 保存失败: {e}")
+            logger.warning(f"[DocumentProcessor] ❌ 保存失败: {e}")
             return None
 
     def save_to_memos_with_review(self, file_path: Path, doc: ExtractedDocument) -> Optional[str]:
@@ -1034,7 +1040,7 @@ class DocumentProcessor:
             dest = rejected_dir / f"{base_name}_orig{file_path.suffix}"
             shutil.copy2(file_path, dest)
 
-        print(f"[DocumentProcessor] 🚫 已拒绝并隔离: {meta_path}")
+        logger.info(f"[DocumentProcessor] 🚫 已拒绝并隔离: {meta_path}")
         return meta_path
 
 
@@ -1051,10 +1057,10 @@ def main():
     processor = DocumentProcessor()
 
     if args.check_deps:
-        print("📦 依赖状态:")
+        logger.info("📦 依赖状态:")
         for dep, available in processor.deps.items():
             status = "✅" if available else "❌"
-            print(f"  {status} {dep}")
+            logger.info(f"  {status} {dep}")
         return
 
     if not args.file:
@@ -1065,22 +1071,22 @@ def main():
     doc = processor.process_document(file_path)
 
     if doc:
-        print(f"\n{'='*50}")
-        print(f"处理结果:")
-        print(f"  类型: {doc.doc_type.value}")
-        print(f"  标题: {doc.title}")
-        print(f"  摘要: {doc.summary}")
-        print(f"{'='*50}")
-        print(f"\n内容预览（前500字符）:")
-        print(doc.content[:500])
-        print(f"\n... ({len(doc.content)} 字符)")
+        logger.info(f"\n{'='*50}")
+        logger.info(f"处理结果:")
+        logger.info(f"  类型: {doc.doc_type.value}")
+        logger.info(f"  标题: {doc.title}")
+        logger.info(f"  摘要: {doc.summary}")
+        logger.info(f"{'='*50}")
+        logger.info(f"\n内容预览（前500字符）:")
+        logger.info(doc.content[:500])
+        logger.info(f"\n... ({len(doc.content)} 字符)")
 
         if args.save:
             memos_uid = processor.save_to_memos(doc)
             if memos_uid:
-                print(f"\n✅ 已保存到Memos: {memos_uid}")
+                logger.info(f"\n✅ 已保存到Memos: {memos_uid}")
     else:
-        print("❌ 处理失败")
+        logger.warning("❌ 处理失败")
 
 
 if __name__ == "__main__":

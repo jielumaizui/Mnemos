@@ -28,51 +28,121 @@ def _conn(db_name: str = "mnemos.db") -> sqlite3.Connection:
 
 
 # ==================== 知识免疫 (E4) ====================
+# 对齐蓝图：07-问题处理流水线设计.md
+
+def _ensure_column(conn, table: str, col: str, dtype: str, default=None):
+    """幂等添加列（SQLite ALTER TABLE ADD COLUMN 兼容）"""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if col not in existing:
+        ddl = f"ALTER TABLE {table} ADD COLUMN {col} {dtype}"
+        if default is not None:
+            ddl += f" DEFAULT {default}"
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as e:
+            logger.debug(f"Column {col} on {table}: {e}")
+
 
 def init_knowledge_immune_tables():
-    """创建知识免疫相关表：auto_fix_log, issue_ignore_rules, knowledge_issues"""
+    """创建/迁移知识免疫三表：knowledge_issues, auto_fix_log, issue_ignore_rules
+
+    对齐蓝图 §7.1 / §4.3 / §6.3，保留旧列向后兼容。
+    """
     with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS auto_fix_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                issue_id INTEGER,
-                fix_type TEXT NOT NULL,
-                before_state TEXT,
-                after_state TEXT,
-                success BOOLEAN DEFAULT 0,
-                created_at TEXT NOT NULL,
-                error TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS issue_ignore_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pattern TEXT NOT NULL,
-                reason TEXT,
-                expires_at TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
+        # ---- knowledge_issues ----
         conn.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_issues (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                page_id TEXT NOT NULL,
+                issue_id TEXT,
+                source_module TEXT,
                 issue_type TEXT NOT NULL,
                 severity TEXT NOT NULL,
+                status TEXT DEFAULT 'detected',
+                page_path TEXT,
+                related_pages TEXT,
                 description TEXT,
-                status TEXT DEFAULT 'open',
-                created_at TEXT NOT NULL,
-                resolved_at TEXT
+                suggestion TEXT,
+                detected_at TIMESTAMP,
+                resolved_at TIMESTAMP,
+                resolved_by TEXT,
+                resolution_action TEXT,
+                resolution_notes TEXT,
+                ignore_rule_id TEXT,
+                page_id TEXT,
+                created_at TEXT,
+                UNIQUE(source_module, issue_type, page_path, related_pages)
             )
         """)
+        _ensure_column(conn, "knowledge_issues", "issue_id", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "source_module", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "status", "TEXT", "'detected'")
+        _ensure_column(conn, "knowledge_issues", "page_path", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "related_pages", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "suggestion", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "detected_at", "TIMESTAMP")
+        _ensure_column(conn, "knowledge_issues", "resolved_by", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "resolution_action", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "resolution_notes", "TEXT")
+        _ensure_column(conn, "knowledge_issues", "ignore_rule_id", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_status ON knowledge_issues(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_severity ON knowledge_issues(severity)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_page ON knowledge_issues(page_path)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_issues_detected ON knowledge_issues(detected_at)")
+
+        # ---- auto_fix_log ----
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS auto_fix_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id TEXT,
+                issue_type TEXT,
+                page_path TEXT,
+                action TEXT,
+                success BOOLEAN,
+                backup_id TEXT,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fix_type TEXT,
+                before_state TEXT,
+                after_state TEXT,
+                error TEXT
+            )
+        """)
+        _ensure_column(conn, "auto_fix_log", "issue_id", "TEXT")
+        _ensure_column(conn, "auto_fix_log", "issue_type", "TEXT")
+        _ensure_column(conn, "auto_fix_log", "page_path", "TEXT")
+        _ensure_column(conn, "auto_fix_log", "action", "TEXT")
+        _ensure_column(conn, "auto_fix_log", "backup_id", "TEXT")
+        _ensure_column(conn, "auto_fix_log", "error_message", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fix_log_issue ON auto_fix_log(issue_id)")
+
+        # ---- issue_ignore_rules ----
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS issue_ignore_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id TEXT,
+                issue_type TEXT,
+                page_pattern TEXT,
+                reason TEXT,
+                expires_at TIMESTAMP,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                pattern TEXT
+            )
+        """)
+        _ensure_column(conn, "issue_ignore_rules", "rule_id", "TEXT")
+        _ensure_column(conn, "issue_ignore_rules", "issue_type", "TEXT")
+        _ensure_column(conn, "issue_ignore_rules", "page_pattern", "TEXT")
+        _ensure_column(conn, "issue_ignore_rules", "created_by", "TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ignore_type ON issue_ignore_rules(issue_type)")
+
         conn.commit()
-        logger.debug("Knowledge immune tables initialized")
+        logger.debug("Knowledge immune tables initialized & migrated")
 
 
 # ==================== 知识图谱 ====================
 
 def init_knowledge_graph_tables():
-    """创建知识图谱相关表：co_occurrence_relations, co_occurs, relation_id_map"""
+    """创建知识图谱相关表：co_occurrence_relations, co_occurs"""
     with _conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS co_occurrence_relations (
@@ -95,100 +165,28 @@ def init_knowledge_graph_tables():
                 created_at TEXT NOT NULL
             )
         """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS relation_id_map (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                internal_id TEXT UNIQUE NOT NULL,
-                external_id TEXT,
-                relation_type TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
         conn.commit()
         logger.debug("Knowledge graph tables initialized")
 
 
 # ==================== 影子页面 (E3) ====================
-
-def init_shadow_page_tables():
-    """创建影子页面相关表：decision_premises"""
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS decision_premises (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                decision_id TEXT NOT NULL,
-                premise TEXT NOT NULL,
-                confidence REAL DEFAULT 1.0,
-                validated BOOLEAN DEFAULT 0,
-                validation_result TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        logger.debug("Shadow page tables initialized")
+# NOTE: decision_premises 表当前无任何业务代码引用，已移除。
+# 若将来需要启用影子页面功能，可从蓝图 01-影子页面.md 恢复 Schema。
 
 
 # ==================== Embedding 缓存 ====================
-
-def init_embedding_cache_table():
-    """创建 Embedding 缓存表"""
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS embedding_cache (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content_hash TEXT UNIQUE NOT NULL,
-                embedding BLOB,
-                model_version TEXT,
-                created_at TEXT NOT NULL,
-                expires_at TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_embedding_hash ON embedding_cache(content_hash)
-        """)
-        conn.commit()
-        logger.debug("Embedding cache table initialized")
+# NOTE: embedding_cache 表当前无任何业务代码引用，已移除。
+# 若将来需要启用 Embedding 缓存，可恢复 init_embedding_cache_table()。
 
 
 # ==================== 熵减引擎 (E1) ====================
-
-def init_entropy_tables():
-    """创建熵减引擎相关表：entropy_ignored_pairs"""
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entropy_ignored_pairs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_a TEXT NOT NULL,
-                entity_b TEXT NOT NULL,
-                reason TEXT,
-                created_at TEXT NOT NULL,
-                UNIQUE(entity_a, entity_b)
-            )
-        """)
-        conn.commit()
-        logger.debug("Entropy tables initialized")
+# NOTE: entropy_ignored_pairs 表当前无任何业务代码引用，已移除。
+# 若将来需要启用熵减忽略对功能，可恢复 init_entropy_tables()。
 
 
 # ==================== 文件摄入 ====================
-
-def init_file_index_table():
-    """创建文件索引表"""
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS file_index (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_path TEXT UNIQUE NOT NULL,
-                file_hash TEXT NOT NULL,
-                file_size INTEGER,
-                mime_type TEXT,
-                ingestion_status TEXT DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        logger.debug("File index table initialized")
+# NOTE: file_index 表当前无任何业务代码引用，已移除。
+# 若将来需要启用文件索引功能，可恢复 init_file_index_table()。
 
 
 # ==================== 画像系统 ====================
@@ -222,52 +220,15 @@ def init_persona_tables():
 
 
 # ==================== KIA 闭环守护 (E12) ====================
-
-def init_guard_tables():
-    """创建 KIA 守护相关表：guard_risk_history"""
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS guard_risk_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                risk_type TEXT NOT NULL,
-                risk_level TEXT NOT NULL,
-                trigger_text TEXT,
-                suggestion TEXT,
-                contextual_mode TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        logger.debug("Guard tables initialized")
+# NOTE: guard_risk_history 表当前无任何业务代码引用，已移除。
+# 若将来需要启用 KIA 守护功能，可恢复 init_guard_tables()。
 
 
 # ==================== 评分层（ADR-016 / 蓝图V2） ====================
 
 def init_scorer_tables():
-    """创建评分层相关表：scorer_models, scorer_training_queue, ground_truth_signals"""
+    """创建评分层相关表：scorer_training_queue, ground_truth_signals, scorer_models"""
     with _conn() as conn:
-        # 模型版本持久化（替代 joblib 文件存储，SQLite 更可控）
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scorer_models (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                dimension TEXT NOT NULL,
-                model_version TEXT NOT NULL,
-                model_type TEXT NOT NULL DEFAULT 'complement_nb',
-                model_blob BLOB,
-                model_hash TEXT,
-                feature_schema_hash TEXT,
-                train_samples INTEGER,
-                val_auc REAL,
-                is_active INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(dimension, model_version)
-            )
-        """)
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_models_active ON scorer_models(dimension, is_active)
-        """)
-
         # 延迟标签回填缓冲队列
         conn.execute("""
             CREATE TABLE IF NOT EXISTS scorer_training_queue (
@@ -303,6 +264,10 @@ def init_scorer_tables():
                 UNIQUE(session_id, signal_type) ON CONFLICT REPLACE
             )
         """)
+        # 迁移：旧版 persona 层的 ground_truth_signals 缺少 session_id 列
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(ground_truth_signals)")}
+        if "session_id" not in existing:
+            conn.execute("ALTER TABLE ground_truth_signals ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_gt_session ON ground_truth_signals(session_id)
         """)
@@ -310,25 +275,45 @@ def init_scorer_tables():
             CREATE INDEX IF NOT EXISTS idx_gt_type ON ground_truth_signals(signal_type, created_at)
         """)
 
+        # 模型版本持久化（ADR-016 V2 评分层）
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scorer_models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dimension TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                model_type TEXT,
+                model_blob BLOB,
+                model_hash TEXT,
+                train_samples INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                meta_json TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sm_dimension ON scorer_models(dimension, is_active, created_at)
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sm_version ON scorer_models(dimension, model_version)
+        """)
+        # 迁移：旧表可能没有 meta_json
+        existing_sm = {row[1] for row in conn.execute("PRAGMA table_info(scorer_models)")}
+        if "meta_json" not in existing_sm:
+            conn.execute("ALTER TABLE scorer_models ADD COLUMN meta_json TEXT")
+
         conn.commit()
-        logger.debug("Scorer tables initialized (V2 schema with ground_truth_signals)")
+        logger.debug("Scorer tables initialized (V2 schema with scorer_models)")
 
 
 # ==================== Skill 飞轮 ====================
 
 def init_skill_tables():
-    """创建 Skill 飞轮相关表：skill_deviation_logs, skill_versions"""
+    """创建 Skill 飞轮相关表：skill_versions
+
+    NOTE: skill_deviation_logs 当前无任何业务代码引用，已移除。
+    skill_versions 保留（ixion.py 在 flywheel.db 中使用同名表，未来可能统一）。
+    """
     with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS skill_deviation_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                skill_name TEXT NOT NULL,
-                expected_output TEXT,
-                actual_output TEXT,
-                deviation_score REAL,
-                created_at TEXT NOT NULL
-            )
-        """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS skill_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -364,19 +349,77 @@ def init_task_classification_table():
         logger.debug("Task classification table initialized")
 
 
+# ==================== 知识轨迹 (E23) ====================
+# 对齐蓝图：23-知识轨迹.md
+
+def init_trail_tables():
+    """创建知识轨迹表：trail_events, page_stats
+
+    NOTE: trail_usage 当前无任何业务代码引用，已移除。
+    trail_events / page_stats 保留（ariadne.py 在 trail.db 中使用同名表，未来可能统一）。
+    """
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trail_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                page_path TEXT,
+                details TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS page_stats (
+                page_path TEXT PRIMARY KEY,
+                read_count INTEGER DEFAULT 0,
+                quote_count INTEGER DEFAULT 0,
+                modify_count INTEGER DEFAULT 0,
+                solve_count INTEGER DEFAULT 0,
+                last_access TIMESTAMP
+            )
+        """)
+        conn.commit()
+        logger.debug("Trail tables initialized")
+
+
+# ==================== 免疫报告 (E5) ====================
+# 对齐蓝图：05-知识免疫.md + 15-数据字典
+# NOTE: immune_reports 表当前无任何业务代码引用，已移除。
+# 免疫系统的报告生成通过 Markdown 文件输出（hygieia.py），不写入 SQLite。
+
+
+# ==================== 压力测试 (E30) ====================
+# 对齐蓝图：30-压力测试.md
+
+def init_stress_test_tables():
+    """创建压力测试表：stress_test_results"""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stress_test_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                page_path TEXT NOT NULL,
+                page_title TEXT,
+                resilience_score REAL,
+                challenges_count INTEGER DEFAULT 0,
+                blind_spots_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_stress_page ON stress_test_results(page_path)")
+        conn.commit()
+        logger.debug("Stress test tables initialized")
+
+
 # ==================== 统一入口 ====================
 
 def init_all_tables():
     """初始化所有缺失的数据库表（幂等，可多次调用）"""
     init_knowledge_immune_tables()
     init_knowledge_graph_tables()
-    init_shadow_page_tables()
-    init_embedding_cache_table()
-    init_entropy_tables()
-    init_file_index_table()
     init_persona_tables()
-    init_guard_tables()
     init_scorer_tables()
     init_skill_tables()
     init_task_classification_table()
+    init_trail_tables()
+    init_stress_test_tables()
     logger.info("All database tables initialized")

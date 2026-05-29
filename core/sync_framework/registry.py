@@ -24,9 +24,9 @@ from typing import Dict, List, Optional, Type
 
 from .agent_source import AgentSource
 
+
+
 logger = logging.getLogger(__name__)
-
-
 class AgentRegistry:
     """Agent 插件注册表"""
 
@@ -76,6 +76,7 @@ class AgentRegistry:
                     cls._instances[name] = source
                     return source
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         return None
 
@@ -98,6 +99,10 @@ class AgentRegistry:
             ("hermes", "integrations.sources.hermes_source", "HermesSource"),
             ("openclaw", "integrations.sources.openclaw_source", "OpenClawSource"),
             ("codex", "integrations.sources.codex_source", "CodexSource"),
+            ("aider", "integrations.sources.aider_source", "AiderSource"),
+            ("gemini", "integrations.sources.gemini_cli_source", "GeminiCliSource"),
+            ("cursor", "integrations.sources.cursor_source", "CursorSource"),
+            ("windsurf", "integrations.sources.windsurf_source", "WindsurfSource"),
         ]
         for name, module_path, class_name in agents:
             if name in cls._registry:
@@ -120,6 +125,10 @@ class PathDiscover:
         "hermes":   {"env": [],               "std": ["~/.hermes"]},
         "openclaw": {"env": ["OPENCLAW_STATE_DIR"], "std": ["~/.openclaw"]},
         "codex":    {"env": ["CODEX_HOME", "XDG_CONFIG_HOME"], "std": ["~/.codex", "~/.config/codex"]},
+        "aider":    {"env": ["AIDER_CHAT_HISTORY_FILE"], "std": []},
+        "gemini":   {"env": ["GEMINI_HOME"], "std": ["~/.gemini", "~/.config/gemini"]},
+        "cursor":   {"env": ["CURSOR_HOME"], "std": ["~/.cursor", "~/.config/Cursor"]},
+        "windsurf": {"env": ["WINDSURF_HOME"], "std": ["~/.windsurf", "~/.config/Windsurf"]},
     }
 
     AGENT_SUBDIRS = {
@@ -128,6 +137,7 @@ class PathDiscover:
         "hermes":   "sessions",
         "openclaw": "workspace/memory/.dreams/session-corpus",
         "codex":    "sessions",
+        "gemini":   "sessions",
     }
 
     @classmethod
@@ -156,6 +166,7 @@ class PathDiscover:
         try:
             cls._discover_from_process(agent_name)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at registry.py", exc_info=True)
             pass
 
         # 4. 标准路径
@@ -204,6 +215,7 @@ class PathDiscover:
                 with open(config_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         return {}
 
@@ -244,6 +256,10 @@ class AgentLifecycleManager:
         self._running = False
         if self._refresh_thread:
             self._refresh_thread.join(timeout=5)
+
+    def discover_agents(self):
+        """手动触发一次 Agent 发现（兼容 daemon 旧调用）"""
+        self._refresh_agents()
 
     def get_active_agents(self) -> Dict[str, AgentSource]:
         """获取当前活跃的 Agent"""

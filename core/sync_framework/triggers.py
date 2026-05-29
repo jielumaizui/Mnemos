@@ -28,8 +28,8 @@ from typing import Callable, Dict, List, Optional, Any
 
 from core.config import get_config
 
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
@@ -238,8 +238,8 @@ class PollingTrigger(BaseTrigger):
                 for row in cursor.fetchall():
                     self._seen[row[0]] = row[1]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
     def _save_state(self):
         """保存已扫描文件状态到 SQLite"""
         try:
@@ -251,9 +251,8 @@ class PollingTrigger(BaseTrigger):
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
-
 class HybridTrigger(BaseTrigger):
     """
     混合触发器：Watchdog + Polling 组合。
@@ -352,8 +351,8 @@ class TriggerDispatcher:
             try:
                 trigger.stop()
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
     def start(self, source_name: str):
         """启动指定触发器"""
         trigger = self._triggers.get(source_name)

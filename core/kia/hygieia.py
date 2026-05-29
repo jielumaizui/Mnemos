@@ -22,15 +22,20 @@ Knowledge Immune System - 知识免疫系统
 
 
 import re
-import yaml
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from core.config import get_config
+from core.pluggable import PluggableModule
 import logging
 
 logger = logging.getLogger(__name__)
+try:
+    import yaml
+except ImportError:  # pragma: no cover - exercised when PyYAML is absent
+    yaml = None
+
 
 
 @dataclass
@@ -74,8 +79,8 @@ class HealthReport:
         return max(0.0, 100.0 - penalty)
 
 
-class KnowledgeImmuneSystem:
-    """知识免疫系统"""
+class KnowledgeImmuneSystem(PluggableModule):
+    """知识免疫系统 — 实现 PluggableModule 热插拔接口"""
 
     # 过时阈值
     TEMPORAL_EXPIRY = {
@@ -90,11 +95,58 @@ class KnowledgeImmuneSystem:
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
-        self.inbox = self.wiki_base / "00-Inbox"
+        self.excluded_dirs = {"99-Reports", "07-Shadow", ".git", ".kg", "__pycache__"}
 
         # 懒加载依赖
         self._graph = graph
         self._dna_engine = dna_engine
+        self._enabled = True
+
+    # ---- PluggableModule 接口 ----
+
+    def enable(self) -> None:
+        self._enabled = True
+        logger.info("KnowledgeImmuneSystem enabled")
+
+    def disable(self) -> None:
+        self._enabled = False
+        logger.info("KnowledgeImmuneSystem disabled")
+
+    def configure(self, cfg: Dict[str, Any]) -> None:
+        if "temporal_expiry" in cfg:
+            self.TEMPORAL_EXPIRY.update(cfg["temporal_expiry"])
+        if "excluded_dirs" in cfg:
+            self.excluded_dirs = set(cfg["excluded_dirs"])
+
+    def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        if event_type == "knowledge.ingested":
+            page_path = data.get("page_path")
+            if page_path:
+                self._on_knowledge_ingested(Path(page_path))
+        elif event_type == "scheduler.daily":
+            if data.get("task_name") == "immune_scan":
+                self.full_scan()
+        elif event_type == "entropy.suggestions":
+            # 熵减引擎的合并建议可作为免疫输入：标记重复/相似页面
+            candidates = data.get("candidates", [])
+            for candidate in candidates:
+                if candidate.get("merge_strategy") == "delete_duplicate":
+                    logger.info(
+                        f"熵减建议删除重复: {candidate.get('page_a')} ↔ {candidate.get('page_b')}"
+                    )
+
+    def _on_knowledge_ingested(self, page_path: Path) -> None:
+        """新知识入库后的增量检测"""
+        issues = []
+        for detector in [self.detect_content_quality, self.detect_low_confidence]:
+            try:
+                issues.extend(detector([page_path]))
+            except Exception:
+                logger.warning(f"增量检测失败: {detector.__name__}", exc_info=True)
+        if issues:
+            logger.info(f"新知识 '{page_path.name}' 检测到 {len(issues)} 个问题")
 
     @property
     def graph(self):
@@ -146,11 +198,12 @@ class KnowledgeImmuneSystem:
                 content = page.read_text(encoding="utf-8")
                 fm = self._extract_frontmatter(content)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at hygieia.py", exc_info=True)
                 continue
 
-            temporal = fm.get("时效性", "上下文相关")
-            created = fm.get("创建日期", "")
-            version_tag = fm.get("版本标记", "")
+            temporal = self._fm_get(fm, "temporal_scope", "时效性", default="上下文相关")
+            created = self._fm_get(fm, "created_at", "创建日期", "created", default="")
+            version_tag = self._fm_get(fm, "version_tag", "版本标记", default="")
 
             # 检查时效性过期
             expiry = self.TEMPORAL_EXPIRY.get(temporal)
@@ -227,10 +280,11 @@ class KnowledgeImmuneSystem:
                 content = page.read_text(encoding="utf-8")
                 fm = self._extract_frontmatter(content)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at hygieia.py", exc_info=True)
                 continue
 
-            confidence = float(fm.get("置信度", 0.5))
-            evidence = fm.get("证据级别", "单源")
+            confidence = float(self._fm_get(fm, "confidence", "置信度", default=0.5))
+            evidence = self._fm_get(fm, "evidence_level", "证据级别", default="single-source")
 
             if confidence < 0.4:
                 issues.append(ImmuneIssue(
@@ -240,7 +294,7 @@ class KnowledgeImmuneSystem:
                     description=f"置信度仅 {confidence}，低于安全阈值 0.4",
                     suggestion="请补充验证来源，或明确标注为假设/待验证",
                 ))
-            elif confidence < 0.6 and evidence == "单源":
+            elif confidence < 0.6 and evidence in {"单源", "single-source"}:
                 issues.append(ImmuneIssue(
                     issue_type="weak_evidence",
                     severity="medium",
@@ -252,29 +306,30 @@ class KnowledgeImmuneSystem:
         return issues
 
     def detect_duplicates(self, pages: List[Path] = None) -> List[ImmuneIssue]:
-        """检测疑似重复"""
+        """检测疑似重复：委托熵减引擎，避免重复实现相似度扫描。"""
         issues = []
-        if not self.dna_engine:
+        try:
+            from .eris import EntropyEngine
+            engine = EntropyEngine(wiki_base=str(self.wiki_base))
+            if self._dna_engine is not None:
+                engine._dna_engine = self._dna_engine
+            report = engine.scan()
+        except Exception as e:
+            logger.warning(f"熵减引擎重复检测失败: {e}")
             return issues
 
-        pages = pages or self._list_pages()
-
-        for page in pages:
-            dna = self.dna_engine.compute_dna(page)
-            if not dna:
+        for candidate in report.candidates:
+            if candidate.merge_strategy not in {"delete_duplicate", "merge_into_one"}:
                 continue
-            self.dna_engine.save_dna(dna)
-
-            duplicates = self.dna_engine.find_duplicates(dna)
-            for dup in duplicates:
-                issues.append(ImmuneIssue(
-                    issue_type="duplicate",
-                    severity="high",
-                    page=str(page),
-                    related_pages=[dup.target_page],
-                    description=f"与 '{Path(dup.target_page).name}' 相似度 {dup.overall_score:.0%}，疑似重复入库",
-                    suggestion="请确认是否为同一知识，如果是，合并或删除较旧版本；如果不是，调整关键词区分",
-                ))
+            severity = "high" if candidate.merge_strategy == "delete_duplicate" else "medium"
+            issues.append(ImmuneIssue(
+                issue_type="duplicate",
+                severity=severity,
+                page=candidate.page_a,
+                related_pages=[candidate.page_b],
+                description=f"与 '{Path(candidate.page_b).name}' 相似度 {candidate.similarity:.0%}，疑似重复或高度相似",
+                suggestion=candidate.recommended_action,
+            ))
 
         return issues
 
@@ -289,6 +344,7 @@ class KnowledgeImmuneSystem:
                 fm = self._extract_frontmatter(content)
                 body = self._extract_body(content)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at hygieia.py", exc_info=True)
                 continue
 
             # 内容过短
@@ -380,6 +436,141 @@ class KnowledgeImmuneSystem:
 
         return issues
 
+    def detect_knowledge_gaps(self, pages: List[Path] = None) -> List[ImmuneIssue]:
+        """检测知识盲区：某些 topic / domain / 形态下的覆盖度不足。
+
+        检测维度：
+        1. 形态缺失 — 某些 topic 下缺少关键形态（decision、problem-solution、heuristic）
+        2. Domain 稀疏 — 某个 domain 标签下页面数过少
+        3. 时间断层 — 某个高频 topic 长期（>180天）无更新
+        4. 关联稀疏 — 高价值页面（decision/heuristic）入度/出度过低
+        """
+        issues = []
+        pages = pages or self._list_pages()
+        if not pages:
+            return issues
+
+        # ---- 收集元数据 ----
+        topic_forms: Dict[str, Set[str]] = {}      # topic -> {forms}
+        topic_last_update: Dict[str, datetime] = {}  # topic -> last update
+        domain_counts: Dict[str, int] = {}           # domain -> page count
+        form_counts: Dict[str, int] = {}             # form -> page count
+        high_value_pages: List[Tuple[Path, str, float]] = []  # (page, form, confidence)
+
+        CRITICAL_FORMS = {"decision", "problem-solution", "heuristic", "insight"}
+        MIN_DOMAIN_PAGES = 3
+        MIN_HIGH_VALUE_DEGREE = 2
+
+        for page in pages:
+            try:
+                content = page.read_text(encoding="utf-8")
+                fm = self._extract_frontmatter(content)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    f"Caught unexpected error at hygieia.py", exc_info=True
+                )
+                continue
+
+            tags = self._fm_get(fm, "tags", "标签", default=[])
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
+            forms = self._fm_get(fm, "form", "形态", default=[])
+            if isinstance(forms, str):
+                forms = [forms]
+            forms = set(f.lower() for f in forms if f)
+            created = self._fm_get(fm, "created_at", "创建日期", "created", default="")
+            confidence = float(self._fm_get(fm, "confidence", "置信度", default=0.5))
+
+            # domain 统计（用 tags 的前缀或特定 domain 标签）
+            domains = [t for t in tags if isinstance(t, str) and t.startswith("domain/")]
+            if not domains:
+                domains = tags[:1]  # fallback 用第一个 tag 作为 domain
+            for d in domains:
+                domain_counts[d] = domain_counts.get(d, 0) + 1
+
+            # topic 统计（去掉 domain/ 前缀的标签）
+            topics = [t for t in tags if isinstance(t, str) and not t.startswith("domain/")]
+            if not topics:
+                topics = [page.stem]
+            for t in topics:
+                topic_forms.setdefault(t, set()).update(forms)
+                # 时间断层追踪
+                if created:
+                    try:
+                        dt = datetime.strptime(str(created), "%Y-%m-%d")
+                        if t not in topic_last_update or dt > topic_last_update[t]:
+                            topic_last_update[t] = dt
+                    except ValueError:
+                        pass
+
+            # 形态统计
+            for f in forms:
+                form_counts[f] = form_counts.get(f, 0) + 1
+
+            # 高价值页面追踪
+            if forms & CRITICAL_FORMS and confidence >= 0.6:
+                high_value_pages.append((page, next(iter(forms & CRITICAL_FORMS)), confidence))
+
+        # ---- 1. 形态缺失检测 ----
+        for topic, forms in topic_forms.items():
+            missing = CRITICAL_FORMS - forms
+            if missing and len(forms) >= 2:  # 只有当该 topic 已有一定积累时才报缺失
+                for m in missing:
+                    issues.append(ImmuneIssue(
+                        issue_type="knowledge_gap",
+                        severity="medium",
+                        page=topic,
+                        description=f"topic '{topic}' 缺少 '{m}' 形态的知识（当前仅有 {forms}）",
+                        suggestion=f"补充该 topic 下的 {m} 形态知识，完善知识覆盖",
+                    ))
+
+        # ---- 2. Domain 稀疏检测 ----
+        for domain, count in domain_counts.items():
+            if count < MIN_DOMAIN_PAGES:
+                issues.append(ImmuneIssue(
+                    issue_type="knowledge_gap",
+                    severity="low",
+                    page=domain,
+                    description=f"domain '{domain}' 仅 {count} 个页面，知识覆盖稀疏",
+                    suggestion="扩展该 domain 下的知识积累，或考虑合并到相关 domain",
+                ))
+
+        # ---- 3. 时间断层检测 ----
+        now = datetime.now()
+        for topic, last_dt in topic_last_update.items():
+            days_since = (now - last_dt).days
+            if days_since > 180 and topic in topic_forms and len(topic_forms[topic]) >= 2:
+                issues.append(ImmuneIssue(
+                    issue_type="knowledge_gap",
+                    severity="medium",
+                    page=topic,
+                    description=f"topic '{topic}' 已 {days_since} 天未更新，可能知识已陈旧",
+                    suggestion="回顾该 topic 的最新进展，更新或补充相关知识",
+                ))
+
+        # ---- 4. 高价值页面关联稀疏 ----
+        if self.graph:
+            for page, form, confidence in high_value_pages:
+                page_str = str(page)
+                out_degree = len(self.graph.get_relations(page_str))
+                in_degree = len(self.graph.get_incoming_relations(page_str))
+                total_degree = out_degree + in_degree
+                if total_degree < MIN_HIGH_VALUE_DEGREE:
+                    issues.append(ImmuneIssue(
+                        issue_type="knowledge_gap",
+                        severity="medium",
+                        page=page_str,
+                        description=(
+                            f"高价值页面（{form}, 置信度 {confidence}）"
+                            f"关联度仅 {total_degree}，知识网络未充分连接"
+                        ),
+                        suggestion="发现更多相关页面并建立关系，提升知识网络密度",
+                        auto_fixable=True,
+                        auto_fix_action="run_relation_discovery",
+                    ))
+
+        return issues
+
     # ========== 综合扫描 ==========
 
     def full_scan(self, pages: List[Path] = None) -> HealthReport:
@@ -395,6 +586,7 @@ class KnowledgeImmuneSystem:
             ("重复", self.detect_duplicates),
             ("内容质量", self.detect_content_quality),
             ("循环依赖", self.detect_circular_dependencies),
+            ("知识盲区", self.detect_knowledge_gaps),
         ]
 
         for name, detector in detectors:
@@ -412,6 +604,14 @@ class KnowledgeImmuneSystem:
         # 按严重程度排序
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
         report.issues.sort(key=lambda x: severity_order.get(x.severity, 99))
+
+        # 发布免疫报告事件
+        self._emit_event("immune.report", {
+            "scanned_pages": report.scanned_pages,
+            "issue_count": len(report.issues),
+            "critical_count": report.critical_count,
+            "health_score": report.health_score,
+        })
 
         return report
 
@@ -440,6 +640,10 @@ class KnowledgeImmuneSystem:
                             logs.append(f"'{page_path.name}' 未找到可自动建立的关系")
                     except Exception as e:
                         logs.append(f"'{issue.page}' 自动修复失败: {e}")
+
+        # 发布自动修复事件
+        if logs:
+            self._emit_event("immune.auto_fix", {"actions": logs})
 
         return logs
 
@@ -488,14 +692,29 @@ class KnowledgeImmuneSystem:
     # ========== 辅助方法 ==========
 
     def _list_pages(self) -> List[Path]:
-        """列出所有 wiki 页面"""
-        if not self.inbox.exists():
+        """列出所有 wiki 页面，扫描整个 Vault 并排除报告/影子/系统目录。"""
+        if not self.wiki_base.exists():
             return []
-        return list(self.inbox.glob("*.md"))
+        pages = []
+        for page in self.wiki_base.rglob("*.md"):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in self.excluded_dirs or part.startswith(".") for part in rel_parts):
+                continue
+            pages.append(page)
+        return pages
+
+    @staticmethod
+    def _fm_get(fm: Dict, *keys, default=None):
+        for key in keys:
+            if key in fm:
+                return fm.get(key)
+        return default
 
     @staticmethod
     def _extract_frontmatter(content: str) -> Dict:
         """提取 frontmatter"""
+        if yaml is None:
+            return {}
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:

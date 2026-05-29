@@ -55,7 +55,7 @@ def _retry_with_backoff(func, max_retries=3, base_delay=0.1):
     for attempt in range(max_retries):
         try:
             return func()
-        except Exception as e:
+        except Exception:
             if attempt == max_retries - 1:
                 raise
             delay = base_delay * (2 ** attempt) + random.uniform(0, 0.1)

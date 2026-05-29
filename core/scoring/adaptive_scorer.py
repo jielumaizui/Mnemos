@@ -168,6 +168,7 @@ class AdaptiveScorer:
                 "dimensions": [c.dimension for c in cards],
             })
         except Exception:
+            logger.warning(f"Unexpected error in adaptive_scorer.py", exc_info=True)
             pass
 
         return cards
@@ -253,6 +254,7 @@ class AdaptiveScorer:
             try:
                 return rule_fn(features)
             except Exception:
+                logger.warning(f"Unexpected error in adaptive_scorer.py", exc_info=True)
                 pass
 
         # 通用规则回退
@@ -389,6 +391,7 @@ class AdaptiveScorer:
             ]
             return np.array([numeric_features], dtype=np.float64)
         except Exception:
+            logger.warning(f"Unexpected error in adaptive_scorer.py", exc_info=True)
             return None
 
     # ==================== 规则先验函数 ====================
@@ -593,6 +596,7 @@ class AdaptiveScorer:
                     "context": {"model_dir": str(self._model_dir)},
                 })
             except Exception:
+                logger.warning(f"Unexpected error in adaptive_scorer.py", exc_info=True)
                 pass
 
     def _cleanup_old_versions(self, keep: int) -> None:
@@ -606,6 +610,7 @@ class AdaptiveScorer:
                 import shutil
                 shutil.rmtree(old, ignore_errors=True)
         except Exception:
+            logger.warning(f"Unexpected error in adaptive_scorer.py", exc_info=True)
             pass
 
     def rollback(self, target_version: Optional[int] = None) -> bool:

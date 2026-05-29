@@ -20,11 +20,14 @@ Knowledge Entropy Engine - 知识熵减引擎
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from core.config import get_config
+from core.pluggable import PluggableModule
 
+import logging
+logger = logging.getLogger(__name__)
 
 @dataclass
 class MergeCandidate:
@@ -59,22 +62,60 @@ class EntropyReport:
         return sum(1 for c in self.candidates if c.merge_strategy == "link_related")
 
 
-class EntropyEngine:
-    """知识熵减引擎"""
+class EntropyEngine(PluggableModule):
+    """知识熵减引擎 — 实现 PluggableModule 热插拔接口"""
 
     # 相似度阈值
     DUPLICATE_THRESHOLD = 0.95
     MERGE_THRESHOLD = 0.80
     LINK_THRESHOLD = 0.60
+    CROSS_REFERENCE_THRESHOLD = 0.40
+    EXCLUDED_DIRS = {"99-Reports", "07-Shadow", ".git", ".kg", "__pycache__"}
 
     def __init__(self, wiki_base: str = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
-        self.inbox = self.wiki_base / "00-Inbox"
 
         # 懒加载 DNA 引擎
         self._dna_engine = None
+        self._enabled = True
+
+    # ---- PluggableModule 接口 ----
+
+    def enable(self) -> None:
+        self._enabled = True
+        logger.info("EntropyEngine enabled")
+
+    def disable(self) -> None:
+        self._enabled = False
+        logger.info("EntropyEngine disabled")
+
+    def configure(self, cfg: Dict[str, Any]) -> None:
+        if "duplicate_threshold" in cfg:
+            self.DUPLICATE_THRESHOLD = cfg["duplicate_threshold"]
+        if "merge_threshold" in cfg:
+            self.MERGE_THRESHOLD = cfg["merge_threshold"]
+        if "excluded_dirs" in cfg:
+            self.EXCLUDED_DIRS = set(cfg["excluded_dirs"])
+
+    def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        if event_type == "knowledge.ingested":
+            page_path = data.get("page_path")
+            if page_path:
+                self._on_knowledge_ingested(Path(page_path))
+        elif event_type == "scheduler.daily":
+            if data.get("task_name") == "entropy_scan":
+                self.scan()
+
+    def _on_knowledge_ingested(self, page_path: Path) -> None:
+        """新知识入库后的增量扫描（TODO: 实现仅扫描新页面 vs 已有页面的增量模式）"""
+        # 当前熵减引擎只有全库扫描能力，增量场景下不触发全量 scan()
+        # 避免每次入库都进行 O(n²) 的全库比对。
+        # 未来应实现：仅将新页面与已有页面进行两两比对。
+        logger.debug(f"新知识入库 '{page_path.name}'，增量熵减扫描待实现")
 
     @property
     def dna_engine(self):
@@ -96,11 +137,11 @@ class EntropyEngine:
         Returns:
             EntropyReport
         """
-        if not self.inbox.exists():
+        if not self.wiki_base.exists():
             return EntropyReport()
 
         # 1. 为所有页面计算 DNA
-        pages = list(self.inbox.glob("*.md"))
+        pages = self._list_pages()
         dnas = []
         for page in pages:
             if self.dna_engine:
@@ -133,7 +174,7 @@ class EntropyEngine:
                 # 计算相似度
                 result = self.dna_engine.compare(dna_a, dna_b)
 
-                if result.overall_score >= self.LINK_THRESHOLD:
+                if result.overall_score >= self.CROSS_REFERENCE_THRESHOLD:
                     candidate = self._generate_candidate(
                         dna_a, dna_b, result
                     )
@@ -155,19 +196,36 @@ class EntropyEngine:
                 seen_pairs.add(pair)
                 unique.append(c)
 
-        return EntropyReport(
+        estimated_savings = self._estimate_savings(unique)
+        report = EntropyReport(
             total_pairs_scanned=len(compared),
             candidates=unique,
+            estimated_savings=estimated_savings,
         )
+        # 发布熵减建议事件
+        if unique:
+            self._emit_event("entropy.suggestions", {
+                "candidate_count": len(unique),
+                "estimated_savings": estimated_savings,
+            })
+        return report
+
+    def _list_pages(self) -> List[Path]:
+        """扫描整个 Vault，排除报告、影子层和隐藏/系统目录。"""
+        pages = []
+        for page in self.wiki_base.rglob("*.md"):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
+                continue
+            pages.append(page)
+        return pages
 
     def _should_compare(self, dna_a, dna_b) -> bool:
         """判断是否值得比较两个 DNA"""
-        # 提取领域和类型
-        domain_a = dna_a.semantic_signature.split(":")[0] if ":" in dna_a.semantic_signature else ""
-        domain_b = dna_b.semantic_signature.split(":")[0] if ":" in dna_b.semantic_signature else ""
-
-        type_a = dna_a.semantic_signature.split(":")[1] if ":" in dna_a.semantic_signature else ""
-        type_b = dna_b.semantic_signature.split(":")[1] if ":" in dna_b.semantic_signature else ""
+        domain_a = getattr(dna_a, "domain", "") or self._signature_part(dna_a, 0)
+        domain_b = getattr(dna_b, "domain", "") or self._signature_part(dna_b, 0)
+        type_a = getattr(dna_a, "knowledge_type", "") or self._signature_part(dna_a, 1)
+        type_b = getattr(dna_b, "knowledge_type", "") or self._signature_part(dna_b, 1)
 
         # 同领域 或 同类型 才比较
         if domain_a and domain_b and domain_a == domain_b:
@@ -182,6 +240,11 @@ class EntropyEngine:
 
         return False
 
+    @staticmethod
+    def _signature_part(dna, index: int) -> str:
+        parts = (getattr(dna, "semantic_signature", "") or "").split(":")
+        return parts[index] if len(parts) > index else ""
+
     def _generate_candidate(self, dna_a, dna_b, similarity_result) -> Optional[MergeCandidate]:
         """基于相似度结果生成合并候选"""
         score = similarity_result.overall_score
@@ -192,6 +255,8 @@ class EntropyEngine:
             return self._suggest_merge(dna_a, dna_b, score)
         elif score >= self.LINK_THRESHOLD:
             return self._suggest_link(dna_a, dna_b, score)
+        elif score >= self.CROSS_REFERENCE_THRESHOLD:
+            return self._suggest_cross_reference(dna_a, dna_b, score)
 
         return None
 
@@ -250,6 +315,23 @@ class EntropyEngine:
             confidence=score,
         )
 
+    def _suggest_cross_reference(self, dna_a, dna_b, score) -> MergeCandidate:
+        """建议互相引用，保留互补知识网络。"""
+        complement = self._analyze_complement(dna_a, dna_b)
+        reason = f"相似度 {score:.0%}，主题互补，适合互相引用"
+        if complement:
+            reason += f"，互补内容: {complement}"
+
+        return MergeCandidate(
+            page_a=dna_a.page_path,
+            page_b=dna_b.page_path,
+            similarity=round(score, 3),
+            merge_strategy="cross_reference",
+            reason=reason,
+            recommended_action=f"在 '{Path(dna_a.page_path).name}' 与 '{Path(dna_b.page_path).name}' 中加入双向引用",
+            confidence=score,
+        )
+
     def _choose_better_page(self, dna_a, dna_b) -> str:
         """选择更优质的页面保留"""
         scores = {}
@@ -301,6 +383,27 @@ class EntropyEngine:
 
         return "references"
 
+    def _estimate_savings(self, candidates: List[MergeCandidate]) -> Dict[str, int]:
+        """估算删除/合并可节省的页面数和字符数。"""
+        removable_pages = set()
+        estimated_chars = 0
+        for candidate in candidates:
+            if candidate.merge_strategy not in {"delete_duplicate", "merge_into_one"}:
+                continue
+            discard = candidate.page_b if candidate.keep_page == candidate.page_a else candidate.page_a
+            if discard in removable_pages:
+                continue
+            removable_pages.add(discard)
+            try:
+                estimated_chars += len(Path(discard).read_text(encoding="utf-8"))
+            except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
+                pass
+        return {
+            "pages": len(removable_pages),
+            "characters": estimated_chars,
+        }
+
     # ========== 报告生成 ==========
 
     def generate_report(self, report: EntropyReport) -> str:
@@ -313,6 +416,8 @@ class EntropyEngine:
             f"- 完全重复: {report.duplicate_count}",
             f"- 可合并: {report.mergeable_count}",
             f"- 建议关联: {report.linkable_count}",
+            f"- 预计节省页面: {report.estimated_savings.get('pages', 0)}",
+            f"- 预计节省字符: {report.estimated_savings.get('characters', 0)}",
             "",
         ]
 
@@ -325,6 +430,7 @@ class EntropyEngine:
             "delete_duplicate": ([], "🔴 完全重复（建议删除）"),
             "merge_into_one": ([], "🟠 高度相似（建议合并）"),
             "link_related": ([], "🟡 部分重叠（建议关联）"),
+            "cross_reference": ([], "🟢 互补知识（建议互引）"),
         }
 
         for candidate in report.candidates:
@@ -370,7 +476,7 @@ class EntropyEngine:
                 except Exception as e:
                     logs.append(f"删除失败 {Path(discard).name}: {e}")
 
-            elif candidate.merge_strategy == "link_related" and apply_links:
+            elif candidate.merge_strategy in {"link_related", "cross_reference"} and apply_links:
                 # 自动建立关系
                 try:
                     from .knowledge_graph import KnowledgeGraph, Relation, RelationType
@@ -402,6 +508,8 @@ class EntropyEngine:
             return RelationType.SPECIALIZES
         elif "similar" in candidate.reason:
             return RelationType.SIMILAR_TO
+        elif candidate.merge_strategy == "cross_reference":
+            return RelationType.REFERENCES
         else:
             return RelationType.REFERENCES
 

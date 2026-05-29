@@ -22,6 +22,8 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 
 
+import logging
+logger = logging.getLogger(__name__)
 SIGNAL_DB_PATH = Path.home() / ".mnemos" / "user_signals.db"
 
 
@@ -409,7 +411,17 @@ class SignalStore:
     # ---- Wechat Signals ----
 
     def insert_wechat_signal(self, signal: WechatSignal) -> int:
-        """插入微信信号"""
+        """微信采集已下线，保留空实现以兼容旧调用方。"""
+        logger_msg = "wechat_signals 已废弃，忽略写入"
+        try:
+            logging.getLogger(__name__).debug(logger_msg)
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
+            pass
+        return 0
+
+    def _insert_wechat_signal_legacy(self, signal: WechatSignal) -> int:
+        """旧微信信号写入实现，保留为迁移参考，不再由正式路径调用。"""
         data = asdict(signal)
         if data.get("topic_tags"):
             data["topic_tags"] = json.dumps(data["topic_tags"], ensure_ascii=False)
@@ -438,15 +450,8 @@ class SignalStore:
             return signal_id
 
     def get_recent_wechat_signals(self, days: int = 90) -> List[Dict]:
-        """获取最近N天的微信信号"""
-        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute("""
-                SELECT * FROM wechat_signals
-                WHERE timestamp >= date('now', ?)
-                ORDER BY timestamp DESC
-            """, (f'-{days} days',))
-            return [dict(row) for row in cursor.fetchall()]
+        """微信信号已不参与画像分析。"""
+        return []
 
     # ---- Memos Signals ----
 
@@ -517,12 +522,16 @@ class SignalStore:
 
     # ---- 通用查询 ----
 
-    ALLOWED_SOURCES = {"session", "git", "memos", "wiki", "file_system", "wechat"}
+    ALLOWED_SOURCES = {"session", "git", "memos", "knowledge", "wiki", "file_system", "wechat"}
 
     def _validate_source(self, source_type: str):
         """校验数据源类型，防止 SQL 注入"""
         if source_type not in self.ALLOWED_SOURCES:
             raise ValueError(f"非法数据源: {source_type}")
+
+    @staticmethod
+    def _table_for_source(source_type: str) -> str:
+        return {"wiki": "knowledge_signals"}.get(source_type, f"{source_type}_signals")
 
     def get_unprocessed_signals(self, source_type: str, limit: int = 1000) -> List[Dict]:
         """获取未处理的信号（用于画像分析）"""
@@ -536,7 +545,7 @@ class SignalStore:
                 WHERE m.processed = 0
                 ORDER BY s.timestamp ASC
                 LIMIT ?
-            """.format(f"{source_type}_signals"), (source_type, limit))
+            """.format(self._table_for_source(source_type)), (source_type, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     def mark_signals_processed(self, source_type: str, signal_ids: List[int]):
@@ -603,6 +612,69 @@ class SignalStore:
                 """, (f'-{days} days',))
                 stats[source] = cursor.fetchone()[0]
         return stats
+
+    def get_signal_health(self, days: int = 30) -> Dict[str, Dict]:
+        """返回四类核心信号健康度；fs 为可选，wechat 不参与。"""
+        stats = self.get_signal_stats(days=days)
+        core = {
+            "session": {"count": stats.get("session", 0), "min": 10, "weight": 0.35},
+            "git": {"count": stats.get("git", 0), "min": 5, "weight": 0.25},
+            "wiki": {"count": stats.get("knowledge", 0), "min": 5, "weight": 0.20},
+            "memos": {"count": stats.get("memos", 0), "min": 30, "weight": 0.20},
+        }
+        for data in core.values():
+            data["healthy"] = data["count"] >= data["min"]
+        core["file_system"] = {
+            "count": stats.get("file_system", 0),
+            "min": 0,
+            "weight": 0.0,
+            "healthy": True,
+            "optional": True,
+        }
+        return core
+
+    def handle_event(self, event_type: str, data: Dict):
+        """事件式信号注入入口。"""
+        now = data.get("timestamp") or datetime.now().isoformat()
+        if event_type == "session_completed":
+            return self.insert_session_signal(SessionSignal(
+                session_id=data.get("session_id", ""),
+                timestamp=now,
+                task_type=data.get("task_type", ""),
+                task_subtype=data.get("task_subtype", ""),
+                follow_up_depth=int(data.get("follow_up_depth", 0) or 0),
+                termination_type=data.get("termination_type", ""),
+                output_type=data.get("output_type", ""),
+                duration_seconds=int(data.get("duration_seconds", 0) or 0),
+                working_dir=data.get("working_dir", ""),
+                agent=data.get("agent", "unknown"),
+            ), session_context=data)
+        if event_type == "wiki_page_accessed":
+            return self.insert_knowledge_signal(
+                data.get("page_path", ""),
+                data.get("action_type", "access"),
+                now,
+            )
+        if event_type == "memos_synced":
+            return self.insert_memos_signal(MemosSignal(
+                memo_uid=data.get("memo_uid", ""),
+                timestamp=now,
+                content_length=int(data.get("content_length", 0) or 0),
+                has_title=bool(data.get("has_title", False)),
+                has_code_block=bool(data.get("has_code_block", False)),
+                tags_json=json.dumps(data.get("tags", []), ensure_ascii=False),
+            ))
+        if event_type == "git_commit_detected":
+            return self.insert_git_signal(GitSignal(
+                repo_path=data.get("repo_path", ""),
+                commit_hash=data.get("commit_hash", ""),
+                timestamp=now,
+                message_length=int(data.get("message_length", 0) or 0),
+                commit_type=data.get("commit_type", ""),
+                is_weekend=bool(data.get("is_weekend", False)),
+                hour_of_day=int(data.get("hour_of_day", 12) or 12),
+            ))
+        return None
 
     def get_daily_summary(self, date: str) -> Dict[str, Any]:
         """获取某天的信号聚合摘要"""

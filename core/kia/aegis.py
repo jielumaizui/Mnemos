@@ -23,6 +23,8 @@ from .prophasis import ChecklistItem, LoadedKnowledge
 from core.persona.hamartia import BlindSpotProfileManager, BlindSpot, ChallengeBalancer
 
 
+import logging
+logger = logging.getLogger(__name__)
 class GuardLevel(Enum):
     """守护级别"""
     SILENT = "silent"       # 轻微：静默记录
@@ -43,6 +45,9 @@ class SmartMatcher:
 
     def __init__(self, semantic_threshold: float = 0.65):
         self.semantic_threshold = semantic_threshold
+        self.negation_words = {"不要", "别", "勿", "无需", "不用", "禁止", "避免", "不能", "不要直接"}
+        self.question_markers = {"?", "？", "怎么", "如何", "为什么", "会怎样", "是什么意思", "是否"}
+        self.command_verbs = {"删除", "清空", "执行", "运行", "部署", "发布", "修改", "覆盖", "drop", "truncate", "rm"}
 
     def match_exact(self, text: str, candidates: List[str]) -> Optional[Tuple[str, float]]:
         """精确匹配：文本与候选完全相等"""
@@ -56,8 +61,12 @@ class SmartMatcher:
         """关键词匹配：子串包含"""
         text_lower = text.lower()
         for kw in keywords:
-            if kw.lower() in text_lower:
-                return kw, 0.85
+            kw_lower = kw.lower()
+            idx = text_lower.find(kw_lower)
+            if idx >= 0:
+                score = self._contextual_score(text, kw, idx, 0.85)
+                if score >= 0.5:
+                    return kw, score
         return None
 
     def match_semantic(self, text: str, references: List[str]) -> Optional[Tuple[str, float]]:
@@ -108,6 +117,33 @@ class SmartMatcher:
                 return {"layer": 3, "type": "semantic", "match": result[0], "score": result[1]}
 
         return None
+
+    def _contextual_score(self, text: str, keyword: str, pos: int, base_score: float) -> float:
+        window_start = max(0, pos - 10)
+        window_end = min(len(text), pos + len(keyword) + 10)
+        window = text[window_start:window_end]
+        prefix = text[max(0, pos - 8):pos]
+        score = base_score
+
+        if any(word in prefix for word in self.negation_words):
+            score *= 0.2
+        if any(marker in text for marker in self.question_markers):
+            score *= 0.45
+        if self._is_in_code_block(text, pos) or self._is_quoted(text, pos):
+            score *= 0.5
+        keyword_lower = keyword.lower()
+        if any(verb in window.lower().replace(keyword_lower, "") for verb in self.command_verbs):
+            score = min(1.0, score + 0.1)
+        return score
+
+    @staticmethod
+    def _is_in_code_block(text: str, pos: int) -> bool:
+        return text[:pos].count("```") % 2 == 1
+
+    @staticmethod
+    def _is_quoted(text: str, pos: int) -> bool:
+        before = text[:pos]
+        return before.count("`") % 2 == 1 or before.count('"') % 2 == 1 or before.count("“") > before.count("”")
 
 
 class DuplicateWorkDetector:
@@ -312,7 +348,6 @@ class InProcessGuard:
 
         # 记录消息用于情境推断
         self.session_messages.append(user_message)
-        self.duplicate_detector.add_message(user_message)
 
         # 推断当前情境模式
         self.contextual_mode = self._infer_contextual_mode(user_message)
@@ -325,6 +360,7 @@ class InProcessGuard:
 
         # 2. 重复工作检测（SmartMatcher Layer 3 语义匹配）
         is_dup, dup_score, dup_reason = self.duplicate_detector.is_duplicate(user_message)
+        self.duplicate_detector.add_message(user_message)
         if is_dup and dup_score >= 0.80:
             return GuardAlert(
                 level=GuardLevel.HINT,
@@ -433,11 +469,16 @@ class InProcessGuard:
 
     def _check_critical(self, user_message: str, ai_response: str) -> Optional[GuardAlert]:
         """检查严重偏差"""
-        combined = (user_message + " " + ai_response).lower()
+        combined_raw = user_message + " " + ai_response
+        combined = combined_raw.lower()
 
         critical_keywords = self.CRITICAL_KEYWORDS.get(self.session.task_type, [])
         for kw in critical_keywords:
-            if kw.lower() in combined:
+            pos = combined.find(kw.lower())
+            if pos >= 0:
+                score = self.smart_matcher._contextual_score(combined_raw, kw, pos, 1.0)
+                if score < 0.5:
+                    continue
                 return GuardAlert(
                     level=GuardLevel.INTERRUPT,
                     checklist_item=ChecklistItem(
@@ -451,6 +492,28 @@ class InProcessGuard:
                 )
 
         return None
+
+    def smart_check(self, user_message: str, ai_response: str = "") -> List[GuardAlert]:
+        """返回所有匹配风险点，按级别排序；用于批量守护和测试。"""
+        alerts = []
+        first = self.check(user_message, ai_response)
+        if first:
+            alerts.append(first)
+        for record in self.check_silent(user_message, ai_response):
+            alerts.append(GuardAlert(
+                level=GuardLevel.SILENT,
+                checklist_item=ChecklistItem(
+                    item=record["item"],
+                    source="system",
+                    severity=record["severity"],
+                ),
+                triggered_by="system",
+                trigger_text=record["trigger"],
+                suggestion=f"静默记录：{record['item']}",
+                timestamp=record["timestamp"],
+            ))
+        order = {GuardLevel.INTERRUPT: 0, GuardLevel.HINT: 1, GuardLevel.SILENT: 2}
+        return sorted(alerts, key=lambda alert: order[alert.level])
 
     def _match_three_tier(self, text: str, keywords: List[str]) -> Optional[Dict]:
         """三层级联匹配引擎（精确 → 关键词 → 语义）
@@ -503,8 +566,8 @@ class InProcessGuard:
                 "session_id": getattr(self.session, 'task_type', 'unknown') if self.session else 'unknown',
             })
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
     def get_silent_summary(self) -> str:
         """获取静默记录汇总（任务完成后报告）"""
         if not self.session or not self.session.silent_records:

@@ -9,6 +9,8 @@ Mnemos - 命令行入口
     mnemos config       查看/编辑配置
     mnemos mcp serve    启动 MCP 服务器
 """
+import logging
+logger = logging.getLogger(__name__)
 
 import os
 import sys
@@ -328,6 +330,7 @@ def cmd_doctor(args):
                                     src = "Git历史"
                         sources[src] = sources.get(src, 0) + 1
                     except Exception:
+                        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
                         continue
                 print("  知识来源分布:")
                 for src_name, cnt in sources.items():
@@ -335,6 +338,7 @@ def cmd_doctor(args):
                         pct = cnt / md_count * 100
                         print(f"    - {src_name}: {cnt} ({pct:.0f}%)")
             except Exception:
+                logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
                 pass
 
         # 最近修改时间
@@ -351,6 +355,7 @@ def cmd_doctor(args):
                     if days_since > 30:
                         warnings.append(f"知识库已 {int(days_since)} 天未更新")
             except Exception:
+                logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
                 pass
     else:
         print(f"  Wiki 未初始化")
@@ -372,6 +377,7 @@ def cmd_doctor(args):
         elif total < 50:
             print(f"  ⚠️  画像信号较少，建议积累更多对话数据以获得精准画像")
     except Exception:
+        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
         print(f"  ☐ 画像数据库未初始化")
 
     # 11. MCP 服务器状态
@@ -406,6 +412,7 @@ def cmd_doctor(args):
         if stats['pending'] > 10:
             warnings.append(f"蒸馏队列积压: {stats['pending']} 个任务")
     except Exception:
+        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
         print(f"  ☐ 蒸馏链路未初始化")
 
     # 检查 Charon 自动触发
@@ -413,6 +420,7 @@ def cmd_doctor(args):
         from core.kia.charon import run_connect_cycle
         print(f"  ✓ Charon 知识解析: 可用")
     except Exception:
+        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
         print(f"  ☐ Charon 知识解析: 未就绪")
 
     # 13. 可选依赖与功能影响报告
@@ -477,6 +485,7 @@ def cmd_status(args):
         total = sum(v for v in stats.values() if v > 0)
         print(f"最近30天信号: {total}")
     except Exception:
+        logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
         print("画像数据库:    未初始化")
 
 
@@ -549,6 +558,7 @@ def cmd_calibrate(args):
                 print("\n" + "=" * 60)
                 print("以上挑战将在校准流程中帮助你验证画像准确性。\n")
         except Exception:
+            logger.warning(f"Unexpected error in mnemos_cli.py", exc_info=True)
             pass
 
     # 运行校准流程

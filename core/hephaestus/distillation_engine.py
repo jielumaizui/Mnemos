@@ -34,11 +34,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import get_config
+from core.frontmatter import to_chinese_frontmatter
 from core.kia.ingest_helpers import is_noise_message
 
+
+
 logger = logging.getLogger(__name__)
-
-
 def _get_wiki_dir() -> Path:
     return get_config().wiki_dir
 
@@ -109,7 +110,7 @@ def clean_message_content(content: str) -> str:
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
     content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
     content = re.sub(
-        r'^(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\s+.+$',
+        r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
         '', content, flags=re.MULTILINE,
     )
     content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
@@ -275,6 +276,7 @@ class HostAgentCaller:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
             pass
 
 
@@ -335,6 +337,7 @@ class ValuePrejudgment:
 
     def __init__(self):
         self._distill_scorer = None
+        self._distill_scorer_v2 = None
 
     def _get_scorer(self):
         if self._distill_scorer is None:
@@ -342,33 +345,69 @@ class ValuePrejudgment:
                 from core.scoring.scorers.distill_scorer import DistillScorer
                 self._distill_scorer = DistillScorer()
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         return self._distill_scorer
 
+    def _get_scorer_v2(self):
+        """获取 V2 评分器（懒加载，失败静默回退）。"""
+        if self._distill_scorer_v2 is None:
+            try:
+                from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
+                self._distill_scorer_v2 = DistillScorerV2()
+            except Exception:
+                logging.getLogger(__name__).debug("DistillScorerV2 not available, falling back to V1")
+                pass
+        return self._distill_scorer_v2
+
     def judge(self, messages: List[Dict]) -> Tuple[str, float]:
-        """预判会话价值，返回 (结论, 置信度)"""
+        """预判会话价值，返回 (结论, 置信度)
+
+        【阶段二 V2 桥接】优先尝试 V2 评分器；若不可用则回退 V1；
+        最终融合规则先验 + ML 后验得分。
+        """
         session_text = build_session_text(messages)
         if not session_text:
             return self.CERTAINLY_NO, 0.9
 
         rule_score = self._rule_assessment(session_text)
 
-        scorer = self._get_scorer()
-        if scorer:
+        # V2 评分优先（阶段二桥接）
+        v2_score = None
+        scorer_v2 = self._get_scorer_v2()
+        if scorer_v2:
             try:
-                cards = scorer.score(session_text)
-                distill_card = next(
-                    (c for c in cards if c.dimension == "distill_score"), None,
-                )
-                if distill_card:
-                    bayesian_score = distill_card.value
-                    combined = 0.4 * rule_score + 0.6 * bayesian_score
-                else:
-                    combined = rule_score
+                v2_score = scorer_v2.score(session_text)
             except Exception:
+                logging.getLogger(__name__).debug("V2 scoring failed, falling back to V1/rule")
+                pass
+
+        if v2_score is not None:
+            # V2 域 0-1，直接融合
+            v2_distill = v2_score.scores.get("distill")
+            if v2_distill is not None:
+                combined = 0.4 * rule_score + 0.6 * v2_distill
+            else:
                 combined = rule_score
         else:
-            combined = rule_score
+            # V1 回退路径
+            scorer = self._get_scorer()
+            if scorer:
+                try:
+                    cards = scorer.score(session_text)
+                    distill_card = next(
+                        (c for c in cards if c.dimension == "distill_score"), None,
+                    )
+                    if distill_card:
+                        bayesian_score = distill_card.value
+                        combined = 0.4 * rule_score + 0.6 * bayesian_score
+                    else:
+                        combined = rule_score
+                except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
+                    combined = rule_score
+            else:
+                combined = rule_score
 
         if combined >= 0.7:
             return self.CERTAINLY_YES, combined
@@ -502,6 +541,7 @@ class KnowledgeExtractor:
                 )
                 fragments.append(fragment)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
                 continue
         return fragments
 
@@ -526,6 +566,7 @@ class KnowledgeExtractor:
                 else:
                     frag.frontmatter["assertion_validated"] = True
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return fragments
 
@@ -538,6 +579,7 @@ class KnowledgeExtractor:
             assertions = merge_similar_assertions(assertions)
             assertions = [a for a in assertions if a.confidence >= 0.4]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
             return []
 
         if not assertions:
@@ -577,12 +619,20 @@ class DistillSelfCheck:
     """第5层：自检 — 规则验证
 
     检查项：
-    1. 断言可验证性（是否有具体数据/条件支撑）
+    1. 断言可验证性与内部冲突
     2. 代码语法正确性
-    3. Wiki 链接有效性
-    4. 时间范围合理性
+    3. Wiki/URL 链接有效性（轻量格式校验 + 后台可达性探测 enqueue）
+    4. 时间范围合理性与 contextual 自动标记
     不通过时标记 pending-verification，仍允许入库。
     """
+
+    def __init__(self, link_probe_worker=None):
+        """
+        Args:
+            link_probe_worker: 可选的 LinkProbeWorker 实例。
+                               传入后，URL 检测时会将外部链接 enqueue 到后台探测队列。
+        """
+        self._link_probe = link_probe_worker
 
     def check(self, fragments: List[KnowledgeFragment],
               messages: List[Dict]) -> Tuple[bool, List[str]]:
@@ -644,10 +694,28 @@ class DistillSelfCheck:
         temporal = frag.frontmatter.get("时效性", "")
         if temporal == "version-bound" and not frag.frontmatter.get("版本标记"):
             issues.append("标记为版本绑定但未指定版本标记")
+        if not temporal and self._looks_contextual(content):
+            frag.frontmatter["时效性"] = "contextual"
+            issues.append("包含当前性表述，已标记为 contextual")
 
         # 7. 回流检测
         if "<wiki-context" in content or "skip-distill" in content:
             issues.append("检测到回流内容，不应再次蒸馏")
+
+        # 8. URL 轻量校验 + 后台可达性探测 enqueue
+        for url in re.findall(r'https?://[^\s)\]>"]+', content):
+            if "." not in url.split("://", 1)[1]:
+                issues.append(f"可疑URL，待验证: {url}")
+            else:
+                frag.frontmatter.setdefault("external_links_pending_verification", True)
+                # 将外部链接 enqueue 到后台探测队列（零阻塞）
+                if self._link_probe is not None:
+                    # 使用 fragment 标题作为页面标识（实际 wiki 路径由调用方决定）
+                    page_path = frag.frontmatter.get("wiki_page_path", frag.title)
+                    self._link_probe.enqueue(url, page_path)
+
+        # 9. 断言内部冲突检测（复用 conflict_resolver 规则）
+        issues.extend(self._check_internal_conflicts(content))
 
         return issues
 
@@ -658,6 +726,28 @@ class DistillSelfCheck:
             return False
         except SyntaxError:
             return True
+
+    def _looks_contextual(self, content: str) -> bool:
+        return bool(re.search(r'(最新|目前|现在|当前|recently|currently|latest|as of)', content, re.I))
+
+    def _check_internal_conflicts(self, content: str) -> List[str]:
+        try:
+            from core.kia.assertion_extractor import extract_assertions
+            from core.kia.conflict_resolver import detect_conflicts
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
+            return []
+
+        assertions = extract_assertions(content, source="distill_self_check")
+        if len(assertions) < 2:
+            return []
+
+        issues = []
+        for i, assertion in enumerate(assertions):
+            conflicts = detect_conflicts([assertion], assertions[i + 1:], min_topic_overlap=0.2)
+            for conflict in conflicts[:2]:
+                issues.append(f"检测到断言内部冲突: {conflict.reason or conflict.conflict_type}")
+        return issues
 
 
 # ========== 第6层：跨 Agent 关联 ==========
@@ -715,6 +805,7 @@ class CrossAgentLinker:
                     keywords = self._text_to_keywords(content)
                     pages.append((md_file.stem, keywords, source))
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
                     continue
         return pages
 
@@ -748,7 +839,8 @@ class CrossAgentLinker:
 class DistillFeedbackLoop:
     """第7层：反馈循环 — 评分驱动
 
-    基于蒸馏结果生成反馈信号，反馈给 AdaptiveScorer：
+    基于蒸馏结果生成反馈信号，反馈给 AdaptiveScorer(V1) 和
+    AdaptiveScorerV2 ground_truth_signals（阶段二桥接）：
     - 高价值但被跳过 → 修正预判阈值
     - 低价值但被提取 → 修正提取阈值
     - 自检失败 → 修正提取质量
@@ -756,6 +848,7 @@ class DistillFeedbackLoop:
 
     def __init__(self):
         self._scorer = None
+        self._scorer_v2 = None
 
     def _get_scorer(self):
         if self._scorer is None:
@@ -763,8 +856,18 @@ class DistillFeedbackLoop:
                 from core.scoring.scorers.distill_scorer import DistillScorer
                 self._scorer = DistillScorer()
             except Exception:
-                pass
+                logging.getLogger(__name__).warning("DistillScorer init failed", exc_info=True)
         return self._scorer
+
+    def _get_scorer_v2(self):
+        """获取 V2 评分器引用（用于 ground_truth 写入）。"""
+        if self._scorer_v2 is None:
+            try:
+                from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
+                self._scorer_v2 = DistillScorerV2()
+            except Exception:
+                logging.getLogger(__name__).debug("DistillScorerV2 not available")
+        return self._scorer_v2
 
     def evaluate(self, result: DistillationResult) -> List[Dict]:
         """评估蒸馏结果，生成反馈信号"""
@@ -813,7 +916,7 @@ class DistillFeedbackLoop:
                 "reason": "判断为知识但提取无片段，提取逻辑需改善",
             })
 
-        # 将信号反馈给 AdaptiveScorer
+        # ── 写入 V1 AdaptiveScorer（保留向后兼容）──
         scorer = self._get_scorer()
         if scorer and signals:
             try:
@@ -829,7 +932,22 @@ class DistillFeedbackLoop:
                     )
                     scorer._scorer.feedback(fb)
             except Exception:
-                pass
+                logging.getLogger(__name__).warning("V1 feedback dispatch failed", exc_info=True)
+
+        # ── 写入 V2 ground_truth_signals（阶段二桥接）──
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            for sig in signals:
+                # 信号转为二元标签：expected > actual → 正例（模型低估了）
+                label = 1 if sig["expected"] > sig["actual"] else 0
+                AdaptiveScorerV2.insert_ground_truth(
+                    session_id=getattr(result, "session_id", "unknown"),
+                    signal_type=sig["type"],
+                    label=label,
+                    confidence=abs(sig["expected"] - sig["actual"]),
+                )
+        except Exception:
+            logging.getLogger(__name__).debug("V2 ground_truth insert failed", exc_info=True)
 
         return signals
 
@@ -839,40 +957,48 @@ class DistillFeedbackLoop:
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
                        source: str = "") -> str:
     """生成 wiki 页面 Markdown"""
-    fm = fragment.frontmatter
+    defaults = {
+        "type": fragment.form or "knowledge",
+        "name": fragment.title,
+        "domain": "未分类",
+        "summary": (fragment.title or fragment.core_content or "")[:80],
+        "status": "草稿",
+        "knowledge_stage": "原始",
+        "source_count": 1,
+        "evidence_level": "单源",
+        "confidence": 0.5,
+        "temporal_scope": "上下文相关",
+        "created_at": datetime.now().strftime("%Y-%m-%d"),
+        "source_session": session_id[:8],
+    }
+    fm = to_chinese_frontmatter(fragment.frontmatter, defaults)
     lines = ["---"]
-    lines.append(f"类型: {fm.get('类型', '未知')}")
-    lines.append(f"领域: {fm.get('领域', '其他')}")
+    ordered_keys = [
+        "类型", "名称", "领域", "摘要", "状态", "知识阶段",
+        "来源数量", "证据级别", "置信度", "时效性", "创建日期", "来源会话",
+        "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
+        "跨Agent关联",
+    ]
+    for key in ordered_keys:
+        if key not in fm:
+            continue
+        value = fm[key]
+        if isinstance(value, (list, dict)):
+            lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+        else:
+            lines.append(f"{key}: {value}")
 
-    roles = fm.get("适用角色", [])
-    if roles:
-        lines.append(f"适用角色: {json.dumps(roles, ensure_ascii=False)}")
+    # 保留少量历史中文字段，避免旧 Prompt 输出的信息丢失。
+    for key in ("适用角色", "触发场景", "复杂度", "情感倾向", "提取方式"):
+        value = (fragment.frontmatter or {}).get(key)
+        if value:
+            if isinstance(value, (list, dict)):
+                lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
+            else:
+                lines.append(f"{key}: {value}")
 
-    scenes = fm.get("触发场景", [])
-    if scenes:
-        lines.append(f"触发场景: {json.dumps(scenes, ensure_ascii=False)}")
-
-    lines.append(f"复杂度: {fm.get('复杂度', '入门')}")
-    lines.append(f"置信度: {fm.get('置信度', 0.5)}")
-    lines.append(f"证据级别: {fm.get('证据级别', '单源')}")
-    lines.append(f"时效性: {fm.get('时效性', '上下文相关')}")
-    lines.append(f"情感倾向: {fm.get('情感倾向', '中性')}")
-    lines.append(f"创建日期: {fm.get('创建日期', datetime.now().strftime('%Y-%m-%d'))}")
-    lines.append(f"来源会话: {session_id[:8]}")
-
-    if fm.get("版本标记"):
-        lines.append(f"版本标记: {fm['版本标记']}")
-    if fm.get("提取方式"):
-        lines.append(f"提取方式: {fm['提取方式']}")
     if not fragment.self_check_passed:
         lines.append(f"验证状态: pending-verification")
-
-    kw = fm.get("关键词", {})
-    if kw:
-        lines.append("关键词:")
-        for layer, words in kw.items():
-            if words:
-                lines.append(f"  {layer}: {json.dumps(words, ensure_ascii=False)}")
 
     lines.append("---")
 
@@ -934,8 +1060,20 @@ class DistillationEngine:
         self._llm_judge = LLMValueJudge(self._caller)
         self._extractor = KnowledgeExtractor(self._caller)
         self._self_check = DistillSelfCheck()
-        self._cross_linker = CrossAgentLinker()
+        self._cross_linker = CrossAgentLinker()          # 旧 Jaccard linker（L6 层保留）
         self._feedback_loop = DistillFeedbackLoop()
+        self._kia_linker = None  # 懒加载：core.kia.cross_agent_linker.CrossAgentLinker
+
+    def _get_kia_linker(self):
+        """懒加载新的跨 Agent 关联器（阶段三接入）。"""
+        if self._kia_linker is None:
+            try:
+                from core.kia.cross_agent_linker import CrossAgentLinker as KiaCrossAgentLinker
+                self._kia_linker = KiaCrossAgentLinker(wiki_root=self.wiki_base)
+            except Exception:
+                logger.debug("KiaCrossAgentLinker not available", exc_info=True)
+                self._kia_linker = False  # 标记为已尝试但失败
+        return self._kia_linker if self._kia_linker is not False else None
 
     def process(self, session_id: str, messages: List[Dict],
                 meta: Dict = None) -> DistillationResult:
@@ -1054,18 +1192,19 @@ class DistillationEngine:
                         "session_id": session_id,
                     })
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
         return result
 
     def write_pages(self, result: DistillationResult) -> List[str]:
-        """将蒸馏结果写入 Wiki 页面"""
+        """将蒸馏结果写入 Wiki 页面，并触发跨 Agent 关联（阶段三）。"""
         written = []
         if result.judgment != "knowledge" or not result.fragments:
             return written
 
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
 
+        file_fragments = []
         for i, fragment in enumerate(result.fragments):
             page_id = f"{result.session_id[:8]}_{fragment.form}_{i + 1}"
             page_content = generate_wiki_page(fragment, result.session_id)
@@ -1073,10 +1212,67 @@ class DistillationEngine:
             try:
                 file_path.write_text(page_content, encoding="utf-8")
                 written.append(str(file_path))
+                file_fragments.append((file_path, fragment))
             except Exception:
+                logger.warning("write_pages failed for %s", page_id, exc_info=True)
                 continue
 
+        # 阶段三：调用新 CrossAgentLinker 建立跨 Agent 关联
+        linker = self._get_kia_linker()
+        if linker and file_fragments:
+            for file_path, fragment in file_fragments:
+                try:
+                    actions = linker.link_after_distill(file_path)
+                    if actions:
+                        # 将关联结果写入 frontmatter（结构化查询用）
+                        refs = [
+                            {"page": str(a.to_page), "reason": a.reason,
+                             "similarity": round(a.similarity, 4)}
+                            for a in actions
+                        ]
+                        fragment.frontmatter["cross_agent_refs"] = refs
+                        # 更新文件 frontmatter（保留 body 中 linker 已注入的链接）
+                        self._update_frontmatter_field(
+                            file_path, "cross_agent_refs", refs,
+                        )
+                except Exception:
+                    logger.debug("Cross-agent linking failed for %s", file_path, exc_info=True)
+
+        # 发射 distill_complete 事件（阶段三：事件总线 wiring）
+        if written:
+            try:
+                from core.mnemos_bus import publish_event
+                for file_path, fragment in file_fragments:
+                    publish_event("distill_complete", "distill", {
+                        "page_path": str(file_path),
+                        "title": fragment.title,
+                        "session_id": result.session_id,
+                        "form": fragment.form,
+                    })
+            except Exception:
+                logger.debug("distill_complete event emit failed", exc_info=True)
+
         return written
+
+    @staticmethod
+    def _update_frontmatter_field(file_path: Path, key: str, value) -> None:
+        """只更新 Markdown 文件的 YAML frontmatter 中指定字段，保留 body 不变。"""
+        try:
+            text = file_path.read_text(encoding="utf-8")
+            if not text.startswith("---"):
+                return
+            parts = text.split("---", 2)
+            if len(parts) < 3:
+                return
+            import yaml
+            fm = yaml.safe_load(parts[1]) or {}
+            fm[key] = value
+            fm = to_chinese_frontmatter(fm)
+            new_fm = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False)
+            new_text = f"---\n{new_fm}---{parts[2]}"
+            file_path.write_text(new_text, encoding="utf-8")
+        except Exception:
+            logger.debug("Frontmatter update failed for %s", file_path, exc_info=True)
 
     def _extract_skill_suggestion(self, messages: List[Dict]) -> str:
         """尝试从对话中提取 Skill 建议"""
@@ -1115,6 +1311,7 @@ class DistillationEngine:
                 )
                 fragments.append(fragment)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at distillation_engine.py", exc_info=True)
                 continue
         return fragments
 

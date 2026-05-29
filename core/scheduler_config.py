@@ -75,7 +75,7 @@ class Scheduler:
         "weekly_report": {
             "cron": "0 10 * * 1",
             "description": "每周一上午10点生成周报",
-            "script": "weekly_report.py",
+            "script": "wrapper_weekly_report.py",
             "log": "weekly_report.log",
             "skip_if_missed": True,
         },
@@ -141,7 +141,7 @@ if os.path.exists(LOCK_FILE):
         if elapsed > timedelta(minutes=SCHEDULE_INTERVAL * 1.5):
             print(f"[{{datetime.now().isoformat()}}] Skipped: missed schedule (was off for {{elapsed}})")
             SHOULD_SKIP = True
-    except:
+    except ValueError:
         pass
 
 if SHOULD_SKIP:
@@ -162,8 +162,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 使用相对路径加载脚本
+import runpy
 SCRIPT_PATH = Path(__file__).parent / "{task['script']}"
-exec(open(str(SCRIPT_PATH)).read())
+runpy.run_path(str(SCRIPT_PATH), run_name="__main__")
 
 # 任务成功完成后，更新时间戳
 from datetime import datetime
@@ -243,6 +244,11 @@ with open(LOCK_FILE, 'w') as f:
         task = self.TASKS.get(task_name)
         if not task:
             print(f"Unknown task: {task_name}")
+            return False
+
+        script_path = self.config_path.parent / "scripts" / task["script"]
+        if not script_path.exists():
+            print(f"[ERR] 脚本不存在，无法安装: {script_path}")
             return False
 
         # 生成包装脚本（处理跳过逻辑）

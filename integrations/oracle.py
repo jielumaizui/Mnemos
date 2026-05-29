@@ -25,7 +25,6 @@ Wiki Reader - Wiki知识读取模块（热力值控制深度版）
 
 import logging
 
-logger = logging.getLogger(__name__)
 
 import os
 import sys
@@ -36,6 +35,7 @@ from typing import List, Dict, Optional, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
 try:
     from core.wiki_metrics import get_default_metrics
     _METRICS_AVAILABLE = True
@@ -134,6 +134,7 @@ class WikiReader:
                     return yaml.safe_load(parts[1]) or {}
             return {}
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at oracle.py", exc_info=True)
             return {}
 
     def _parse_content(self, content: str) -> Tuple[Dict, str]:

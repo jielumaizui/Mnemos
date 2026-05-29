@@ -73,6 +73,7 @@ class ProfileCrossValidator:
                         severity="medium",
                     ))
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_validator.py", exc_info=True)
                 continue
 
         return contradictions

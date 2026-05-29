@@ -12,7 +12,7 @@ ADR-012: 所有 L3 模块必须实现，L2 推荐实现，L1/L4 可选。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class PluggableModule(ABC):
@@ -74,3 +74,18 @@ class PluggableModule(ABC):
             data: 事件数据字典
         """
         ...
+
+    # ---- 事件发布辅助（可选，不强制实现）----
+
+    def _emit_event(self, event_type: str, payload: Dict[str, Any]) -> Optional[str]:
+        """向事件总线发布事件。
+
+        如果事件总线未初始化，静默忽略（不抛异常）。
+        返回值：trace_id 或 None。
+        """
+        try:
+            from core.mnemos_bus import get_event_bus
+            bus = get_event_bus()
+            return bus.publish(event_type, payload=payload)
+        except Exception:
+            return None

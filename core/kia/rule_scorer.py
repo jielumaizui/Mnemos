@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from core.frontmatter import normalize_frontmatter
+
 
 # ==================== 常量定义（从 ingest_helpers 提取）====================
 
@@ -224,6 +226,7 @@ def completeness_penalty(frontmatter: Dict, content: str = "") -> RuleResult:
     
     if not frontmatter or not isinstance(frontmatter, dict):
         return RuleResult("completeness", 0.0, 0.20, ["无 frontmatter"])
+    frontmatter = normalize_frontmatter(frontmatter)
     
     # 检查必填字段
     missing = _REQUIRED_FRONTMATTER_FIELDS - set(frontmatter.keys())

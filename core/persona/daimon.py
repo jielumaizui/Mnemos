@@ -26,6 +26,7 @@ import json
 import sqlite3
 import subprocess
 import logging
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Dict, List, Optional, Iterator, Any
 from datetime import datetime, timedelta
@@ -37,7 +38,6 @@ from .psyche import (
     SessionSignal, GitSignal, MemosSignal, log_session_signal,
 )
 
-logger = logging.getLogger(__name__)
 
 
 class SignalCollector:
@@ -82,6 +82,7 @@ class SignalCollector:
                     self.store.insert_session_signal(signal)
                     count += 1
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
                 continue
 
         return count
@@ -332,6 +333,7 @@ class SignalCollector:
             try:
                 count += self._collect_from_single_repo(Path(repo_path))
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
                 continue
 
         return count
@@ -536,6 +538,7 @@ class SignalCollector:
                 count += 1
 
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
                 continue
 
         return count
@@ -618,6 +621,7 @@ class SignalCollector:
                     count += 1
 
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
                     continue
 
         return count
@@ -632,7 +636,7 @@ class SignalCollector:
         过滤 AI 生成的内容，只保留用户原创笔记。
         """
         try:
-            from memos_sdk import MemosClient
+            from integrations.styx import MemosClient
         except ImportError:
             return 0
 
@@ -738,6 +742,7 @@ class SignalCollector:
                 count = collector()
                 results[name] = count
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
                 results[name] = -1  # 错误标记
 
         return results
@@ -786,7 +791,7 @@ def collect_and_log():
     """采集并输出日志"""
     collector = SignalCollector()
     results = collector.collect_all()
-    print(collector.get_collection_summary())
+    logger.info(collector.get_collection_summary())
     return results
 
 

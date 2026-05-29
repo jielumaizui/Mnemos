@@ -79,6 +79,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "token_budget_context_pct": 0.25,
         "token_budget_content_pct": 0.55,
         "token_budget_output_reserve": 2000,
+        # 真实环境保护：避免积压时一次性跑满 CPU/磁盘/宿主 Agent。
+        "max_tasks_per_cycle": 5,
+        "max_collect_per_cycle": 20,
+        "min_task_interval_seconds": 1.0,
     },
     # === 知识图谱常量 ===
     "knowledge_graph": {
@@ -100,6 +104,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "share": 0.9,
             "ignore": 0.3,
         },
+    },
+    # === Capture 队列层常量 ===
+    "capture": {
+        "max_queue_depth": 10000,
+        "per_source_max_queue_depth": 1000,
+        "max_workers": 4,
+        "per_source_concurrency": 1,
+        "max_batch_per_tick": 50,
+        "tick_interval_seconds": 5,
+        "max_payload_bytes": 200000,
+        "duplicate_ttl_days": 30,
     },
     # === 同步层常量 ===
     "sync": {
@@ -127,6 +142,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "event_bus": {
         "max_latency_ms": 10,
         "queue_depth_alert": 1000,
+        "max_queue_depth": 10000,
+        "max_recover_events": 1000,
         "dead_letter_alert": 10,
         "max_retries": 5,
     },
@@ -428,6 +445,7 @@ class Config:
                     agents = json.load(f)
                 return agents.get(agent_name, {})
             except Exception:
+                logger.warning(f"Unexpected error in config.py", exc_info=True)
                 pass
         return {}
 

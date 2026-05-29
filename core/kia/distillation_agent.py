@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
 """
 Distillation Agent - 供 Claude Code 子 Agent 调用的蒸馏执行器
 
@@ -223,20 +225,20 @@ def main():
     if args.list:
         pending = _list_pending()
         if pending:
-            print(f"待蒸馏任务: {len(pending)}")
+            logger.info(f"待蒸馏任务: {len(pending)}")
             for task in pending:
                 meta = task.get("meta", {})
                 print(f"  - {task['session_id'][:20]}... | "
                       f"消息: {len(task.get('messages', [])):3d} | "
                       f"来源: {meta.get('source', 'unknown'):8s}")
         else:
-            print("无待蒸馏任务")
+            logger.info("无待蒸馏任务")
         return
 
     if args.next:
         task = _get_next()
         if not task:
-            print("队列空，无待蒸馏任务")
+            logger.info("队列空，无待蒸馏任务")
             return
 
         prompt = build_prompt(task)
@@ -245,23 +247,23 @@ def main():
         prompt_path = QUEUE_DIR / f"{task['session_id']}_prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
 
-        print(f"任务: {task['session_id']}")
-        print(f"Prompt 已保存: {prompt_path}")
-        print(f"消息数: {len(task.get('messages', []))}")
-        print()
-        print("=" * 60)
-        print(prompt)
-        print("=" * 60)
+        logger.info(f"任务: {task['session_id']}")
+        logger.info(f"Prompt 已保存: {prompt_path}")
+        logger.info(f"消息数: {len(task.get('messages', []))}")
+        logger.info()
+        logger.info("=" * 60)
+        logger.info(prompt)
+        logger.info("=" * 60)
         return
 
     if args.done:
         success = _mark_done(args.done, args.output)
-        print(f"{'已标记完成' if success else '任务不存在'}: {args.done}")
+        logger.info(f"{'已标记完成' if success else '任务不存在'}: {args.done}")
         return
 
     if args.fail:
         success = _mark_failed(args.fail, "Agent execution failed")
-        print(f"{'已标记失败' if success else '任务不存在'}: {args.fail}")
+        logger.warning(f"{'已标记失败' if success else '任务不存在'}: {args.fail}")
         return
 
     parser.print_help()

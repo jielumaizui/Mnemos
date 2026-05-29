@@ -164,7 +164,10 @@ def get_wiki_knowledge(user_message: str) -> Optional[str]:
     # 记录查询轨迹（供暗知识挖掘使用）
     if result["found"]:
         try:
-            from core.knowledge_trail import KnowledgeTrail
+            try:
+                from core.knowledge_trail import KnowledgeTrail
+            except ImportError:
+                KnowledgeTrail = None  # module not available
             trail = KnowledgeTrail()
             for page in result.get("pages", []):
                 page_path = page.get("path", "")
@@ -1042,7 +1045,10 @@ def run_kia_cycles():
 
     # 1. 关联周期 (L2 → L3)
     try:
-        from core.connect_worker import run_connect_cycle
+        try:
+            from core.connect_worker import run_connect_cycle
+        except ImportError:
+            run_connect_cycle = None  # module not available
         stats = run_connect_cycle(dry_run=False)
         results.append(f"关联: {stats.get('pages_processed', 0)} 页, "
                       f"{stats.get('links_created', 0)} 链接")
@@ -1060,7 +1066,10 @@ def run_kia_cycles():
 
     # 2b. 免疫系统健康扫描
     try:
-        from core.knowledge_immune import KnowledgeImmuneSystem
+        try:
+            from core.knowledge_immune import KnowledgeImmuneSystem
+        except ImportError:
+            KnowledgeImmuneSystem = None  # module not available
         immune = KnowledgeImmuneSystem()
         report = immune.full_scan()
         health_score = report.health_score
@@ -1078,7 +1087,10 @@ def run_kia_cycles():
 
     # 3. DNA 指纹扫描（去重 + 相似度检测）
     try:
-        from core.knowledge_dna import DNAEngine
+        try:
+            from core.knowledge_dna import DNAEngine
+        except ImportError:
+            DNAEngine = None  # module not available
         dna_engine = DNAEngine()
         dna_stats = dna_engine.scan_all_pages()
         total_dna = dna_engine.get_stats().get("total_fingerprints", 0)
@@ -1107,7 +1119,10 @@ def run_kia_cycles():
 
     # 4. 暗知识挖掘（需要 trail 数据，无条件运行但可能为空）
     try:
-        from core.dark_knowledge import DarkKnowledgeMiner
+        try:
+            from core.dark_knowledge import DarkKnowledgeMiner
+        except ImportError:
+            DarkKnowledgeMiner = None  # module not available
         miner = DarkKnowledgeMiner()
         associations = miner.mine_hidden_associations(min_confidence=0.5)
         gaps = miner.mine_knowledge_gaps(min_frequency=3)
@@ -1120,7 +1135,10 @@ def run_kia_cycles():
 
     # 5. 知识图谱增强（间接关联发现）
     try:
-        from core.quantum_entanglement import QuantumEntanglement
+        try:
+            from core.quantum_entanglement import QuantumEntanglement
+        except ImportError:
+            QuantumEntanglement = None  # module not available
         qe = QuantumEntanglement()
         indirect = qe.discover_indirect_paths(max_depth=2, min_strength=0.3)
         cross = qe.discover_cross_domain()
@@ -1133,7 +1151,10 @@ def run_kia_cycles():
 
     # 6. Skill-Wiki 双飞轮扫描
     try:
-        from core.skill_wiki_flywheel import SkillWikiFlywheel
+        try:
+            from core.skill_wiki_flywheel import SkillWikiFlywheel
+        except ImportError:
+            SkillWikiFlywheel = None  # module not available
         flywheel = SkillWikiFlywheel()
         insights = flywheel.scan_wiki_for_skills()
         if insights:
@@ -1145,7 +1166,10 @@ def run_kia_cycles():
 
     # 7. 可证伪性标记扫描
     try:
-        from core.falsifiability_marker import FalsifiabilityMarker
+        try:
+            from core.falsifiability_marker import FalsifiabilityMarker
+        except ImportError:
+            FalsifiabilityMarker = None  # module not available
         marker = FalsifiabilityMarker()
         marks = marker.scan_all_marks(days_since_last_test=30)
         if marks:
@@ -1157,7 +1181,10 @@ def run_kia_cycles():
 
     # 8. 知识画像生成
     try:
-        from core.knowledge_profile import ProfileGenerator
+        try:
+            from core.knowledge_profile import ProfileGenerator
+        except ImportError:
+            ProfileGenerator = None  # module not available
         gen = ProfileGenerator()
         profile = gen.generate()
         results.append(f"画像: {profile.total_knowledge} 页, 质量分 {profile.quality_score:.0f}")
@@ -1166,7 +1193,10 @@ def run_kia_cycles():
 
     # 9. 时间胶囊（自动扫描时效性知识）
     try:
-        from core.time_capsule import TimeCapsule
+        try:
+            from core.time_capsule import TimeCapsule
+        except ImportError:
+            TimeCapsule = None  # module not available
         capsule = TimeCapsule()
         new_reminders = capsule.scan_for_auto_reminders()
         due = capsule.get_due_reminders(days_ahead=7)
@@ -1179,7 +1209,10 @@ def run_kia_cycles():
 
     # 10. 熵引擎（知识混乱度扫描）
     try:
-        from core.entropy_engine import EntropyEngine
+        try:
+            from core.entropy_engine import EntropyEngine
+        except ImportError:
+            EntropyEngine = None  # module not available
         entropy = EntropyEngine()
         report = entropy.scan()
         if report.duplicate_count > 0 or report.mergeable_count > 0:
@@ -1191,7 +1224,10 @@ def run_kia_cycles():
 
     # 11. 版本时间旅行（全量快照）
     try:
-        from core.version_time_travel import VersionTimeTravel
+        try:
+            from core.version_time_travel import VersionTimeTravel
+        except ImportError:
+            VersionTimeTravel = None  # module not available
         vtt = VersionTimeTravel()
         snap_stats = vtt.scan_and_snapshot_all()
         total_snaps = sum(snap_stats.values())
@@ -1204,7 +1240,10 @@ def run_kia_cycles():
 
     # 12. 影子页面（外部验证，需 Tavily API）
     try:
-        from core.shadow_page import ShadowPageManager
+        try:
+            from core.shadow_page import ShadowPageManager
+        except ImportError:
+            ShadowPageManager = None  # module not available
         spm = ShadowPageManager()
         shadows = spm.list_shadows()
         if shadows:

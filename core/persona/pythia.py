@@ -26,11 +26,11 @@ from collections import Counter, defaultdict
 from .psyche import SignalStore, get_signal_store
 import logging
 
-logger = logging.getLogger(__name__)
 
 
 # ========== 三层雷达模型定义 ==========
 
+logger = logging.getLogger(__name__)
 @dataclass
 class EnergyProfile:
     """Layer 1: 能量模式 - 你的能量怎么流动"""
@@ -149,8 +149,6 @@ class PreferenceAnalyzer:
         "session": 10,
         "git": 5,
         "wiki": 5,
-        "wechat": 20,
-        "file_system": 10,
         "memos": 30,
     }
 
@@ -158,7 +156,7 @@ class PreferenceAnalyzer:
         self.store = store or get_signal_store()
 
     def analyze(self, days: int = 90, previous_profile: PreferenceProfile = None,
-                incremental: bool = False) -> PreferenceProfile:
+                incremental: bool = True, metis_profile=None) -> PreferenceProfile:
         """
         分析信号，生成偏好画像。
 
@@ -177,11 +175,14 @@ class PreferenceAnalyzer:
         session_signals = self.store.get_recent_session_signals(days=days)
         git_signals = self._get_git_signals(days=days)
         wiki_signals = self._get_wiki_signals(days=days)
-        wechat_signals = self.store.get_recent_wechat_signals(days=days)
-        fs_signals = self._get_fs_signals(days=days)
+        wechat_signals = []
+        fs_signals = []
         memos_signals = self.store.get_recent_memos_signals(days=days)
 
-        total_signals = len(session_signals) + len(git_signals) + len(wiki_signals) + len(wechat_signals) + len(fs_signals) + len(memos_signals)
+        total_signals = len(session_signals) + len(git_signals) + len(wiki_signals) + len(memos_signals)
+
+        if total_signals == 0 and metis_profile is not None:
+            return self._fallback_from_knowledge_profile(metis_profile, previous_profile, days)
 
         # 标记所有信号为已处理（增量模式依赖这个标记）
         self._mark_all_processed(session_signals, git_signals, wiki_signals, wechat_signals, fs_signals, memos_signals)
@@ -214,8 +215,8 @@ class PreferenceAnalyzer:
         new_session = self.store.get_unprocessed_signals("session", limit=1000)
         new_git = self.store.get_unprocessed_signals("git", limit=1000)
         new_wiki = self.store.get_unprocessed_signals("knowledge", limit=1000)
-        new_wechat = self.store.get_unprocessed_signals("wechat", limit=1000)
-        new_fs = self.store.get_unprocessed_signals("file_system", limit=1000)
+        new_wechat = []
+        new_fs = []
         new_memos = self.store.get_unprocessed_signals("memos", limit=5000)
 
         total_new = len(new_session) + len(new_git) + len(new_wiki) + len(new_wechat) + len(new_fs) + len(new_memos)
@@ -327,6 +328,47 @@ class PreferenceAnalyzer:
                     self.store.mark_signals_processed("memos", ids)
         except Exception as e:
             logger.warning(f"忽略异常: {e}")
+
+    def _fallback_from_knowledge_profile(self, metis_profile, previous_profile: PreferenceProfile = None,
+                                         days: int = 90) -> PreferenceProfile:
+        """行为信号不足时，用知识画像做低置信度降级推断。"""
+        profile = PreferenceProfile(
+            version=(previous_profile.version + 1) if previous_profile else 1,
+            generated_at=datetime.now().isoformat(),
+            period_start=(datetime.now() - timedelta(days=days)).isoformat()[:10],
+            period_end=datetime.now().isoformat()[:10],
+            signal_count=0,
+        )
+
+        entropy = getattr(metis_profile, "domain_entropy", 0.0)
+        profile.value.depth_vs_breadth = round(1.0 - min(1.0, entropy), 2)
+
+        learning = getattr(metis_profile, "learning_mode", {}) or {}
+        simple_mode = learning.get("simple_mode", "") if isinstance(learning, dict) else str(learning)
+        if "方法论" in simple_mode or "deductive" in simple_mode:
+            profile.cognitive.abstraction = 0.7
+            profile.cognitive.deduction = 0.7
+        elif "问题" in simple_mode or "inductive" in simple_mode:
+            profile.cognitive.abstraction = 0.35
+            profile.cognitive.deduction = 0.35
+
+        tool_stack = getattr(metis_profile, "tool_stack", []) or []
+        if len(tool_stack) > 3:
+            profile.cognitive.system_view = min(1.0, len(tool_stack) / 10)
+
+        profile.energy.confidence = 0.1
+        profile.cognitive.confidence = 0.3
+        profile.value.confidence = 0.3
+        profile.energy.insufficient_dimensions = [
+            "focus_depth", "startup_difficulty", "endurance_mode",
+            "switching_flexibility", "recovery_cycle",
+        ]
+        profile.cognitive.insufficient_dimensions = ["skepticism", "creativity"]
+        profile.value.insufficient_dimensions = [
+            "correctness_vs_efficiency", "perfection_vs_completion",
+            "innovation_vs_safety", "autonomy_vs_collaboration",
+        ]
+        return profile
 
     # ---- Layer 1: 能量模式分析 ----
 
@@ -823,6 +865,7 @@ class PreferenceAnalyzer:
                     dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     parsed.append(dt)
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at pythia.py", exc_info=True)
                     continue
 
             parsed.sort()
@@ -847,6 +890,7 @@ class PreferenceAnalyzer:
                 """, (f'-{days} days',))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at pythia.py", exc_info=True)
             return []
 
     def _get_wiki_signals(self, days: int) -> List[Dict]:
@@ -862,6 +906,7 @@ class PreferenceAnalyzer:
                 """, (f'-{days} days',))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at pythia.py", exc_info=True)
             return []
 
     def _get_fs_signals(self, days: int) -> List[Dict]:
@@ -877,6 +922,7 @@ class PreferenceAnalyzer:
                 """, (f'-{days} days',))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at pythia.py", exc_info=True)
             return []
 
 

@@ -17,9 +17,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class PushSignal:
     """推送信号"""
@@ -246,6 +246,7 @@ class PredictivePush:
             if results:
                 return results[0]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at predictive_push.py", exc_info=True)
             pass
 
         # 回退：文件名搜索
@@ -275,6 +276,7 @@ class PredictivePush:
                 )
                 return cursor.fetchone() is not None
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at predictive_push.py", exc_info=True)
             return False
 
     def _get_mode(self) -> str:
@@ -290,6 +292,7 @@ class PredictivePush:
             else:
                 return "HOT"
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at predictive_push.py", exc_info=True)
             return "COLD"
 
     def _count_today_pushes(self) -> int:

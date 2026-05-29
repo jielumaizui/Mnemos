@@ -23,7 +23,6 @@ from typing import Dict, List, Optional, Set, Tuple
 from core.config import get_config
 from .relation_schema import Relation, RelationType, RelationEvidence, suggest_relation_type
 
-logger = logging.getLogger(__name__)
 
 
 def _get_db_path() -> Path:
@@ -220,6 +219,7 @@ class RelationManager:
                     if entity_lower in content:
                         pages.append(md_file)
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at relation_manager.py", exc_info=True)
                     continue
         return pages
 
@@ -232,6 +232,7 @@ class RelationManager:
             try:
                 content = page.read_text(encoding="utf-8")
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at relation_manager.py", exc_info=True)
                 continue
 
             # 提取 [[链接]] 中的实体
@@ -256,6 +257,7 @@ class RelationManager:
                         if isinstance(layer_words, list):
                             keywords.update(w.lower() for w in layer_words if isinstance(w, str))
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at relation_manager.py", exc_info=True)
                 continue
         return keywords
 
@@ -267,6 +269,7 @@ class RelationManager:
             entities = em.get_all_entities()
             return [e.name for e in entities]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at relation_manager.py", exc_info=True)
             return []
 
     @staticmethod
@@ -292,3 +295,4 @@ class RelationManager:
 
 
 import re
+logger = logging.getLogger(__name__)

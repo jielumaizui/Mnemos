@@ -134,7 +134,7 @@ def generate_batch_prompt(threshold: int = 1) -> str:
     # 按类型分组统计
     type_counts = {}
     for task in pending:
-        from core.distillation_agent import _detect_session_type
+        from core.kia.distillation_agent import _detect_session_type
         stype = _detect_session_type(task.get("messages", []))
         type_counts[stype] = type_counts.get(stype, 0) + 1
 
@@ -144,7 +144,7 @@ def generate_batch_prompt(threshold: int = 1) -> str:
     for i, task in enumerate(pending, 1):
         meta = task.get("meta", {})
         msg_count = len(task.get("messages", []))
-        from core.distillation_agent import _detect_session_type
+        from core.kia.distillation_agent import _detect_session_type
         stype = _detect_session_type(task.get("messages", []))
         lines.append(f"### {i}. {task['session_id'][:24]}...")
         lines.append(f"- 消息数: {msg_count}")

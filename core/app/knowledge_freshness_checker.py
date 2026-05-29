@@ -8,6 +8,8 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 
+import logging
+logger = logging.getLogger(__name__)
 class KnowledgeFreshnessChecker:
     """检查知识条目的新鲜度，标记需要更新的内容"""
 
@@ -38,6 +40,7 @@ class KnowledgeFreshnessChecker:
                 "reason": f"内容已 {age_days} 天未更新" if needs_update else "",
             }
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at knowledge_freshness_checker.py", exc_info=True)
             return {"freshness_score": 0.0, "needs_update": True, "reason": "无法解析日期"}
 
     def batch_check(self, pages: List[Dict]) -> List[Dict]:

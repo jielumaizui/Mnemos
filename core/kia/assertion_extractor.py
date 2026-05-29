@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """
 Assertion Extractor - 从文本中提取可验证断言
 
@@ -37,6 +39,7 @@ class Assertion:
     temporal_scope: str = ""        # permanent/stable/version-bound/contextual
     boundary_hint: str = ""         # 边界条件提示（从否定句/条件句提取）
     is_negated: bool = False        # 是否是否定断言（反模式）
+    tags: List[str] = field(default_factory=list)  # domain/主题标签，用于基础领域冲突判断
 
 
 # ========== 启发式规则 ==========
@@ -467,17 +470,17 @@ def main():
         """
 
     assertions = extract_assertions(text)
-    print(f"提取到 {len(assertions)} 条断言:\n")
+    logger.info(f"提取到 {len(assertions)} 条断言:\n")
 
     for i, a in enumerate(assertions, 1):
-        print(f"[{i}] {a.form.value}")
-        print(f"    断言: {a.claim}")
-        print(f"    置信度: {a.confidence:.2f}")
+        logger.info(f"[{i}] {a.form.value}")
+        logger.info(f"    断言: {a.claim}")
+        logger.info(f"    置信度: {a.confidence:.2f}")
         if a.boundary_hint:
-            print(f"    边界: {a.boundary_hint}")
+            logger.info(f"    边界: {a.boundary_hint}")
         if a.is_negated:
-            print(f"    [否定断言]")
-        print()
+            logger.info(f"    [否定断言]")
+        logger.info()
 
 
 if __name__ == "__main__":

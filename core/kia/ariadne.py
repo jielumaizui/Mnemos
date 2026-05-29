@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from core.config import get_config
+from core.kia.adaptive_config import AdaptiveConfig
 
 
 @dataclass
@@ -63,11 +64,19 @@ class PageTrail:
 class KnowledgeTrail:
     """知识轨迹追踪器"""
 
-    def __init__(self, wiki_base: str = None, db_path: str = None):
+    def __init__(self, wiki_base: str = None, db_path: str = None,
+                 adaptive_config: AdaptiveConfig = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
         self.inbox = self.wiki_base / "00-Inbox"
+        self.adaptive_config = adaptive_config or AdaptiveConfig({
+            "trail.effect_ewma_alpha": 0.35,
+            "trail.effect_half_life_days": 30,
+            "trail.forgotten_effect_weight": 0.55,
+            "trail.forgotten_age_weight": 0.30,
+            "trail.forgotten_inactivity_weight": 0.15,
+        })
         self.db_path = Path(db_path) if db_path else (
             self.wiki_base / ".kg" / "trail.db"
         )
@@ -102,11 +111,18 @@ class KnowledgeTrail:
             total_modifications INTEGER DEFAULT 0,
             first_accessed TEXT,
             last_accessed TEXT,
-            effect_score REAL DEFAULT 0.0
+            effect_score REAL DEFAULT 0.5,
+            effect_count INTEGER DEFAULT 0,
+            effect_solved_count INTEGER DEFAULT 0
         );
         """
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             conn.executescript(schema)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(page_stats)")}
+            if "effect_count" not in columns:
+                conn.execute("ALTER TABLE page_stats ADD COLUMN effect_count INTEGER DEFAULT 0")
+            if "effect_solved_count" not in columns:
+                conn.execute("ALTER TABLE page_stats ADD COLUMN effect_solved_count INTEGER DEFAULT 0")
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10)
@@ -206,11 +222,14 @@ class KnowledgeTrail:
 
                 # 效果分数更新
                 if event_type == "effect" and success is not None:
-                    # 简单的滑动平均
-                    old_score = row["effect_score"] or 0.0
-                    old_count = row["total_queries"] or 1
-                    new_score = (old_score * (old_count - 1) + (1.0 if success else 0.0)) / old_count
+                    old_score = row["effect_score"] if row["effect_score"] is not None else 0.5
+                    decayed_score = self._decay_effect_score(old_score, row["last_accessed"])
+                    alpha = self._config_value("trail.effect_ewma_alpha", 0.35)
+                    outcome = 1.0 if success else 0.0
+                    new_score = alpha * outcome + (1 - alpha) * decayed_score
                     updates["effect_score"] = round(new_score, 3)
+                    updates["effect_count"] = (row["effect_count"] or 0) + 1
+                    updates["effect_solved_count"] = (row["effect_solved_count"] or 0) + (1 if success else 0)
 
                 set_clause = ", ".join(f"{k}=?" for k in updates)
                 conn.execute(
@@ -231,9 +250,16 @@ class KnowledgeTrail:
                         1 if event_type == "reference" else 0,
                         1 if event_type == "modify" else 0,
                         now, now,
-                        1.0 if success else 0.0 if success is not None else 0.0,
+                        1.0 if success else 0.0 if success is not None else 0.5,
                     )
                 )
+                if event_type == "effect" and success is not None:
+                    conn.execute(
+                        """UPDATE page_stats
+                           SET effect_count=1, effect_solved_count=?
+                           WHERE page_path=?""",
+                        (1 if success else 0, page_path)
+                    )
             conn.commit()
 
     # ========== 查询分析 ==========
@@ -333,7 +359,7 @@ class KnowledgeTrail:
 
             # 所有有一定历史的知识
             all_pages = conn.execute(
-                """SELECT page_path, page_title, first_accessed, effect_score
+                """SELECT page_path, page_title, first_accessed, last_accessed, effect_score
                    FROM page_stats
                    WHERE first_accessed <= ?""",
                 (age_threshold,)
@@ -347,11 +373,11 @@ class KnowledgeTrail:
                     "page_title": row["page_title"],
                     "first_accessed": row["first_accessed"],
                     "effect_score": row["effect_score"],
-                    "last_accessed": self._get_last_access(row["page_path"]),
+                    "last_accessed": row["last_accessed"] or self._get_last_access(row["page_path"]),
                 })
+                forgotten[-1]["priority"] = self._forgotten_priority(forgotten[-1])
 
-        # 按效果分数排序（效果好的知识被遗忘更可惜）
-        forgotten.sort(key=lambda x: x["effect_score"], reverse=True)
+        forgotten.sort(key=lambda x: x["priority"], reverse=True)
         return forgotten
 
     def get_user_journey(self, session_id: str = None,
@@ -409,7 +435,7 @@ class KnowledgeTrail:
 
             # 效果最好的知识
             top_effective = conn.execute(
-                """SELECT page_path, page_title, effect_score
+                """SELECT page_path, page_title, effect_score, effect_count, effect_solved_count
                    FROM page_stats
                    WHERE effect_score > 0
                    ORDER BY effect_score DESC
@@ -418,7 +444,7 @@ class KnowledgeTrail:
 
             # 效果最差的知识（被查询但很少解决问题）
             least_effective = conn.execute(
-                """SELECT page_path, page_title, effect_score, total_queries
+                """SELECT page_path, page_title, effect_score, total_queries, effect_count, effect_solved_count
                    FROM page_stats
                    WHERE total_queries >= 3 AND effect_score < 0.5
                    ORDER BY effect_score ASC
@@ -431,11 +457,11 @@ class KnowledgeTrail:
             "solved_count": solved,
             "solve_rate": round(solved / max(total_effects, 1), 3),
             "top_effective": [
-                {"page": r[0], "title": r[1], "score": r[2]}
+                {"page": r[0], "title": r[1], "score": r[2], "effect_count": r[3], "solved_count": r[4]}
                 for r in top_effective
             ],
             "needs_improvement": [
-                {"page": r[0], "title": r[1], "score": r[2], "queries": r[3]}
+                {"page": r[0], "title": r[1], "score": r[2], "queries": r[3], "effect_count": r[4], "solved_count": r[5]}
                 for r in least_effective
             ],
         }
@@ -450,6 +476,45 @@ class KnowledgeTrail:
                 (page_path,)
             ).fetchone()
         return row[0] if row and row[0] else ""
+
+    def _config_value(self, key: str, default):
+        return self.adaptive_config.base_config.get(key, default)
+
+    def _decay_effect_score(self, score: float, last_accessed: str) -> float:
+        """按时间把效果分逐步拉回中立值 0.5。"""
+        if not last_accessed:
+            return score
+        try:
+            days_old = max((datetime.now() - datetime.fromisoformat(last_accessed)).days, 0)
+        except ValueError:
+            return score
+        half_life = self._config_value("trail.effect_half_life_days", 30)
+        decay = 0.5 ** (days_old / max(half_life, 1))
+        return 0.5 + (score - 0.5) * decay
+
+    def _forgotten_priority(self, row: Dict) -> float:
+        now = datetime.now()
+        try:
+            first = datetime.fromisoformat(row.get("first_accessed") or now.isoformat())
+        except ValueError:
+            first = now
+        try:
+            last = datetime.fromisoformat(row.get("last_accessed") or row.get("first_accessed") or now.isoformat())
+        except ValueError:
+            last = first
+
+        age_days = max((now - first).days, 0)
+        inactive_days = max((now - last).days, 0)
+        age_score = min(age_days / 90, 1.0)
+        inactivity_score = min(inactive_days / 30, 1.0)
+        effect_score = row.get("effect_score") if row.get("effect_score") is not None else 0.5
+
+        return round(
+            effect_score * self._config_value("trail.forgotten_effect_weight", 0.55)
+            + age_score * self._config_value("trail.forgotten_age_weight", 0.30)
+            + inactivity_score * self._config_value("trail.forgotten_inactivity_weight", 0.15),
+            3,
+        )
 
     def generate_weekly_report(self) -> str:
         """生成周报"""

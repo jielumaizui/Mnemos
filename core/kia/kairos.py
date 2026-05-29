@@ -10,6 +10,7 @@ Time Parser - 时间解析器
 
 
 import re
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
@@ -23,6 +24,7 @@ class TimeWindowType(Enum):
     MEDIUM = "medium"           # 中期（8-30天）
     LONG = "long"               # 长期（>30天）
     PERIODIC = "periodic"       # 周期性
+    NO_TIME_INTENT = "no_time_intent"  # 无时间意图
     UNKNOWN = "unknown"         # 无法确定
 
 
@@ -30,11 +32,14 @@ class TimeWindowType(Enum):
 class TimeWindow:
     """时间窗口"""
     window: TimeWindowType
-    days_until: int             # 距离执行的天数（0=今天）
+    days_until: Optional[int]   # 距离执行的天数（0=今天）
     due_date: Optional[datetime] = None  # 预估执行日期
     is_periodic: bool = False
     period: Optional[str] = None        # weekly/biweekly/monthly/quarterly
     periodic_keywords: List[str] = None  # 检测到的周期性关键词
+    weekday: Optional[int] = None       # 0=周一, 6=周日
+    hour: Optional[int] = None          # 0-23
+    minute: Optional[int] = None        # 0-59
 
     def __post_init__(self):
         if self.periodic_keywords is None:
@@ -56,14 +61,8 @@ class TimeParser:
         (r'后天|the day after tomorrow', 2),
         # 3天后
         (r'3天后|三天后|in 3 days', 3),
-        # 本周内
-        (r'本周|这周|this week', 3),
-        # 下周
-        (r'下周|下星期|next week', 7),
         # 下下周
         (r'下下周|the week after next', 14),
-        # 本月底
-        (r'本月|这个月|this month', 15),
         # 下个月
         (r'下个月|下月|next month', 30),
         # 下个月初
@@ -93,16 +92,26 @@ class TimeParser:
     ]
 
     # 模糊时间
-    FUZZY_PATTERNS = [
-        (r'尽快|as soon as possible|尽快处理', 2),      # 2天内
-        (r'有空时|有空|when you have time', 7),         # 一周内
-        (r'不急|不着急|not urgent', 14),                # 两周内
-    ]
+    FUZZY_MAPPING_BY_TYPE = {
+        "coding": {"尽快": 0, "有空时": 1, "不急": 3},
+        "strategy": {"尽快": 0, "有空时": 2, "不急": 4},
+        "marketing": {"尽快": 0, "有空时": 1, "不急": 3},
+        "analysis": {"尽快": 0, "有空时": 1, "不急": 3},
+        "writing": {"尽快": 0, "有空时": 2, "不急": 4},
+        "review": {"尽快": 0, "有空时": 1, "不急": 2},
+        "default": {"尽快": 0, "有空时": 1, "不急": 3},
+    }
+
+    FUZZY_ALIASES = {
+        "尽快": r'尽快|as soon as possible|尽快处理|asap',
+        "有空时": r'有空时|有空|when you have time',
+        "不急": r'不急|不着急|not urgent',
+    }
 
     def __init__(self, reference_time: Optional[datetime] = None):
         self.reference_time = reference_time or datetime.now()
 
-    def parse(self, content: str) -> TimeWindow:
+    def parse(self, content: str, task_type: Optional[str] = None) -> TimeWindow:
         """
         解析内容中的时间信息
 
@@ -123,7 +132,7 @@ class TimeParser:
             return relative_match
 
         # 3. 检测模糊时间
-        fuzzy_match = self._detect_fuzzy(content)
+        fuzzy_match = self._detect_fuzzy(content, task_type=task_type)
         if fuzzy_match:
             return fuzzy_match
 
@@ -132,16 +141,20 @@ class TimeParser:
         if date_match:
             return date_match
 
-        # 无法确定，默认即时
+        # 无时间意图交给上游任务类型决定，避免闲聊误触发装载。
         return TimeWindow(
-            window=TimeWindowType.IMMEDIATE,
-            days_until=0,
-            due_date=self.reference_time
+            window=TimeWindowType.NO_TIME_INTENT,
+            days_until=None,
+            due_date=None
         )
 
     def _detect_periodic(self, content: str) -> Optional[TimeWindow]:
         """检测周期性任务"""
         content_lower = content.lower()
+        compound_match = self._detect_compound_periodic(content_lower)
+        if compound_match:
+            return compound_match
+
         for pattern, period in self.PERIODIC_PATTERNS:
             if re.search(pattern, content_lower):
                 return TimeWindow(
@@ -154,9 +167,50 @@ class TimeParser:
                 )
         return None
 
+    def _detect_compound_periodic(self, content_lower: str) -> Optional[TimeWindow]:
+        """检测带星期和时间点的周期表达，如“每周五下午3点”"""
+        pattern = r'每(?:周|星期)([一二三四五六日天])(?:的)?(上午|中午|下午|晚上|早上)?(\d{1,2})(?:点|:)(?:(\d{1,2})分?)?'
+        match = re.search(pattern, content_lower)
+        if not match:
+            return None
+
+        weekday = self._chinese_weekday_to_int(match.group(1))
+        hour = int(match.group(3))
+        minute = int(match.group(4) or 0)
+        period_of_day = match.group(2) or ""
+        hour = self._normalize_hour(hour, period_of_day)
+        return TimeWindow(
+            window=TimeWindowType.PERIODIC,
+            days_until=0,
+            due_date=self.reference_time,
+            is_periodic=True,
+            period="weekly",
+            periodic_keywords=["weekly", f"weekday_{weekday}", f"hour_{hour}"],
+            weekday=weekday,
+            hour=hour,
+            minute=minute,
+        )
+
+    @staticmethod
+    def _chinese_weekday_to_int(value: str) -> int:
+        mapping = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+        return mapping[value]
+
+    @staticmethod
+    def _normalize_hour(hour: int, period_of_day: str) -> int:
+        if period_of_day in ("下午", "晚上") and hour < 12:
+            return hour + 12
+        if period_of_day == "中午" and hour < 11:
+            return hour + 12
+        return hour
+
     def _detect_relative(self, content: str) -> Optional[TimeWindow]:
         """检测相对时间"""
         content_lower = content.lower()
+        dynamic = self._detect_dynamic_relative(content_lower)
+        if dynamic:
+            return dynamic
+
         for pattern, days in self.RELATIVE_PATTERNS:
             if re.search(pattern, content_lower):
                 due_date = self.reference_time + timedelta(days=days)
@@ -168,10 +222,34 @@ class TimeParser:
                 )
         return None
 
-    def _detect_fuzzy(self, content: str) -> Optional[TimeWindow]:
+    def _detect_dynamic_relative(self, content_lower: str) -> Optional[TimeWindow]:
+        """检测需要参考当前日期动态计算的相对时间"""
+        today_weekday = self.reference_time.weekday()
+
+        if re.search(r'本周|这周|this week', content_lower):
+            days = max(0, 4 - today_weekday)  # 默认周五为本周截止
+            due_date = self.reference_time + timedelta(days=days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        if re.search(r'(?<!下)下周|(?<!下)下星期|next week', content_lower):
+            days = 7 - today_weekday
+            due_date = self.reference_time + timedelta(days=days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        if re.search(r'本月底|这个月月底|本月|这个月|this month|end of this month', content_lower):
+            last_day = calendar.monthrange(self.reference_time.year, self.reference_time.month)[1]
+            due_date = self.reference_time.replace(day=last_day)
+            days = max(0, (due_date.date() - self.reference_time.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        return None
+
+    def _detect_fuzzy(self, content: str, task_type: Optional[str] = None) -> Optional[TimeWindow]:
         """检测模糊时间"""
         content_lower = content.lower()
-        for pattern, days in self.FUZZY_PATTERNS:
+        fuzzy_map = self.FUZZY_MAPPING_BY_TYPE.get(task_type or "", self.FUZZY_MAPPING_BY_TYPE["default"])
+        for key, days in fuzzy_map.items():
+            pattern = self.FUZZY_ALIASES[key]
             if re.search(pattern, content_lower):
                 due_date = self.reference_time + timedelta(days=days)
                 window_type = self._days_to_window(days)
@@ -207,8 +285,10 @@ class TimeParser:
                     continue
         return None
 
-    def _days_to_window(self, days: int) -> TimeWindowType:
+    def _days_to_window(self, days: Optional[int]) -> TimeWindowType:
         """天数转换为窗口类型"""
+        if days is None:
+            return TimeWindowType.NO_TIME_INTENT
         if days <= 1:
             return TimeWindowType.IMMEDIATE
         elif days <= 7:
@@ -218,7 +298,7 @@ class TimeParser:
         else:
             return TimeWindowType.LONG
 
-    def should_load_now(self, time_window: TimeWindow) -> bool:
+    def should_load_now(self, time_window: TimeWindow, task_type: Optional[str] = None) -> bool:
         """
         判断是否应该立即装载知识
 
@@ -232,6 +312,12 @@ class TimeParser:
             return True
         if time_window.is_periodic:
             return True  # 周期性任务在触发时立即装载
+        if time_window.window == TimeWindowType.NO_TIME_INTENT:
+            if task_type in ("coding", "analysis", "review"):
+                return True
+            if task_type in ("strategy", "writing", "marketing"):
+                return False
+            return False
         return False
 
     def get_reminder_days_before(self, time_window: TimeWindow) -> int:
@@ -246,7 +332,7 @@ class TimeParser:
 class PeriodicDetector:
     """周期性检测器 - 基于历史记录"""
 
-    def detect(self, task_type: str, history: List[Dict]) -> Optional[str]:
+    def detect(self, task_type: str, history: List[Dict]) -> Optional[Dict]:
         """
         检测同一类型任务是否在规律间隔出现
 
@@ -255,7 +341,7 @@ class PeriodicDetector:
             history: 历史记录列表，每项包含 'created_at' 和 'task_type'
 
         Returns:
-            weekly/biweekly/monthly/quarterly/yearly/None
+            {"period", "confidence", "avg_interval", "variance_ratio"} 或 None
         """
         # 筛选同类型任务
         dates = []
@@ -267,7 +353,7 @@ class PeriodicDetector:
                 except (ValueError, AttributeError):
                     continue
 
-        if len(dates) < 3:
+        if len(dates) < 2:
             return None
 
         # 按时间排序
@@ -280,32 +366,41 @@ class PeriodicDetector:
             if delta > 0:
                 intervals.append(delta)
 
-        if len(intervals) < 2:
+        if not intervals:
             return None
 
         # 使用加权滑动窗口（最近间隔权重更高）
         weighted_avg = self._weighted_average(intervals)
         variance = self._variance(intervals, weighted_avg)
 
-        # 方差容忍度：间隔平均值的30%
-        threshold = weighted_avg * 0.3
+        variance_ratio = (variance ** 0.5) / weighted_avg if weighted_avg > 0 else float("inf")
 
-        if variance > threshold:
+        if variance_ratio > 0.4:
             return None  # 间隔不稳定，不是周期性任务
 
+        period = None
         # 判断周期
         if 6 <= weighted_avg <= 8:
-            return 'weekly'
+            period = 'weekly'
         elif 13 <= weighted_avg <= 15:
-            return 'biweekly'
+            period = 'biweekly'
         elif 28 <= weighted_avg <= 31:
-            return 'monthly'
+            period = 'monthly'
         elif 85 <= weighted_avg <= 95:
-            return 'quarterly'
+            period = 'quarterly'
         elif 360 <= weighted_avg <= 370:
-            return 'yearly'
+            period = 'yearly'
 
-        return None
+        if not period:
+            return None
+
+        confidence = min(1.0, len(dates) / 5.0) * max(0.0, 1.0 - variance_ratio)
+        return {
+            "period": period,
+            "confidence": round(confidence, 3),
+            "avg_interval": round(weighted_avg, 1),
+            "variance_ratio": round(variance_ratio, 3),
+        }
 
     def _weighted_average(self, intervals: List[int]) -> float:
         """加权平均（最近间隔权重更高）"""
@@ -328,13 +423,17 @@ class PeriodicDetector:
 
 # ========== 便捷函数 ==========
 
-def parse_time(content: str, reference_time: Optional[datetime] = None) -> TimeWindow:
+def parse_time(
+    content: str,
+    reference_time: Optional[datetime] = None,
+    task_type: Optional[str] = None,
+) -> TimeWindow:
     """便捷函数：解析时间"""
     parser = TimeParser(reference_time=reference_time)
-    return parser.parse(content)
+    return parser.parse(content, task_type=task_type)
 
 
-def should_load_knowledge(content: str) -> tuple:
+def should_load_knowledge(content: str, task_type: Optional[str] = None) -> tuple:
     """
     便捷函数：判断是否应该立即装载知识
 
@@ -342,5 +441,5 @@ def should_load_knowledge(content: str) -> tuple:
         (should_load: bool, time_window: TimeWindow)
     """
     parser = TimeParser()
-    tw = parser.parse(content)
-    return parser.should_load_now(tw), tw
+    tw = parser.parse(content, task_type=task_type)
+    return parser.should_load_now(tw, task_type=task_type), tw

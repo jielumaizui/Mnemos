@@ -46,6 +46,21 @@ class SyncResult:
     error: Optional[str] = None
 
 
+@dataclass
+class BatchSyncResult:
+    """批量同步结果
+
+    契约化 SyncEngine.sync_batch 的返回类型，替代裸 Dict。
+    """
+    agent: str
+    total_sessions: int
+    successful: List[Dict[str, Any]] = field(default_factory=list)
+    failed: List[Dict[str, Any]] = field(default_factory=list)
+    turn_stats: Dict[str, int] = field(default_factory=lambda: {
+        "new": 0, "updated": 0, "skipped": 0, "noise": 0, "failed": 0
+    })
+
+
 class AgentSource(ABC):
     """Agent 数据源抽象，每个 AI 系统实现一个子类"""
 
@@ -107,4 +122,5 @@ class AgentSource(ABC):
 
     def on_session_end(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """KIA Hook：Session 结束时调用"""
+        # TODO: 子类可覆盖以实现 Session 结束时的清理/归档逻辑
         pass

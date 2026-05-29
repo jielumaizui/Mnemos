@@ -29,6 +29,8 @@ from core.persona.delphi import PersonaStore, KnowledgeAligner
 from core.config import get_config
 
 
+import logging
+logger = logging.getLogger(__name__)
 @dataclass
 class ChecklistItem:
     """校验清单项"""
@@ -167,6 +169,7 @@ class PreFlightInjector:
             profile, _ = self.persona_store.load_persona()
             self.current_persona = profile
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prophasis.py", exc_info=True)
             self.current_persona = None
 
     def _find_latest_version(self, task_type: str, subtype: str) -> Optional[Path]:

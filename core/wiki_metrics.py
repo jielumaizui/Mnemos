@@ -12,8 +12,9 @@ Wiki Metrics - 精简版 wiki 质量与热力追踪
 
 存储：~/.mnemos/wiki_metrics.db
 """
-
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import sqlite3
 import json
@@ -27,6 +28,12 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 
 from core.config import get_config
+from core.frontmatter import fm_get, to_chinese_frontmatter
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
 
 
 # ==================== 1. 枚举 ====================
@@ -146,6 +153,7 @@ def compute_heat_level(last_updated: str, last_accessed: str = None) -> str:
             lu = lu.replace(tzinfo=timezone.utc)
         days_since_update = (now - lu).days
     except Exception:
+        logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
         days_since_update = 999
 
     if last_accessed:
@@ -155,6 +163,7 @@ def compute_heat_level(last_updated: str, last_accessed: str = None) -> str:
                 la = la.replace(tzinfo=timezone.utc)
             days_since_access = (now - la).days
         except Exception:
+            logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
             days_since_access = 999
         days = min(days_since_update, days_since_access)
     else:
@@ -240,11 +249,18 @@ class WikiMetrics:
     单一数据库存储所有 wiki 页面的质量、热力和阶段信息。
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    CATEGORY_DECAY_DAYS = {
+        "technology": 7,
+        "methodology": 30,
+        "practice": 60,
+    }
+
+    def __init__(self, db_path: Optional[str] = None, wiki_dir: Optional[str] = None):
         if db_path is not None:
             self._db_path = Path(db_path)
         else:
             self._db_path = None  # 使用 _LazyPath
+        self._wiki_dir = Path(wiki_dir).expanduser() if wiki_dir else None
         self._local = threading.local()
         self._init_db()
 
@@ -253,6 +269,12 @@ class WikiMetrics:
         if self._db_path is not None:
             return self._db_path
         return Path(str(DB_PATH))
+
+    @property
+    def wiki_dir(self) -> Path:
+        if self._wiki_dir is not None:
+            return self._wiki_dir
+        return Path(str(WIKI_DIR))
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn") or self._local.conn is None:
@@ -476,20 +498,22 @@ class WikiMetrics:
         now = _utcnow()
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT wiki_path, heat_score, last_updated FROM page_metrics WHERE heat_score > 0"
+            "SELECT wiki_path, heat_score, last_updated, tags FROM page_metrics WHERE heat_score > 0"
         ).fetchall()
 
-        for path, score, last_updated in rows:
+        for path, score, last_updated, tags in rows:
             try:
                 lu = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
                 if lu.tzinfo is None:
                     lu = lu.replace(tzinfo=timezone.utc)
                 days = (now - lu).days
             except Exception:
+                logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
                 days = 0
 
-            if days >= decay_days:
-                decay = min(days / decay_days, 5)  # 最多减5分
+            page_decay_days = self._decay_days_for(path, tags, decay_days)
+            if days >= page_decay_days:
+                decay = min(days / page_decay_days, 5)  # 最多减5分
                 new_score = max(score - decay, 0)
                 new_level = compute_heat_level(last_updated)
                 conn.execute(
@@ -497,6 +521,142 @@ class WikiMetrics:
                     (new_score, new_level, path)
                 )
         conn.commit()
+
+    def get_pages_by_level(self, level: HeatLevel | str, limit: int = 50) -> List[PageMetrics]:
+        """按热力等级获取页面。"""
+        level_value = level.value if isinstance(level, HeatLevel) else str(level)
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT * FROM page_metrics
+               WHERE heat_level = ?
+               ORDER BY heat_score DESC, last_updated DESC
+               LIMIT ?""",
+            (level_value, limit)
+        ).fetchall()
+        return [self._row_to_metrics(row) for row in rows]
+
+    def get_cold_pages(self, limit: int = 10) -> List[PageMetrics]:
+        """获取冷却知识，用于周报/自省报告联动。"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT * FROM page_metrics
+               WHERE heat_level = 'cold'
+               ORDER BY quality_score ASC, freshness_days DESC, last_updated ASC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        return [self._row_to_metrics(row) for row in rows]
+
+    def sync_heat_to_frontmatter(self, page_path: Path) -> bool:
+        """将热力数据反写到页面 frontmatter，供 Obsidian Graph View 使用。"""
+        page_path = Path(page_path)
+        metrics = self.get_page(str(page_path))
+        if not metrics:
+            return False
+        if not page_path.exists():
+            return False
+
+        try:
+            content = page_path.read_text(encoding="utf-8")
+            fm, body = self._split_frontmatter(content)
+            fm["heat_level"] = metrics.heat_level
+            fm["heat_score"] = round(metrics.heat_score, 1)
+            fm["stats_updated"] = _utcnow().isoformat()
+            fm = to_chinese_frontmatter(fm)
+            page_path.write_text(self._join_frontmatter(fm, body), encoding="utf-8")
+            return True
+        except Exception:
+            logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
+            return False
+
+    def generate_heat_report(self, write: bool = False, wiki_dir: Optional[str] = None) -> str:
+        """生成热力地图 Markdown 报告，可选写入 wiki/99-Reports。"""
+        hot = self.get_pages_by_level(HeatLevel.HOT)
+        warm = self.get_pages_by_level(HeatLevel.WARM)
+        cold = self.get_pages_by_level(HeatLevel.COLD)
+
+        lines = [
+            "# 热力地图",
+            f"生成时间: {_utcnow().strftime('%Y-%m-%d %H:%M')}",
+            "",
+            f"- HOT: {len(hot)}",
+            f"- WARM: {len(warm)}",
+            f"- COLD: {len(cold)}",
+            "",
+        ]
+
+        for title, pages in [
+            ("## HOT", hot),
+            ("## WARM", warm),
+            ("## COLD", cold),
+        ]:
+            lines.extend([title, ""])
+            if not pages:
+                lines.append("无")
+                lines.append("")
+                continue
+            for page in pages[:20]:
+                lines.append(
+                    f"- **{page.title or Path(page.wiki_path).stem}** "
+                    f"`{page.heat_level}` score={page.heat_score:.1f} quality={page.quality_score:.1f}"
+                )
+            lines.append("")
+
+        report = "\n".join(lines)
+        if write:
+            base = Path(wiki_dir).expanduser() if wiki_dir else self.wiki_dir
+            report_dir = base / "99-Reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            path = report_dir / f"热力地图-{_utcnow().strftime('%Y-%m-%d')}.md"
+            path.write_text(report, encoding="utf-8")
+        return report
+
+    def _decay_days_for(self, path: str, tags_json: str = "[]", default: int = 15) -> int:
+        category = self._category_for_path(path, tags_json)
+        return self.CATEGORY_DECAY_DAYS.get(category, default)
+
+    def _category_for_path(self, path: str, tags_json: str = "[]") -> str:
+        page_path = Path(path)
+        if page_path.exists():
+            try:
+                fm, _ = self._split_frontmatter(page_path.read_text(encoding="utf-8"))
+                category = (
+                    fm.get("category")
+                    or fm.get("page_type")
+                    or fm_get(fm, "domain")
+                )
+                if category:
+                    return str(category)
+            except Exception:
+                logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
+                pass
+        try:
+            tags = json.loads(tags_json or "[]")
+        except Exception:
+            logger.warning(f"Unexpected error in wiki_metrics.py", exc_info=True)
+            tags = []
+        for tag in tags:
+            if str(tag).startswith("category:"):
+                return str(tag).split(":", 1)[1]
+        return ""
+
+    @staticmethod
+    def _split_frontmatter(content: str) -> tuple[Dict, str]:
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                if yaml is None:
+                    return {}, parts[2].lstrip("\n")
+                return yaml.safe_load(parts[1]) or {}, parts[2].lstrip("\n")
+        return {}, content
+
+    @staticmethod
+    def _join_frontmatter(frontmatter: Dict, body: str) -> str:
+        if yaml is not None:
+            fm_text = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
+        else:
+            fm_text = "\n".join(f"{k}: {v}" for k, v in frontmatter.items())
+        return f"---\n{fm_text}\n---\n{body}"
 
     # ---- 关系操作 ----
 
@@ -704,36 +864,36 @@ def main():
         if args.content_file:
             content = Path(args.content_file).read_text(encoding="utf-8")
         score = m.assess_quality(args.assess, content)
-        print(f"质量评分: {score:.1f}/100")
+        logger.info(f"质量评分: {score:.1f}/100")
         return
 
     if args.get:
         page = m.get_page(args.get)
         if page:
-            print(f"Path: {page.wiki_path}")
-            print(f"Stage: {page.knowledge_stage} | Quality: {page.quality_score}")
-            print(f"Heat: {page.heat_level} ({page.heat_score:.1f})")
-            print(f"Freshness: {page.freshness_days} days")
+            logger.info(f"Path: {page.wiki_path}")
+            logger.info(f"Stage: {page.knowledge_stage} | Quality: {page.quality_score}")
+            logger.info(f"Heat: {page.heat_level} ({page.heat_score:.1f})")
+            logger.info(f"Freshness: {page.freshness_days} days")
         else:
-            print("页面未找到")
+            logger.info("页面未找到")
         return
 
     if args.summary:
-        print(json.dumps(m.get_summary(), indent=2, ensure_ascii=False))
+        logger.info(json.dumps(m.get_summary(), indent=2, ensure_ascii=False))
         return
 
     if args.report:
-        print(m.generate_report())
+        logger.info(m.generate_report())
         return
 
     if args.merge_candidates:
         candidates = m.get_merge_candidates()
-        print(json.dumps(candidates, indent=2, ensure_ascii=False))
+        logger.info(json.dumps(candidates, indent=2, ensure_ascii=False))
         return
 
     if args.decay:
         m.decay_all()
-        print("热力衰减完成")
+        logger.info("热力衰减完成")
         return
 
     parser.print_help()

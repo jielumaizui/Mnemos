@@ -1,5 +1,6 @@
 from __future__ import annotations
 #!/usr/bin/env python3
+import logging
 """
 Knowledge Inbox Processor - Knowledge Inbox 文件处理模块
 监控桌面文件夹，处理用户导入的文件
@@ -23,6 +24,7 @@ from core.task_id_parser import TaskIdParser, TagBuilder
 from core.hephaestus.document_processor import DocumentProcessor
 
 # Ebook 处理（软依赖）
+logger = logging.getLogger(__name__)
 try:
     import ebooklib
     from ebooklib import epub
@@ -36,13 +38,6 @@ try:
     HEAT_TRACKER_AVAILABLE = True
 except ImportError:
     HEAT_TRACKER_AVAILABLE = False
-
-# IngestEngine（软依赖）
-try:
-    from core.kia.ingest_engine import IngestEngine
-    INGEST_ENGINE_AVAILABLE = True
-except ImportError:
-    INGEST_ENGINE_AVAILABLE = False
 
 
 @dataclass
@@ -125,15 +120,10 @@ class KnowledgeInboxProcessor:
             try:
                 self.heat_tracker = WikiHeatTracker()
             except Exception as e:
-                print(f"[KnowledgeInbox] 热力追踪器初始化失败: {e}")
+                logger.warning(f"[KnowledgeInbox] 热力追踪器初始化失败: {e}")
 
-        # IngestEngine 来源追踪（可选）
-        self.ingest_engine = None
-        if INGEST_ENGINE_AVAILABLE:
-            try:
-                self.ingest_engine = IngestEngine()
-            except Exception as e:
-                print(f"[KnowledgeInbox] IngestEngine 初始化失败: {e}")
+        # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
+        # 如需恢复，请使用 SyncEngine 或扩展 _save_state 记录来源详情。
 
     # ... 类定义继续 ...
 
@@ -179,9 +169,9 @@ class KnowledgeInboxProcessor:
                     conn.commit()
                 import shutil
                 shutil.move(str(old_state_file), str(old_state_file.with_suffix(".json.bak")))
-                print("[Inbox] 状态已迁移到 SQLite")
+                logger.info("[Inbox] 状态已迁移到 SQLite")
             except Exception as e:
-                print(f"[Inbox] 状态迁移失败: {e}")
+                logger.warning(f"[Inbox] 状态迁移失败: {e}")
 
         with sqlite3.connect(str(self.state_db), timeout=10) as conn:
             cursor = conn.execute("SELECT file_hash, status FROM processed_files")
@@ -326,35 +316,23 @@ class KnowledgeInboxProcessor:
             "error": None
         }
 
-        # 来源追踪
-        source_id = None
-        if self.ingest_engine:
-            try:
-                source_id = self.ingest_engine.record_ingest_source(
-                    source_type="file",
-                    source_id=str(inbox_file.path),
-                    metadata={"filename": inbox_file.filename, "size": inbox_file.size}
-                )
-            except Exception:
-                pass
-
         try:
             suffix = inbox_file.path.suffix.lower()
 
             # 检查是否为结构化图片
             if suffix in self.IMAGE_EXTENSIONS:
-                return self._process_image_file(inbox_file, result, source_id)
+                return self._process_image_file(inbox_file, result)
 
             # 检查是否为文档文件
             if suffix in self.DOCUMENT_EXTENSIONS:
-                return self._process_document_file(inbox_file, result, source_id)
+                return self._process_document_file(inbox_file, result)
 
             # 检查是否为电子书
             if suffix in self.EBOOK_EXTENSIONS:
-                return self._process_ebook_file(inbox_file, result, source_id)
+                return self._process_ebook_file(inbox_file, result)
 
             # 处理普通文本文件
-            return self._process_text_file(inbox_file, result, source_id)
+            return self._process_text_file(inbox_file, result)
 
         except Exception as e:
             inbox_file.status = "error"
@@ -362,12 +340,7 @@ class KnowledgeInboxProcessor:
             result["error"] = str(e)
             self._move_to_failed(inbox_file, str(e))
             self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg=str(e))
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "failed",
-                    file_hash=inbox_file.hash, source_id=source_id,
-                    error_msg=str(e)
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
             return result
 
     def _move_to_failed(self, inbox_file: InboxFile, error_msg: str):
@@ -379,9 +352,9 @@ class KnowledgeInboxProcessor:
             error_file = self.failed_dir / f"{inbox_file.hash}_{inbox_file.filename}.error.txt"
             error_file.write_text(f"处理时间: {datetime.now().isoformat()}\n错误: {error_msg}\n", encoding="utf-8")
         except Exception as e:
-            print(f"[Inbox] 移动失败文件失败: {e}")
+            logger.warning(f"[Inbox] 移动失败文件失败: {e}")
 
-    def _process_text_file(self, inbox_file: InboxFile, result: Dict, source_id: int = None) -> Dict:
+    def _process_text_file(self, inbox_file: InboxFile, result: Dict) -> Dict:
         """处理文本文件"""
         # 提取内容
         content, content_type = self._extract_content(inbox_file.path)
@@ -424,11 +397,7 @@ class KnowledgeInboxProcessor:
         self._save_state(inbox_file.hash, inbox_file.filename, memos_uid, status="success")
 
         # 记录文件监控事件
-        if self.ingest_engine and source_id:
-            self.ingest_engine.record_file_watch(
-                str(inbox_file.path), "processed",
-                file_hash=inbox_file.hash, source_id=source_id
-            )
+        # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
 
         # 初始化热力追踪
         self._init_heat_tracking(inbox_file.filename, memos_uid, "text")
@@ -443,15 +412,15 @@ class KnowledgeInboxProcessor:
             try:
                 page_id = f"inbox/{filename}"
                 self.heat_tracker.init_page(page_id, initial_level="L1")
-                print(f"[Inbox] 热力追踪已初始化: {page_id}")
+                logger.info(f"[Inbox] 热力追踪已初始化: {page_id}")
             except Exception as e:
-                print(f"[Inbox] 热力追踪初始化失败: {e}")
+                logger.warning(f"[Inbox] 热力追踪初始化失败: {e}")
 
-    def _process_image_file(self, inbox_file: InboxFile, result: Dict, source_id: int = None) -> Dict:
+    def _process_image_file(self, inbox_file: InboxFile, result: Dict) -> Dict:
         """处理图片文件——人工解析流程"""
-        print(f"[Inbox] 检测到图片文件: {inbox_file.filename}")
-        print("[Inbox] 图片处理已改为人工流程：请用 Kimi/豆包等工具解析图片内容，")
-        print("        将解析结果保存为 .md 文件后重新放入 inbox，系统将自动入库。")
+        logger.info(f"[Inbox] 检测到图片文件: {inbox_file.filename}")
+        logger.info("[Inbox] 图片处理已改为人工流程：请用 Kimi/豆包等工具解析图片内容，")
+        logger.info("        将解析结果保存为 .md 文件后重新放入 inbox，系统将自动入库。")
 
         # 将原图片移动到待人工处理目录
         manual_dir = self.inbox_dir / ".manual"
@@ -460,16 +429,16 @@ class KnowledgeInboxProcessor:
         try:
             shutil.move(str(inbox_file.path), str(manual_path))
         except Exception as e:
-            print(f"[Inbox] 移动文件到 .manual 失败: {e}")
+            logger.warning(f"[Inbox] 移动文件到 .manual 失败: {e}")
 
         result["success"] = False
         result["error"] = "图片需人工解析：请用 Kimi/豆包解析后保存为 .md 重新放入 inbox"
         self._save_state(inbox_file.hash, inbox_file.filename, status="skipped")
         return result
 
-    def _process_document_file(self, inbox_file: InboxFile, result: Dict, source_id: int = None) -> Dict:
+    def _process_document_file(self, inbox_file: InboxFile, result: Dict) -> Dict:
         """处理文档文件（Excel/PPT/PDF/Word/HTML）"""
-        print(f"[Inbox] 检测到文档文件: {inbox_file.filename}")
+        logger.info(f"[Inbox] 检测到文档文件: {inbox_file.filename}")
 
         # 使用文档处理器（带验证流程）
         extraction = self.document_processor.process_document_with_validation(inbox_file.path)
@@ -478,21 +447,16 @@ class KnowledgeInboxProcessor:
             result["error"] = "文档处理失败或内容为空"
             self._move_to_failed(inbox_file, "文档处理失败或内容为空")
             self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg="文档处理失败或内容为空")
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "failed",
-                    file_hash=inbox_file.hash, source_id=source_id,
-                    error_msg="文档处理失败或内容为空"
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
             return result
 
         # 根据验证状态决定后续操作
         if extraction.validation_status == "review":
-            print(f"[Inbox] 文档需要人工审核: {inbox_file.filename}")
+            logger.info(f"[Inbox] 文档需要人工审核: {inbox_file.filename}")
             # 保存到Memos但标记为待审核
             memos_uid = self.document_processor.save_to_memos(extraction)
         elif extraction.validation_status == "failed":
-            print(f"[Inbox] 文档验证失败: {inbox_file.filename}")
+            logger.warning(f"[Inbox] 文档验证失败: {inbox_file.filename}")
             # 即使失败也保存，但标记为待审核
             extraction.needs_review = True
             extraction.review_reason = "验证失败，需要人工核对"
@@ -513,11 +477,7 @@ class KnowledgeInboxProcessor:
 
             # 保存状态
             self._save_state(inbox_file.hash, inbox_file.filename, memos_uid, status="success")
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "processed",
-                    file_hash=inbox_file.hash, source_id=source_id
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
 
             # 初始化热力追踪
             doc_type = extraction.doc_type.value if hasattr(extraction, 'doc_type') else 'document'
@@ -534,25 +494,20 @@ class KnowledgeInboxProcessor:
             result["error"] = "保存到Memos失败"
             self._move_to_failed(inbox_file, "保存到Memos失败")
             self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg="保存到Memos失败")
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "failed",
-                    file_hash=inbox_file.hash, source_id=source_id,
-                    error_msg="保存到Memos失败"
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
 
         return result
 
-    def _process_ebook_file(self, inbox_file: InboxFile, result: Dict, source_id: int = None) -> Dict:
+    def _process_ebook_file(self, inbox_file: InboxFile, result: Dict) -> Dict:
         """处理电子书文件（epub/mobi/azw3）"""
-        print(f"[Inbox] 检测到电子书文件: {inbox_file.filename}")
+        logger.info(f"[Inbox] 检测到电子书文件: {inbox_file.filename}")
 
         if not EBOOKLIB_AVAILABLE and inbox_file.path.suffix.lower() == '.epub':
             # ebooklib 不可用，回退到文本提取
-            print(f"[Inbox] ebooklib 不可用，回退到文本提取")
+            logger.info(f"[Inbox] ebooklib 不可用，回退到文本提取")
             try:
                 content = inbox_file.path.read_text(encoding='utf-8', errors='ignore')[:50000]
-                return self._process_ebook_as_text(inbox_file, result, content, source_id)
+                return self._process_ebook_as_text(inbox_file, result, content)
             except Exception as e:
                 result["error"] = f"电子书处理失败: {e}"
                 self._move_to_failed(inbox_file, str(e))
@@ -580,8 +535,8 @@ class KnowledgeInboxProcessor:
                             if text:
                                 content_parts.append(text)
                         except Exception:
+                            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                             pass
-
                 full_content = "\n\n".join(content_parts)
                 if len(full_content) > 100000:
                     full_content = full_content[:100000] + "\n\n... (内容截断)"
@@ -621,11 +576,6 @@ class KnowledgeInboxProcessor:
                     shutil.move(str(inbox_file.path), str(processed_path))
 
                     self._save_state(inbox_file.hash, inbox_file.filename, memos_uid, status="success")
-                    if self.ingest_engine and source_id:
-                        self.ingest_engine.record_file_watch(
-                            str(inbox_file.path), "processed",
-                            file_hash=inbox_file.hash, source_id=source_id
-                        )
                     self._init_heat_tracking(inbox_file.filename, memos_uid, "ebook")
 
                     result["success"] = True
@@ -639,25 +589,19 @@ class KnowledgeInboxProcessor:
                 result["error"] = f"EPUB 处理失败: {e}"
                 self._move_to_failed(inbox_file, str(e))
                 self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg=str(e))
-                if self.ingest_engine and source_id:
-                    self.ingest_engine.record_file_watch(
-                        str(inbox_file.path), "failed",
-                        file_hash=inbox_file.hash, source_id=source_id,
-                        error_msg=str(e)
-                    )
                 return result
         else:
             # mobi/azw3 暂不支持 ebooklib，回退到文本提取
             try:
                 content = inbox_file.path.read_text(encoding='utf-8', errors='ignore')[:50000]
-                return self._process_ebook_as_text(inbox_file, result, content, source_id)
+                return self._process_ebook_as_text(inbox_file, result, content)
             except Exception as e:
                 result["error"] = f"电子书处理失败: {e}"
                 self._move_to_failed(inbox_file, str(e))
                 self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg=str(e))
                 return result
 
-    def _process_ebook_as_text(self, inbox_file: InboxFile, result: Dict, content: str, source_id: int = None) -> Dict:
+    def _process_ebook_as_text(self, inbox_file: InboxFile, result: Dict, content: str) -> Dict:
         """将电子书作为纯文本处理（回退方案）"""
         memos_content = f"""# Ebook: {inbox_file.filename}
 
@@ -693,11 +637,7 @@ class KnowledgeInboxProcessor:
             shutil.move(str(inbox_file.path), str(processed_path))
 
             self._save_state(inbox_file.hash, inbox_file.filename, memos_uid, status="success")
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "processed",
-                    file_hash=inbox_file.hash, source_id=source_id
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
             self._init_heat_tracking(inbox_file.filename, memos_uid, "ebook")
 
             result["success"] = True
@@ -706,12 +646,7 @@ class KnowledgeInboxProcessor:
             result["error"] = "保存到Memos失败"
             self._move_to_failed(inbox_file, "保存到Memos失败")
             self._save_state(inbox_file.hash, inbox_file.filename, status="failed", error_msg="保存到Memos失败")
-            if self.ingest_engine and source_id:
-                self.ingest_engine.record_file_watch(
-                    str(inbox_file.path), "failed",
-                    file_hash=inbox_file.hash, source_id=source_id,
-                    error_msg="保存到Memos失败"
-                )
+            # TODO: 来源追踪功能原由 IngestEngine 提供，该模块已移除。
 
         return result
 
@@ -720,7 +655,7 @@ class KnowledgeInboxProcessor:
         pending_files = self.scan_inbox()
 
         if not pending_files:
-            print("[Inbox] 没有待处理文件")
+            logger.info("[Inbox] 没有待处理文件")
             return []
 
         results = []
@@ -729,7 +664,7 @@ class KnowledgeInboxProcessor:
         skipped_count = 0
 
         for inbox_file in pending_files:
-            print(f"Processing: {inbox_file.filename}...")
+            logger.info(f"Processing: {inbox_file.filename}...")
             result = self.process_file(inbox_file)
             results.append(result)
 
@@ -746,9 +681,9 @@ class KnowledgeInboxProcessor:
         # 记录扫描日志
         self._log_scan(len(pending_files), success_count, failed_count, report_path)
 
-        print(f"\n[Inbox] 处理完成: {success_count} 成功, {failed_count} 失败, {skipped_count} 跳过")
+        logger.warning(f"\n[Inbox] 处理完成: {success_count} 成功, {failed_count} 失败, {skipped_count} 跳过")
         if report_path:
-            print(f"[Inbox] 报告已生成: {report_path}")
+            logger.info(f"[Inbox] 报告已生成: {report_path}")
 
         return results
 
@@ -855,20 +790,20 @@ def main():
 
     if args.run:
         results = processor.run()
-        print(f"\n处理完成: {len(results)} 个文件")
+        logger.info(f"\n处理完成: {len(results)} 个文件")
         for r in results:
             status = "OK" if r["success"] else "❌"
-            print(f"  {status} {r['file']}: {r.get('memos_uid', r.get('error'))}")
+            logger.warning(f"  {status} {r['file']}: {r.get('memos_uid', r.get('error'))}")
 
     elif args.list:
         processed = processor.list_processed()
-        print(f"已处理文件: {len(processed)}")
+        logger.info(f"已处理文件: {len(processed)}")
         for p in processed:
-            print(f"  - {p['filename']} ({p['processed_at'][:10]})")
+            logger.info(f"  - {p['filename']} ({p['processed_at'][:10]})")
 
     else:
         status = processor.get_status()
-        print(json.dumps(status, indent=2, ensure_ascii=False))
+        logger.info(json.dumps(status, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

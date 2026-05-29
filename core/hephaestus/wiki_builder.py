@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import logging
 """
 Wiki Builder - L1 → L2 蒸馏：将 Memos 原始会话转换为 Obsidian Wiki Markdown
 
@@ -34,6 +35,7 @@ from pathlib import Path
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
+logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from integrations.styx import MemosClient
 from core.config import get_config
@@ -89,6 +91,7 @@ def _is_session_completed(session_id: str, memos: List[Dict]) -> bool:
                 if latest_time is None or t > latest_time:
                     latest_time = t
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
     if not latest_time:
         return False
@@ -107,6 +110,7 @@ def _is_processed(session_id: str) -> bool:
             )
             return cursor.fetchone() is not None
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at wiki_builder.py", exc_info=True)
         return False
 
 
@@ -134,7 +138,7 @@ def _mark_processed(session_id: str, source: str, message_count: int,
                 )
             conn.commit()
     except Exception as e:
-        print(f"  [WikiBuilder] 标记处理状态失败: {e}")
+        logger.warning(f"  [WikiBuilder] 标记处理状态失败: {e}")
 
 
 def _log(session_id: str, action: str, detail: str = "") -> None:
@@ -151,6 +155,7 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
                 f.write("# Wiki Build Log\n\n")
                 f.write(line)
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at wiki_builder.py", exc_info=True)
         pass
 
 
@@ -158,11 +163,11 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
 
 def fetch_l1_sessions(client: MemosClient) -> Dict[str, List[Dict]]:
     """从 Memos 获取所有 level=L1 的记录，按 session= 标签分组"""
-    print("[WikiBuilder] 查询 Memos 中 L1 记录...")
+    logger.info("[WikiBuilder] 查询 Memos 中 L1 记录...")
     try:
         all_memos = client.list_all_memos()
     except Exception as e:
-        print(f"[WikiBuilder] 查询失败: {e}")
+        logger.warning(f"[WikiBuilder] 查询失败: {e}")
         return {}
 
     sessions: Dict[str, List[Dict]] = {}
@@ -205,6 +210,7 @@ def _try_parse_json(content: str) -> Optional[Dict]:
             msgs = json.loads(match.group(1))
             return {"_meta": {"segment": segment or "1/1"}, "messages": msgs}
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
         pass
     messages = []
     for m in re.finditer(r'"role"\s*:\s*"([^"]*)"', content):
@@ -225,7 +231,7 @@ def _clean_message_content(content: str) -> str:
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
     content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
     content = re.sub(
-        r'^(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\s+.+$',
+        r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
         '', content, flags=re.MULTILINE,
     )
     content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
@@ -330,6 +336,7 @@ def _find_similar_source(content: str, threshold: float = SIMILARITY_THRESHOLD) 
             if similarity > threshold:
                 return f"{md_file.name} ({similarity:.1%})"
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
     return None
 
@@ -492,6 +499,7 @@ def score_session(messages: List[Dict]) -> Tuple[float, Dict]:
                 "scorer": "distill_scorer",
             }
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at wiki_builder.py", exc_info=True)
         pass
 
     # 降级到 RuleScorer
@@ -632,7 +640,7 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                     _log(session_id, "skip_pipeline", result.judgment_reason)
                     stats["skipped_low_quality"] += 1
             except Exception as e:
-                print(f"  [WikiBuilder] 流水线处理失败: {e}")
+                logger.warning(f"  [WikiBuilder] 流水线处理失败: {e}")
                 _log(session_id, "error", str(e))
                 stats["failed"] += 1
         else:
@@ -691,6 +699,7 @@ def update_index_md():
                 name = md_file.stem[:16]
                 lines.append(f"- [[{name}]] ({agent})")
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         lines.append("")
 
@@ -702,8 +711,8 @@ def update_index_md():
             lines.append(f"- Total sessions: {total}")
             lines.append(f"- Last update: {datetime.now().isoformat()}")
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
         pass
-
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -725,9 +734,8 @@ def _git_auto_commit():
             cwd=wiki_dir, capture_output=True,
         )
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
         pass
-
-
 def get_stats() -> Dict:
     """获取处理统计"""
     try:
@@ -760,24 +768,24 @@ def main():
 
     token = os.getenv("MEMOS_TOKEN")
     if not token:
-        print("ERROR: MEMOS_TOKEN 环境变量未设置")
+        logger.warning("ERROR: MEMOS_TOKEN 环境变量未设置")
         sys.exit(1)
 
     client = MemosClient(token=token, agent="wiki-builder")
 
     if args.stats:
         stats = get_stats()
-        print("\n=== Wiki Builder 统计 ===")
+        logger.info("\n=== Wiki Builder 统计 ===")
         for k, v in stats.items():
-            print(f"  {k}: {v}")
+            logger.info(f"  {k}: {v}")
         return
 
     use_pipeline = not args.no_pipeline
 
     if args.watch:
-        print(f"[WikiBuilder] 守护模式启动 (pipeline={'ON' if use_pipeline else 'OFF'})")
+        logger.info(f"[WikiBuilder] 守护模式启动 (pipeline={'ON' if use_pipeline else 'OFF'})")
         while True:
-            print(f"\n=== {datetime.now().isoformat()} ===")
+            logger.info(f"\n=== {datetime.now().isoformat()} ===")
             stats = run_build_cycle(client, dry_run=args.dry_run, use_pipeline=use_pipeline)
             print(f"结果: processed={stats['processed']}, "
                   f"incomplete={stats['skipped_incomplete']}, "
@@ -791,15 +799,15 @@ def main():
             time.sleep(300)
     else:
         stats = run_build_cycle(client, dry_run=args.dry_run, use_pipeline=use_pipeline)
-        print(f"\n=== Wiki 构建完成 ===")
-        print(f"  已处理: {stats['processed']}")
-        print(f"  未完成: {stats['skipped_incomplete']}")
-        print(f"  质量跳过: {stats['skipped_low_quality']}")
-        print(f"  相似跳过: {stats['skipped_similar']}")
-        print(f"  回流跳过: {stats['skipped_distill'] + stats['skipped_recirculation']}")
-        print(f"  流水线: {stats['pipeline_used']}")
-        print(f"  规则级: {stats['rule_used']}")
-        print(f"  失败: {stats['failed']}")
+        logger.info(f"\n=== Wiki 构建完成 ===")
+        logger.info(f"  已处理: {stats['processed']}")
+        logger.warning(f"  未完成: {stats['skipped_incomplete']}")
+        logger.warning(f"  质量跳过: {stats['skipped_low_quality']}")
+        logger.warning(f"  相似跳过: {stats['skipped_similar']}")
+        logger.warning(f"  回流跳过: {stats['skipped_distill'] + stats['skipped_recirculation']}")
+        logger.info(f"  流水线: {stats['pipeline_used']}")
+        logger.info(f"  规则级: {stats['rule_used']}")
+        logger.warning(f"  失败: {stats['failed']}")
 
 
 if __name__ == "__main__":

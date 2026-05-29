@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.config import get_config
-
 logger = logging.getLogger(__name__)
+
 
 
 def _get_db_path() -> Path:
@@ -146,6 +146,7 @@ class ContextAwareQuery:
                 try:
                     content = md_file.read_text(encoding="utf-8")
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at context_query.py", exc_info=True)
                     continue
 
                 # 跳过 frontmatter
@@ -188,6 +189,7 @@ class ContextAwareQuery:
                 if f"[[{page_name}]]" in content or f"[[{page_name}|" in content:
                     score += 0.3
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at context_query.py", exc_info=True)
                 continue
 
         # 活跃实体匹配
@@ -197,8 +199,8 @@ class ContextAwareQuery:
                 entity_hits = sum(1 for e in active_entities if e.lower() in content)
                 score += min(0.4, entity_hits * 0.1)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
         return min(1.0, score)
 
     @staticmethod
@@ -210,6 +212,7 @@ class ContextAwareQuery:
             # 半衰期 30 天
             return max(0.0, 0.5 ** (age_days / 30.0))
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at context_query.py", exc_info=True)
             return 0.3
 
     @staticmethod
@@ -224,6 +227,7 @@ class ContextAwareQuery:
             if m:
                 return float(m.group(1))
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return 0.5
 
@@ -251,4 +255,5 @@ class ContextAwareQuery:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass

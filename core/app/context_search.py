@@ -10,15 +10,16 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import log1p
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+
 
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class SearchResult:
     """搜索结果"""
@@ -30,6 +31,19 @@ class SearchResult:
     confidence: float = 0.0
     continuity: float = 0.0
     freshness: float = 0.0
+    persona_score: float = 0.0
+    context_boost: float = 1.0
+    final_score: float = 0.0
+    match_reason: str = ""
+    freshness_alert: Optional[Any] = None
+
+    @property
+    def page_title(self) -> str:
+        return self.title
+
+    @property
+    def excerpt(self) -> str:
+        return self.snippet
 
 
 class ContextAwareSearch:
@@ -37,6 +51,7 @@ class ContextAwareSearch:
 
     MAX_RESULTS = 10
     FRESHNESS_HALF_LIFE_DAYS = 30
+    EXCLUDED_DIRS = {".git", ".obsidian", ".kg", "99-Archive", "99-Reports", "__pycache__"}
 
     def __init__(self, wiki_base: Optional[str] = None):
         if wiki_base:
@@ -70,6 +85,8 @@ class ContextAwareSearch:
         if not candidates:
             return []
 
+        freshness_checker = self._get_freshness_checker()
+
         # 2. 画像加权评分
         profile = self._get_profile_weights()
         results = []
@@ -78,6 +95,8 @@ class ContextAwareSearch:
             confidence = self._compute_confidence(candidate)
             continuity = self._compute_continuity(candidate, context)
             freshness = self._compute_freshness(candidate)
+            persona_score = self._compute_persona_score(candidate, profile)
+            context_boost = self._compute_context_boost(candidate, context)
 
             # 加权总分
             score = (
@@ -86,7 +105,8 @@ class ContextAwareSearch:
                 + continuity * 0.2
                 + freshness * 0.1 * profile.get("temporal_boost", 1.0)
             )
-            score = min(score, 1.0)
+            score = min(score * context_boost, 1.0)
+            freshness_alert = freshness_checker.check(candidate) if freshness_checker else None
 
             results.append(SearchResult(
                 page_path=candidate.get("path", ""),
@@ -97,6 +117,11 @@ class ContextAwareSearch:
                 confidence=confidence,
                 continuity=continuity,
                 freshness=freshness,
+                persona_score=persona_score,
+                context_boost=context_boost,
+                final_score=score,
+                match_reason=self._explain_match(relevance, confidence, continuity, freshness, context_boost),
+                freshness_alert=freshness_alert,
             ))
 
         # 3. 排序并截取
@@ -111,7 +136,8 @@ class ContextAwareSearch:
             results = kg.search(query, limit=20)
             return [
                 {"path": r.get("page_path", ""), "title": r.get("title", ""),
-                 "content": r.get("content", ""), "entity": r.get("entity_name", "")}
+                 "content": r.get("content", ""), "entity": r.get("entity_name", ""),
+                 "frontmatter": r.get("frontmatter", {})}
                 for r in results
             ]
         except Exception as e:
@@ -121,10 +147,13 @@ class ContextAwareSearch:
     def _recall_from_files(self, query: str) -> List[Dict]:
         """从文件系统召回（回退方案）"""
         candidates = []
-        keywords = query.lower().split()
+        keywords = self._query_terms(query)
 
         for md_file in self.wiki_base.rglob("*.md"):
             try:
+                rel_parts = md_file.relative_to(self.wiki_base).parts
+                if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
+                    continue
                 content = md_file.read_text(encoding="utf-8", errors="ignore")
                 content_lower = content.lower()
                 if any(kw in content_lower for kw in keywords):
@@ -134,17 +163,19 @@ class ContextAwareSearch:
                         "path": rel_path,
                         "title": title,
                         "content": content[:2000],
+                        "frontmatter": self._extract_frontmatter(content),
                     })
                     if len(candidates) >= 20:
                         break
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at context_search.py", exc_info=True)
                 continue
 
         return candidates
 
     def _compute_relevance(self, query: str, candidate: Dict) -> float:
         """计算查询与候选内容的相关性"""
-        keywords = query.lower().split()
+        keywords = self._query_terms(query)
         content = candidate.get("content", "").lower()
         title = candidate.get("title", "").lower()
 
@@ -171,8 +202,8 @@ class ContextAwareSearch:
             if e:
                 return e.confidence
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
         return 0.5
 
     def _compute_continuity(self, candidate: Dict, context: Dict) -> float:
@@ -205,6 +236,32 @@ class ContextAwareSearch:
 
         return min(score, 1.0)
 
+    def _compute_persona_score(self, candidate: Dict, profile: Dict) -> float:
+        frontmatter = candidate.get("frontmatter", {}) or {}
+        confidence = self._compute_confidence(candidate)
+        alignment = frontmatter.get("persona_alignment", {})
+        if isinstance(alignment, dict) and "total" in alignment:
+            try:
+                return float(alignment["total"])
+            except (TypeError, ValueError):
+                pass
+        return min(1.0, confidence * profile.get("confidence_boost", 1.0))
+
+    def _compute_context_boost(self, candidate: Dict, context: Dict) -> float:
+        if not context:
+            return 1.0
+        boost = 1.0
+        candidate_path = candidate.get("path", "")
+        working_dir = context.get("working_dir", "")
+        if working_dir:
+            parts = [p.lower() for p in Path(working_dir).parts if len(p) > 2]
+            if any(part in candidate_path.lower() for part in parts):
+                boost *= 1.05
+        recent_pages = {str(p) for p in context.get("recent_pages", [])}
+        if candidate_path in recent_pages:
+            boost *= 1.05
+        return min(boost, 1.15)
+
     def _compute_freshness(self, candidate: Dict) -> float:
         """计算内容新鲜度 — 基于半衰期衰减"""
         path = candidate.get("path", "")
@@ -220,8 +277,8 @@ class ContextAwareSearch:
                 freshness = 0.5 ** (age_days / self.FRESHNESS_HALF_LIFE_DAYS)
                 return freshness
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
         return 0.5
 
     def _get_profile_weights(self) -> Dict:
@@ -243,12 +300,13 @@ class ContextAwareSearch:
                 "temporal_boost": 1.15,  # 时间模式加权
             }
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at context_search.py", exc_info=True)
             return {}
 
     def _extract_snippet(self, candidate: Dict, query: str) -> str:
         """提取搜索片段"""
         content = candidate.get("content", "")
-        keywords = query.lower().split()
+        keywords = self._query_terms(query)
         if not content:
             return ""
 
@@ -262,3 +320,47 @@ class ContextAwareSearch:
 
         # 回退：取前 200 字符
         return content[:200].strip() + ("..." if len(content) > 200 else "")
+
+    @staticmethod
+    def _query_terms(query: str) -> List[str]:
+        terms = re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z0-9_\-]{2,}", query.lower())
+        return terms or [query.lower()]
+
+    @staticmethod
+    def _extract_frontmatter(content: str) -> Dict:
+        if not content.startswith("---"):
+            return {}
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return {}
+        try:
+            import yaml
+            return yaml.safe_load(parts[1]) or {}
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at context_search.py", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _explain_match(relevance: float, confidence: float, continuity: float,
+                       freshness: float, context_boost: float) -> str:
+        reasons = []
+        if relevance >= 0.5:
+            reasons.append("关键词匹配")
+        if confidence >= 0.7:
+            reasons.append("高置信知识")
+        if continuity >= 0.5:
+            reasons.append("上下文连续")
+        if freshness >= 0.7:
+            reasons.append("内容较新")
+        if context_boost > 1.0:
+            reasons.append("情境加权")
+        return "、".join(reasons) or "基础相关"
+
+    @staticmethod
+    def _get_freshness_checker():
+        try:
+            from core.kia.proteus import KnowledgeFreshnessChecker
+            return KnowledgeFreshnessChecker()
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at context_search.py", exc_info=True)
+            return None

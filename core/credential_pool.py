@@ -26,6 +26,8 @@ Credential Pool - API Key 池管理
 """
 
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import os
 import json
@@ -650,7 +652,7 @@ def main():
             api_base=args.base,
             model=args.model,
         )
-        print(f"添加: {cred.id} ({cred.provider.value})")
+        logger.info(f"添加: {cred.id} ({cred.provider.value})")
         return
 
     if args.list:
@@ -664,21 +666,21 @@ def main():
 
     if args.health:
         health = pool.health_check()
-        print(json.dumps(health, indent=2, ensure_ascii=False))
+        logger.info(json.dumps(health, indent=2, ensure_ascii=False))
         return
 
     if args.reset:
         if pool.reset_cooldown(args.reset):
-            print(f"已重置: {args.reset}")
+            logger.info(f"已重置: {args.reset}")
         else:
-            print("未找到")
+            logger.info("未找到")
         return
 
     if args.remove:
         if pool.remove_key(args.remove):
-            print(f"已移除: {args.remove}")
+            logger.info(f"已移除: {args.remove}")
         else:
-            print("未找到")
+            logger.info("未找到")
         return
 
     parser.print_help()

@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from core.config import get_config
-
 logger = logging.getLogger(__name__)
+
 
 
 def _get_db_path() -> Path:
@@ -31,18 +31,31 @@ def _get_db_path() -> Path:
 
 @dataclass
 class Entity:
-    """知识实体"""
-    uid: str  # 唯一标识（slug）
+    """知识实体（对齐蓝图 §3.1）"""
+    uid: str                          # 唯一标识（slug）
     name: str
-    aliases: List[str] = field(default_factory=list)
-    entity_type: str = "concept"  # concept / tool / person / project / pattern
+    entity_type: str = "concept"      # page / concept / technology / project / person
+    source_page: str = ""             # 来源 wiki 页面路径（wiki_page 的别名）
     quality_score: float = 0.5
     confidence: float = 0.5
-    status: str = "raw"  # raw → refined → mature
-    wiki_page: str = ""
+    temporal_scope: str = "stable"    # permanent / stable / version-bound / contextual
+    version_info: Optional[str] = None  # 版本号（如 Python 3.12）
+    status: str = "active"            # active / deprecated / merged
+    visit_count: int = 0              # 被访问次数（暗知识反馈）
+    tags: Set[str] = field(default_factory=set)
+    aliases: List[str] = field(default_factory=list)
     first_seen: str = ""
     last_updated: str = ""
     source_count: int = 1
+
+    @property
+    def wiki_page(self) -> str:
+        """向后兼容：wiki_page 是 source_page 的别名"""
+        return self.source_page
+
+    @wiki_page.setter
+    def wiki_page(self, value: str) -> None:
+        self.source_page = value
 
 
 class EntityManager:
@@ -53,10 +66,14 @@ class EntityManager:
             uid TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             entity_type TEXT DEFAULT 'concept',
+            source_page TEXT DEFAULT '',
             quality_score REAL DEFAULT 0.5,
             confidence REAL DEFAULT 0.5,
-            status TEXT DEFAULT 'raw',
-            wiki_page TEXT DEFAULT '',
+            temporal_scope TEXT DEFAULT 'stable',
+            version_info TEXT,
+            status TEXT DEFAULT 'active',
+            visit_count INTEGER DEFAULT 0,
+            tags TEXT DEFAULT '[]',
             first_seen TEXT,
             last_updated TEXT,
             source_count INTEGER DEFAULT 1
@@ -67,11 +84,23 @@ class EntityManager:
             entity_uid TEXT NOT NULL,
             FOREIGN KEY (entity_uid) REFERENCES entities(uid)
         );
+    """
 
+    ENTITY_INDEXES = """
         CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
         CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status);
         CREATE INDEX IF NOT EXISTS idx_entities_quality ON entities(quality_score);
+        CREATE INDEX IF NOT EXISTS idx_entities_visit ON entities(visit_count);
     """
+
+    MIGRATIONS = [
+        "ALTER TABLE entities ADD COLUMN source_page TEXT DEFAULT '';",
+        "ALTER TABLE entities ADD COLUMN temporal_scope TEXT DEFAULT 'stable';",
+        "ALTER TABLE entities ADD COLUMN version_info TEXT;",
+        "ALTER TABLE entities ADD COLUMN status TEXT DEFAULT 'active';",
+        "ALTER TABLE entities ADD COLUMN visit_count INTEGER DEFAULT 0;",
+        "ALTER TABLE entities ADD COLUMN tags TEXT DEFAULT '[]';",
+    ]
 
     def __init__(self):
         self._db_path = _get_db_path()
@@ -81,6 +110,14 @@ class EntityManager:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(str(self._db_path), timeout=5) as conn:
             conn.executescript(self.ENTITY_TABLE)
+            # 迁移：兼容旧表结构（先迁移，再建索引）
+            for mig in self.MIGRATIONS:
+                try:
+                    conn.execute(mig)
+                except sqlite3.OperationalError:
+                    pass  # 列已存在
+            # 索引在迁移后创建，避免旧表缺少列导致失败
+            conn.executescript(self.ENTITY_INDEXES)
             conn.commit()
 
     def ingest_from_wiki(self, wiki_page: Path) -> List[Entity]:
@@ -88,6 +125,7 @@ class EntityManager:
         try:
             content = wiki_page.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at entity_manager.py", exc_info=True)
             return []
 
         fm = self._parse_frontmatter(content)
@@ -154,6 +192,7 @@ class EntityManager:
                 if row:
                     return self.get_entity(row[0])
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at entity_manager.py", exc_info=True)
             pass
 
         # 再查名称
@@ -163,21 +202,36 @@ class EntityManager:
         try:
             with sqlite3.connect(str(self._db_path), timeout=5) as conn:
                 cursor = conn.execute(
-                    "SELECT uid, name, entity_type, quality_score, confidence, "
-                    "status, wiki_page, first_seen, last_updated, source_count "
+                    "SELECT uid, name, entity_type, source_page, quality_score, confidence, "
+                    "temporal_scope, version_info, status, visit_count, tags, "
+                    "first_seen, last_updated, source_count "
                     "FROM entities WHERE uid = ?", (uid,),
                 )
                 row = cursor.fetchone()
                 if not row:
                     return None
                 aliases = self._get_aliases(uid)
+                tags_raw = row[10] or '[]'
+                try:
+                    tags = set(json.loads(tags_raw)) if tags_raw else set()
+                except json.JSONDecodeError:
+                    tags = set()
                 return Entity(
-                    uid=row[0], name=row[1], aliases=aliases,
-                    entity_type=row[2], quality_score=row[3], confidence=row[4],
-                    status=row[5], wiki_page=row[6], first_seen=row[7],
-                    last_updated=row[8], source_count=row[9],
+                    uid=row[0], name=row[1], entity_type=row[2],
+                    source_page=row[3] or "",
+                    quality_score=row[4], confidence=row[5],
+                    temporal_scope=row[6] or "stable",
+                    version_info=row[7],
+                    status=row[8] or "active",
+                    visit_count=row[9] or 0,
+                    tags=tags,
+                    aliases=aliases,
+                    first_seen=row[11],
+                    last_updated=row[12],
+                    source_count=row[13] or 1,
                 )
         except Exception:
+            logger.warning(f"读取实体失败: {uid}", exc_info=True)
             return None
 
     def get_entity_by_name(self, name: str) -> Optional[Entity]:
@@ -194,8 +248,8 @@ class EntityManager:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
     def get_all_entities(self, entity_type: str = None,
                          min_quality: float = 0.0) -> List[Entity]:
         """获取所有实体"""
@@ -210,6 +264,7 @@ class EntityManager:
                 cursor = conn.execute(query, params)
                 return [self.get_entity(row[0]) for row in cursor if self.get_entity(row[0])]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at entity_manager.py", exc_info=True)
             return []
 
     # ---- 内部方法 ----
@@ -240,13 +295,15 @@ class EntityManager:
             with sqlite3.connect(str(self._db_path), timeout=5) as conn:
                 conn.execute(
                     """INSERT OR REPLACE INTO entities
-                       (uid, name, entity_type, quality_score, confidence,
-                        status, wiki_page, first_seen, last_updated, source_count)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (uid, name, entity_type, source_page, quality_score, confidence,
+                        temporal_scope, version_info, status, visit_count, tags,
+                        first_seen, last_updated, source_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (entity.uid, entity.name, entity.entity_type,
-                     entity.quality_score, entity.confidence, entity.status,
-                     entity.wiki_page, entity.first_seen, entity.last_updated,
-                     entity.source_count),
+                     entity.source_page, entity.quality_score, entity.confidence,
+                     entity.temporal_scope, entity.version_info, entity.status,
+                     entity.visit_count, json.dumps(sorted(entity.tags)),
+                     entity.first_seen, entity.last_updated, entity.source_count),
                 )
                 # 保存别名
                 for alias in entity.aliases:
@@ -266,6 +323,7 @@ class EntityManager:
                 )
                 return [row[0] for row in cursor]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at entity_manager.py", exc_info=True)
             return []
 
     @staticmethod

@@ -20,11 +20,18 @@ from __future__ import annotations
 
 import re
 import sqlite3
-import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from core.pluggable import PluggableModule
+
+import logging
+logger = logging.getLogger(__name__)
+try:
+    import yaml
+except ImportError:  # pragma: no cover - optional dependency fallback
+    yaml = None
 
 from core.config import get_config
 
@@ -81,6 +88,15 @@ class _LazyPath:
 
 DB_PATH = _LazyPath("data_dir", "stress_test.db")
 WIKI_DIR = _LazyPath("wiki_dir")
+EXCLUDED_DIRS = {
+    ".git",
+    ".obsidian",
+    "__pycache__",
+    "99-Reports",
+    "reports",
+    "shadow_pages",
+    ".shadow_pages",
+}
 
 
 # ==================== Data Classes ====================
@@ -109,8 +125,8 @@ class StressTestResult:
 
 # ==================== StressTestEngine ====================
 
-class StressTestEngine:
-    """知识压力测试引擎"""
+class StressTestEngine(PluggableModule):
+    """知识压力测试引擎 — 实现 PluggableModule 热插拔接口"""
 
     # 挑战模板（按知识类型）
     CHALLENGE_TEMPLATES = {
@@ -208,13 +224,55 @@ class StressTestEngine:
         ],
     }
 
-    def __init__(self, wiki_base: str | None = None):
+    DEFAULT_CHALLENGE_TEMPLATES = [
+        {
+            "type": "boundary",
+            "template": "这条知识的适用边界是什么？在什么条件下它可能不适用或产生反效果？",
+            "risk": "medium",
+        },
+        {
+            "type": "temporal",
+            "template": "这条知识的时效性如何？随着时间推移，有哪些因素可能导致它失效？",
+            "risk": "medium",
+        },
+    ]
+
+    def __init__(self, wiki_base: str | None = None, db_path: str | Path | None = None):
         if wiki_base:
             self.wiki_base = Path(wiki_base).expanduser()
         else:
             self.wiki_base = WIKI_DIR
         self.inbox = self.wiki_base / "00-Inbox"
-        self._db_path = DB_PATH
+        self._db_path = Path(db_path).expanduser() if db_path else DB_PATH
+        self._init_db()
+        self._enabled = True
+
+    # ---- PluggableModule 接口 ----
+
+    def enable(self) -> None:
+        self._enabled = True
+
+    def disable(self) -> None:
+        self._enabled = False
+
+    def configure(self, cfg: Dict[str, Any]) -> None:
+        if "thresholds" in cfg:
+            self.THRESHOLDS.update(cfg["thresholds"])
+
+    def handle_event(self, event_type: str, data: Dict[str, Any]) -> None:
+        if not self._enabled:
+            return
+        if event_type == "periodic_stress_test":
+            limit = data.get("limit", 10)
+            self.batch_test(limit=limit)
+        elif event_type == "page_created":
+            page_path = data.get("page_path")
+            if page_path:
+                self.test_page(Path(page_path))
+        elif event_type == "knowledge_needs_reinforcement":
+            page_path = data.get("page_path")
+            if page_path:
+                self.test_page(Path(page_path))
 
     # ---- DB helpers ----
 
@@ -288,23 +346,31 @@ class StressTestEngine:
             fm = self._extract_frontmatter(content)
             body = self._extract_body(content)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at stress_test.py", exc_info=True)
             return result
 
         result.page_title = self._extract_title(content) or page_path.stem
 
         # 1. 基于知识类型生成挑战
-        form = fm.get("类型", "")
-        templates = self.CHALLENGE_TEMPLATES.get(form, [])
+        form = self._fm_get(fm, "类型", "")
+        templates = self.CHALLENGE_TEMPLATES.get(form) or self.DEFAULT_CHALLENGE_TEMPLATES
 
         tools = self._get_keywords(fm, "工具实体")
         scenarios = self._get_keywords(fm, "场景标签")
+        domains = self._get_keywords(fm, "领域")
         tool_str = tools[0] if tools else "相关工具"
         scenario_str = scenarios[0] if scenarios else "当前场景"
+        domain_str = self._fm_get(fm, "领域", domains[0] if domains else "通用领域")
+        confidence_str = str(self._fm_get(fm, "置信度", 0.5))
+        version_str = self._fm_get(fm, "版本标记", "未标注版本")
 
         for template in templates:
             question = template["template"].format(
                 tool=tool_str,
                 scenario=scenario_str,
+                domain=domain_str,
+                confidence=confidence_str,
+                version=version_str,
             )
             result.challenges.append(Challenge(
                 challenge_type=template["type"],
@@ -314,7 +380,7 @@ class StressTestEngine:
             ))
 
         # 2. 基于适用边界生成挑战
-        boundaries = self._extract_boundaries(body)
+        boundaries = self._extract_boundaries(body, fm)
         if boundaries.get("applies"):
             result.challenges.append(Challenge(
                 challenge_type="boundary",
@@ -332,7 +398,8 @@ class StressTestEngine:
             ))
 
         # 3. 基于反模式生成挑战
-        anti_patterns = self._extract_anti_patterns(body)
+        anti_patterns = self._extract_anti_patterns(body, fm)
+        boundaries["anti_patterns"] = anti_patterns
         for anti in anti_patterns[:2]:
             result.challenges.append(Challenge(
                 challenge_type="counter_example",
@@ -342,8 +409,8 @@ class StressTestEngine:
             ))
 
         # 4. 基于时效性生成挑战
-        temporal = fm.get("时效性", "")
-        version_tag = fm.get("版本标记", "")
+        temporal = self._fm_get(fm, "时效性", "")
+        version_tag = self._fm_get(fm, "版本标记", "")
         if temporal == "版本绑定" and version_tag:
             result.challenges.append(Challenge(
                 challenge_type="temporal",
@@ -360,7 +427,7 @@ class StressTestEngine:
             ))
 
         # 5. 基于置信度生成挑战
-        confidence = float(fm.get("置信度", 0.5))
+        confidence = float(self._fm_get(fm, "置信度", 0.5))
         if confidence < 0.6:
             result.challenges.append(Challenge(
                 challenge_type="boundary",
@@ -375,25 +442,43 @@ class StressTestEngine:
         # 识别盲区
         result.blind_spots = self._identify_blind_spots(result, fm, boundaries)
 
+        self.save_result(result)
+        self._update_page_frontmatter(page_path, result)
+
+        # 发布压力测试事件
+        if result.resilience_score is not None and result.resilience_score < 5.0:
+            self._emit_event("knowledge_needs_reinforcement", {
+                "page_path": str(page_path),
+                "score": result.resilience_score,
+                "blind_spots": result.blind_spots,
+            })
+        if result.blind_spots:
+            for bs in result.blind_spots:
+                self._emit_event("profile_blindspot_detected", {
+                    "page_path": str(page_path),
+                    "blindspot": bs,
+                })
+
         return result
 
-    def batch_test(self, limit: int | None = None) -> List[StressTestResult]:
+    def batch_test(
+        self,
+        limit: int | None = None,
+        filter_fn: Optional[Callable[[Path], bool]] = None,
+    ) -> List[StressTestResult]:
         """批量测试所有知识页面"""
         results = []
-        wiki_base = Path(str(self.wiki_base))
-        inbox = wiki_base / "00-Inbox"
-        if not inbox.exists():
-            return results
 
-        pages = list(inbox.glob("*.md"))
-        if limit:
-            pages = pages[:limit]
+        pages = self._list_pages()
 
         for page in pages:
+            if filter_fn and not filter_fn(page):
+                continue
             result = self.test_page(page)
             if result.challenges:
                 results.append(result)
-                self.save_result(result)
+            if limit and len(results) >= limit:
+                break
 
         return results
 
@@ -410,11 +495,11 @@ class StressTestEngine:
             score += 1
 
         # 有反模式 +1
-        if frontmatter.get("类型") == "反模式" or boundaries.get("anti_patterns"):
+        if self._fm_get(frontmatter, "类型") == "反模式" or boundaries.get("anti_patterns"):
             score += 1
 
         # 置信度高 +1
-        confidence = float(frontmatter.get("置信度", 0))
+        confidence = float(self._fm_get(frontmatter, "置信度", 0))
         if confidence >= 0.8:
             score += 1
         elif confidence < 0.5:
@@ -430,7 +515,16 @@ class StressTestEngine:
         elif len(result.challenges) > 8:
             score -= 0.5
 
-        return max(0, min(10, score))
+        last_test = self._fm_get(frontmatter, "上次压力测试", "")
+        if last_test:
+            try:
+                last_dt = datetime.fromisoformat(str(last_test))
+                if (datetime.now() - last_dt.replace(tzinfo=None)).days > 90:
+                    score -= 0.5
+            except ValueError:
+                pass
+
+        return max(0, min(10, round(score, 1)))
 
     def _identify_blind_spots(self, result: StressTestResult,
                                frontmatter: Dict,
@@ -443,20 +537,20 @@ class StressTestEngine:
             blind_spots.append("未声明适用边界，可能导致误用")
 
         # 缺少反模式
-        if frontmatter.get("类型") in ["经验法则", "方法论"] and not boundaries.get("anti_patterns"):
+        if self._fm_get(frontmatter, "类型") in ["经验法则", "方法论"] and not boundaries.get("anti_patterns"):
             blind_spots.append("缺少反模式/注意事项，未考虑失败场景")
 
         # 低置信度
-        confidence = float(frontmatter.get("置信度", 0.5))
+        confidence = float(self._fm_get(frontmatter, "置信度", 0.5))
         if confidence < 0.5:
             blind_spots.append("置信度过低，知识基础不牢")
 
         # 单源证据
-        if frontmatter.get("证据级别") == "单源":
+        if self._fm_get(frontmatter, "证据级别") == "单源":
             blind_spots.append("单源证据，未经交叉验证")
 
         # 时效性风险
-        if frontmatter.get("时效性") == "版本绑定" and not frontmatter.get("版本标记"):
+        if self._fm_get(frontmatter, "时效性") == "版本绑定" and not self._fm_get(frontmatter, "版本标记"):
             blind_spots.append("声明为版本绑定但未标注版本号")
 
         return blind_spots
@@ -494,13 +588,16 @@ class StressTestEngine:
 
     @staticmethod
     def _extract_frontmatter(content: str) -> Dict:
+        if yaml is None:
+            return {}
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 try:
                     return yaml.safe_load(parts[1]) or {}
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at stress_test.py", exc_info=True)
+                    return {}
         return {}
 
     @staticmethod
@@ -523,45 +620,177 @@ class StressTestEngine:
             return keywords.get(layer, []) or []
         return []
 
-    @staticmethod
-    def _extract_boundaries(body: str) -> Dict:
-        """提取适用边界"""
+    def _extract_boundaries(self, body: str, frontmatter: Optional[Dict] = None) -> Dict:
+        """提取适用边界，支持 frontmatter、列表、标题段落和内联标记。"""
+        frontmatter = frontmatter or {}
         boundaries = {}
 
-        applies_match = re.search(
-            r"[\-\*]\s*适用于[：:]\s*(.+?)(?:\n[\-\*]|\n#{1,3}\s|\Z)",
-            body, re.DOTALL
-        )
-        if applies_match:
-            boundaries["applies"] = applies_match.group(1).strip().replace("\n", " ")
+        for field_name in ["适用条件", "适用边界", "适用范围"]:
+            value = frontmatter.get(field_name)
+            if value:
+                boundaries["applies"] = self._normalize_field_value(value)
+                break
 
-        not_applies_match = re.search(
-            r"[\-\*]\s*不适用于[：:]\s*(.+?)(?:\n[\-\*]|\n#{1,3}\s|\Z)",
-            body, re.DOTALL
-        )
-        if not_applies_match:
-            boundaries["not_applies"] = not_applies_match.group(1).strip().replace("\n", " ")
+        for field_name in ["不适用场景", "不适用条件", "不适用边界"]:
+            value = frontmatter.get(field_name)
+            if value:
+                boundaries["not_applies"] = self._normalize_field_value(value)
+                break
+
+        if not boundaries.get("applies"):
+            boundaries["applies"] = self._first_pattern_match(body, [
+                r"(?m)^\s*[\-\*]\s+适用(?:于)?[：:]\s*(.+?)(?:\n\s*[\-\*]\s+|\n#{1,3}\s|\Z)",
+                r"#{1,3}\s*(?:适用边界|适用范围|适用条件)\s*\n(.+?)(?:\n#{1,3}\s|\Z)",
+                r"\*\*适用[：:]\*\*\s*(.+?)(?:\n|\Z)",
+            ])
+
+        if not boundaries.get("not_applies"):
+            boundaries["not_applies"] = self._first_pattern_match(body, [
+                r"(?m)^\s*[\-\*]\s+不适用(?:于)?[：:]\s*(.+?)(?:\n\s*[\-\*]\s+|\n#{1,3}\s|\Z)",
+                r"#{1,3}\s*(?:不适用边界|不适用范围|不适用条件|不适用场景)\s*\n(.+?)(?:\n#{1,3}\s|\Z)",
+                r"\*\*不适用[：:]\*\*\s*(.+?)(?:\n|\Z)",
+            ])
 
         return boundaries
 
-    @staticmethod
-    def _extract_anti_patterns(body: str) -> List[str]:
-        """提取反模式列表"""
+    def _extract_anti_patterns(self, body: str, frontmatter: Optional[Dict] = None) -> List[str]:
+        """提取反模式列表，支持 frontmatter 和正文 section。"""
+        frontmatter = frontmatter or {}
         patterns = []
-        in_anti_section = False
 
-        for line in body.split("\n"):
-            if "反模式" in line or "注意事项" in line:
-                in_anti_section = True
+        for field_name in ["反模式", "注意事项", "常见错误", "避坑指南"]:
+            value = frontmatter.get(field_name)
+            if value:
+                if isinstance(value, list):
+                    patterns.extend(str(item).strip() for item in value if str(item).strip())
+                else:
+                    patterns.append(str(value).strip())
+
+        if not patterns:
+            section_match = re.search(
+                r"#{1,3}\s*(?:反模式|注意事项|常见错误|避坑指南)\s*\n(.+?)(?:\n#{1,3}\s|\Z)",
+                body,
+                re.DOTALL | re.IGNORECASE,
+            )
+            if section_match:
+                section = section_match.group(1)
+                for line in section.split("\n"):
+                    line = line.strip()
+                    if line.startswith(("-", "*")) or re.match(r"^\d+\.", line):
+                        text = re.sub(r"^(?:[-*]|\d+\.)\s*", "", line).strip()
+                        if text and len(text) > 5:
+                            patterns.append(text)
+
+        return patterns[:5]
+
+    def _list_pages(self) -> List[Path]:
+        wiki_base = Path(str(self.wiki_base))
+        if not wiki_base.exists():
+            return []
+        pages = []
+        for page in wiki_base.rglob("*.md"):
+            relative_parts = set(page.relative_to(wiki_base).parts[:-1])
+            if relative_parts & EXCLUDED_DIRS:
                 continue
-            if in_anti_section and line.startswith("#"):
-                break
-            if in_anti_section and line.strip().startswith(("-", "*")):
-                text = line.strip().lstrip("- *").strip()
-                if text:
-                    patterns.append(text)
+            pages.append(page)
+        return sorted(pages, key=self._page_priority)
 
-        return patterns
+    def _page_priority(self, page: Path) -> tuple:
+        last_age = self._days_since_last_test(page)
+        type_rank = 1
+        try:
+            fm = self._extract_frontmatter(page.read_text(encoding="utf-8"))
+            if self._fm_get(fm, "类型") in {"决策记录", "方法论"}:
+                type_rank = 0
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
+            pass
+        return (-last_age, type_rank, str(page))
+
+    def _days_since_last_test(self, page_path: Path) -> int:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT created_at FROM stress_test_results
+                   WHERE page_path=? ORDER BY created_at DESC LIMIT 1""",
+                (str(page_path),),
+            ).fetchone()
+        if not row:
+            return 9999
+        try:
+            last = datetime.fromisoformat(str(row["created_at"]))
+            return (datetime.now(timezone.utc) - last.replace(tzinfo=timezone.utc)).days
+        except ValueError:
+            return 9999
+
+    @staticmethod
+    def _fm_get(frontmatter: Dict, key: str, default: Any = None) -> Any:
+        value = frontmatter.get(key, default)
+        return default if value is None else value
+
+    @staticmethod
+    def _normalize_field_value(value: Any) -> str:
+        if isinstance(value, list):
+            return "；".join(str(item).strip() for item in value if str(item).strip())
+        return str(value).strip()
+
+    @staticmethod
+    def _first_pattern_match(body: str, patterns: List[str]) -> str:
+        for pattern in patterns:
+            match = re.search(pattern, body, re.DOTALL | re.IGNORECASE)
+            if match:
+                text = match.group(1).strip()
+                text = re.sub(r"\n+", " ", text)
+                return text
+        return ""
+
+    def _update_page_frontmatter(self, page_path: Path, result: StressTestResult):
+        if yaml is None:
+            return
+
+        content = page_path.read_text(encoding="utf-8")
+        fm, body = self._split_frontmatter(content)
+        fm["韧性评分"] = result.resilience_score
+        fm["上次压力测试"] = datetime.now().date().isoformat()
+        fm["盲区清单"] = result.blind_spots
+
+        history = self._get_test_history(str(page_path), limit=2)
+        if len(history) >= 2 and all(row["resilience_score"] < 4.0 for row in history):
+            fm["需加固"] = True
+            self._emit_event("knowledge_needs_reinforcement", {
+                "page_path": str(page_path),
+                "score": result.resilience_score,
+                "blind_spots": result.blind_spots,
+            })
+
+        page_path.write_text(self._join_frontmatter(fm, body), encoding="utf-8")
+
+    def _get_test_history(self, page_path: str, limit: int = 2) -> List[sqlite3.Row]:
+        with self._get_conn() as conn:
+            return conn.execute(
+                """SELECT resilience_score, created_at FROM stress_test_results
+                   WHERE page_path=? ORDER BY created_at DESC LIMIT ?""",
+                (page_path, limit),
+            ).fetchall()
+
+    @classmethod
+    def _split_frontmatter(cls, content: str) -> tuple[Dict, str]:
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                return cls._extract_frontmatter(content), parts[2].lstrip("\n")
+        return {}, content
+
+    @staticmethod
+    def _join_frontmatter(frontmatter: Dict, body: str) -> str:
+        if yaml is None:
+            return body
+        fm_text = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
+        return f"---\n{fm_text}\n---\n{body}"
+
+    @staticmethod
+    def _emit_event(event_type: str, payload: Dict):
+        # 事件总线尚未在该模块内注入，先保留可观测钩子，避免硬依赖周边模块。
+        return {"event_type": event_type, "payload": payload}
 
 
 # ========== 便捷函数 ==========

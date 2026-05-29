@@ -18,6 +18,8 @@ Knowledge Graph Manager - 知识图谱管理器
 """
 
 import json
+import logging
+logger = logging.getLogger(__name__)
 import re
 import sqlite3
 from pathlib import Path
@@ -26,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from core.config import get_config
+
 from .relation_schema import (
     Relation, RelationType, RelationEvidence,
     RELATION_META, suggest_relation_type,
@@ -404,6 +407,7 @@ class KnowledgeGraph:
                 existing_title = self._extract_title(existing_content) or existing_path.stem
                 existing_keywords = self._extract_all_keywords(existing_meta)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at knowledge_graph.py", exc_info=True)
                 continue
 
             # 关键词重叠
@@ -586,48 +590,28 @@ class KnowledgeGraph:
         3. 替代矛盾：A replaces B 且 B replaces A（循环替代）
         4. 演化矛盾：A evolved_from B 且 B evolved_from A
         """
-        conflicts = []
-
         with self._conn() as conn:
-            # 获取所有关系
             rows = conn.execute(
-                "SELECT source, target, relation_type FROM relations"
+                "SELECT source, target, relation_type, strength, confidence, source_method FROM relations"
             ).fetchall()
 
-        rel_set = set()
+        relations = []
         for row in rows:
-            rel_set.add((row["source"], row["target"], row["relation_type"]))
+            try:
+                relation_type = RelationType(row["relation_type"])
+            except ValueError:
+                continue
+            relations.append(Relation(
+                source=row["source"],
+                target=row["target"],
+                relation_type=relation_type,
+                strength=row["strength"],
+                confidence=row["confidence"],
+                source_method=row["source_method"],
+            ))
 
-        for source, target, rel_type in rel_set:
-            # 检查逻辑矛盾
-            if rel_type == RelationType.BUILDS_ON.value:
-                # A builds_on B 但 A contradicts B
-                if (source, target, RelationType.CONTRADICTS.value) in rel_set:
-                    conflicts.append((
-                        Relation(source=source, target=target, relation_type=RelationType.BUILDS_ON),
-                        Relation(source=source, target=target, relation_type=RelationType.CONTRADICTS),
-                        f"'{source}' 既建立在 '{target}' 之上，又与它矛盾",
-                    ))
-
-            if rel_type == RelationType.REPLACES.value:
-                # A replaces B 且 B replaces A
-                if (target, source, RelationType.REPLACES.value) in rel_set:
-                    conflicts.append((
-                        Relation(source=source, target=target, relation_type=RelationType.REPLACES),
-                        Relation(source=target, target=source, relation_type=RelationType.REPLACES),
-                        f"'{source}' 和 '{target}' 互相替代，形成循环",
-                    ))
-
-            if rel_type == RelationType.EVOLVED_FROM.value:
-                # A evolved_from B 且 B evolved_from A
-                if (target, source, RelationType.EVOLVED_FROM.value) in rel_set:
-                    conflicts.append((
-                        Relation(source=source, target=target, relation_type=RelationType.EVOLVED_FROM),
-                        Relation(source=target, target=source, relation_type=RelationType.EVOLVED_FROM),
-                        f"'{source}' 和 '{target}' 互相演化，形成循环",
-                    ))
-
-        return conflicts
+        from core.kia.conflict_resolver import detect_relation_conflicts
+        return detect_relation_conflicts(relations)
 
     def get_contradiction_pairs(self, page: str) -> List[Relation]:
         """获取与某页面存在矛盾关系的所有页面"""
@@ -751,6 +735,128 @@ WHERE file.path = "{page}"
             """, (top_n,)).fetchall()
         return [(row[0], row[1]) for row in rows]
 
+    # ========== 搜索召回（供 ContextAwareSearch 使用）==========
+
+    # 与 context_search.py 对齐的排除目录
+    EXCLUDED_DIRS = {".git", ".obsidian", ".kg", "99-Archive", "99-Reports", "__pycache__"}
+
+    def search(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        知识图谱关键词召回。
+
+        在关系数据库和 Wiki 页面中搜索与查询相关的页面。
+
+        Returns:
+            [{"page_path": str, "title": str, "content": str, "entity_name": str}, ...]
+        """
+        keywords = [kw.strip().lower() for kw in query.split() if len(kw.strip()) > 1]
+        if not keywords:
+            keywords = [query.lower().strip()]
+
+        results_map: Dict[str, Dict] = {}
+
+        # 1. 从关系数据库召回
+        try:
+            with self._conn() as conn:
+                conditions = []
+                params = []
+                for kw in keywords:
+                    like = f"%{kw}%"
+                    conditions.extend([
+                        "source LIKE ?", "target LIKE ?", "relation_type LIKE ?"
+                    ])
+                    params.extend([like, like, like])
+
+                where = " OR ".join(conditions)
+                rows = conn.execute(
+                    f"""SELECT source, target, relation_type, strength, confidence
+                        FROM relations WHERE {where}""",
+                    params
+                ).fetchall()
+
+                for row in rows:
+                    for col in ("source", "target"):
+                        page_path = row[col]
+                        # 规范化路径：若存在于 wiki_base 下则取相对路径
+                        rel_path = self._to_rel_path(page_path)
+                        if rel_path in results_map:
+                            results_map[rel_path]["_score"] += row["strength"] * row["confidence"]
+                        else:
+                            title = Path(page_path).stem
+                            results_map[rel_path] = {
+                                "page_path": rel_path,
+                                "title": title,
+                                "content": "",
+                                "entity_name": title,
+                                "_score": row["strength"] * row["confidence"],
+                            }
+        except sqlite3.Error as e:
+            logger.warning(f"KG 数据库搜索失败: {e}")
+
+        # 2. 从 Wiki 文件召回（补充内容和标题）
+        if self.wiki_base.exists():
+            for md_file in self.wiki_base.rglob("*.md"):
+                try:
+                    rel_parts = md_file.relative_to(self.wiki_base).parts
+                    if any(
+                        part in self.EXCLUDED_DIRS or part.startswith(".")
+                        for part in rel_parts
+                    ):
+                        continue
+
+                    content = md_file.read_text(encoding="utf-8", errors="ignore")
+                    content_lower = content.lower()
+
+                    match_count = sum(1 for kw in keywords if kw in content_lower)
+                    if match_count == 0:
+                        continue
+
+                    rel_path = str(md_file.relative_to(self.wiki_base))
+                    title = self._extract_title(content) or md_file.stem
+
+                    fm = self._extract_frontmatter(content)
+                    if rel_path in results_map:
+                        results_map[rel_path]["title"] = title
+                        results_map[rel_path]["content"] = content[:2000]
+                        results_map[rel_path]["entity_name"] = title
+                        results_map[rel_path]["frontmatter"] = fm
+                        results_map[rel_path]["_score"] += match_count * 0.1
+                    else:
+                        results_map[rel_path] = {
+                            "page_path": rel_path,
+                            "title": title,
+                            "content": content[:2000],
+                            "entity_name": title,
+                            "frontmatter": fm,
+                            "_score": match_count * 0.1,
+                        }
+                except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at knowledge_graph.py", exc_info=True)
+                    continue
+
+        # 3. 排序并截取
+        sorted_results = sorted(
+            results_map.values(),
+            key=lambda r: r["_score"],
+            reverse=True
+        )
+
+        # 移除内部 _score 字段
+        for r in sorted_results:
+            del r["_score"]
+
+        return sorted_results[:limit]
+
+    def _to_rel_path(self, page_path: str) -> str:
+        """将绝对路径转换为相对于 wiki_base 的路径。"""
+        try:
+            p = Path(page_path)
+            if p.is_absolute() and self.wiki_base in p.parents or p == self.wiki_base:
+                return str(p.relative_to(self.wiki_base))
+        except ValueError:
+            pass
+        return page_path
+
     # ========== 辅助方法 ==========
 
     @staticmethod
@@ -763,6 +869,7 @@ WHERE file.path = "{page}"
                     import yaml
                     return yaml.safe_load(parts[1]) or {}
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                     pass
         return {}
 

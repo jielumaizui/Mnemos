@@ -7,9 +7,9 @@ Shadow Page - 知识影子页面系统
 - 中文社区内容（知乎、掘金、微信公众号）
 - 最新动态和新闻
 
-双轨联网：
-- tavily-search: 通用网络搜索，覆盖官方文档和技术博客
-- agent-reach: 社交平台搜索，覆盖小红书、抖音、微信公众号等
+搜索引擎：
+- tavily-search: 主引擎，通用网络搜索
+- fallback_search: 可选回退，由宿主 agent 注入（如 SearchWeb 等自有搜索工具）
 
 设计原则：
 - 影子页面独立存储，不污染主页面
@@ -35,6 +35,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
+
 
 @dataclass
 class SearchResult:
@@ -42,7 +47,7 @@ class SearchResult:
     title: str
     url: str
     snippet: str = ""
-    source: str = ""           # tavily / agent_reach
+    source: str = ""           # tavily / fallback
     category: str = "general"  # official / community / news / blog / social
     published_date: str = ""
     relevance_score: float = 0.0
@@ -95,12 +100,16 @@ class ShadowPageManager:
         ],
     }
 
-    def __init__(self, wiki_base: str = None):
+    def __init__(self, wiki_base: str = None, fallback_search=None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
         self.shadow_dir = self.wiki_base / self.SHADOW_DIR_NAME
+        self.excluded_dirs = {self.SHADOW_DIR_NAME, "99-Reports", ".git", ".obsidian", ".kg", "__pycache__"}
         self.shadow_dir.mkdir(parents=True, exist_ok=True)
+        self.fallback_search = fallback_search  # 可选: Callable[[str, int], List[SearchResult]]
+        if yaml is None:
+            logger.warning("PyYAML 未安装，frontmatter 提取功能将不可用。请执行: pip install pyyaml")
 
     # ========== 查询生成 ==========
 
@@ -115,7 +124,8 @@ class ShadowPageManager:
 
         try:
             content = page_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"读取页面失败 {page_path}: {e}")
             return []
 
         fm = self._extract_frontmatter(content)
@@ -162,11 +172,15 @@ class ShadowPageManager:
         """
         使用 tavily-search 进行搜索
 
-        需要 tvly CLI 已安装并登录
+        需要 tvly CLI 已安装并登录。
+        当 Tavily 不可用时，自动调用 fallback_search（如宿主 agent 注入的搜索工具）。
         """
         results = []
         if not shutil.which("tvly"):
-            logger.warning("tvly CLI 未安装，跳过 tavily 搜索")
+            logger.warning("tvly CLI 未安装")
+            if self.fallback_search:
+                logger.info("回退到宿主 agent 搜索工具")
+                return self.fallback_search(query, max_results)
             return results
 
         try:
@@ -179,6 +193,10 @@ class ShadowPageManager:
                 cmd, capture_output=True, text=True, timeout=30
             )
             if output.returncode != 0:
+                logger.warning(f"tavily 搜索失败: {output.stderr.strip()}")
+                if self.fallback_search:
+                    logger.info("回退到宿主 agent 搜索工具")
+                    return self.fallback_search(query, max_results)
                 return results
 
             data = json.loads(output.stdout)
@@ -192,54 +210,22 @@ class ShadowPageManager:
                     category=self._classify_url(url),
                     relevance_score=item.get("score", 0.5),
                 ))
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-            pass
-
-        return results
-
-    def search_agent_reach(self, query: str, max_results: int = 5) -> List[SearchResult]:
-        """
-        使用 agent-reach 进行社交平台搜索
-
-        覆盖：小红书、抖音、微信公众号等
-        """
-        results = []
-        try:
-            # agent-reach 的调用方式取决于 skill 的具体实现
-            # 这里使用通用的 skill 调用方式
-            cmd = ["claude", "skill", "agent-reach", query]
-            output = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
-            )
-            if output.returncode != 0:
-                return results
-
-            # 解析 agent-reach 的输出（假设为 JSON 格式）
-            data = json.loads(output.stdout)
-            for item in data.get("results", []):
-                results.append(SearchResult(
-                    title=item.get("title", "无标题"),
-                    url=item.get("url", ""),
-                    snippet=item.get("summary", "")[:300],
-                    source="agent_reach",
-                    category="social",
-                    relevance_score=item.get("relevance", 0.5),
-                ))
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-            pass
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+            logger.warning(f"tavily 搜索异常 query={query!r}: {e}")
+            if self.fallback_search:
+                logger.info("回退到宿主 agent 搜索工具")
+                return self.fallback_search(query, max_results)
 
         return results
 
     def search_all(self, queries: List[str],
-                   use_tavily: bool = True,
-                   use_agent_reach: bool = True) -> List[SearchResult]:
+                   use_tavily: bool = True) -> List[SearchResult]:
         """
-        执行所有搜索，合并去重结果
+        执行搜索，合并去重结果
 
         Args:
             queries: 查询列表
-            use_tavily: 是否使用 tavily
-            use_agent_reach: 是否使用 agent_reach
+            use_tavily: 是否使用 tavily（为 False 时仍尝试 fallback_search）
 
         Returns:
             去重后的搜索结果列表
@@ -249,8 +235,9 @@ class ShadowPageManager:
         for query in queries:
             if use_tavily:
                 all_results.extend(self.search_tavily(query))
-            if use_agent_reach:
-                all_results.extend(self.search_agent_reach(query))
+            elif self.fallback_search:
+                # 显式禁用 tavily 时，直接调用 fallback
+                all_results.extend(self.fallback_search(query, 5))
 
         # 按 URL 去重，保留相关性更高的
         url_map: Dict[str, SearchResult] = {}
@@ -400,7 +387,8 @@ class ShadowPageManager:
                 queries_used=fm.get("queries_used", []),
                 content=content,
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"读取影子页面失败 {shadow_path}: {e}")
             return None
 
     def list_shadows(self) -> List[Path]:
@@ -417,6 +405,10 @@ class ShadowPageManager:
             return True
         return False
 
+    def sync_all_inbox(self, page_pattern: str = "*.md") -> Dict[str, int]:
+        """同步所有影子页面（chronos 兼容性别名）。"""
+        return self.batch_sync(page_pattern)
+
     def batch_sync(self, page_pattern: str = "*.md") -> Dict[str, int]:
         """
         批量同步影子页面
@@ -425,12 +417,11 @@ class ShadowPageManager:
             {created: N, updated: N, failed: N}
         """
         stats = {"created": 0, "updated": 0, "failed": 0}
-        inbox = self.wiki_base / "00-Inbox"
 
-        if not inbox.exists():
+        if not self.wiki_base.exists():
             return stats
 
-        for page in inbox.glob(page_pattern):
+        for page in self._list_pages(page_pattern):
             try:
                 existing = self.get_shadow(page)
                 shadow = self.sync_shadow(page)
@@ -441,21 +432,34 @@ class ShadowPageManager:
                         stats["created"] += 1
                 else:
                     stats["failed"] += 1
-            except Exception:
+            except Exception as e:
+                logger.warning(f"同步影子页面失败 {page}: {e}")
                 stats["failed"] += 1
 
         return stats
+
+    def _list_pages(self, page_pattern: str = "*.md") -> List[Path]:
+        pages = []
+        for page in self.wiki_base.rglob(page_pattern):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in self.excluded_dirs or part.startswith(".") for part in rel_parts):
+                continue
+            if page.name.endswith(".shadow.md"):
+                continue
+            pages.append(page)
+        return pages
 
     # ========== 辅助方法 ==========
 
     @staticmethod
     def _extract_frontmatter(content: str) -> Dict:
         """提取 frontmatter"""
+        if yaml is None:
+            return {}
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 try:
-                    import yaml
                     return yaml.safe_load(parts[1]) or {}
                 except Exception as e:
                     logger.warning(f"忽略异常: {e}")
@@ -513,3 +517,191 @@ def sync_all_shadows(wiki_base: str = None) -> Dict[str, int]:
     """便捷函数：同步所有影子页面"""
     manager = ShadowPageManager(wiki_base=wiki_base)
     return manager.batch_sync()
+
+
+# ========== 前提条件变化检测（MVP） ==========
+
+@dataclass
+class DecisionDependency:
+    """决策依赖条件"""
+    dep_type: str              # library_feature / data_volume / cost_budget / team_capability
+    raw_text: str = ""         # 原始匹配文本
+    entity: str = ""           # 依赖实体（如库名）
+    condition: str = ""        # 条件描述（如"不支持 SSL"）
+    supported_at_decision: bool = False  # 决策时该条件是否成立
+
+
+@dataclass
+class ValidationResult:
+    """验证结果"""
+    status_changed: bool = False
+    current_status: bool = False
+    evidence: str = ""         # 验证来源 URL
+    confidence: float = 0.0
+
+
+@dataclass
+class PremiseChange:
+    """前提条件变化"""
+    dependency: DecisionDependency
+    old_status: bool
+    new_status: bool
+    evidence: str = ""
+    confidence: float = 0.0
+
+
+class LibraryFeatureValidator:
+    """库特性支持状态验证器（MVP）
+
+    通过搜索目标库的官方文档/changelog，验证某特性现在是否支持。
+    """
+
+    # 检测正面信号的关键词
+    POSITIVE_SIGNALS = [
+        "now supports", "added support", "从 v", "since v",
+        "已支持", "新增支持", "开始支持", "现已支持",
+    ]
+
+    def check(self, dep: DecisionDependency, search_func=None) -> ValidationResult:
+        """
+        验证库特性支持状态。
+
+        Args:
+            dep: 决策依赖
+            search_func: 可选的搜索函数（默认使用 ShadowPageManager.search_tavily）
+
+        Returns:
+            ValidationResult
+        """
+        if not dep.entity or not dep.condition:
+            return ValidationResult(status_changed=False)
+
+        query = f"{dep.entity} {dep.condition} support changelog"
+
+        try:
+            if search_func is None:
+                # 使用 ShadowPageManager 的 tavily 搜索
+                manager = ShadowPageManager()
+                results = manager.search_tavily(query, max_results=5)
+            else:
+                results = search_func(query)
+
+            for r in results:
+                snippet = r.snippet.lower()
+                if any(sig in snippet for sig in self.POSITIVE_SIGNALS):
+                    return ValidationResult(
+                        status_changed=True,
+                        current_status=True,
+                        evidence=r.url,
+                        confidence=min(r.relevance_score + 0.3, 0.9),
+                    )
+
+            return ValidationResult(status_changed=False)
+        except Exception as e:
+            logger.warning(f"库特性验证失败 {dep.entity}: {e}")
+            return ValidationResult(status_changed=False)
+
+
+class PremiseValidator:
+    """前提条件验证器（MVP）
+
+    在影子页面的周期性刷新中，验证知识图谱中记录的用户决策依赖条件是否仍然成立。
+    v1 仅支持 library_feature 类型。
+    """
+
+    # 依赖类型识别正则（简化版）
+    # 使用 re.ASCII 确保 \w 只匹配 ASCII，避免误匹配中文字符
+    DEPENDENCY_PATTERNS = {
+        "library_feature": [
+            re.compile(r"([a-z0-9][a-z0-9\-\.]*[a-z0-9])\s*(?:库|package|library)?.*不?支持\s*([\w\-]+)", re.I),
+            re.compile(r"([\w\-]+)\s+(?:v?\d+\.\d+).*之前?.*不?支持", re.I | re.ASCII),
+        ],
+    }
+
+    def __init__(self, wiki_base: Path = None):
+        self.wiki_base = wiki_base or get_config().wiki_dir
+
+    def extract_dependencies(self, content: str) -> List[DecisionDependency]:
+        """从页面内容中提取决策依赖条件"""
+        dependencies = []
+
+        for dep_type, patterns in self.DEPENDENCY_PATTERNS.items():
+            for pattern in patterns:
+                for match in pattern.finditer(content):
+                    entity = match.group(1) if match.lastindex >= 1 else ""
+                    condition = match.group(2) if match.lastindex >= 2 else ""
+                    raw_text = match.group(0)
+                    # 简单推断：包含"不支持"则为 False，"支持"则为 True
+                    supported = "不支持" not in raw_text and "not support" not in raw_text.lower()
+                    dependencies.append(DecisionDependency(
+                        dep_type=dep_type,
+                        raw_text=raw_text,
+                        entity=entity,
+                        condition=condition,
+                        supported_at_decision=supported,
+                    ))
+
+        return dependencies
+
+    def validate_premises(self, page_path: str) -> List[PremiseChange]:
+        """
+        验证某 Wiki 页面关联的所有决策前提条件。
+
+        Args:
+            page_path: Wiki 页面路径（相对或绝对）
+
+        Returns:
+            前提条件变化列表
+        """
+        p = Path(page_path)
+        if not p.exists():
+            p = self.wiki_base / page_path
+        if not p.exists():
+            logger.warning(f"页面不存在，跳过前提验证: {page_path}")
+            return []
+
+        try:
+            content = p.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"读取页面失败 {page_path}: {e}")
+            return []
+
+        dependencies = self.extract_dependencies(content)
+        if not dependencies:
+            return []
+
+        changes = []
+        validator = LibraryFeatureValidator()
+
+        for dep in dependencies:
+            result = validator.check(dep)
+            if result.status_changed and dep.supported_at_decision != result.current_status:
+                changes.append(PremiseChange(
+                    dependency=dep,
+                    old_status=dep.supported_at_decision,
+                    new_status=result.current_status,
+                    evidence=result.evidence,
+                    confidence=result.confidence,
+                ))
+
+        if changes:
+            logger.info(f"页面 {page_path} 检测到 {len(changes)} 个前提条件变化")
+
+        return changes
+
+    def validate_batch(self, page_pattern: str = "*.md") -> Dict[str, List[PremiseChange]]:
+        """
+        批量验证 Wiki 页面前提条件。
+
+        Returns:
+            {page_path: [PremiseChange, ...]}
+        """
+        results = {}
+        manager = ShadowPageManager(wiki_base=str(self.wiki_base))
+
+        for page in manager._list_pages(page_pattern):
+            changes = self.validate_premises(str(page))
+            if changes:
+                results[str(page)] = changes
+
+        return results

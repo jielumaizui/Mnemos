@@ -26,6 +26,8 @@ from urllib3.util.retry import Retry
 from core.config import get_config
 
 # 全局连接池（进程内共享）
+import logging
+logger = logging.getLogger(__name__)
 _session_lock = threading.Lock()
 _sessions: Dict[str, requests.Session] = {}
 
@@ -154,6 +156,7 @@ class MemosClient:
                 if patterns:
                     return patterns
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         return list(MemosClient._DEFAULT_SANITIZE_PATTERNS)
 
@@ -205,6 +208,7 @@ class MemosClient:
             try:
                 self._metrics_callback(method, elapsed, resp.status_code)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at styx.py", exc_info=True)
                 pass  # metrics 不应影响主流程
 
         # 错误分类

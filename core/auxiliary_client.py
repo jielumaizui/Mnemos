@@ -38,8 +38,9 @@ anthropic → openai → siliconflow
     # reranking（允许API）
     ranked = client.rerank("query", ["doc1", "doc2"])
 """
-
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import os
 import time
@@ -604,8 +605,8 @@ def main():
     if args.list_providers:
         available = client.get_available_providers()
         chain = [p.value for p in client.fallback_chain]
-        print("降级链路:", " -> ".join(chain))
-        print("可用 provider:", ", ".join(available))
+        logger.info("降级链路:", " -> ".join(chain))
+        logger.info("可用 provider:", ", ".join(available))
         return
 
     if not args.prompt:
@@ -621,12 +622,12 @@ def main():
             system=args.system,
             provider=args.provider,
         )
-        print(f"[{resp.provider}/{resp.model}] 延迟: {resp.latency_ms:.0f}ms")
-        print(f"用量: {resp.usage}")
-        print("-" * 40)
-        print(resp.content)
+        logger.info(f"[{resp.provider}/{resp.model}] 延迟: {resp.latency_ms:.0f}ms")
+        logger.info(f"用量: {resp.usage}")
+        logger.info("-" * 40)
+        logger.info(resp.content)
     except RuntimeError as e:
-        print(f"错误: {e}")
+        logger.warning(f"错误: {e}")
 
 
 if __name__ == "__main__":

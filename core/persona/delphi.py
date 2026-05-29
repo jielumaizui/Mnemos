@@ -32,11 +32,11 @@ from .hamartia import BlindSpotProfile
 from core.config import get_config
 import logging
 
-logger = logging.getLogger(__name__)
 
 
 # ========== 配置 ==========
 
+logger = logging.getLogger(__name__)
 def _get_wiki_dir():
     """Lazy-load wiki directory to avoid side effects at import time."""
     return get_config().wiki_dir
@@ -437,6 +437,7 @@ class PersonaStore:
 
             return profile, blindspot
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
             return None, None
 
     def _generate_persona_page(self, profile: PreferenceProfile, blindspot: BlindSpotProfile = None) -> str:
@@ -577,6 +578,7 @@ class PersonaStore:
         try:
             fm = yaml.safe_load(parts[1]) or {}
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
             return None, None
 
         # 从markdown列表项提取分数，格式：- **key**: label (0.85)
@@ -638,6 +640,7 @@ class PersonaStore:
             version_match = re.search(r'version:\s*(\d+)', content)
             version = int(version_match.group(1)) if version_match else 0
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
             version = 0
 
         backup_path = self.history_dir / f"user-persona-v{version}.md"
@@ -716,6 +719,7 @@ class PersonaStore:
                     stats["updated"] += 1
 
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
                 stats["skipped"] += 1
                 continue
 
@@ -733,6 +737,7 @@ class PersonaStore:
         try:
             return yaml.safe_load(parts[1]) or {}
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
             return None
 
     def _update_persona_frontmatter(self, content: str, frontmatter: Dict,
@@ -799,14 +804,14 @@ def save_persona_to_wiki(profile: PreferenceProfile, blindspot: BlindSpotProfile
     """便捷函数：保存画像到wiki"""
     store = PersonaStore()
     store.save_persona(profile, blindspot)
-    print(f"✅ 画像已保存到 wiki: {store.persona_page}")
+    logger.info(f"✅ 画像已保存到 wiki: {store.persona_page}")
 
 
 def align_wiki_with_persona(persona: PreferenceProfile, dry_run: bool = False) -> Dict:
     """便捷函数：全量反写wiki匹配度"""
     store = PersonaStore()
     stats = store.align_all_wiki_pages(persona, dry_run=dry_run)
-    print(f"✅ Wiki扫描完成: {stats['scanned']} 条, 更新 {stats['updated']} 条, 跳过 {stats['skipped']} 条")
+    logger.warning(f"✅ Wiki扫描完成: {stats['scanned']} 条, 更新 {stats['updated']} 条, 跳过 {stats['skipped']} 条")
     return stats
 
 
@@ -921,6 +926,7 @@ def _load_base_behavior_prompt() -> str:
             return "\n".join(lines)
         return ""
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
         return ""
 
 

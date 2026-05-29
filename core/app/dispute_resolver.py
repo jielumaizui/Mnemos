@@ -14,9 +14,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class DisputeAssertion:
     """争议断言"""
@@ -110,6 +110,7 @@ class DisputeResolver:
                         "needs_escalation": days_old >= 7,
                     })
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at dispute_resolver.py", exc_info=True)
                 continue
 
         return sorted(disputes, key=lambda d: d["days_old"], reverse=True)
@@ -214,4 +215,5 @@ class DisputeResolver:
     def _add_context_to_both(self, dispute_page_path: str, context: str) -> None:
         """给双方添加上下文"""
         # 上下文信息已写入争议页面
+        # TODO: 实现将上下文同步回争议双方的原始页面（当前仅写入争议页面）
         pass

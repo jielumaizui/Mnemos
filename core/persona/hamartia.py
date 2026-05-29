@@ -548,6 +548,14 @@ class BlindSpotProfileManager:
 
         self._save_profile(profile)
 
+    def recover_credit(self) -> float:
+        """恢复挑战信用并持久化，供周期性画像分析/每日任务调用。"""
+        profile = self._load_profile()
+        self.balancer.profile = profile
+        self.balancer.recover_credit()
+        self._save_profile(self.balancer.profile)
+        return self.balancer.profile.challenge_credit
+
     def _load_profile(self) -> BlindSpotProfile:
         """从数据库加载盲区画像"""
         # 简化版：从persona_versions表加载
@@ -573,6 +581,8 @@ class BlindSpotProfileManager:
             "rejected_count": profile.rejected_count,
             "acceptance_rate": profile.acceptance_rate,
             "challenge_credit": profile.challenge_credit,
+            "credit_max": profile.credit_max,
+            "credit_recovery_rate": profile.credit_recovery_rate,
         }
         self.store.update_blindspot_profile(data)
 
@@ -588,6 +598,8 @@ class BlindSpotProfileManager:
         profile.rejected_count = data.get("rejected_count", 0)
         profile.acceptance_rate = data.get("acceptance_rate", 0.0)
         profile.challenge_credit = data.get("challenge_credit", 10.0)
+        profile.credit_max = data.get("credit_max", 10.0)
+        profile.credit_recovery_rate = data.get("credit_recovery_rate", 1.0)
         return profile
 
 

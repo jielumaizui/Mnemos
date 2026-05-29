@@ -23,7 +23,7 @@ if os.path.exists(LOCK_FILE):
         if elapsed > timedelta(minutes=SCHEDULE_INTERVAL * 1.5):
             print(f"[{datetime.now().isoformat()}] Skipped: missed schedule (was off for {elapsed})")
             SHOULD_SKIP = True
-    except:
+    except ValueError:
         pass
 
 if SHOULD_SKIP:
@@ -41,8 +41,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 使用相对路径加载脚本
-SCRIPT_PATH = Path(__file__).parent / "weekly_report.py"
-exec(open(str(SCRIPT_PATH)).read())
+import runpy
+SCRIPT_PATH = Path(__file__).parent.parent / "core" / "app" / "weekly_report.py"
+runpy.run_path(str(SCRIPT_PATH), run_name="__main__")
 
 # 任务成功完成后，更新时间戳
 from datetime import datetime

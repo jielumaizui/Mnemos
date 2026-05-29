@@ -40,7 +40,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 # ========== 配置 ==========
 
 # 微信数据路径（平台特定，当前仅支持 macOS）
@@ -158,14 +157,14 @@ class WeChatCollector:
                 return conn
         except sqlite3.DatabaseError as e:
             if "file is not a database" in str(e).lower() or "not a database" in str(e).lower():
-                print(f"[WeChat] 数据库已加密，需要解密密钥: {db_path.name}")
-                print(f"         原因: macOS 版微信使用 SQLCipher 加密本地数据库")
-                print(f"         解决: 使用 import_wechat_text() 手动导入聊天记录")
+                logger.info(f"[WeChat] 数据库已加密，需要解密密钥: {db_path.name}")
+                logger.info(f"         原因: macOS 版微信使用 SQLCipher 加密本地数据库")
+                logger.info(f"         解决: 使用 import_wechat_text() 手动导入聊天记录")
             else:
-                print(f"[WeChat] 连接数据库失败: {db_path} - {e}")
+                logger.warning(f"[WeChat] 连接数据库失败: {db_path} - {e}")
             return None
         except Exception as e:
-            print(f"[WeChat] 连接数据库失败: {db_path} - {e}")
+            logger.warning(f"[WeChat] 连接数据库失败: {db_path} - {e}")
             return None
 
     def _connect_sqlcipher(self, db_path: Path) -> Optional[sqlite3.Connection]:
@@ -180,9 +179,9 @@ class WeChatCollector:
             conn.execute("SELECT count(*) FROM sqlite_master;")
             return conn
         except ImportError:
-            print("[WeChat] pysqlcipher3 未安装，尝试替代方案...")
+            logger.info("[WeChat] pysqlcipher3 未安装，尝试替代方案...")
         except Exception as e:
-            print(f"[WeChat] SQLCipher解密失败: {e}")
+            logger.warning(f"[WeChat] SQLCipher解密失败: {e}")
 
         # 备选：尝试使用 sqlcipher 命令行工具
         try:
@@ -213,10 +212,10 @@ class WeChatCollector:
             是否成功
         """
         # 这里预留外部工具调用接口
-        print("[WeChat] 外部解密工具需要手动配置")
-        print("  方案1: 安装 pysqlcipher3 并设置密钥")
-        print("  方案2: 使用 wechat-dump 工具导出")
-        print("  方案3: 微信自带导出功能导出为文本")
+        logger.info("[WeChat] 外部解密工具需要手动配置")
+        logger.info("  方案1: 安装 pysqlcipher3 并设置密钥")
+        logger.info("  方案2: 使用 wechat-dump 工具导出")
+        logger.info("  方案3: 微信自带导出功能导出为文本")
         return False
 
     # ---- 消息提取 ----
@@ -300,6 +299,7 @@ class WeChatCollector:
                         })
 
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at echo.py", exc_info=True)
                     continue
 
             # 按时间排序
@@ -453,6 +453,7 @@ class WeChatCollector:
                 self.store.insert_wechat_signal(signal)
                 count += 1
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at echo.py", exc_info=True)
                 continue
 
         return count
@@ -610,6 +611,7 @@ class WeChatManualImporter:
 
 【使用代码】
     from core.persona.echo import import_wechat_text
+logger = logging.getLogger(__name__)
     text = """粘贴你的聊天记录到这里"""
     import_wechat_text(text)
 
@@ -621,7 +623,7 @@ class WeChatManualImporter:
         """从文件导入微信消息。"""
         path = Path(file_path)
         if not path.exists():
-            print(f"[WeChatManualImporter] 文件不存在: {file_path}")
+            logger.info(f"[WeChatManualImporter] 文件不存在: {file_path}")
             return 0
 
         text = path.read_text(encoding="utf-8")
@@ -633,23 +635,23 @@ class WeChatManualImporter:
 def collect_wechat_signals(days: int = 30) -> int:
     """便捷函数：采集微信信号"""
     collector = WeChatCollector()
-    print(collector.get_collection_summary())
+    logger.info(collector.get_collection_summary())
     count = collector.collect_and_store(days=days)
-    print(f"✅ 采集微信信号: {count} 条")
+    logger.info(f"✅ 采集微信信号: {count} 条")
     return count
 
 
 def import_wechat_text(text: str, default_date: str = None) -> int:
     """便捷函数：从文本导入微信消息"""
     count = WeChatManualImporter.import_from_text(text, default_date=default_date)
-    print(f"✅ 导入微信消息: {count} 条")
+    logger.info(f"✅ 导入微信消息: {count} 条")
     return count
 
 
 def show_wechat_import_guide() -> str:
     """便捷函数：显示手动导入指南"""
     guide = WeChatManualImporter.get_import_guide()
-    print(guide)
+    logger.info(guide)
     return guide
 
 

@@ -20,8 +20,26 @@ from datetime import datetime, timezone
 
 
 class RelationType(str, Enum):
-    """关系类型枚举"""
+    """关系类型枚举
 
+    核心类型（蓝图要求 9 种）：CONTAINS, RELATED_TO, CONTRADICTS,
+    SUPERCEDES, DERIVES_FROM, PREREQUISITE, CO_OCCURS, SEQUENTIAL, SIMILAR_TO
+
+    扩展类型（向后兼容，共 17+ 种）：涵盖层级、因果、演化、对比、元关系等
+    """
+
+    # === 核心类型（蓝图标准 9 种）===
+    CONTAINS = "contains"                # 包含（A 包含 B）
+    RELATED_TO = "related_to"            # 相关（A 与 B 有关联）
+    CONTRADICTS = "contradicts"          # 矛盾（A 和 B 结论冲突）
+    SUPERCEDES = "supercedes"            # 取代（A 取代 B）
+    DERIVES_FROM = "derives_from"        # 派生（A 由 B 派生）
+    PREREQUISITE = "prerequisite"        # 前置（A 是 B 的前置条件）
+    CO_OCCURS = "co_occurs"              # 共现（A 与 B 同时出现）
+    SEQUENTIAL = "sequential"            # 顺序（A 在 B 之前发生）
+    SIMILAR_TO = "similar_to"            # 相似（A 和 B 结构/模式相似）
+
+    # === 扩展类型（向后兼容，保留现有语义）===
     # 层级关系
     BUILDS_ON = "builds_on"              # 建立在...之上（A 深化/扩展了 B）
     SPECIALIZES = "specializes"          # 是...的特化（A 是 B 的具体场景）
@@ -41,17 +59,100 @@ class RelationType(str, Enum):
     SUPERCEDED_BY = "superceded_by"      # 被...取代（A 被 B 取代）
 
     # 对比关系
-    CONTRADICTS = "contradicts"          # 与...矛盾（A 和 B 结论冲突）
     ALTERNATIVE_TO = "alternative_to"    # 是...的替代方案（A 和 B 可互换）
-    SIMILAR_TO = "similar_to"            # 类似于...（A 和 B 结构/模式相似）
+    CONTRASTS_WITH = "contrasts_with"    # 与...对比（A 与 B 对比）
+
+    # 动作/语义关系（ConnectWorker 使用）
+    USES = "uses"                        # 使用...（A 使用 B）
+    IMPLEMENTS = "implements"            # 实现...（A 实现 B）
+    EXTENDS = "extends"                  # 扩展...（A 扩展 B）
 
     # 元关系
     REFERENCES = "references"            # 引用了...（A 提及/参考了 B）
     INSTANCE_OF = "instance_of"          # 是...的实例（A 是 B 的具体案例）
 
 
+# 蓝图定义的核心关系类型（9 种）
+CORE_RELATION_TYPES = frozenset({
+    RelationType.CONTAINS,
+    RelationType.RELATED_TO,
+    RelationType.CONTRADICTS,
+    RelationType.SUPERCEDES,
+    RelationType.DERIVES_FROM,
+    RelationType.PREREQUISITE,
+    RelationType.CO_OCCURS,
+    RelationType.SEQUENTIAL,
+    RelationType.SIMILAR_TO,
+})
+
+
 # 关系元数据：反向关系、对称性、传递性、描述
 RELATION_META: Dict[RelationType, Dict] = {
+    # --- 核心类型 ---
+    RelationType.CONTAINS: {
+        "reverse": "is_contained_by",
+        "symmetric": False,
+        "transitive": True,
+        "description": "A 包含 B（组成部分或子集）",
+        "example": "「OAuth2 流程」contains「JWT 签名验证」",
+    },
+    RelationType.RELATED_TO: {
+        "reverse": "related_to",
+        "symmetric": True,
+        "transitive": False,
+        "description": "A 与 B 存在一般性关联",
+        "example": "「DDD」related_to「微服务」",
+    },
+    RelationType.CONTRADICTS: {
+        "reverse": "is_contradicted_by",
+        "symmetric": True,
+        "transitive": False,
+        "description": "A 和 B 的结论/建议互相冲突",
+        "example": "「微服务拆分要细」contradicts「服务不宜过多」",
+    },
+    RelationType.SUPERCEDES: {
+        "reverse": "is_superceded_by",
+        "symmetric": False,
+        "transitive": False,
+        "description": "A 取代 B，B 已过时",
+        "example": "「pytest」supercedes「unittest」",
+    },
+    RelationType.DERIVES_FROM: {
+        "reverse": "is_derived_by",
+        "symmetric": False,
+        "transitive": True,
+        "description": "A 由 B 派生或扩展而来",
+        "example": "「v2 复盘」derives_from「v1 复盘」",
+    },
+    RelationType.PREREQUISITE: {
+        "reverse": "is_prerequisite_for",
+        "symmetric": False,
+        "transitive": True,
+        "description": "学习/理解 A 之前需要先掌握 B",
+        "example": "「HTTP 协议」prerequisite「RESTful API 设计」",
+    },
+    RelationType.CO_OCCURS: {
+        "reverse": "co_occurs",
+        "symmetric": True,
+        "transitive": False,
+        "description": "A 与 B 在上下文中同时出现",
+        "example": "「Kubernetes」co_occurs「Docker」",
+    },
+    RelationType.SEQUENTIAL: {
+        "reverse": "is_preceded_by",
+        "symmetric": False,
+        "transitive": True,
+        "description": "A 在 B 之前发生或执行",
+        "example": "「需求分析」sequential「系统设计」",
+    },
+    RelationType.SIMILAR_TO: {
+        "reverse": "similar_to",
+        "symmetric": True,
+        "transitive": False,
+        "description": "A 和 B 结构、模式或适用场景相似",
+        "example": "「策略模式」similar_to「状态模式」",
+    },
+    # --- 扩展类型（向后兼容）---
     RelationType.BUILDS_ON: {
         "reverse": "is_built_by",
         "symmetric": False,
@@ -184,24 +285,34 @@ class RelationEvidence:
 
 @dataclass
 class Relation:
-    """知识关系"""
-    source: str                  # 源页面 ID（文件路径或页面标识）
-    target: str                  # 目标页面 ID
+    """知识关系（对齐蓝图 §3.2）"""
+    source: str                       # 源实体
+    target: str                       # 目标实体
     relation_type: RelationType
-    strength: float = 0.5        # 关系强度 0.0-1.0
-    confidence: float = 0.5      # 置信度 0.0-1.0（关系是否真实存在的确定程度）
-    source_method: str = "auto"  # auto / llm / similarity / keyword / manual
+    strength: float = 0.5             # 综合强度（向后兼容字段）
+    base_strength: float = 0.5        # 基础强度（提取时计算）
+    dynamic_strength: float = 0.5     # 动态强度（基于使用频率）
+    confidence: float = 0.5           # 初始可信度
+    confidence_history: List[float] = None  # 可信度历史（贝叶斯更新记录）
+    evidence: List[RelationEvidence] = None   # 支持证据列表
+    source_method: str = "auto"       # auto / manual / dark_knowledge
     created_at: str = ""
     updated_at: str = ""
-    evidence: List[RelationEvidence] = None
+    last_validated: str = ""          # 上次验证时间
+    status: str = "active"            # active / suspect / deprecated
 
     def __post_init__(self):
         if self.evidence is None:
             self.evidence = []
+        if self.confidence_history is None:
+            self.confidence_history = []
         if not self.created_at:
             self.created_at = datetime.now(timezone.utc).isoformat()[:19]
         if not self.updated_at:
             self.updated_at = self.created_at
+        # 如果 base/dynamic 被显式设置，重新计算 strength
+        if self.base_strength != 0.5 or self.dynamic_strength != 0.5:
+            self.strength = round(self.base_strength * self.dynamic_strength, 3)
 
     @property
     def is_symmetric(self) -> bool:
@@ -218,6 +329,14 @@ class Relation:
         """是否传递关系"""
         return RELATION_META.get(self.relation_type, {}).get("transitive", False)
 
+    def update_confidence(self, new_score: float) -> None:
+        """贝叶斯更新置信度，追加到历史"""
+        self.confidence_history.append(round(self.confidence, 4))
+        # 简单 EWMA 更新
+        alpha = 0.3
+        self.confidence = round(alpha * new_score + (1 - alpha) * self.confidence, 4)
+        self.updated_at = datetime.now(timezone.utc).isoformat()[:19]
+
     def to_dict(self) -> Dict:
         """序列化为字典"""
         return {
@@ -225,10 +344,15 @@ class Relation:
             "target": self.target,
             "relation_type": self.relation_type.value,
             "strength": round(self.strength, 2),
+            "base_strength": round(self.base_strength, 2),
+            "dynamic_strength": round(self.dynamic_strength, 2),
             "confidence": round(self.confidence, 2),
+            "confidence_history": self.confidence_history,
             "source_method": self.source_method,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "last_validated": self.last_validated,
+            "status": self.status,
             "evidence": [
                 {"type": e.evidence_type, "content": e.content}
                 for e in (self.evidence or [])
@@ -237,7 +361,7 @@ class Relation:
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Relation":
-        """从字典反序列化"""
+        """从字典反序列化（向后兼容：旧数据中的 strength 映射为 base_strength）"""
         evidence = [
             RelationEvidence(
                 evidence_type=e.get("type", e.get("evidence_type", "")),
@@ -245,15 +369,27 @@ class Relation:
             )
             for e in data.get("evidence", [])
         ]
+        # 向后兼容：旧数据可能只有 strength 字段
+        base_strength = data.get("base_strength")
+        dynamic_strength = data.get("dynamic_strength")
+        old_strength = data.get("strength", 0.5)
+        if base_strength is None:
+            base_strength = old_strength
+            dynamic_strength = dynamic_strength or 1.0
         return cls(
             source=data["source"],
             target=data["target"],
             relation_type=RelationType(data["relation_type"]),
-            strength=data.get("strength", 0.5),
+            strength=old_strength,
+            base_strength=base_strength,
+            dynamic_strength=dynamic_strength or 0.5,
             confidence=data.get("confidence", 0.5),
+            confidence_history=data.get("confidence_history", []),
             source_method=data.get("source_method", "auto"),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
+            last_validated=data.get("last_validated", ""),
+            status=data.get("status", "active"),
             evidence=evidence,
         )
 
@@ -299,7 +435,31 @@ def suggest_relation_type(keywords: List[str]) -> List[Tuple[RelationType, float
     返回 [(关系类型, 匹配分数), ...]，按分数降序
     """
     keyword_map = {
-        "基于": [(RelationType.BUILDS_ON, 0.9)],
+        # --- 核心类型关键词 ---
+        "包含": [(RelationType.CONTAINS, 0.9)],
+        "涵盖": [(RelationType.CONTAINS, 0.8)],
+        "相关": [(RelationType.RELATED_TO, 0.8)],
+        "关联": [(RelationType.RELATED_TO, 0.8)],
+        "矛盾": [(RelationType.CONTRADICTS, 0.9)],
+        "冲突": [(RelationType.CONTRADICTS, 0.8)],
+        "相反": [(RelationType.CONTRADICTS, 0.7)],
+        "取代": [(RelationType.SUPERCEDES, 0.9)],
+        "废弃": [(RelationType.SUPERCEDES, 0.9)],
+        "过时": [(RelationType.SUPERCEDES, 0.8)],
+        "派生": [(RelationType.DERIVES_FROM, 0.9)],
+        "基于": [(RelationType.DERIVES_FROM, 0.8), (RelationType.BUILDS_ON, 0.7)],
+        "来源": [(RelationType.DERIVES_FROM, 0.7)],
+        "前置": [(RelationType.PREREQUISITE, 0.9)],
+        "先决": [(RelationType.PREREQUISITE, 0.9)],
+        "先学": [(RelationType.PREREQUISITE, 0.8)],
+        "共现": [(RelationType.CO_OCCURS, 0.9)],
+        "同时": [(RelationType.CO_OCCURS, 0.7)],
+        "顺序": [(RelationType.SEQUENTIAL, 0.8)],
+        "先后": [(RelationType.SEQUENTIAL, 0.7)],
+        "类似": [(RelationType.SIMILAR_TO, 0.9)],
+        "像": [(RelationType.SIMILAR_TO, 0.7)],
+        "类比": [(RelationType.SIMILAR_TO, 0.8)],
+        # --- 扩展类型关键词（向后兼容）---
         "建立": [(RelationType.BUILDS_ON, 0.8)],
         "扩展": [(RelationType.BUILDS_ON, 0.8)],
         "深化": [(RelationType.BUILDS_ON, 0.7)],
@@ -311,32 +471,22 @@ def suggest_relation_type(keywords: List[str]) -> List[Tuple[RelationType, float
         "总结": [(RelationType.GENERALIZES, 0.6)],
         "部分": [(RelationType.PART_OF, 0.8)],
         "组成": [(RelationType.PART_OF, 0.7), (RelationType.HAS_PART, 0.7)],
-        "包含": [(RelationType.HAS_PART, 0.8)],
         "导致": [(RelationType.CAUSES, 0.9)],
         "引发": [(RelationType.CAUSES, 0.8)],
         "原因": [(RelationType.CAUSES, 0.7)],
         "依赖": [(RelationType.DEPENDS_ON, 0.9)],
         "需要": [(RelationType.DEPENDS_ON, 0.7), (RelationType.PREREQUISITE_FOR, 0.6)],
         "前提": [(RelationType.PREREQUISITE_FOR, 0.9)],
-        "先学": [(RelationType.PREREQUISITE_FOR, 0.8)],
         "解决": [(RelationType.SOLVES, 0.9)],
         "方案": [(RelationType.SOLVES, 0.7)],
         "修复": [(RelationType.SOLVES, 0.7)],
         "替代": [(RelationType.REPLACES, 0.9), (RelationType.ALTERNATIVE_TO, 0.7)],
-        "取代": [(RelationType.REPLACES, 0.9), (RelationType.SUPERCEDED_BY, 0.8)],
+        "取代老": [(RelationType.REPLACES, 0.9)],
         "升级": [(RelationType.REPLACES, 0.7), (RelationType.EVOLVED_FROM, 0.6)],
         "演化": [(RelationType.EVOLVED_FROM, 0.9)],
         "迭代": [(RelationType.EVOLVED_FROM, 0.8)],
-        "过时": [(RelationType.SUPERCEDED_BY, 0.8)],
-        "废弃": [(RelationType.SUPERCEDED_BY, 0.9)],
-        "矛盾": [(RelationType.CONTRADICTS, 0.9)],
-        "冲突": [(RelationType.CONTRADICTS, 0.8)],
-        "相反": [(RelationType.CONTRADICTS, 0.7)],
         "或": [(RelationType.ALTERNATIVE_TO, 0.6)],
         "可选": [(RelationType.ALTERNATIVE_TO, 0.7)],
-        "类似": [(RelationType.SIMILAR_TO, 0.9)],
-        "像": [(RelationType.SIMILAR_TO, 0.7)],
-        "类比": [(RelationType.SIMILAR_TO, 0.8)],
         "参考": [(RelationType.REFERENCES, 0.8)],
         "引用": [(RelationType.REFERENCES, 0.8)],
         "提及": [(RelationType.REFERENCES, 0.6)],

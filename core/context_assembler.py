@@ -98,6 +98,7 @@ class ContextAssembler:
                     "entities": page_entities,
                 })
             except Exception:
+                logger.warning(f"Unexpected error in context_assembler.py", exc_info=True)
                 continue
 
             if len(candidates) >= limit:

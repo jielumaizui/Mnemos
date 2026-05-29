@@ -27,6 +27,8 @@ Memos-Wiki v2.0.0 Orchestrator - 主控脚本
 """
 
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import argparse
 import sys
@@ -58,7 +60,7 @@ class Orchestrator:
         line = f"[{level}] {msg}"
         self.logs.append(line)
         if self.verbose or level in ("ERROR", "WARN"):
-            print(line)
+            logger.info(line)
 
     # ========== 阶段 1: 蒸馏 ==========
 
@@ -106,22 +108,20 @@ class Orchestrator:
             from core.kia.genos import DNAEngine
             engine = DNAEngine(wiki_base=str(self.wiki_base))
 
-            if not self.inbox.exists():
-                return {"status": "ok", "computed": 0}
-
-            pages = list(self.inbox.glob("*.md"))
             if self.limit:
-                pages = pages[:self.limit]
+                pages = engine._list_pages()[:self.limit]
+                computed = 0
+                for page in pages:
+                    dna = engine.compute_dna(page)
+                    if dna:
+                        engine.save_dna(dna)
+                        computed += 1
+                stats = {"scanned": len(pages), "computed": computed, "failed": len(pages) - computed}
+            else:
+                stats = engine.scan_all_pages()
 
-            computed = 0
-            for page in pages:
-                dna = engine.compute_dna(page)
-                if dna:
-                    engine.save_dna(dna)
-                    computed += 1
-
-            self.log(f"DNA 计算完成: {computed} 个页面")
-            return {"status": "ok", "computed": computed}
+            self.log(f"DNA 计算完成: {stats['computed']} 个页面")
+            return {"status": "ok", **stats}
         except Exception as e:
             self.errors.append(("dna", str(e)))
             self.log(f"DNA 计算失败: {e}", "ERROR")
@@ -285,57 +285,53 @@ class Orchestrator:
     # ========== 阶段 8: 暗知识挖掘 ==========
 
     def run_dark(self) -> Dict:
-        """运行暗知识挖掘"""
-        self.log("阶段 8: 暗知识挖掘")
+        """运行暗知识挖掘（盲区检测）
+
+        TODO: erebus 模块已按蓝图合并到知识图谱 + 免疫系统。
+        当前降级为调用 hygieia.detect_knowledge_gaps() 进行盲区扫描。
+        """
+        self.log("阶段 8: 暗知识挖掘（盲区检测）")
         try:
-            from core.kia.erebus import DarkKnowledgeMiner
-            miner = DarkKnowledgeMiner(wiki_base=str(self.wiki_base))
-
-            associations = miner.mine_hidden_associations()
-            temporal = miner.mine_temporal_patterns()
-            gaps = miner.mine_knowledge_gaps()
-            evolution = miner.mine_evolution_signals()
-            needs = miner.mine_unrecorded_needs()
-
-            self.log(f"暗知识挖掘完成: {len(associations)} 关联, {len(gaps)} 盲区, "
-                    f"{len(needs)} 未记录需求")
-
+            from core.kia.hygieia import KnowledgeImmuneSystem
+            immune = KnowledgeImmuneSystem(wiki_base=str(self.wiki_base))
+            gaps = immune.detect_knowledge_gaps()
+            self.log(f"盲区检测完成: {len(gaps)} 项盲区")
             return {
                 "status": "ok",
-                "associations": len(associations),
-                "temporal_patterns": len(temporal),
                 "gaps": len(gaps),
-                "evolution_signals": len(evolution),
-                "unrecorded_needs": len(needs),
+                "note": "erebus 已合并，降级为盲区检测",
             }
         except Exception as e:
             self.errors.append(("dark", str(e)))
-            self.log(f"暗知识挖掘失败: {e}", "ERROR")
+            self.log(f"盲区检测失败: {e}", "ERROR")
             return {"status": "error", "error": str(e)}
 
     # ========== 阶段 9: 量子纠缠 ==========
 
     def run_entangle(self) -> Dict:
-        """运行量子纠缠发现"""
-        self.log("阶段 9: 量子纠缠发现")
+        """运行量子纠缠发现（关系网络分析）
+
+        TODO: moirai 模块已按蓝图合并到知识图谱。
+        当前降级为调用知识图谱的 discover_relations 进行关系发现。
+        """
+        self.log("阶段 9: 量子纠缠发现（关系网络分析）")
         try:
-            from core.kia.moirai import QuantumEntanglement
-            qe = QuantumEntanglement(wiki_base=str(self.wiki_base))
-
-            network = qe.discover_all(limit_per_type=20)
-            self.log(f"量子纠缠发现完成: {len(network.pairs)} 对, "
-                    f"{len(network.hub_pages)} 枢纽, "
-                    f"{len(network.cluster_map)} 聚类")
-
+            from core.kia.knowledge_graph import KnowledgeGraph
+            kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
+            # 获取所有页面，进行批量关系发现
+            all_pages = list(kg.wiki_base.rglob("*.md"))
+            discovered = []
+            for p in all_pages[:50]:  # 限制范围避免超时
+                discovered.extend(kg.discover_relations(p))
+            self.log(f"关系发现完成: {len(discovered)} 条新关系")
             return {
                 "status": "ok",
-                "pairs": len(network.pairs),
-                "hub_pages": len(network.hub_pages),
-                "clusters": len(network.cluster_map),
+                "relations_discovered": len(discovered),
+                "note": "moirai 已合并，降级为关系发现",
             }
         except Exception as e:
             self.errors.append(("entangle", str(e)))
-            self.log(f"量子纠缠发现失败: {e}", "ERROR")
+            self.log(f"关系发现失败: {e}", "ERROR")
             return {"status": "error", "error": str(e)}
 
     # ========== 阶段 10: 影子页面 ==========
@@ -425,14 +421,15 @@ class Orchestrator:
             engine = PredictivePushEngine(wiki_base=str(self.wiki_base))
 
             if context:
-                decisions = engine.decide_push(context)
-                triggered = [d for d in decisions if d.should_push]
-                self.log(f"推送引擎完成: 上下文分析, {len(triggered)} 条推送")
+                decision = engine.decide_push(context)
+                triggered = 1 if decision.should_push else 0
+                self.log(f"推送引擎完成: 上下文分析, {triggered} 条推送")
                 return {
                     "status": "ok",
                     "context": context[:50],
-                    "decisions": len(decisions),
-                    "triggered": len(triggered),
+                    "decisions": 1,
+                    "triggered": triggered,
+                    "reason": decision.reason,
                 }
             else:
                 self.log("推送引擎: 无上下文，跳过")
@@ -635,10 +632,10 @@ def main():
     # 输出
     if args.output:
         Path(args.output).write_text(report, encoding="utf-8")
-        print(f"报告已保存到: {args.output}")
+        logger.info(f"报告已保存到: {args.output}")
     else:
-        print("\n" + "=" * 50)
-        print(report)
+        logger.info("\n" + "=" * 50)
+        logger.info(report)
 
     # 返回码
     if orch.errors:

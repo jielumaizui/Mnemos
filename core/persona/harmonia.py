@@ -59,19 +59,19 @@ def run_calibration():
     profile, _ = store.load_persona()
 
     if not profile:
-        print("[校准] 暂无画像，请先运行画像分析。")
+        logger.info("[校准] 暂无画像，请先运行画像分析。")
         return
 
-    print("=" * 60)
-    print("用户画像自评校准")
-    print("=" * 60)
-    print(f"当前画像版本: v{profile.version}，基于 {profile.signal_count} 条信号")
-    print()
-    print("说明：")
-    print("  系统基于你的行为信号推断了一套画像。")
-    print("  请对每个维度打分：1=完全不准，2=不太准，3=基本准确，4=比较准，5=非常准")
-    print("  如果某个维度显示'数据不足'，直接按回车跳过。")
-    print()
+    logger.info("=" * 60)
+    logger.info("用户画像自评校准")
+    logger.info("=" * 60)
+    logger.info(f"当前画像版本: v{profile.version}，基于 {profile.signal_count} 条信号")
+    logger.info()
+    logger.info("说明：")
+    logger.info("  系统基于你的行为信号推断了一套画像。")
+    logger.info("  请对每个维度打分：1=完全不准，2=不太准，3=基本准确，4=比较准，5=非常准")
+    logger.info("  如果某个维度显示'数据不足'，直接按回车跳过。")
+    logger.info()
 
     calibration = {
         "version": profile.version,
@@ -98,9 +98,9 @@ def run_calibration():
 
 def _calibrate_layer(layer_name: str, layer_key: str, profile: PreferenceProfile, calibration: Dict):
     """校准一个层"""
-    print(f"\n{'='*40}")
-    print(f"{layer_name}")
-    print(f"{'='*40}")
+    logger.info(f"\n{'='*40}")
+    logger.info(f"{layer_name}")
+    logger.info(f"{'='*40}")
 
     layer = getattr(profile, layer_key)
     ins = set(layer.insufficient_dimensions or [])
@@ -111,13 +111,13 @@ def _calibrate_layer(layer_name: str, layer_key: str, profile: PreferenceProfile
         label = _get_label_for_score(score, labels)
 
         if dim_key in ins:
-            print(f"\n  [{name}] — 数据不足，跳过")
+            logger.info(f"\n  [{name}] — 数据不足，跳过")
             calibration["ratings"][dim_key] = None
             continue
 
-        print(f"\n  [{name}]")
-        print(f"  系统推断: {label} ({score:.2f})")
-        print(f"  量表: {scale}")
+        logger.info(f"\n  [{name}]")
+        logger.info(f"  系统推断: {label} ({score:.2f})")
+        logger.info(f"  量表: {scale}")
 
         while True:
             user_input = input(f"  你觉得这个推断准吗？(1-5，回车=跳过): ").strip()
@@ -135,9 +135,9 @@ def _calibrate_layer(layer_name: str, layer_key: str, profile: PreferenceProfile
                             calibration["comments"][dim_key] = comment
                     break
                 else:
-                    print("  请输入 1-5 之间的数字")
+                    logger.info("  请输入 1-5 之间的数字")
             except ValueError:
-                print("  请输入数字")
+                logger.info("  请输入数字")
 
 
 def _get_label_for_score(score: float, labels: List[str]) -> str:
@@ -181,37 +181,37 @@ def _save_calibration(store: PersonaStore, profile: PreferenceProfile, calibrati
     calib_file = calib_dir / f"calibration-v{profile.version}-{datetime.now().strftime('%Y%m%d')}.json"
     calib_file.write_text(json.dumps(calibration, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"\n[校准] 结果已保存: {calib_file}")
+    logger.info(f"\n[校准] 结果已保存: {calib_file}")
 
 
 def _print_calibration_report(calibration: Dict):
     """打印校准报告摘要"""
     ratings = {k: v for k, v in calibration["ratings"].items() if v is not None}
     if not ratings:
-        print("\n[校准] 未收集到有效评分")
+        logger.info("\n[校准] 未收集到有效评分")
         return
 
     avg = sum(ratings.values()) / len(ratings)
-    print(f"\n{'='*40}")
-    print("校准报告")
-    print(f"{'='*40}")
-    print(f"  评分维度数: {len(ratings)}")
-    print(f"  平均准确度: {avg:.1f}/5.0")
+    logger.info(f"\n{'='*40}")
+    logger.info("校准报告")
+    logger.info(f"{'='*40}")
+    logger.info(f"  评分维度数: {len(ratings)}")
+    logger.info(f"  平均准确度: {avg:.1f}/5.0")
 
     if avg >= 4.0:
-        print("  评价: 画像整体较准确")
+        logger.info("  评价: 画像整体较准确")
     elif avg >= 3.0:
-        print("  评价: 画像基本可用，部分维度需优化")
+        logger.info("  评价: 画像基本可用，部分维度需优化")
     else:
-        print("  评价: 画像偏差较大，建议检查数据源或推断逻辑")
+        logger.info("  评价: 画像偏差较大，建议检查数据源或推断逻辑")
 
     # 显示偏差最大的维度
     low_ratings = [(k, v) for k, v in ratings.items() if v <= 2]
     if low_ratings:
-        print(f"\n  偏差较大的维度（≤2分）:")
+        logger.info(f"\n  偏差较大的维度（≤2分）:")
         for dim, rating in low_ratings:
             comment = calibration["comments"].get(dim, "")
-            print(f"    - {dim}: {rating}/5 {comment and f'({comment})'}")
+            logger.info(f"    - {dim}: {rating}/5 {comment and f'({comment})'}")
 
 
 if __name__ == "__main__":

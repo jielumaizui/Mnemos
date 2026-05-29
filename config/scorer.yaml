@@ -1,0 +1,42 @@
+# 评分层配置 — AdaptiveScorerV2
+# 放置于项目根目录或 ~/.mnemos/ 下，由 core.config.get_config() 加载
+
+scorer:
+  # 环境：standard（sklearn） / lightweight（纯Python，树莓派）
+  backend: standard
+
+  # 训练阈值
+  training:
+    min_samples_per_dimension: 20   # 单维度最少样本数启动训练
+    min_confidence: 0.7             # ground_truth 最低置信度纳入训练
+    max_queue_size: 500             # 训练队列上限
+    retention_days: 30              # 训练记录保留天数
+
+  # 贝叶斯融合参数
+  bayesian:
+    alpha_prior: 1.0                # Beta 先验 α（Laplace 平滑）
+    beta_prior: 1.0                 # Beta 先验 β
+    explicit_neg_likelihood: 0.3    # 默认 P(E|~H)
+    rule_weight_cold: 3.0           # 冷启动规则权重
+    rule_weight_warm: 1.5           # 温启动规则权重
+    rule_weight_hot: 0.5            # 热启动规则权重
+
+  # 降级保护
+  fallback:
+    max_consecutive_failures: 3     # 连续失败次数触发降级
+    degrade_to_rule: true           # 降级时是否回退到规则评分
+
+  # 模型持久化
+  persistence:
+    format: joblib                  # joblib / json / onnx
+    max_versions: 5                 # 每维度保留最大版本数
+    auto_save_after_training: true  # 训练完成后自动保存
+
+  # 各维度开关
+  dimensions:
+    memos:  true
+    sync:   true
+    distill: true
+    kg:     true
+    profile: true
+    ops:    true

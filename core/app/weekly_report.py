@@ -13,9 +13,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+
 logger = logging.getLogger(__name__)
-
-
 class WeeklyReportGenerator:
     """每周画像报告生成器"""
 
@@ -120,6 +120,7 @@ class WeeklyReportGenerator:
             else:
                 lines.append("- 本周无足够数据")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
             lines.append("- 数据采集未就绪")
 
         lines.append("")
@@ -143,6 +144,7 @@ class WeeklyReportGenerator:
             else:
                 lines.append("- 本周未发现新盲点")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
             lines.append("- 盲点检测未就绪")
 
         lines.append("")
@@ -163,6 +165,7 @@ class WeeklyReportGenerator:
             event_section = report.split("## 维度变化")[0] if "## 维度变化" in report else report
             lines.append(event_section.strip())
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
             lines.append("- 演化数据不足（需至少 2 个快照）")
 
         lines.append("")

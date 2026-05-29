@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional
-
 logger = logging.getLogger(__name__)
+
 
 
 class PersonaDrivenDialogueStrategy:
@@ -97,6 +97,7 @@ class PersonaDrivenDialogueStrategy:
                     if template["condition"](preference_profile):
                         strategies.append(template["strategy"])
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at dialogue_strategy.py", exc_info=True)
                     continue
 
         # 从盲区画像提取策略
@@ -106,6 +107,7 @@ class PersonaDrivenDialogueStrategy:
                     if template["condition"](blindspot_profile):
                         strategies.append(template["strategy"])
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at dialogue_strategy.py", exc_info=True)
                     continue
 
         if not strategies:

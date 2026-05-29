@@ -10,15 +10,16 @@ ADR-019: 优先 hnswlib 双索引融合检索，DNAEngine/SimHash 作为兼容�
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.config import get_config
 from core.kia.genos import DNAEngine
 
+
+
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class LinkAction:
     """链接操作"""
@@ -26,6 +27,42 @@ class LinkAction:
     to_page: Path
     reason: str
     similarity: float
+
+
+@dataclass
+class WikiPage:
+    """用于跨 Agent 分歧检测的轻量页面表示"""
+    path: Path
+    frontmatter: Dict
+    content: str
+
+
+@dataclass
+class AgentConclusion:
+    """单个 Agent 在某个主题上的结论"""
+    agent: str
+    session_id: str
+    date_str: str
+    conclusion: str
+    confidence: float
+    source_page: str
+
+
+@dataclass
+class DivergenceReport:
+    """跨 Agent 认知分歧报告"""
+    topic: str
+    divergences: List[AgentConclusion]
+    severity: str
+    detected_at: datetime
+
+    def to_push_message(self) -> str:
+        lines = [f"关于 **{self.topic}**，不同 Agent 给出了不同建议："]
+        for item in self.divergences:
+            date = f"（{item.date_str}）" if item.date_str else ""
+            lines.append(f"- {item.agent}{date}：{item.conclusion}")
+        lines.append("\n需要我对比一下两种方案的利弊吗？")
+        return "\n".join(lines)
 
 
 class CrossAgentLinker:
@@ -36,14 +73,15 @@ class CrossAgentLinker:
     在原页面添加双向链接，不生成合成页。
     """
 
-    SIMILARITY_THRESHOLD = 0.30
+    VECTOR_SIMILARITY_THRESHOLD = 0.75
+    DNA_SIMILARITY_THRESHOLD = 0.30
     MAX_LINKS_PER_PAGE = 3
-    WORKSPACE_NAMES = ["claude", "hermes", "shared"]
+    WORKSPACE_NAMES = ["claude", "hermes", "kimi", "codex", "gpt", "shared"]
 
     def __init__(self, wiki_root: Path = None, vector_index=None):
         self.wiki_root = wiki_root or get_config().wiki_dir
         self.vector_index = vector_index
-        self.dna = DNAEngine()
+        self.dna = None
 
     # ── 主入口 ──
 
@@ -91,6 +129,15 @@ class CrossAgentLinker:
 
         return links
 
+    def handle_event(self, event_type: str, data: Dict) -> List[LinkAction]:
+        """事件总线入口：蒸馏完成后自动建立跨 Agent 关联"""
+        if event_type not in {"distill_complete", "knowledge_distilled", "page.created"}:
+            return []
+        page_path = data.get("page_path") or data.get("path") or data.get("wiki_path")
+        if not page_path:
+            return []
+        return self.link_after_distill(Path(page_path))
+
     # ── 内部方法 ──
 
     def _find_cross_workspace_similar(self, page_path: Path,
@@ -104,22 +151,30 @@ class CrossAgentLinker:
                 query = page_path.read_text(encoding="utf-8")[:2000]
                 search_results = self.vector_index.hybrid_search(
                     query=query,
+                    filters={
+                        "workspace": [
+                            w for w in self.WORKSPACE_NAMES
+                            if w != exclude_agent and w != "shared"
+                        ]
+                    },
                     top_k=self.MAX_LINKS_PER_PAGE * 3,
                 )
                 for r in search_results:
                     md_file = Path(r["path"])
-                    if md_file.exists() and md_file.name != page_path.name:
+                    score = float(r.get("score", 0))
+                    if score < self.VECTOR_SIMILARITY_THRESHOLD:
+                        continue
+                    if md_file.exists() and md_file != page_path:
                         other_agent = self._extract_agent_from_path(md_file)
                         if other_agent and other_agent != exclude_agent:
-                            results.append((md_file, r["score"]))
+                            results.append((md_file, score))
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
                 pass
 
         # 方案 B：DNAEngine/SimHash 兼容降级
         if not results:
-            source_dna = self.dna.compute_dna(page_path)
-            if not source_dna:
-                return []
+            dna = self._get_dna()
             for ws in self.WORKSPACE_NAMES:
                 if ws == exclude_agent:
                     continue
@@ -130,13 +185,18 @@ class CrossAgentLinker:
                     if md_file == page_path:
                         continue
                     try:
-                        target_dna = self.dna.compute_dna(md_file)
-                        if not target_dna:
-                            continue
-                        sim = self.dna.compare(source_dna, target_dna)
-                        if sim.overall_score >= self.SIMILARITY_THRESHOLD:
-                            results.append((md_file, sim.overall_score))
+                        score = 0.0
+                        if dna:
+                            source_dna = dna.compute_dna(page_path)
+                            target_dna = dna.compute_dna(md_file)
+                            if source_dna and target_dna:
+                                score = dna.compare(source_dna, target_dna).overall_score
+                        if score == 0.0:
+                            score = self._text_similarity(page_path, md_file)
+                        if score >= self.DNA_SIMILARITY_THRESHOLD:
+                            results.append((md_file, score))
                     except Exception:
+                        logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
                         continue
 
         seen = set()
@@ -148,6 +208,36 @@ class CrossAgentLinker:
                 unique_results.append((md_file, score))
 
         return unique_results[:self.MAX_LINKS_PER_PAGE * 3]
+
+    def _get_dna(self) -> Optional[DNAEngine]:
+        """懒加载 DNAEngine，避免旧库结构问题阻断向量路径"""
+        if self.dna is not None:
+            return self.dna
+        try:
+            self.dna = DNAEngine()
+            return self.dna
+        except Exception as exc:
+            logger.warning("DNAEngine 初始化失败，跳过跨 Agent 降级检索: %s", exc)
+            return None
+
+    def _text_similarity(self, left: Path, right: Path) -> float:
+        """DNA 不可用时的零依赖文本相似度降级"""
+        import re
+
+        try:
+            left_text = left.read_text(encoding="utf-8")[:2000].lower()
+            right_text = right.read_text(encoding="utf-8")[:2000].lower()
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
+            return 0.0
+        left_terms = set(re.findall(r"[a-z0-9_]{3,}|[\u4e00-\u9fa5]{2,4}", left_text))
+        right_terms = set(re.findall(r"[a-z0-9_]{3,}|[\u4e00-\u9fa5]{2,4}", right_text))
+        if not left_terms or not right_terms:
+            return 0.0
+        score = len(left_terms & right_terms) / len(left_terms | right_terms)
+        if left.stem.lower() == right.stem.lower():
+            score += 0.2
+        return min(1.0, score)
 
     def _extract_agent_from_path(self, page_path: Path) -> Optional[str]:
         """从页面路径提取 agent 来源"""
@@ -166,6 +256,7 @@ class CrossAgentLinker:
             if agent:
                 return agent
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
             pass
 
         # 文件名推断
@@ -224,3 +315,179 @@ class CrossAgentLinker:
                     k, v = line.split(":", 1)
                     fm[k.strip()] = v.strip()
         return fm
+
+
+class CrossAgentDivergenceDetector:
+    """
+    跨 Agent 认知分歧检测器。
+
+    v1 采用保守规则：只在不同 Agent 的结论出现明确方向对立时报告分歧，
+    避免把互补建议误判为冲突。
+    """
+
+    CONTRADICTION_PAIRS = [
+        ("sentinel", "cluster"),
+        ("单体", "微服务"),
+        ("同步", "异步"),
+        ("乐观锁", "悲观锁"),
+        ("行锁", "表锁"),
+        ("拉", "推"),
+        ("客户端", "服务端"),
+        ("集中式", "分布式"),
+    ]
+
+    NEGATION_SIGNALS = ["不要", "不推荐", "避免", "有问题", "缺点", "不适合"]
+
+    def __init__(self, wiki_root: Path = None):
+        self.wiki_root = wiki_root or get_config().wiki_dir
+        self.linker = CrossAgentLinker(wiki_root=self.wiki_root)
+
+    def detect(self, topic: str) -> Optional[DivergenceReport]:
+        pages = self._find_pages_by_topic(topic)
+        conclusions = []
+        for page in pages:
+            agent = page.frontmatter.get("source_agent") or self.linker._extract_agent_from_path(page.path)
+            if not agent:
+                continue
+            conclusion = self._extract_conclusion(page)
+            if not conclusion:
+                continue
+            conclusions.append(AgentConclusion(
+                agent=str(agent).lower(),
+                session_id=self._first_session_id(page.frontmatter.get("source_sessions")),
+                date_str=self._format_date(page.frontmatter.get("distilled_at", "")),
+                conclusion=conclusion,
+                confidence=float(page.frontmatter.get("confidence", 0.5) or 0.5),
+                source_page=str(page.path),
+            ))
+
+        conclusions = self._dedup_by_agent(conclusions)
+        if len(conclusions) < 2 or not self._are_contradictory(conclusions):
+            return None
+
+        return DivergenceReport(
+            topic=topic,
+            divergences=conclusions,
+            severity=self._classify_severity(topic, conclusions),
+            detected_at=datetime.now(),
+        )
+
+    def _find_pages_by_topic(self, topic: str) -> List[WikiPage]:
+        topic_lower = topic.lower()
+        pages = []
+        for md_file in self.wiki_root.rglob("*.md"):
+            if any(part.startswith(".") for part in md_file.relative_to(self.wiki_root).parts):
+                continue
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
+                continue
+            fm = self.linker._read_frontmatter(md_file)
+            haystack = " ".join([
+                md_file.stem,
+                str(fm.get("topic", "")),
+                str(fm.get("title", "")),
+                str(fm.get("tags", "")),
+                content[:2000],
+            ]).lower()
+            if topic_lower in haystack:
+                pages.append(WikiPage(md_file, fm, content))
+        return pages
+
+    def _extract_conclusion(self, page: WikiPage) -> Optional[str]:
+        for key in ["decision", "conclusion", "recommendation"]:
+            value = page.frontmatter.get(key)
+            if value:
+                return str(value).strip()[:200]
+
+        for heading in ["## 决策", "## 结论", "## 推荐", "## Decision", "## Conclusion"]:
+            if heading not in page.content:
+                continue
+            start = page.content.find(heading) + len(heading)
+            end = page.content.find("\n## ", start)
+            if end == -1:
+                end = len(page.content)
+            paragraph = page.content[start:end].strip()
+            for line in paragraph.splitlines():
+                clean = line.strip(" -\t")
+                if clean:
+                    return clean[:200]
+        return None
+
+    def _dedup_by_agent(self, conclusions: List[AgentConclusion]) -> List[AgentConclusion]:
+        latest = {}
+        for item in conclusions:
+            current = latest.get(item.agent)
+            if current is None or item.date_str >= current.date_str:
+                latest[item.agent] = item
+        return list(latest.values())
+
+    def _are_contradictory(self, conclusions: List[AgentConclusion]) -> bool:
+        texts = [item.conclusion.lower() for item in conclusions]
+        for left, right in self.CONTRADICTION_PAIRS:
+            if any(left.lower() in text for text in texts) and any(right.lower() in text for text in texts):
+                return True
+
+        for i, left in enumerate(texts):
+            for j, right in enumerate(texts):
+                if i == j:
+                    continue
+                if any(signal in right for signal in self.NEGATION_SIGNALS):
+                    terms = self._technical_terms(left)
+                    if any(term in right for term in terms):
+                        return True
+        return False
+
+    def _classify_severity(self, topic: str, conclusions: List[AgentConclusion]) -> str:
+        high_keywords = ["集群", "架构", "选型", "方案", "部署", "基础设施"]
+        text = topic + " " + " ".join(item.conclusion for item in conclusions)
+        if any(keyword in text for keyword in high_keywords):
+            return "high"
+        return "medium"
+
+    def _technical_terms(self, text: str) -> List[str]:
+        import re
+
+        terms = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", text)
+        terms.extend(re.findall(r"[\u4e00-\u9fa5]{2,8}", text))
+        stop = {"建议", "使用", "方案", "模式", "可以", "需要", "推荐"}
+        return [term.lower() for term in terms if term.lower() not in stop]
+
+    def _first_session_id(self, source_sessions) -> str:
+        if isinstance(source_sessions, list) and source_sessions:
+            first = source_sessions[0]
+            if isinstance(first, dict):
+                return str(first.get("session_id", ""))
+            return str(first)
+        return ""
+
+    def _format_date(self, value: str) -> str:
+        if not value:
+            return ""
+        raw = str(value).strip().strip('"')
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m-%d"):
+            try:
+                dt = datetime.strptime(raw[:len(fmt)], fmt)
+                return f"{dt.month}/{dt.day}"
+            except ValueError:
+                continue
+        return raw[:10]
+
+
+class DivergencePushManager:
+    """分歧推送冷却管理器"""
+
+    PUSH_COOLDOWN_HOURS = 24
+
+    def __init__(self):
+        self._recent_pushes: Dict[str, datetime] = {}
+
+    def should_push(self, report: DivergenceReport) -> bool:
+        last = self._recent_pushes.get(report.topic)
+        if not last:
+            return True
+        return datetime.now() - last >= timedelta(hours=self.PUSH_COOLDOWN_HOURS)
+
+    def mark_pushed(self, topic: str):
+        self._recent_pushes[topic] = datetime.now()

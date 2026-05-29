@@ -7,6 +7,7 @@ import shutil
 import unittest
 import json
 import gc
+from unittest.mock import patch
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -140,6 +141,116 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0].status, "completed")
 
+    def test_same_day_tasks_do_not_overwrite(self):
+        """同日同类型任务不会互相覆盖"""
+        from core.kia.chronos import KnowledgeScheduler
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+        due = datetime.now() + timedelta(days=5)
+
+        first = scheduler.schedule("review", "code", due, context="任务A")
+        second = scheduler.schedule("review", "code", due, context="任务B")
+
+        self.assertNotEqual(first, second)
+        tasks = scheduler.list_all()
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual({t.context for t in tasks}, {"任务A", "任务B"})
+
+    def test_pending_reminders_order_by_priority(self):
+        """到期提醒按优先级优先，再按时间排序"""
+        from core.kia.chronos import KnowledgeScheduler
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+        due = datetime.now()
+        low = scheduler.schedule("review", "low", due, context="low", priority=0)
+        high = scheduler.schedule("review", "high", due, context="high", priority=5)
+
+        reminders = scheduler.get_pending_reminders()
+        self.assertEqual([t.task_id for t in reminders], [high, low])
+        self.assertEqual(reminders[0].priority, 5)
+
+    def test_periodic_task_regenerates_on_completion(self):
+        """周期性任务完成后自动生成下一周期任务"""
+        from core.kia.chronos import KnowledgeScheduler
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+        due = datetime.now() + timedelta(days=1)
+        task_id = scheduler.schedule(
+            "review",
+            "weekly",
+            due,
+            context="每周复盘",
+            is_periodic=True,
+            period="weekly",
+            priority=3,
+        )
+
+        scheduler.mark_completed(task_id)
+
+        completed = scheduler.list_all(status="completed")
+        pending = scheduler.list_all(status="pending")
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(len(pending), 1)
+        self.assertTrue(pending[0].is_periodic)
+        self.assertEqual(pending[0].period, "weekly")
+        self.assertEqual(pending[0].priority, 3)
+        next_due = datetime.fromisoformat(pending[0].due_date)
+        self.assertEqual((next_due - due).days, 7)
+
+    def test_session_start_event_uses_classifier_contract(self):
+        """session.start 事件按 Dike 契约传入 messages 列表"""
+        from core.kia.chronos import KnowledgeScheduler
+        from core.kia.dike import ClassificationResult
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+
+        class FakeClassifier:
+            def classify(self, messages):
+                self.messages = messages
+                return ClassificationResult(
+                    task_type="coding",
+                    subtype="python",
+                    confidence=0.9,
+                    suggested_confirmation="silent",
+                )
+
+        fake = FakeClassifier()
+        with patch("core.kia.dike.TaskClassifier", return_value=fake):
+            result = scheduler.trigger_event(
+                "session.start",
+                {"user_message": "帮我修一个 Python bug"},
+            )
+
+        self.assertEqual(fake.messages, [{"role": "user", "content": "帮我修一个 Python bug"}])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["event_type"], "session.start")
+        self.assertEqual(result["task_type"], "coding")
+
+    def test_message_exchanged_event_uses_guard_contract(self):
+        """message.exchanged 事件按 Aegis InProcessGuard.check 契约执行"""
+        from core.kia.chronos import KnowledgeScheduler
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+
+        class FakeGuard:
+            def __init__(self):
+                self.calls = []
+
+            def check(self, user_message, ai_response=""):
+                self.calls.append((user_message, ai_response))
+                return None
+
+        guard = FakeGuard()
+        result = scheduler.trigger_event(
+            "message.exchanged",
+            {"guard": guard, "message": "继续", "ai_response": "好的"},
+        )
+
+        self.assertEqual(guard.calls, [("继续", "好的")])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["event_type"], "message.exchanged")
+        self.assertIsNone(result["alert"])
+
     def test_cleanup_old(self):
         """可清理旧任务"""
         from core.kia.chronos import KnowledgeScheduler
@@ -164,6 +275,49 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         scheduler.cleanup_old_tasks(days=30)
         tasks = scheduler.list_all()
         self.assertEqual(len(tasks), 0)
+
+    def test_issue_pipeline_step_scans_and_fixes(self):
+        """issue_pipeline 步骤扫描并自动修复可自动修复的问题"""
+        from core.kia.chronos import KnowledgeScheduler
+        from core.kia.issue_pipeline import IssueRegistry, Issue
+
+        # 准备独立的 issue db
+        issue_db = Path(self.temp_dir) / "issues.db"
+        registry = IssueRegistry(db_path=str(issue_db))
+        issue = Issue(
+            source_module="immune", issue_type="orphan",
+            page_path="orphan.md", severity="medium",
+        )
+        registry.register(issue)
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+        result = scheduler._run_issue_pipeline(registry=registry)
+        self.assertEqual(result["status"], "ok")
+        self.assertGreaterEqual(result["scanned"], 1)
+
+    def test_dialog_reminder_cleanup_step(self):
+        """dialog_reminder_cleanup 步骤清理过期记录"""
+        from core.kia.chronos import KnowledgeScheduler
+        from core.kia.dialog_reminder import DialogReminderQueue
+
+        reminder_db = Path(self.temp_dir) / "reminders.db"
+        queue = DialogReminderQueue(db_path=str(reminder_db))
+        rid = queue.enqueue("issue-1", "page.md", "medium", "test", ["a"])
+        queue.resolve(rid, "ok")
+        # 将 resolved_at 改为过去
+        import sqlite3
+        old = (datetime.now() - timedelta(days=40)).isoformat()
+        with sqlite3.connect(str(reminder_db), timeout=10) as conn:
+            conn.execute(
+                "UPDATE dialog_reminders SET resolved_at = ? WHERE reminder_id = ?",
+                (old, rid),
+            )
+            conn.commit()
+
+        scheduler = KnowledgeScheduler(db_path=str(self.db_path))
+        result = scheduler._run_dialog_reminder_cleanup(queue=queue)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["deleted"], 1)
 
 
 if __name__ == "__main__":

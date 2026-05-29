@@ -11,6 +11,8 @@
 """
 
 from __future__ import annotations
+import logging
+logger = logging.getLogger(__name__)
 
 import json
 import os
@@ -182,41 +184,41 @@ def main(limit: int = 3, exclude_session_id: str = "") -> Dict:
     if not exclude_session_id:
         exclude_session_id = os.environ.get("MNEMOS_EXCLUDE_SESSION", "")
 
-    print("=" * 60)
-    print("Memos → Wiki 蒸馏流水线")
-    print(f"Wiki: {wiki_base}")
-    print(f"启动时间: {datetime.now(timezone.utc).isoformat()}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Memos → Wiki 蒸馏流水线")
+    logger.info(f"Wiki: {wiki_base}")
+    logger.info(f"启动时间: {datetime.now(timezone.utc).isoformat()}")
+    logger.info("=" * 60)
 
     # 1. 拉取数据
-    print("\n[1/4] 拉取 Memos 数据...")
+    logger.info("\n[1/4] 拉取 Memos 数据...")
     memos = fetch_memos()
-    print(f"  共 {len(memos)} 条原始数据")
+    logger.info(f"  共 {len(memos)} 条原始数据")
 
     # 2. 按 session 聚合过滤
-    print("\n[2/4] 按 session 聚合过滤...")
+    logger.info("\n[2/4] 按 session 聚合过滤...")
     sessions = collect_sessions(memos, exclude_session_id=exclude_session_id)
-    print(f"  共 {len(sessions)} 个历史 session（过滤后消息 >= 3 条）")
+    logger.info(f"  共 {len(sessions)} 个历史 session（过滤后消息 >= 3 条）")
 
     # 按消息数排序
     sorted_sessions = sorted(sessions.items(), key=lambda x: -len(x[1]))
     for sid, msgs in sorted_sessions[:10]:
-        print(f"    {sid[:8]}...: {len(msgs)} 条消息")
+        logger.info(f"    {sid[:8]}...: {len(msgs)} 条消息")
 
     # 3. 取前 N 个 session 入蒸馏队列（同源复用：委托给宿主 Agent）
     target_sessions = sorted_sessions[:limit]
 
-    print(f"\n[3/4] 入队 {len(target_sessions)} 个 session 到蒸馏队列...")
+    logger.info(f"\n[3/4] 入队 {len(target_sessions)} 个 session 到蒸馏队列...")
     enqueued = 0
 
     for i, (sid, msgs) in enumerate(target_sessions, 1):
-        print(f"\n  Session {i}/{len(target_sessions)}: {sid[:8]}... ({len(msgs)} 条消息)")
+        logger.info(f"\n  Session {i}/{len(target_sessions)}: {sid[:8]}... ({len(msgs)} 条消息)")
         try:
             distill_session(sid, msgs, wiki_base)
             enqueued += 1
-            print("  ✓ 已入队")
+            logger.info("  ✓ 已入队")
         except Exception as e:
-            print(f"  ✗ 入队失败: {e}")
+            logger.warning(f"  ✗ 入队失败: {e}")
 
     # 尝试立即触发委托（不阻塞等待）
     if enqueued > 0:
@@ -224,13 +226,13 @@ def main(limit: int = 3, exclude_session_id: str = "") -> Dict:
             from core.hephaestus_worker import HephaestusWorker
             worker = HephaestusWorker()
             delegated = worker.process_all()
-            print(f"\n  已委托 {delegated} 个任务给宿主 Agent")
-            print("  提示: daemon 会在 Agent 完成后自动收集结果到 Inbox")
+            logger.info(f"\n  已委托 {delegated} 个任务给宿主 Agent")
+            logger.info("  提示: daemon 会在 Agent 完成后自动收集结果到 Inbox")
         except Exception as e:
-            print(f"  委托触发失败: {e}")
+            logger.warning(f"  委托触发失败: {e}")
 
     # 4. 跑主控循环
-    print("\n[4/4] 执行主控循环...")
+    logger.info("\n[4/4] 执行主控循环...")
     orch = Orchestrator(wiki_base=wiki_base, dry_run=False, limit=50, verbose=False)
 
     results: Dict[str, Dict] = {}
@@ -247,13 +249,13 @@ def main(limit: int = 3, exclude_session_id: str = "") -> Dict:
         "finished_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    print("\n" + "=" * 60)
-    print("蒸馏完成")
-    print(f"  Session 处理: {summary['sessions_processed']}")
-    print(f"  已入队: {summary['enqueued']} 个")
-    print(f"  DNA: {summary['dna_computed']} 个")
-    print(f"  免疫: {summary['immune_score']} 分")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("蒸馏完成")
+    logger.info(f"  Session 处理: {summary['sessions_processed']}")
+    logger.info(f"  已入队: {summary['enqueued']} 个")
+    logger.info(f"  DNA: {summary['dna_computed']} 个")
+    logger.info(f"  免疫: {summary['immune_score']} 分")
+    logger.info("=" * 60)
 
     return summary
 

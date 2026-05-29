@@ -61,6 +61,7 @@ def _is_process_running(pid: int) -> bool:
             )
             return str(pid) in result.stdout
         except Exception:
+            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
             return False
     else:
         try:
@@ -98,37 +99,119 @@ def remove_pid():
 
 def service_l1_sync(stop_event: threading.Event):
     """
-    服务1: L1同步 — 通过 SyncEngine 监控所有 Agent 源文件变化，自动同步到 Memos
-    使用 watchdog 实时监控（通过 Trigger 系统），回退到定时轮询
+    服务1: L1同步 — 通过 CaptureService 监控所有 Agent 源文件变化，自动同步到 Memos
+
+    架构约束：
+    - 所有 AgentSource 必须走 CaptureService → CaptureQueue → CaptureWorkerPool → SyncEngine
+    - 不复用旧的 sync_engine.sync_batch() 直接写入路径
+    - 原始 L0 解析能力复用（discover_sessions + parse_turns），写入路径废弃/下沉
     """
     logger.info("[L1同步] 服务启动")
     try:
-        from core.sync_framework.sync_engine import SyncEngine
-        from core.sync_framework.registry import AgentLifecycleManager
+        from core.sync_framework.capture_service import CaptureService
+        from core.sync_framework.registry import AgentRegistry
         from core.config import get_config
 
         config = get_config()
-        sync_engine = SyncEngine()
-        lifecycle_mgr = AgentLifecycleManager()
 
-        # 发现并注册所有 Agent 源
-        lifecycle_mgr.discover_agents()
-        sources = lifecycle_mgr.get_active_sources()
-        logger.info(f"[L1同步] 已注册 {len(sources)} 个 Agent 源")
+        # 1. 先注册内置 Agent（确保 Worker 能正确解析来源标签）
+        AgentRegistry.register_builtin_agents()
+
+        # 2. 初始化 CaptureService（consumer 模式，启动 WorkerPool 消费 pending 队列）
+        capture_service = CaptureService(start_worker=True)
 
         # 定时轮询模式（watchdog 由 TriggerDispatcher 管理）
         poll_interval = 30  # 30秒轮询一次
 
         while not stop_event.is_set():
             try:
-                for source in sources:
+                # 重新发现活跃 Agent
+                agents = AgentRegistry.auto_discover()
+                logger.debug(f"[L1同步] 发现 {len(agents)} 个活跃 Agent 源")
+
+                for source in agents:
                     try:
-                        result = sync_engine.sync_batch(source)
-                        if result.get("synced", 0) > 0 or result.get("skipped", 0) > 0:
-                            logger.info(f"[L1同步] {source.name}: "
-                                       f"synced={result.get('synced',0)}, "
-                                       f"skipped={result.get('skipped',0)}, "
-                                       f"failed={result.get('failed',0)}")
+                        sessions = source.discover_sessions()
+                        if not sessions:
+                            continue
+
+                        queued_count = 0
+                        dup_count = 0
+                        bp_count = 0
+                        error_count = 0
+
+                        for session_info in sessions:
+                            try:
+                                turns = source.parse_turns(session_info.source_path)
+                                if not turns:
+                                    continue
+
+                                # 确保按 turn_number 顺序入队，避免增量跳过逻辑错乱
+                                turns = sorted(turns, key=lambda t: t.turn_number)
+
+                                # 复用旧 sync_session 的 session lifecycle hooks
+                                try:
+                                    from core.mnemos_bus import publish_event
+                                    publish_event("polled", source.name, {
+                                        "file_path": str(session_info.source_path),
+                                        "session_id": session_info.session_id,
+                                    })
+                                except Exception:
+                                    pass
+
+                                context = source.on_session_start(
+                                    session_info.session_id,
+                                    {"working_dir": session_info.working_dir, "agent": source.name},
+                                )
+
+                                try:
+                                    for turn in turns:
+                                        result = capture_service.capture_turn(
+                                            source_agent=source.name,
+                                            session_id=session_info.session_id,
+                                            turn_number=turn.turn_number,
+                                            user_content=turn.user_content,
+                                            assistant_content=turn.assistant_content,
+                                            timestamp=turn.timestamp,
+                                            model=source.model_tag,
+                                            cwd=str(session_info.source_path),
+                                            metadata=turn.metadata,
+                                        )
+                                        status = result.get("status")
+                                        if status == "queued":
+                                            queued_count += 1
+                                        elif status == "duplicate":
+                                            dup_count += 1
+                                        elif status == "backpressure":
+                                            bp_count += 1
+                                        elif status == "error":
+                                            error_count += 1
+
+                                    # 触发异步 end_session，让 Worker 优先 flush 该 session
+                                    capture_service.end_session(source.name, session_info.session_id)
+                                finally:
+                                    # KIA Hook: session_end（无论入队是否成功都执行，避免泄漏）
+                                    all_messages = []
+                                    for turn in turns:
+                                        if turn.user_content:
+                                            all_messages.append({"role": "user", "content": turn.user_content})
+                                        if turn.assistant_content:
+                                            all_messages.append({"role": "assistant", "content": turn.assistant_content})
+                                    source.on_session_end(session_info.session_id, all_messages)
+
+                            except Exception as e:
+                                logger.error(
+                                    f"[L1同步] {source.name}/{session_info.session_id} 解析失败: {e}"
+                                )
+
+                        if queued_count > 0 or dup_count > 0 or bp_count > 0 or error_count > 0:
+                            logger.info(
+                                f"[L1同步] {source.name}: "
+                                f"queued={queued_count}, "
+                                f"duplicate={dup_count}, "
+                                f"backpressure={bp_count}, "
+                                f"error={error_count}"
+                            )
                     except Exception as e:
                         logger.error(f"[L1同步] {source.name} 同步失败: {e}")
             except Exception as e:
@@ -297,8 +380,11 @@ def service_signal_collector(stop_event: threading.Event):
                         if isinstance(sig, dict):
                             # 统一转换为 SessionSignal，确保 agent 字段正确
                             from core.persona.psyche import SessionSignal
+                            sid = sig.get("session_id") or ""
+                            if not sid:
+                                continue
                             session_signal = SessionSignal(
-                                session_id=sig.get("session_id", ""),
+                                session_id=sid,
                                 timestamp=sig.get("timestamp", datetime.now(timezone.utc).isoformat()),
                                 task_type=sig.get("task_type", "unknown"),
                                 task_subtype=sig.get("task_subtype", ""),
@@ -614,10 +700,14 @@ def _run_preflight_checks() -> List[str]:
     # 2. Memos API 可访问性（如果启用）
     if config.memos_enabled:
         try:
-            from integrations.styx import MemosClient
-            client = MemosClient(token=config.memos_token, base_url=config.memos_api_url)
-            # 轻量探测：尝试获取用户列表
-            client._request("GET", "/api/v1/user/me", raise_on_error=False)
+            import requests
+            # 轻量探测：尝试访问 memos 列表（不依赖 token 有效性）
+            resp = requests.get(
+                f"{config.memos_api_url}/api/v1/memos",
+                timeout=5,
+            )
+            if resp.status_code not in (200, 401):
+                resp.raise_for_status()
         except Exception as e:
             warnings.append(f"Memos API 连接异常: {e}")
 
@@ -841,6 +931,7 @@ def status_daemon():
             print(f"  待处理: {stats['pending']}")
             print(f"  已委托: {stats['delegated']}")
         except Exception:
+            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
             pass
     else:
         print("Mnemos daemon 未运行")
@@ -917,6 +1008,7 @@ def uninstall_windows_task() -> bool:
             return True
         return False
     except Exception:
+        logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
         return False
 
 

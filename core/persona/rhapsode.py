@@ -8,7 +8,7 @@ Report Generator - 自省报告生成器
 - 预测成长趋势
 - 输出结构化Markdown报告
 
-输出位置：wiki/01-People/self-reports/YYYY-Q{N}.md
+输出位置：wiki/99-Reports/画像周报-YYYY-Q{N}.md
 """
 # Rhapsode — 说唱诗人 — 报告生成，讲述用户画像故事
 # 原模块: report_generator.py
@@ -23,14 +23,14 @@ from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from .psyche import SignalStore, get_signal_store
+import logging
+logger = logging.getLogger(__name__)
 from .pythia import (
     PreferenceProfile, PreferenceAnalyzer, EnergyProfile, CognitiveProfile, ValueProfile
 )
 from .hamartia import BlindSpotProfile, BlindSpot, BlindSpotProfileManager
 from core.config import get_config
-import logging
 
-logger = logging.getLogger(__name__)
 
 
 # ========== 配置 ==========
@@ -69,7 +69,7 @@ class _LazyPath:
 
 
 WIKI_DIR = _LazyPath()
-REPORTS_DIR = _LazyPath("01-People", "self-reports")
+REPORTS_DIR = _LazyPath("99-Reports")
 
 
 # ========== 数据模型 ==========
@@ -183,12 +183,16 @@ class SelfReportGenerator:
 
         return report
 
-    def save_to_wiki(self, report: SelfReport) -> Path:
-        """保存报告到wiki"""
+    def save_report(self, report: SelfReport) -> Path:
+        """保存报告到 wiki 报告目录"""
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = REPORTS_DIR / f"{report.period_label}.md"
+        path = REPORTS_DIR / f"画像周报-{report.period_label}.md"
         path.write_text(report.raw_markdown, encoding="utf-8")
         return path
+
+    def save_to_wiki(self, report: SelfReport) -> Path:
+        """兼容旧调用入口。"""
+        return self.save_report(report)
 
     # ---- 内部方法 ----
 
@@ -198,7 +202,7 @@ class SelfReportGenerator:
             return None
         try:
             data = self.store.get_latest_persona_version()
-            if data and data.get("version", 0) < current_version:
+            if data and data.get("version", 0) == current_version - 1:
                 return self._dict_to_profile(data)
         except Exception as e:
             logger.warning(f"忽略异常: {e}")
@@ -349,6 +353,7 @@ class SelfReportGenerator:
         try:
             profile = self.blindspot_manager._load_profile()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at rhapsode.py", exc_info=True)
             return changes
 
         # 简化版：基于当前盲区画像生成快照对比
@@ -428,31 +433,7 @@ class SelfReportGenerator:
                 rationale="深度优先模式持续强化，建议主动安排跨领域探索，防止视野收窄",
             ))
 
-        # 预测4：基于启动难度预测能量管理
-        startup = current.energy.startup_difficulty
-        if startup > 0.6:
-            predictions.append(GrowthPrediction(
-                area="任务启动",
-                current_state="启动困难",
-                predicted_state="如果引入外部推动力，启动效率可提升30-50%",
-                confidence=0.65,
-                timeframe="即时",
-                rationale="启动难度较高，这不是能力问题，是能量管理问题。建议采用'5分钟启动法'或外部 accountability",
-            ))
-
-        # 预测5：如果创新偏好持续高位，预测风险累积
-        innov = current.value.innovation_vs_safety
-        if innov > 0.7:
-            predictions.append(GrowthPrediction(
-                area="风险控制",
-                current_state="创新偏好强",
-                predicted_state="未来3个月可能遇到1-2次创新导致的回退",
-                confidence=0.55,
-                timeframe="3个月",
-                rationale="创新偏好持续高位，建议为关键决策增加'保守方案'作为fallback",
-            ))
-
-        return predictions[:5]  # 最多5个预测
+        return predictions[:3]  # MVP 阶段保留 3 条高置信预测
 
     def _generate_recommendations(self, current: PreferenceProfile,
                                   changes: List[DimensionChange],
@@ -510,16 +491,21 @@ class SelfReportGenerator:
                 "建议为任务设定明确的'足够好'标准"
             )
 
-        # 去重
-        seen = set()
+        # 按建议类型去重：每类最多 2 条，总计最多 8 条
+        type_counts = defaultdict(int)
         unique = []
         for rec in recommendations:
-            key = rec[:30]
-            if key not in seen:
-                seen.add(key)
-                unique.append(rec)
+            tag = "其他"
+            if rec.startswith("【") and "】" in rec:
+                tag = rec[1:rec.index("】")]
+            if type_counts[tag] >= 2:
+                continue
+            type_counts[tag] += 1
+            unique.append(rec)
+            if len(unique) >= 8:
+                break
 
-        return unique[:8]  # 最多8条建议
+        return unique
 
     def _to_markdown(self, report: SelfReport) -> str:
         """生成Markdown报告"""
@@ -661,6 +647,14 @@ class SelfReportGenerator:
                 lines.append(f"{i}. {rec}")
             lines.append("")
 
+        cold_pages = self._get_cold_pages_for_report()
+        if cold_pages:
+            lines.extend(["## 冷却知识", ""])
+            for page in cold_pages:
+                title = page.title or Path(page.wiki_path).stem
+                lines.append(f"- **{title}**（热力 {page.heat_score:.1f}，质量 {page.quality_score:.1f}）")
+            lines.append("")
+
         # 底部
         lines.extend([
             "---",
@@ -714,6 +708,15 @@ class SelfReportGenerator:
         quarter = (now.month - 1) // 3 + 1
         return f"{now.year}-Q{quarter}"
 
+    @staticmethod
+    def _get_cold_pages_for_report(limit: int = 5):
+        try:
+            from core.wiki_metrics import get_default_metrics
+            return get_default_metrics().get_cold_pages(limit=limit)
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at rhapsode.py", exc_info=True)
+            return []
+
 
 # ========== 便捷函数 ==========
 
@@ -728,8 +731,8 @@ def generate_and_save_report(days: int = 90) -> Path:
     """便捷函数：生成并保存报告到wiki"""
     generator = SelfReportGenerator()
     report = generator.generate(days=days)
-    path = generator.save_to_wiki(report)
-    print(f"✅ 自省报告已保存: {path}")
+    path = generator.save_report(report)
+    logger.info(f"✅ 自省报告已保存: {path}")
     return path
 
 # 兼容别名

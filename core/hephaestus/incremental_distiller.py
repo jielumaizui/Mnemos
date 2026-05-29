@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+logger = logging.getLogger(__name__)
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -29,7 +30,6 @@ from core.hephaestus.distillation_engine import (
     build_session_text, extract_json,
 )
 
-logger = logging.getLogger(__name__)
 
 
 def _get_db_path() -> Path:
@@ -59,6 +59,7 @@ class IncrementalDraft:
             data = json.loads(self.fragments_json)
             return [KnowledgeFragment(**f) for f in data]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at incremental_distiller.py", exc_info=True)
             return []
 
     @fragments.setter
@@ -255,6 +256,7 @@ class IncrementalDistiller:
                         related_concepts=[],
                     ))
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at incremental_distiller.py", exc_info=True)
                     continue
 
         draft = IncrementalDraft(
@@ -365,6 +367,7 @@ class IncrementalDistiller:
                     ))
                 return drafts
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at incremental_distiller.py", exc_info=True)
             return []
 
     def _update_draft(self, draft: IncrementalDraft):

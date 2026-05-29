@@ -2,6 +2,7 @@
 # 原模块: connect_worker.py
 
 #!/usr/bin/env python3
+import logging
 """
 Connect Worker - L2 → L3 关联层：构建 Obsidian 知识图谱
 
@@ -35,11 +36,15 @@ import re
 import json
 import argparse
 import time
-from datetime import datetime
+import hashlib
+import math
+import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Dict, List, Set, Tuple, Optional
 from core.config import get_config
+logger = logging.getLogger(__name__)
 
 
 def _get_wiki_dir():
@@ -171,14 +176,23 @@ PROJECT_INDICATORS = {
     "平台", "platform", "服务", "service", "组件", "component", "模块", "module",
 }
 
+CHINESE_SURNAMES = {
+    "王", "李", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴", "徐", "孙",
+    "胡", "朱", "高", "林", "何", "郭", "马", "罗", "梁", "宋", "郑", "谢",
+    "韩", "唐", "冯", "于", "董", "萧", "程", "曹", "袁", "邓", "许", "傅",
+    "沈", "曾", "彭", "吕", "苏", "卢", "蒋", "蔡", "贾", "丁", "魏", "薛",
+    "叶", "阎", "余", "潘", "杜", "戴", "夏", "钟", "汪", "田", "任", "姜",
+}
+
 
 def _safe_filename(name: str) -> str:
     """生成安全的文件名（保留可读性）"""
     # 替换不安全的字符，但保留中文
     safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip()
     # 限制长度
-    if len(safe) > 80:
-        safe = safe[:80]
+    if len(safe) > 60:
+        hash_suffix = hashlib.md5(safe.encode("utf-8")).hexdigest()[:6]
+        safe = f"{safe[:60]}_{hash_suffix}"
     return safe or "untitled"
 
 
@@ -192,15 +206,38 @@ def _ensure_dirs():
 class EntityExtractor:
     """多维度实体提取器"""
 
-    def __init__(self):
+    def __init__(self, wiki_base: str | Path | None = None, bootstrap_from_existing: bool = True):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else Path(str(WIKI_DIR))
+        self.tech_keywords = set(TECH_KEYWORDS)
+        self.concept_keywords = set(CONCEPT_KEYWORDS)
+        if bootstrap_from_existing:
+            self._bootstrap_from_existing_pages()
         self.tech_pattern = re.compile(
-            r'\b(' + '|'.join(re.escape(t) for t in TECH_KEYWORDS) + r')\b',
+            r'\b(' + '|'.join(re.escape(t) for t in sorted(self.tech_keywords, key=len, reverse=True)) + r')\b',
             re.IGNORECASE
         )
         self.concept_pattern = re.compile(
-            r'\b(' + '|'.join(re.escape(c) for c in CONCEPT_KEYWORDS) + r')\b',
+            r'\b(' + '|'.join(re.escape(c) for c in sorted(self.concept_keywords, key=len, reverse=True)) + r')\b',
             re.IGNORECASE
         )
+
+    def _bootstrap_from_existing_pages(self):
+        """从已生成实体页自举扩展词典。"""
+        dir_map = {
+            "tech": self.wiki_base / "03-Tech",
+            "concepts": self.wiki_base / "04-Concepts",
+        }
+        for category, dir_path in dir_map.items():
+            if not dir_path.exists():
+                continue
+            for md_file in dir_path.glob("*.md"):
+                name = md_file.stem.strip()
+                if not name:
+                    continue
+                if category == "tech":
+                    self.tech_keywords.add(name.lower())
+                elif category == "concepts":
+                    self.concept_keywords.add(name.lower())
 
     def extract(self, text: str, cwd: str = "", git_branch: str = "") -> Dict[str, Set[str]]:
         """
@@ -254,6 +291,7 @@ class EntityExtractor:
         for m in proj_matches:
             if len(m) >= 2:
                 result["projects"].add(m.strip())
+        result["projects"].update(self.extract_chinese_projects(text))
 
         # 7. 人名提取（英文：First Last 格式）
         name_pattern = re.compile(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b')
@@ -262,6 +300,7 @@ class EntityExtractor:
             # 过滤掉常见非人名
             if name.lower() not in ('i am', 'it is', 'we are', 'you are', 'the', 'this', 'that'):
                 result["people"].add(name)
+        result["people"].update(self.extract_chinese_names(text))
 
         # 8. 中文字符专有名词（技术相关）
         zh_terms = re.findall(r'[一-鿿]{2,6}', text)
@@ -290,18 +329,54 @@ class EntityExtractor:
 
         return result
 
+    def extract_chinese_names(self, text: str) -> Set[str]:
+        """中文人名：百家姓 + 1-2 字名，并用局部上下文降噪。"""
+        names = set()
+        indicators = ["说", "认为", "提到", "建议", "负责", "和", "与", "找", "问", "告诉"]
+        for match in re.finditer(r"([一-鿿]{2,3})", text):
+            name = match.group(1)
+            if len(name) == 3 and name[-1] in {"说", "认", "提", "建", "负", "和", "与", "找", "问", "告"}:
+                name = name[:2]
+            if name[0] not in CHINESE_SURNAMES:
+                continue
+            context = text[max(0, match.start() - 4):min(len(text), match.end() + 4)]
+            if any(ind in context for ind in indicators):
+                names.add(name)
+        return names
+
+    def extract_chinese_projects(self, text: str) -> Set[str]:
+        """中文项目名：识别 项目/产品/系统/平台/应用 + 名称。"""
+        projects = set()
+        patterns = [
+            r"(?:项目|产品|系统|平台|应用)[\s:：「『\"']+([\w\-一-鿿]{2,20})(?:[」』\"'\s，。,.]|$)",
+            r"(?:代号|codename)[\s:：]+([\w\-一-鿿]{2,10})(?:[\s，。,.]|$)",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                projects.add(match.group(1).strip())
+        return projects
+
 
 # ========== 关系引擎 ==========
 
 class RelationEngine:
     """关系分析和建立"""
 
-    def __init__(self):
-        self.co_occurrence = defaultdict(lambda: defaultdict(int))
+    def __init__(self, half_life_days: int = 30, db_path: str | Path | None = None):
+        self.half_life_days = half_life_days
+        self.decay_lambda = math.log(2) / max(half_life_days, 1)
+        self.co_occurrence = defaultdict(lambda: defaultdict(float))
         self.entity_docs = defaultdict(list)  # entity -> [doc_paths]
+        self.db_path = Path(db_path).expanduser() if db_path else None
+        if self.db_path:
+            self._init_db()
 
-    def analyze_session(self, doc_path: str, entities: Dict[str, Set[str]]):
+    def analyze_session(self, doc_path: str, entities: Dict[str, Set[str]], timestamp: datetime = None):
         """分析单个 session 中的所有实体共现"""
+        timestamp = timestamp or datetime.now()
+        age_days = max((datetime.now() - timestamp).total_seconds() / 86400, 0)
+        weight = round(math.exp(-self.decay_lambda * age_days), 4)
+
         all_entities = set()
         for category, items in entities.items():
             all_entities.update(items)
@@ -313,14 +388,15 @@ class RelationEngine:
         for i, e1 in enumerate(entities_list):
             for e2 in entities_list[i + 1:]:
                 if e1 != e2:
-                    self.co_occurrence[e1][e2] += 1
-                    self.co_occurrence[e2][e1] += 1
+                    self.co_occurrence[e1][e2] += weight
+                    self.co_occurrence[e2][e1] += weight
+                    self._persist_relation(e1, e2, weight, timestamp)
 
-    def get_relations(self, entity: str, min_count: int = 1) -> List[Tuple[str, int]]:
+    def get_relations(self, entity: str, min_count: float = 1.0) -> List[Tuple[str, float]]:
         """获取实体的关系列表"""
         relations = self.co_occurrence.get(entity, {})
         return sorted(
-            [(e, c) for e, c in relations.items() if c >= min_count],
+            [(e, round(c, 3)) for e, c in relations.items() if c >= min_count],
             key=lambda x: x[1],
             reverse=True
         )
@@ -332,6 +408,73 @@ class RelationEngine:
             if entity in entities:
                 sessions.append(doc_path)
         return sessions
+
+    def decrement(self, e1: str, e2: str, amount: float = 1.0):
+        self.co_occurrence[e1][e2] = max(0.0, self.co_occurrence[e1][e2] - amount)
+        self.co_occurrence[e2][e1] = max(0.0, self.co_occurrence[e2][e1] - amount)
+        if self.db_path:
+            self._decrement_persisted_relation(e1, e2, amount)
+
+    def get_weight(self, e1: str, e2: str) -> float:
+        return float(self.co_occurrence.get(e1, {}).get(e2, 0.0))
+
+    def get_total_mentions(self, entity: str) -> int:
+        return sum(1 for entities in self.entity_docs.values() if entity in entities)
+
+    def _init_db(self):
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS co_occurrence_relations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_a TEXT NOT NULL,
+                    entity_b TEXT NOT NULL,
+                    co_occurrence_count INTEGER DEFAULT 0,
+                    weight REAL DEFAULT 0,
+                    session_count INTEGER DEFAULT 0,
+                    first_seen TEXT,
+                    last_seen TEXT,
+                    UNIQUE(entity_a, entity_b)
+                )
+            """)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(co_occurrence_relations)")}
+            if "weight" not in columns:
+                conn.execute("ALTER TABLE co_occurrence_relations ADD COLUMN weight REAL DEFAULT 0")
+            if "session_count" not in columns:
+                conn.execute("ALTER TABLE co_occurrence_relations ADD COLUMN session_count INTEGER DEFAULT 0")
+            if "first_seen" not in columns:
+                conn.execute("ALTER TABLE co_occurrence_relations ADD COLUMN first_seen TEXT")
+            if "last_seen" not in columns:
+                conn.execute("ALTER TABLE co_occurrence_relations ADD COLUMN last_seen TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coocc_entity_a ON co_occurrence_relations(entity_a)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coocc_entity_b ON co_occurrence_relations(entity_b)")
+
+    def _persist_relation(self, e1: str, e2: str, weight: float, timestamp: datetime):
+        if not self.db_path:
+            return
+        entity_a, entity_b = sorted([e1, e2])
+        now = timestamp.isoformat()
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("""
+                INSERT INTO co_occurrence_relations
+                    (entity_a, entity_b, co_occurrence_count, weight, session_count, first_seen, last_seen)
+                VALUES (?, ?, 1, ?, 1, ?, ?)
+                ON CONFLICT(entity_a, entity_b) DO UPDATE SET
+                    co_occurrence_count = co_occurrence_count + 1,
+                    weight = weight + excluded.weight,
+                    session_count = session_count + 1,
+                    last_seen = excluded.last_seen
+            """, (entity_a, entity_b, weight, now, now))
+
+    def _decrement_persisted_relation(self, e1: str, e2: str, amount: float):
+        entity_a, entity_b = sorted([e1, e2])
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("""
+                UPDATE co_occurrence_relations
+                SET weight = MAX(weight - ?, 0),
+                    co_occurrence_count = MAX(co_occurrence_count - 1, 0)
+                WHERE entity_a=? AND entity_b=?
+            """, (amount, entity_a, entity_b))
 
 
 # ========== 页面生成器 ==========
@@ -726,23 +869,113 @@ def enrich_source_pages(extractor: EntityExtractor, relation_engine: RelationEng
             md_file.write_text(text + "\n".join(enrich_lines), encoding="utf-8")
 
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at charon.py", exc_info=True)
             continue
+
+
+def _flatten_entities(entities: Dict[str, Set[str]]) -> Set[str]:
+    all_entities = set()
+    for items in entities.values():
+        all_entities.update(items)
+    return all_entities
+
+
+def _extract_page_timestamp(page_path: Path) -> datetime:
+    try:
+        return datetime.fromtimestamp(page_path.stat().st_mtime)
+    except OSError:
+        return datetime.now()
+
+
+class ConnectModule:
+    """连接 Worker 的轻量热插拔封装。"""
+
+    def __init__(self, wiki_base: str | Path | None = None, db_path: str | Path | None = None):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else Path(str(WIKI_DIR))
+        self.db_path = Path(db_path).expanduser() if db_path else self.wiki_base / ".kg" / "knowledge_graph.db"
+        self.extractor = EntityExtractor(wiki_base=self.wiki_base)
+        self.relation_engine = RelationEngine(db_path=self.db_path)
+
+    def handle_event(self, event_type: str, data: Dict):
+        if event_type in {"page.created", "page.modified", "distill_complete"}:
+            page_path = data.get("page_path")
+            if page_path:
+                return self._incremental_process(Path(page_path))
+        if event_type == "scheduler.hourly" and data.get("task_name") == "connect_consistency_check":
+            return run_connect_cycle()
+        return None
+
+    def _incremental_process(self, page_path: Path) -> Dict:
+        if not page_path.exists():
+            return {"status": "missing", "page_path": str(page_path)}
+
+        text = page_path.read_text(encoding="utf-8")
+        cwd = ""
+        match = re.search(r'working_dir:\s*`?([^`\n]+)', text)
+        if match:
+            cwd = match.group(1).strip()
+
+        old_entities = self._get_stored_entities(page_path)
+        new_entities_by_type = self.extractor.extract(text, cwd=cwd)
+        new_entities = _flatten_entities(new_entities_by_type)
+        removed = old_entities - new_entities
+        added = new_entities - old_entities
+
+        for e1 in removed:
+            for e2 in old_entities:
+                if e1 != e2:
+                    self.relation_engine.decrement(e1, e2)
+
+        self.relation_engine.analyze_session(
+            page_path.stem[:40],
+            new_entities_by_type,
+            timestamp=_extract_page_timestamp(page_path),
+        )
+        self._store_entities(page_path, new_entities)
+
+        return {
+            "status": "ok",
+            "page_path": str(page_path),
+            "added": sorted(added),
+            "removed": sorted(removed),
+        }
+
+    def _get_stored_entities(self, page_path: Path) -> Set[str]:
+        marker = self._marker_path(page_path)
+        if not marker.exists():
+            return set()
+        try:
+            return set(json.loads(marker.read_text(encoding="utf-8")).get("entities", []))
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at charon.py", exc_info=True)
+            return set()
+
+    def _store_entities(self, page_path: Path, entities: Set[str]):
+        marker = self._marker_path(page_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            json.dumps({"page_path": str(page_path), "entities": sorted(entities)}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _marker_path(self, page_path: Path) -> Path:
+        return self.wiki_base / ".kg" / "connect_entities" / f"{hashlib.md5(str(page_path).encode()).hexdigest()}.json"
 
 
 # ========== 主流程 ==========
 
-def run_connect_cycle(dry_run: bool = False) -> Dict:
+def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) -> Dict:
     """执行一轮关联构建 — 生成 Obsidian 知识图谱"""
     _ensure_dirs()
 
     if not INBOX_DIR.exists():
-        print("[Connect] 无 Inbox 目录，跳过")
+        logger.info("[Connect] 无 Inbox 目录，跳过")
         return {"people": 0, "projects": 0, "tech": 0, "concepts": 0, "mocs": 0}
 
-    print("[Connect] 构建 Obsidian 知识图谱...")
+    logger.info("[Connect] 构建 Obsidian 知识图谱...")
 
-    extractor = EntityExtractor()
-    relation_engine = RelationEngine()
+    extractor = EntityExtractor(wiki_base=Path(str(WIKI_DIR)))
+    relation_engine = RelationEngine(db_path=db_path or (Path(str(WIKI_DIR)) / ".kg" / "knowledge_graph.db"))
 
     # 收集所有实体
     all_entities: Dict[str, Dict[str, Set[str]]] = {
@@ -768,7 +1001,7 @@ def run_connect_cycle(dry_run: bool = False) -> Dict:
                 cwd = m.group(1).strip()
 
             entities = extractor.extract(text, cwd=cwd)
-            relation_engine.analyze_session(doc_name, entities)
+            relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
 
             for category, items in entities.items():
                 for item in items:
@@ -779,13 +1012,14 @@ def run_connect_cycle(dry_run: bool = False) -> Dict:
                 project_tech[proj].update(entities["tech"])
 
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at charon.py", exc_info=True)
             continue
 
     stats = {"people": 0, "projects": 0, "tech": 0, "concepts": 0, "mocs": 0}
 
     if dry_run:
         total = sum(len(v) for v in all_entities.values())
-        print(f"[Connect] [DRY RUN] 将生成 {total} 个实体节点 + MOC 枢纽")
+        logger.info(f"[Connect] [DRY RUN] 将生成 {total} 个实体节点 + MOC 枢纽")
         return stats
 
     # 生成人物页面
@@ -847,16 +1081,16 @@ def main():
     args = parser.parse_args()
 
     if args.watch:
-        print("[Connect] 守护模式启动")
+        logger.info("[Connect] 守护模式启动")
         while True:
-            print(f"\n=== {datetime.now().isoformat()} ===")
+            logger.info(f"\n=== {datetime.now().isoformat()} ===")
             run_connect_cycle(dry_run=args.dry_run)
             time.sleep(600)
     else:
         stats = run_connect_cycle(dry_run=args.dry_run)
-        print(f"\n=== 知识图谱构建完成 ===")
+        logger.info(f"\n=== 知识图谱构建完成 ===")
         for k, v in stats.items():
-            print(f"  {k}: {v}")
+            logger.info(f"  {k}: {v}")
 
 
 if __name__ == "__main__":

@@ -27,11 +27,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.config import get_config
 
-logger = logging.getLogger(__name__)
 
 
 # ========== 数据模型 ==========
 
+logger = logging.getLogger(__name__)
 @dataclass
 class TokenBudget:
     """Token 预算配置"""
@@ -71,6 +71,7 @@ class WikiPage:
         try:
             return self.path.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prompt_builder.py", exc_info=True)
             return ""
 
 
@@ -307,6 +308,7 @@ class RelatedContextRetriever:
                     fm[key] = val
             return fm
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prompt_builder.py", exc_info=True)
             return None
 
     @staticmethod
@@ -320,6 +322,7 @@ class RelatedContextRetriever:
                     text = text[end + 3:]
             return text.strip()[:300]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prompt_builder.py", exc_info=True)
             return ""
 
     @staticmethod
@@ -534,6 +537,7 @@ class TemplateRegistry:
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
             return self._schema_to_markdown(schema)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prompt_builder.py", exc_info=True)
             return ""
 
     def _schema_to_markdown(self, schema: dict, indent: int = 0) -> str:
@@ -563,6 +567,7 @@ class TemplateRegistry:
                 return STAGE1_FILTER_PROMPT
             return DISTILLATION_PROMPT
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at prompt_builder.py", exc_info=True)
             return "请分析以下内容并提取知识：\n\n{conversation_text}"
 
 

@@ -23,12 +23,12 @@ from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 # 配置日志到 stderr，避免污染 stdout（MCP 协议通道）
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stderr,
     format="%(asctime)s [mcp] %(levelname)s: %(message)s"
 )
-logger = logging.getLogger(__name__)
 
 # JSON-RPC 2.0 标准错误码
 JSONRPC_PARSE_ERROR = -32700
@@ -53,6 +53,10 @@ class MCPServer:
             "wiki_write": self._tool_wiki_write,
             "session_search": self._tool_session_search,
             "session_save": self._tool_session_save,
+            "capture_turn": self._tool_capture_turn,
+            "capture_session": self._tool_capture_session,
+            "end_session": self._tool_end_session,
+            "capture_status": self._tool_capture_status,
             "knowledge_ingest": self._tool_knowledge_ingest,
             "knowledge_import": self._tool_knowledge_import,
             "knowledge_distill": self._tool_knowledge_distill,
@@ -680,9 +684,11 @@ tags: [{', '.join(tags or ['file_import'])}]
                             elif explicit == "git":
                                 src = "git_knowledge"
                         except Exception:
+                            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                             pass
                 sources[src] = sources.get(src, 0) + 1
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at agora.py", exc_info=True)
                 continue
 
         total = sum(sources.values())
@@ -754,56 +760,211 @@ tags: [{', '.join(tags or ['file_import'])}]
             }
 
     def _tool_session_save(self, session_id: str, messages: List[Dict],
-                           tags: List[str] = None) -> Dict:
+                           tags: List[str] = None,
+                           source_agent: str = "unknown") -> Dict:
         """
         保存完整聊天记录到 Memos（L1 原始池）
 
-        使用场景：
-        - Agent 会话结束时，将本轮对话完整保存
-        - 支持按 hash/range/segment 分片存储
-        - 自动添加 _meta 完整性校验
+        ⚠️ Deprecated: 请使用 capture_turn / capture_session。
+        此工具现已统一走 CaptureService，不再直接调用 MemosClient。
         """
-        from core.config import get_config
-        from integrations.styx import MemosClient
-
-        config = get_config()
-        if not config.memos_enabled or not config.memos_token:
-            return {
-                "success": False,
-                "message": "Memos 未配置，无法保存会话",
-            }
+        from core.sync_framework.capture_service import CaptureService
 
         try:
-            client = MemosClient(
-                token=config.memos_token,
-                base_url=config.memos_api_url,
-            )
+            service = CaptureService()
+            # 将 messages 转为 turns 格式
+            turns = []
+            user_content = ""
+            assistant_content = ""
+            turn_number = 0
+            for msg in messages:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    if assistant_content:
+                        turns.append({
+                            "turn_number": turn_number,
+                            "user_content": user_content,
+                            "assistant_content": assistant_content,
+                        })
+                        turn_number += 1
+                    user_content = content
+                    assistant_content = ""
+                elif role == "assistant":
+                    assistant_content = content
 
-            save_tags = list(tags or [])
-            if "source=agent" not in save_tags:
-                save_tags.append("source=agent")
-            if "level=L1" not in save_tags:
-                save_tags.append("level=L1")
+            if user_content or assistant_content:
+                turns.append({
+                    "turn_number": turn_number,
+                    "user_content": user_content,
+                    "assistant_content": assistant_content,
+                })
 
-            memories = client.save_session_full(
+            result = service.capture_session(
+                source_agent=source_agent,
                 session_id=session_id,
-                messages=messages,
-                tags=save_tags,
-                visibility="PUBLIC",
+                turns=turns,
             )
-
             return {
-                "success": True,
-                "message": f"已保存 {len(memories)} 条分片记录",
+                "success": result.get("status") in ("queued", "duplicate", "done"),
+                "message": f"Session 已入队: {result.get('queued_count', 0)} 轮次 queued, {result.get('duplicate_count', 0)} 重复",
                 "session_id": session_id,
-                "chunks": len(memories),
-                "memo_ids": [m.id for m in memories],
+                "capture_result": result,
             }
         except Exception as e:
             logger.error(f"会话保存失败: {e}")
             return {
                 "success": False,
                 "message": f"保存失败: {e}",
+            }
+
+    def _tool_capture_turn(
+        self,
+        source_agent: str,
+        session_id: str,
+        turn_id: str = "",
+        turn_number: int = 0,
+        user_content: str = "",
+        assistant_content: str = "",
+        timestamp: str = "",
+        model: str = "",
+        cwd: str = "",
+        metadata: Dict = None,
+    ) -> Dict:
+        """
+        MCP 主动上报单轮对话。
+
+        只做校验和入队，不直接写 Memos。
+        返回 < 200ms。
+        """
+        from core.sync_framework.capture_service import CaptureService
+
+        try:
+            service = CaptureService()
+            result = service.capture_turn(
+                source_agent=source_agent,
+                session_id=session_id,
+                turn_id=turn_id or None,
+                turn_number=turn_number,
+                user_content=user_content,
+                assistant_content=assistant_content,
+                timestamp=timestamp or None,
+                model=model or None,
+                cwd=cwd or None,
+                metadata=metadata or {},
+            )
+            return {
+                "success": result["status"] in ("queued", "duplicate"),
+                "status": result["status"],
+                "duplicate": result.get("duplicate", False),
+                "source_agent": source_agent,
+                "session_id": session_id,
+                "turn_number": turn_number,
+            }
+        except Exception as e:
+            logger.error(f"capture_turn 失败: {e}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": str(e),
+            }
+
+    def _tool_capture_session(
+        self,
+        source_agent: str,
+        session_id: str,
+        turns: List[Dict],
+    ) -> Dict:
+        """
+        MCP 批量上报整个 session。
+        """
+        from core.sync_framework.capture_service import CaptureService
+
+        try:
+            service = CaptureService()
+            result = service.capture_session(
+                source_agent=source_agent,
+                session_id=session_id,
+                turns=turns,
+            )
+            return {
+                "success": result.get("status") in ("queued", "duplicate"),
+                "status": result["status"],
+                "queued_count": result.get("queued_count", 0),
+                "duplicate_count": result.get("duplicate_count", 0),
+                "backpressure_count": result.get("backpressure_count", 0),
+                "session_id": session_id,
+            }
+        except Exception as e:
+            logger.error(f"capture_session 失败: {e}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": str(e),
+            }
+
+    def _tool_end_session(
+        self,
+        source_agent: str,
+        session_id: str,
+    ) -> Dict:
+        """
+        标记 session 结束。
+        """
+        from core.sync_framework.capture_service import CaptureService
+
+        try:
+            service = CaptureService()
+            result = service.end_session(
+                source_agent=source_agent,
+                session_id=session_id,
+            )
+            return {
+                "success": True,
+                "status": result["status"],
+                "session_id": session_id,
+            }
+        except Exception as e:
+            logger.error(f"end_session 失败: {e}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": str(e),
+            }
+
+    def _tool_capture_status(
+        self,
+        source_agent: str,
+        session_id: str,
+        turn_number: int = -1,
+    ) -> Dict:
+        """
+        查询指定 session/turn 的队列状态。
+        """
+        from core.sync_framework.capture_service import CaptureService
+
+        try:
+            service = CaptureService()
+            result = service.get_status(
+                source_agent=source_agent,
+                session_id=session_id,
+                turn_number=turn_number if turn_number >= 0 else None,
+            )
+            return {
+                "success": True,
+                "status": result.get("status"),
+                "source_agent": source_agent,
+                "session_id": session_id,
+                "turn_number": result.get("turn_number"),
+                "retry_count": result.get("retry_count", 0),
+                "error": result.get("error"),
+            }
+        except Exception as e:
+            logger.error(f"capture_status 失败: {e}")
+            return {
+                "success": False,
+                "status": "error",
+                "message": str(e),
             }
 
     def _tool_knowledge_distill(self, session_id: str,
@@ -1206,6 +1367,7 @@ tags: [{', '.join(tags or ['file_import'])}]
             wiki_md_count = len(list(config.wiki_dir.rglob("*.md")))
             checks["wiki_pages"] = wiki_md_count
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at agora.py", exc_info=True)
             checks["wiki_pages"] = 0
 
         return {

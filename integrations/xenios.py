@@ -17,7 +17,6 @@ AI Context Reader - AI上下文读取模块
 
 import logging
 
-logger = logging.getLogger(__name__)
 
 import os
 import sys
@@ -31,6 +30,7 @@ from dataclasses import dataclass
 from integrations.styx import MemosClient, Memory
 
 
+logger = logging.getLogger(__name__)
 @dataclass
 class ReadPolicy:
     """读取策略"""
@@ -340,6 +340,7 @@ class AIContextReader:
                 else:
                     days_old = 999
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at xenios.py", exc_info=True)
                 days_old = 999
 
             # 按时间分层截断

@@ -15,9 +15,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class FreshnessAlert:
     """知识过时提醒"""
@@ -132,28 +132,37 @@ class FreshnessAlertChecker:
                                         current_version=version_info,
                                     )
                         except Exception:
+                            logging.getLogger(__name__).warning(f"Caught unexpected error at freshness_alert.py", exc_info=True)
                             continue
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
         return None
 
     def _check_context_expiry(self, entity) -> Optional[FreshnessAlert]:
         """检查上下文知识是否过期"""
         try:
-            from core.kia.evolution_tracker import TemporalEvolutionTracker
-            tracker = TemporalEvolutionTracker()
-            alert = tracker.check_entity_freshness(entity.name, [])
-            if alert:
-                return FreshnessAlert(
-                    entity_name=entity.name,
-                    alert_type="context_expired",
-                    message=f"「{entity.name}」的上下文知识可能已过时",
-                    confidence=0.6,
-                )
+            # NOTE: TemporalEvolutionTracker 未实现，使用 EntityManager 的更新时间来判断
+            from core.kia.entity_manager import EntityManager
+            em = EntityManager()
+            updated = entity.meta.get("updated_at", "")
+            if updated:
+                from datetime import datetime
+                try:
+                    last_update = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                    days_since = (datetime.now() - last_update).days
+                    if days_since >= self.CONTEXT_EXPIRY_DAYS:
+                        return FreshnessAlert(
+                            entity_name=entity.name,
+                            alert_type="context_expired",
+                            message=f"「{entity.name}」的上下文知识可能已过时（{days_since}天未更新）",
+                            confidence=0.6,
+                        )
+                except ValueError:
+                    pass
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
         return None
 
     def _check_rarely_accessed(self, entity) -> Optional[FreshnessAlert]:
@@ -183,6 +192,6 @@ class FreshnessAlertChecker:
                         confidence=0.4,
                     )
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
         return None

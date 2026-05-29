@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+
+
 logger = logging.getLogger(__name__)
-
-
 def open_obsidian(
     page_path: Optional[str] = None,
     vault_name: Optional[str] = None,
@@ -194,4 +194,5 @@ def _open_app() -> bool:
 
         return result.returncode == 0
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at obsidian_opener.py", exc_info=True)
         return False

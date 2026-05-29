@@ -163,6 +163,8 @@ class EventBus:
         self._mnemos_dir = config.mnemos_dir
         self._max_retries = config.get("event_bus.max_retries", 5)
         self._queue_depth_alert = config.get("event_bus.queue_depth_alert", 1000)
+        self._max_queue_depth = config.get("event_bus.max_queue_depth", 10000)
+        self._max_recover_events = config.get("event_bus.max_recover_events", 1000)
         self._dead_letter_alert = config.get("event_bus.dead_letter_alert", 10)
         self._max_latency_ms = config.get("event_bus.max_latency_ms", 10)
 
@@ -195,11 +197,11 @@ class EventBus:
     def _get_conn(self) -> sqlite3.Connection:
         """获取当前线程的 SQLite 连接"""
         if not hasattr(self._local, "conn") or self._local.conn is None:
-            conn = sqlite3.connect(str(self._db_path), timeout=10)
+            conn = sqlite3.connect(str(self._db_path), timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA busy_timeout=30000")
             self._local.conn = conn
         return self._local.conn
 
@@ -216,6 +218,7 @@ class EventBus:
             try:
                 self._local.conn.close()
             except Exception:
+                logger.warning(f"Unexpected error in mnemos_bus.py", exc_info=True)
                 pass
             self._local.conn = None
 
@@ -224,11 +227,20 @@ class EventBus:
     def _recover_pending(self):
         """启动时恢复 pending 和 processing 事件到内存队列"""
         conn = self._get_conn()
+        total_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events WHERE status IN ('pending', 'processing')"
+        ).fetchone()
+        total = total_row["cnt"] if total_row else 0
+        limit = int(self._max_recover_events or 1000)
         cursor = conn.execute(
-            "SELECT * FROM events WHERE status IN ('pending', 'processing') ORDER BY id ASC"
+            """SELECT * FROM events
+               WHERE status IN ('pending', 'processing')
+               ORDER BY id ASC
+               LIMIT ?""",
+            (limit,),
         )
         rows = cursor.fetchall()
-        for row in rows:
+        for i, row in enumerate(rows):
             event = Event.from_row(row)
             if event:
                 self._queue.put(event)
@@ -236,9 +248,18 @@ class EventBus:
                 conn.execute(
                     "UPDATE events SET status = 'pending' WHERE id = ?", (row["id"],)
                 )
+                # 每 100 条 commit 一次，减少锁持有时间
+                if (i + 1) % 100 == 0:
+                    conn.commit()
         conn.commit()
         if rows:
             logger.info(f"[EventBus] 恢复 {len(rows)} 个未完成事件")
+        if total > limit:
+            logger.warning(
+                "[EventBus] 未完成事件积压 %d 个，本次仅恢复 %d 个，"
+                "剩余事件保留 pending，后续分批恢复",
+                total, limit,
+            )
 
     # ---- 目录管理（旧文件系统兼容） ----
 
@@ -311,6 +332,14 @@ class EventBus:
             ),
         )
         conn.commit()
+
+        qsize = self._queue.qsize()
+        if qsize >= self._max_queue_depth:
+            logger.warning(
+                "[EventBus] 内存队列深度 %d 已达上限 %d，事件已持久化但暂不入内存队列",
+                qsize, self._max_queue_depth,
+            )
+            return trace_id
 
         # ---- 推入内存队列 ----
         self._queue.put(event)
@@ -652,6 +681,7 @@ class EventProcessor:
                     self._results[event.trace_id] = result
                 return result
             except Exception:
+                logger.warning(f"Unexpected error in mnemos_bus.py", exc_info=True)
                 raise  # 让 EventBus 的重试逻辑处理
         wrapped.__name__ = handler.__name__
         return wrapped
@@ -729,6 +759,10 @@ def _get_bus() -> EventBus:
             if _global_bus is None:
                 _global_bus = EventBus()
     return _global_bus
+
+
+# 公共别名，供外部模块（如 PluggableModule）使用
+get_event_bus = _get_bus
 
 
 def publish_event(event_type: str, agent: str, payload: Dict[str, Any]) -> str:

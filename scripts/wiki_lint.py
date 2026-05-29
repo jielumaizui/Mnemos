@@ -29,6 +29,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.config import get_config
+from core.frontmatter import fm_get, to_chinese_frontmatter
 
 WIKI_DIR = get_config().wiki_dir
 
@@ -154,12 +155,12 @@ def check_missing_meta(page: Dict) -> List[str]:
 
     required_fields = ["status", "source_count", "knowledge_stage", "evidence_level"]
     for field in required_fields:
-        if field not in fm:
+        if fm_get(fm, field) is None:
             missing.append(f"缺少 {field}")
 
     # source_count 检查
-    if fm.get("source_count", 0) == 0:
-        sources = fm.get("sources", [])
+    if fm_get(fm, "source_count", 0) == 0:
+        sources = fm.get("sources", fm.get("来源", []))
         if not sources:
             missing.append("source_count 为 0 且无 sources")
 
@@ -304,16 +305,19 @@ def auto_fix(results: List[Dict], all_pages: List[Dict], page_index: Dict[str, D
         if fm is None:
             continue
 
-        # 修复缺元数据：添加 knowledge_stage 和 evidence_level
+        # 修复缺元数据：写入中文展示字段，内部工具通过 alias 映射读取。
         modified = False
-        if "knowledge_stage" not in fm:
-            fm["knowledge_stage"] = "P3"
+        if fm_get(fm, "knowledge_stage") is None:
+            fm["知识阶段"] = "原始"
             modified = True
-        if "evidence_level" not in fm:
-            fm["evidence_level"] = 1
+        if fm_get(fm, "evidence_level") is None:
+            fm["证据级别"] = "单源"
             modified = True
-        if "status" not in fm:
-            fm["status"] = "draft"
+        if fm_get(fm, "status") is None:
+            fm["状态"] = "草稿"
+            modified = True
+        if fm_get(fm, "source_count") is None:
+            fm["来源数量"] = 1
             modified = True
 
         if modified:
@@ -321,7 +325,12 @@ def auto_fix(results: List[Dict], all_pages: List[Dict], page_index: Dict[str, D
             content = page["content"]
             fm_match = FRONTMATTER_RE.match(content)
             if fm_match:
-                new_fm = json.dumps(fm, ensure_ascii=False, indent=2)
+                fm = to_chinese_frontmatter(fm)
+                try:
+                    import yaml
+                    new_fm = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
+                except Exception:
+                    new_fm = json.dumps(fm, ensure_ascii=False, indent=2)
                 new_content = f"---\n{new_fm}\n---\n" + content[fm_match.end():]
                 Path(page["path"]).write_text(new_content, encoding="utf-8")
                 fixed += 1

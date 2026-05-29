@@ -10,9 +10,9 @@ from typing import Dict, List, Optional
 
 from integrations.olympus import AgentAdapter, AgentRegistry
 
+
+
 logger = logging.getLogger(__name__)
-
-
 class HermesAdapter(AgentAdapter):
     """Hermes Agent 适配器
 
@@ -49,6 +49,7 @@ class HermesAdapter(AgentAdapter):
                 "knowledge_loaded": knowledge.get("loaded", False),
             })
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at caduceus.py", exc_info=True)
             pass  # 事件总线失败不影响主流程
         return {"agent": self.name, "knowledge": knowledge}
 
@@ -80,6 +81,7 @@ class HermesAdapter(AgentAdapter):
                 "meta": {"source": self.name, "working_dir": working_dir or os.getcwd()},
             })
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return {"saved": True, "distill_task_id": sid}
 

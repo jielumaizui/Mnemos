@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+logger = logging.getLogger(__name__)
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -27,7 +28,6 @@ from core.hephaestus.distillation_engine import (
     HostAgentCaller, build_session_text,
 )
 
-logger = logging.getLogger(__name__)
 
 
 def _get_db_path() -> Path:
@@ -185,6 +185,7 @@ class OutcomeCollector:
                 # 编辑标记
                 signals["edits"] += content.count("<!-- user-edited -->")
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
                 continue
         return signals
 
@@ -269,6 +270,7 @@ class DeferredDistillationQueue:
             age_days = (datetime.now() - created).days
             time_score = max(0.0, 1.0 - age_days / 30.0)
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             time_score = 0.5
 
         # domain 权重
@@ -355,6 +357,7 @@ class DeferredDistillationQueue:
                     for row in cursor
                 ]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             return []
 
     def _cluster_by_entity(self, records: List[DeferredRecord]) -> Dict[int, List[DeferredRecord]]:
@@ -387,6 +390,7 @@ class DeferredDistillationQueue:
                 )
                 return cursor.fetchone()[0]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             return 0
 
     def _distill_record(self, engine: DistillationEngine, record: DeferredRecord):
@@ -410,8 +414,8 @@ class DeferredDistillationQueue:
                 )
                 conn.commit()
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
-
     @staticmethod
     def _extract_entity(content: str) -> str:
         """从内容中提取主实体关键词"""
@@ -466,6 +470,7 @@ class WikiIncrementalDistiller:
         try:
             existing = page_path.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             return False
 
         if mode == "append":
@@ -479,6 +484,7 @@ class WikiIncrementalDistiller:
             page_path.write_text(updated, encoding="utf-8")
             return True
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             return False
 
     def _append_content(self, existing: str, new_content: str) -> str:
@@ -533,6 +539,7 @@ class FragmentationDetector:
                     for kw in keywords:
                         pages_by_entity.setdefault(kw, []).append((md_file, len(content)))
                 except Exception:
+                    logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
                     continue
 
         fragmented = []
@@ -622,6 +629,7 @@ class CrossPageDistiller:
                 content = page.read_text(encoding="utf-8")
                 page_contents.append({"path": str(page), "content": content[:3000]})
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
                 continue
 
         if not page_contents:
@@ -642,6 +650,7 @@ class CrossPageDistiller:
         try:
             merged_path.write_text(merged_content, encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at deferred_distill.py", exc_info=True)
             return None
 
         # 标记旧页面为 superceded
@@ -685,6 +694,7 @@ class CrossPageDistiller:
 
                 return frontmatter + f"# {title}\n\n" + result["core_content"]
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return None
 
@@ -733,4 +743,5 @@ class CrossPageDistiller:
                     )
                     page.write_text(new_content, encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass

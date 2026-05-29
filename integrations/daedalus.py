@@ -11,9 +11,9 @@ from typing import Dict, List, Optional
 
 from integrations.olympus import AgentAdapter, AgentRegistry
 
+
+
 logger = logging.getLogger(__name__)
-
-
 class CodexAdapter(AgentAdapter):
     """Codex CLI Agent 适配器
 
@@ -57,6 +57,7 @@ class CodexAdapter(AgentAdapter):
                 "knowledge_loaded": knowledge.get("loaded", False),
             })
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return {"agent": self.name, "knowledge": knowledge}
 
@@ -91,6 +92,7 @@ class CodexAdapter(AgentAdapter):
                 "meta": {"source": self.name, "working_dir": working_dir or os.getcwd()},
             })
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
         return {
             "saved": True,
@@ -125,8 +127,8 @@ class CodexAdapter(AgentAdapter):
                 import stat
                 wrapper_sh.chmod(wrapper_sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
             logger.info(f"[Daedalus] Codex hooks 已安装到 {data_dir}")
             logger.info(f"  Python wrapper: {wrapper_py}")
             logger.info(f"  Windows .bat: {wrapper_bat}")

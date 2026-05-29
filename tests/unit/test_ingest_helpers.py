@@ -80,7 +80,7 @@ class TestExtractEntitiesFallback(unittest.TestCase):
         self.assertIn("WikiHeatTracker", result)
 
     def test_chinese_suffix_extracted(self):
-        # 中文实体提取需要特定模式(XXX框架/系统)，当前实现可能不匹配
+        # DEBT: 中文实体提取模式与 XXX 框架/系统可能不匹配，需确认实体边界规则
         result = extract_entities_fallback("自动化处理框架 和 知识管理系统")
         # 函数返回可能为空，不强制包含
         self.assertIsInstance(result, list)

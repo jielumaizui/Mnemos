@@ -26,6 +26,11 @@ from core.config import get_config
 import logging
 
 logger = logging.getLogger(__name__)
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
+
 
 
 @dataclass
@@ -52,11 +57,13 @@ class TimeCapsule:
         "稳定": [365],                  # 1年提醒回顾
     }
 
-    def __init__(self, wiki_base: str = None, db_path: str = None):
+    def __init__(self, wiki_base: str = None, db_path: str = None,
+                 auto_reminder_days: Optional[Dict[str, List[int]]] = None):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
             get_config().wiki_dir
         )
-        self.inbox = self.wiki_base / "00-Inbox"
+        self.excluded_dirs = {".git", ".obsidian", ".kg", "99-Reports", "07-Shadow", "__pycache__"}
+        self.auto_reminder_days = auto_reminder_days or dict(self.AUTO_REMINDER_DAYS)
         self.db_path = Path(db_path) if db_path else (
             self.wiki_base / ".kg" / "capsule.db"
         )
@@ -98,22 +105,22 @@ class TimeCapsule:
             新增的提醒数量
         """
         count = 0
-        if not self.inbox.exists():
+        if not self.wiki_base.exists():
             return count
 
-        for page in self.inbox.glob("*.md"):
+        for page in self._list_pages():
             try:
                 content = page.read_text(encoding="utf-8")
                 fm = self._extract_frontmatter(content)
                 if not fm:
                     continue
 
-                temporal = fm.get("时效性", "")
-                created = fm.get("创建日期", "")
-                version_tag = fm.get("版本标记", "")
+                temporal = self._fm_get(fm, "temporal_scope", "时效性", default="")
+                created = self._fm_get(fm, "created_at", "创建日期", "created", default="")
+                version_tag = self._fm_get(fm, "version_tag", "版本标记", default="")
 
-                if temporal in self.AUTO_REMINDER_DAYS and created:
-                    for days in self.AUTO_REMINDER_DAYS[temporal]:
+                if temporal in self.auto_reminder_days and created:
+                    for days in self.auto_reminder_days[temporal]:
                         try:
                             created_date = datetime.strptime(str(created), "%Y-%m-%d")
                             reminder_date = created_date + timedelta(days=days)
@@ -132,9 +139,19 @@ class TimeCapsule:
                         except ValueError:
                             continue
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
                 continue
 
         return count
+
+    def _list_pages(self) -> List[Path]:
+        pages = []
+        for page in self.wiki_base.rglob("*.md"):
+            rel_parts = page.relative_to(self.wiki_base).parts
+            if any(part in self.excluded_dirs or part.startswith(".") for part in rel_parts):
+                continue
+            pages.append(page)
+        return pages
 
     def _add_reminder(self, page_path: str, page_title: str,
                       reminder_type: str, scheduled_date: str,
@@ -144,13 +161,21 @@ class TimeCapsule:
             with self._conn() as conn:
                 # 检查是否已存在相同提醒
                 existing = conn.execute(
-                    """SELECT 1 FROM capsules
-                       WHERE page_path=? AND reminder_type=? AND scheduled_date=?
+                    """SELECT id, reason FROM capsules
+                       WHERE page_path=? AND scheduled_date=?
                        AND status='pending'""",
-                    (page_path, reminder_type, scheduled_date)
+                    (page_path, scheduled_date)
                 ).fetchone()
 
                 if existing:
+                    old_reason = existing["reason"] or ""
+                    if reason and reason not in old_reason:
+                        merged_reason = f"{old_reason}; {reason}" if old_reason else reason
+                        conn.execute(
+                            "UPDATE capsules SET reason=? WHERE id=?",
+                            (merged_reason, existing["id"])
+                        )
+                        conn.commit()
                     return False
 
                 conn.execute(
@@ -163,6 +188,24 @@ class TimeCapsule:
                 return True
         except sqlite3.Error:
             return False
+
+    def generate_periodic_reminders(self, reference_date: Optional[datetime] = None) -> int:
+        """生成 weekly/monthly/quarterly 周期性回顾提醒。"""
+        ref = reference_date or datetime.now()
+        scheduled = ref.strftime("%Y-%m-%d")
+        count = 0
+
+        if ref.weekday() == 0:
+            if self._add_reminder("__periodic__/weekly", "每周知识回顾", "periodic", scheduled, "每周回顾：检查逾期和 7 天内到期知识"):
+                count += 1
+        if ref.day == 1:
+            if self._add_reminder("__periodic__/monthly", "每月知识回顾", "periodic", scheduled, "每月回顾：检查 30 天内到期知识"):
+                count += 1
+            if ref.month in {1, 4, 7, 10}:
+                if self._add_reminder("__periodic__/quarterly", "季度知识回顾", "periodic", scheduled, "季度回顾：完整检查知识时效性"):
+                    count += 1
+
+        return count
 
     # ========== 手动提醒 ==========
 
@@ -226,6 +269,50 @@ class TimeCapsule:
             ).fetchall()
 
         return [self._row_to_reminder(row) for row in rows]
+
+    def publish_due_events(self, days_ahead: int = 0) -> int:
+        """发布 capsule.due 事件；事件总线不可用时降级为 0。"""
+        return self._publish_reminder_events("capsule.due", self.get_due_reminders(days_ahead))
+
+    def publish_overdue_events(self) -> int:
+        """发布 capsule.overdue 事件；事件总线不可用时降级为 0。"""
+        today = datetime.now()
+        reminders = self.get_overdue_reminders()
+        payloads = []
+        for reminder in reminders:
+            scheduled = datetime.strptime(reminder.scheduled_date, "%Y-%m-%d")
+            payloads.append((reminder, {"days_overdue": (today - scheduled).days}))
+        return self._publish_reminder_events("capsule.overdue", payloads)
+
+    def _publish_reminder_events(self, event_type: str, reminders) -> int:
+        try:
+            from core.mnemos_bus import publish_event
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
+            return 0
+
+        count = 0
+        for item in reminders:
+            if isinstance(item, tuple):
+                reminder, extra = item
+            else:
+                reminder, extra = item, {}
+            payload = {
+                "capsule_id": reminder.capsule_id,
+                "page_path": reminder.page_path,
+                "page_title": reminder.page_title,
+                "reminder_type": reminder.reminder_type,
+                "reason": reminder.reason,
+                "scheduled_date": reminder.scheduled_date,
+                **extra,
+            }
+            try:
+                publish_event(event_type, "aion", payload)
+                count += 1
+            except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
+                continue
+        return count
 
     def get_all_reminders(self, page_path: str = None,
                           status: str = None) -> List[CapsuleReminder]:
@@ -351,15 +438,23 @@ class TimeCapsule:
 
     @staticmethod
     def _extract_frontmatter(content: str) -> Optional[Dict]:
+        if yaml is None:
+            return {}
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 try:
-                    import yaml
                     return yaml.safe_load(parts[1]) or {}
                 except Exception as e:
                     logger.warning(f"忽略异常: {e}")
         return {}
+
+    @staticmethod
+    def _fm_get(fm: Dict, *keys, default=None):
+        for key in keys:
+            if key in fm:
+                return fm.get(key)
+        return default
 
 
 # ========== 便捷函数 ==========

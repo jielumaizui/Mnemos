@@ -8,6 +8,7 @@ Ingest 引擎纯函数辅助模块
 import hashlib
 import json
 import logging
+logger = logging.getLogger(__name__)
 import re
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,7 @@ def _bypass_record(content: str, source: str, rule_score: float, original_result
             "original_result": str(original_result),
         }, ensure_ascii=False))
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error at ingest_helpers.py", exc_info=True)
         pass  # 记录失败不影响主流程
 
 
@@ -184,8 +186,8 @@ def is_noise_message(content: str,
         rule_score = scorer.score(content)
         _bypass_record(content, "is_noise_message", rule_score, False)
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
         pass
-    
     return False
 
 
@@ -255,8 +257,8 @@ def score_message_quality(content: str) -> Dict[str, float]:
         rule_score = scorer.score(content)
         _bypass_record(content, "score_message_quality", rule_score, None)
     except Exception:
+        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
         pass
-    
     if not content or not isinstance(content, str):
         return _empty_quality_result()
 
@@ -1093,33 +1095,61 @@ def build_tag_string(tags: Dict[str, str]) -> str:
 
 # ==================== L2 价值预判定 (E14) ====================
 
-def layer2_value_prejudge(content: str, rule_score: Dict[str, float] = None) -> Dict[str, any]:
-    """L2 层价值预判定 —— 连接 RuleScorer 评分与蒸馏决策
+def layer2_value_prejudge(
+    content: str,
+    rule_score: Dict[str, float] = None,
+    v2_score=None,
+) -> Dict[str, any]:
+    """L2 层价值预判定 —— 连接 RuleScorer / AdaptiveScorerV2 评分与蒸馏决策
 
-    【E14 蒸馏层对齐】
+    【E14 蒸馏层对齐 + 阶段二 V2 桥接】
     根据 quality score 将消息分为三类：
     - direct_distill (>=70): 高价值，直接进入蒸馏队列
     - skip (<=30): 低价值，跳过不处理
     - llm_judge (30-70): 中间值，交由 LLM 二次判断
 
+    若传入 v2_score（ScoreCardV2），将 V2 的 distill_score（0-1 域）
+    与 rule_score（0-100 域）融合后再判定。融合权重：rule 0.5 + V2 0.5。
+
     Args:
         content: 消息内容
         rule_score: score_message_quality() 的返回结果（可选，不传则自动评分）
+        v2_score: AdaptiveScorerV2.score() 返回的 ScoreCardV2（可选）
 
     Returns:
         {
             "decision": "direct_distill" | "skip" | "llm_judge",
-            "score": float,           # 总分
+            "score": float,           # 总分（0-100 域）
             "threshold": int,         # 判定阈值
             "reason": str,            # 判定原因
             "confidence": float,      # 判定置信度
+            "sources": Dict,          # 各来源分数明细
         }
     """
     # 自动评分（如果未提供）
     if rule_score is None:
         rule_score = score_message_quality(content)
 
-    total_score = rule_score.get("total_score", 0.0)
+    rule_total = rule_score.get("total_score", 0.0)
+    sources = {"rule": rule_total}
+
+    # V2 评分融合（可选，零阻塞）
+    v2_distill = None
+    if v2_score is not None:
+        try:
+            v2_distill = v2_score.scores.get("distill")
+            if v2_distill is not None:
+                # V2 域为 0-1，映射到 0-100
+                v2_mapped = v2_distill * 100.0
+                sources["v2_distill"] = round(v2_mapped, 2)
+                # 融合：等权重平均
+                total_score = (rule_total + v2_mapped) / 2.0
+            else:
+                total_score = rule_total
+        except Exception:
+            total_score = rule_total
+    else:
+        total_score = rule_total
 
     # 阈值设定
     DIRECT_THRESHOLD = 70.0
@@ -1130,8 +1160,9 @@ def layer2_value_prejudge(content: str, rule_score: Dict[str, float] = None) -> 
             "decision": "direct_distill",
             "score": total_score,
             "threshold": DIRECT_THRESHOLD,
-            "reason": f"质量评分 {total_score:.1f} >= {DIRECT_THRESHOLD}，高价值内容直接进入蒸馏队列",
+            "reason": f"融合评分 {total_score:.1f} >= {DIRECT_THRESHOLD}，高价值内容直接进入蒸馏队列",
             "confidence": min(1.0, (total_score - DIRECT_THRESHOLD) / 30.0 + 0.7),
+            "sources": sources,
         }
 
     if total_score <= SKIP_THRESHOLD:
@@ -1139,15 +1170,20 @@ def layer2_value_prejudge(content: str, rule_score: Dict[str, float] = None) -> 
             "decision": "skip",
             "score": total_score,
             "threshold": SKIP_THRESHOLD,
-            "reason": f"质量评分 {total_score:.1f} <= {SKIP_THRESHOLD}，低价值内容跳过",
+            "reason": f"融合评分 {total_score:.1f} <= {SKIP_THRESHOLD}，低价值内容跳过",
             "confidence": min(1.0, (SKIP_THRESHOLD - total_score) / 30.0 + 0.7),
+            "sources": sources,
         }
 
     # 中间值：LLM 二次判断
+    reason = f"融合评分 {total_score:.1f} 处于中间区间 ({SKIP_THRESHOLD}-{DIRECT_THRESHOLD})，需 LLM 二次判断"
+    if v2_distill is not None:
+        reason += f" (V2 distill={v2_distill:.2f})"
     return {
         "decision": "llm_judge",
         "score": total_score,
         "threshold": (SKIP_THRESHOLD, DIRECT_THRESHOLD),
-        "reason": f"质量评分 {total_score:.1f} 处于中间区间 ({SKIP_THRESHOLD}-{DIRECT_THRESHOLD})，需 LLM 二次判断",
+        "reason": reason,
         "confidence": 0.5,
+        "sources": sources,
     }

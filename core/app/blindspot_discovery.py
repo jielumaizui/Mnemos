@@ -15,9 +15,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class BlindSpotReminder:
     """盲点提醒"""
@@ -130,6 +130,23 @@ class BlindspotDiscovery:
                 WHERE topic = ?
             """, (action, now.isoformat(), topic))
 
+    def handle_event(self, event_type: str, payload: Optional[Dict] = None) -> Dict:
+        """处理周期事件：恢复盲区挑战信用。"""
+        if event_type not in {"periodic_persona_analysis", "daily_credit_recovery"}:
+            return {"status": "ignored", "event_type": event_type}
+
+        try:
+            from core.persona.hamartia import BlindSpotProfileManager
+            credit = BlindSpotProfileManager().recover_credit()
+            return {
+                "status": "ok",
+                "event_type": event_type,
+                "challenge_credit": credit,
+            }
+        except Exception as e:
+            logger.warning(f"盲区信用恢复失败: {e}")
+            return {"status": "error", "event_type": event_type, "error": str(e)}
+
     def _detect_blindspots(self, query: str) -> List[BlindSpotReminder]:
         """从知识图谱和画像检测盲点"""
         results = []
@@ -154,6 +171,7 @@ class BlindspotDiscovery:
                         detected_at=datetime.now().isoformat(),
                     ))
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at blindspot_discovery.py", exc_info=True)
             pass
 
         # 2. 检查画像盲区
@@ -172,6 +190,7 @@ class BlindspotDiscovery:
                         detected_at=datetime.now().isoformat(),
                     ))
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at blindspot_discovery.py", exc_info=True)
             pass
 
         # 保存新发现的盲点

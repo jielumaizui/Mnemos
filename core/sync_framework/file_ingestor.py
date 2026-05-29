@@ -158,6 +158,7 @@ class FileIngestor:
             except (UnicodeDecodeError, UnicodeError):
                 continue
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error at file_ingestor.py", exc_info=True)
                 return None
         return None
 

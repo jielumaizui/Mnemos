@@ -43,3 +43,15 @@ integrations:
     settings_json_path: "~/.claude/settings.json"
   mcp:
     enabled: false
+
+distill:
+  # 真实环境保护：积压恢复时分批处理，避免 CPU/磁盘/宿主 Agent 持续高负载
+  max_tasks_per_cycle: 5
+  max_collect_per_cycle: 20
+  min_task_interval_seconds: 1.0
+
+event_bus:
+  # 真实环境保护：事件积压时只分批恢复到内存队列，剩余保持 pending
+  queue_depth_alert: 1000
+  max_queue_depth: 10000
+  max_recover_events: 1000

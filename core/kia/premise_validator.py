@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 
+import logging
+logger = logging.getLogger(__name__)
 class PremiseValidator:
     """验证决策前提的当前有效性"""
 
@@ -158,8 +160,8 @@ class PremiseValidator:
                 if age_days > 90:
                     age_penalty = min(0.5, (age_days - 90) / 360)
             except Exception:
+                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
-
         score = max(0.0, 1.0 - time_sensitive_count * self.time_sensitive_penalty - age_penalty)
 
         if score >= 0.5:

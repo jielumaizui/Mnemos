@@ -27,6 +27,8 @@ from typing import List, Dict, Optional, Tuple
 from .prophasis import ChecklistItem, LoadedKnowledge
 from .aegis import GuardSession
 
+import logging
+logger = logging.getLogger(__name__)
 try:
     from core.persona.hamartia import BlindSpotProfile, BlindSpot
     PERSONA_AVAILABLE = True
@@ -109,8 +111,9 @@ class AutoRetrospective:
         "timeline": [r'(\d+)[\s个]*天', r'周期[:：]?\s*(\d+)', r'时间[:：]?\s*(\d+)'],
     }
 
-    def __init__(self):
-        pass
+    def __init__(self, wiki_base: str | Path | None = None, recap_db_path: str | Path | None = None):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else None
+        self.recap_db_path = Path(recap_db_path).expanduser() if recap_db_path else None
 
     def should_trigger(self, messages: List[Dict]) -> bool:
         """
@@ -133,20 +136,8 @@ class AutoRetrospective:
                 if re.search(pattern, content, re.IGNORECASE):
                     return True
 
-        # 2. 检测任务自然结束
-        if len(messages) >= 2:
-            last_two = messages[-2:]
-            if (last_two[0].get("role") == "assistant" and
-                last_two[1].get("role") == "user"):
-                user_content = last_two[1].get("content", "")
-                for pattern in self.ENDING_PATTERNS:
-                    if re.search(pattern, user_content, re.IGNORECASE):
-                        # 如果用户用结束语回复AI的完成消息，视为自然结束
-                        return True
-
-        # 3. 检测AI说了"完成"后用户没回复新任务
-        # 这个需要外部传入更多上下文，这里不做判断
-
+        # CLI 场景下不把“谢谢/好的/ok”视为自然结束，避免误触发复盘。
+        # checklist 完成、/done 等显式信号由调用方转成触发关键词或直接调用 generate()。
         return False
 
     def generate(self, task_type: str, subtype: str,
@@ -209,8 +200,7 @@ class AutoRetrospective:
         """从会话中提取目标信息"""
         results = {}
 
-        # 合并所有消息
-        all_text = " ".join([m.get("content", "") for m in messages])
+        all_text = self._select_goal_text(messages, is_expected=is_expected)
 
         # 提取各类目标
         for goal_type, patterns in self.GOAL_PATTERNS.items():
@@ -234,9 +224,10 @@ class AutoRetrospective:
                 r'想要[:：]\s*(.+?)(?:\n|$)',
             ]
             for pattern in expectation_patterns:
-                match = re.search(pattern, all_text)
+                matches = re.findall(pattern, all_text)
+                match = matches[-1] if matches else None
                 if match:
-                    results["description"] = match.group(1).strip()
+                    results["description"] = str(match).strip()
                     break
         else:
             # 找"实际"、"结果"后面的内容
@@ -246,12 +237,27 @@ class AutoRetrospective:
                 r'最终[:：]\s*(.+?)(?:\n|$)',
             ]
             for pattern in result_patterns:
-                match = re.search(pattern, all_text)
+                matches = re.findall(pattern, all_text)
+                match = matches[-1] if matches else None
                 if match:
-                    results["description"] = match.group(1).strip()
+                    results["description"] = str(match).strip()
                     break
 
         return results
+
+    @staticmethod
+    def _select_goal_text(messages: List[Dict], is_expected: bool = True) -> str:
+        expected_markers = ["预期", "目标", "希望", "想要", "计划"]
+        actual_markers = ["实际", "结果", "最终", "达成", "完成"]
+        markers = expected_markers if is_expected else actual_markers
+        selected = [
+            m.get("content", "")
+            for m in messages
+            if any(marker in m.get("content", "") for marker in markers)
+        ]
+        if selected:
+            return "\n".join(selected)
+        return "\n".join(m.get("content", "") for m in messages)
 
     def _analyze_gaps(self, expected: Dict, actual: Dict) -> List[GoalComparison]:
         """对比预期与实际，找出差异"""
@@ -395,6 +401,13 @@ class AutoRetrospective:
         focus_list = []
 
         if not blindspot_profile or not PERSONA_AVAILABLE:
+            focus_list.append(BlindSpotFocus(
+                blindspot_type="blindspot_profile_unavailable",
+                was_triggered=False,
+                evidence="盲区画像未接入，本次复盘仅输出目标差异和 checklist 教训",
+                recommendation="可在画像系统可用后重新生成复盘焦点",
+                severity="low",
+            ))
             return focus_list
 
         all_text = " ".join([m.get("content", "") for m in messages]).lower()
@@ -572,6 +585,71 @@ class AutoRetrospective:
             lines.extend(["", "## 总结", result.summary])
 
         return "\n".join(lines)
+
+    def create_recap_todo(
+        self,
+        result: RetrospectiveResult,
+        report_path: str = "00-Dashboard.md",
+    ) -> Optional[str]:
+        """将复盘结果登记为系统复盘待办，交给强制复盘策略追达。"""
+        try:
+            from core.app.forced_retrospective import ForcedRetrospective
+            forced = ForcedRetrospective(
+                db_path=str(self.recap_db_path) if self.recap_db_path else None
+            )
+            severity = self._result_severity(result)
+            topic = result.summary or f"{result.task_type}/{result.subtype} 复盘"
+            return forced.create_system_recap(topic=topic, severity=severity, target_page=report_path)
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at epimetheus.py", exc_info=True)
+            return None
+
+    def write_dashboard(self, recaps: List[Dict], dashboard_path: str | Path | None = None) -> Optional[Path]:
+        """写入 Wiki 看板兜底，让待复盘事项即使未被 Agent 提醒也可见。"""
+        if dashboard_path:
+            path = Path(dashboard_path)
+        elif self.wiki_base:
+            path = self.wiki_base / "00-Dashboard.md"
+        else:
+            return None
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "---",
+            "hermes_type: dashboard",
+            "auto_updated: true",
+            f"updated: {datetime.now().isoformat()[:19]}",
+            "---",
+            "",
+            "# 待复盘看板",
+            "",
+        ]
+
+        if not recaps:
+            lines.append("暂无待复盘事项。")
+        else:
+            lines.extend(["## 本周新增", "", "| 时间 | 来源 | 复盘摘要 | 状态 |", "|---|---|---|---|"])
+            for recap in recaps:
+                lines.append(
+                    f"| {recap.get('time', datetime.now().strftime('%Y-%m-%d'))} "
+                    f"| {recap.get('source', 'system')} "
+                    f"| {recap.get('summary', '')} "
+                    f"| {recap.get('status', 'pending')} |"
+                )
+
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _result_severity(result: RetrospectiveResult) -> str:
+        severities = [gap.severity for gap in result.gaps]
+        if "critical" in severities:
+            return "critical"
+        if "high" in severities:
+            return "high"
+        if result.new_lessons:
+            return "medium"
+        return "low"
 
 
 # ========== 便捷函数 ==========

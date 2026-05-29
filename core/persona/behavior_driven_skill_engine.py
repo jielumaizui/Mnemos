@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 
+import logging
+logger = logging.getLogger(__name__)
 @dataclass
 class BehaviorPattern:
     """行为模式"""
@@ -205,8 +207,8 @@ class BehaviorDrivenSkillEngine:
                             usage[skill]["last_used"] = timestamp
                             usage[skill]["last_used_days"] = days_ago
                     except Exception:
+                        logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                         pass
-
         return dict(usage)
 
     def get_behavior_summary(self, actions: List[Dict]) -> Dict:

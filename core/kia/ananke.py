@@ -99,6 +99,7 @@ class VersionTimeTravel:
         try:
             content = page_path.read_text(encoding="utf-8")
         except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at ananke.py", exc_info=True)
             return None
 
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
