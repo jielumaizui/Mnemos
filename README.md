@@ -28,8 +28,6 @@ Mnemos 是一套全自动的 AI Agent 行为操作系统，它连接你所有的
 
 灵感源自 [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)——让 LLM 增量构建并维护持久化的知识库。Mnemos 在此基础上走了更远的一步：**知识不是存完就完了，它应该在决策中活着。**
 
-灵感源自 [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)——让 LLM 增量构建并维护持久化的知识库。Mnemos 在此基础上走了更远的一步：**知识不是存完就完了，它应该在决策中活着。**
-
 ## 它和别的"Second Brain"有什么不同？
 
 | 维度 | 常见 Second Brain 工具 | Mnemos |
@@ -439,7 +437,7 @@ distillation:
 - **聚类算法**：HDBSCAN → DBSCAN → K-Means 回退链
 - **调度**：拓扑排序 + ThreadPoolExecutor 并行执行
 - **文档处理**：PDF / PPT / Excel / Word / HTML / EBOOK 解析
-- **核心依赖**：requests、pyyaml（仅两个必需依赖）
+- **核心依赖**：requests、pyyaml、watchdog、numpy
 
 ## 项目状态
 
