@@ -37,6 +37,12 @@ jobs:
       - name: Run smoke tests
         run: |
           python -m pytest tests/ -v --ignore=tests/test_system.py
+        if: runner.os != 'Windows'
+
+      - name: Run smoke tests (Windows)
+        run: |
+          python -m pytest tests/test_smoke.py tests/test_functional.py tests/test_pipeline.py -v
+        if: runner.os == 'Windows'
 
       - name: Test CLI help
         run: |
