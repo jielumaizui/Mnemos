@@ -195,7 +195,6 @@ def cmd_init(args):
     print()
 
     optional_deps = [
-        ("mcp", "MCP SDK", "MCP 协议服务器 (让 AI Agent 通过标准协议调用 Mnemos)"),
         ("black", "Black", "代码格式化工具"),
         ("pytest", "Pytest", "运行测试套件"),
     ]
@@ -206,7 +205,7 @@ def cmd_init(args):
         except ImportError:
             print(f"      ✗ {name}: 未安装")
             print(f"        └─ 影响: {desc}")
-            print(f"        └─ 安装: pip install mnemos[{ 'mcp' if module == 'mcp' else 'dev'}]")
+            print(f"        └─ 安装: pip install mnemos[dev]")
             print()
 
     # 6. 保存
@@ -292,6 +291,7 @@ def cmd_doctor(args):
         "yaml": "pyyaml",
         "watchdog": "watchdog",
         "numpy": "numpy",
+        "mcp": "mcp",
     }
     for name, pkg in deps.items():
         try:
@@ -544,7 +544,6 @@ def cmd_doctor(args):
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
-        ("mcp", "MCP SDK", "MCP 协议服务器", "pip install mnemos[mcp]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
     ]
