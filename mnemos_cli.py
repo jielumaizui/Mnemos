@@ -51,21 +51,43 @@ def _sqlite_group_counts(db_path: Path, table: str, group_cols: str, where: str 
 def _daemon_processes():
     try:
         import subprocess
-        result = subprocess.run(
-            ["pgrep", "-af", "mnemos_daemon.py"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode not in (0, 1):
-            return []
-        lines = []
-        for line in result.stdout.splitlines():
-            if "pgrep" in line:
-                continue
-            if "mnemos_daemon.py" in line:
-                lines.append(line)
-        return lines
+        import platform
+        if platform.system() == "Darwin":
+            # macOS: pgrep -a 只输出 PID，需要用 ps 获取完整命令行
+            result = subprocess.run(
+                ["pgrep", "-f", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return []
+            lines = []
+            for pid in result.stdout.splitlines():
+                pid = pid.strip()
+                if not pid.isdigit():
+                    continue
+                ps_result = subprocess.run(
+                    ["ps", "-p", pid, "-o", "args="],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if ps_result.returncode == 0:
+                    cmd = ps_result.stdout.strip()
+                    if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
+                        lines.append(f"{pid} {cmd}")
+            return lines
+        else:
+            result = subprocess.run(
+                ["pgrep", "-af", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return []
+            lines = []
+            for line in result.stdout.splitlines():
+                if "pgrep" in line:
+                    continue
+                if "mnemos_daemon.py" in line:
+                    lines.append(line)
+            return lines
     except Exception:
         return []
 
@@ -1002,8 +1024,11 @@ def cmd_events(args):
                     conn.execute("DELETE FROM events WHERE id = ?", (row[0],))
                     orphaned_removed += 1
 
-                conn.execute("VACUUM")
                 conn.commit()
+
+            # VACUUM 必须在事务外执行，使用独立连接
+            with sqlite3.connect(str(events_db), timeout=10) as vacuum_conn:
+                vacuum_conn.execute("VACUUM")
 
             print(f"清理完成:")
             print(f"  删除已完成旧事件: {done_removed}")

@@ -58,6 +58,12 @@ DIMENSION_LABELS = {
 
 def run_calibration():
     """运行校准流程"""
+    import sys
+    if not sys.stdin.isatty():
+        logger.info("[校准] 校准需要在交互式终端中运行（需要用户输入）。")
+        logger.info("[校准] 请直接在终端运行: mnemos calibrate")
+        return
+
     store = PersonaStore()
     profile, _ = store.load_persona()
 
@@ -69,12 +75,12 @@ def run_calibration():
     logger.info("用户画像自评校准")
     logger.info("=" * 60)
     logger.info(f"当前画像版本: v{profile.version}，基于 {profile.signal_count} 条信号")
-    logger.info()
+    logger.info("")
     logger.info("说明：")
     logger.info("  系统基于你的行为信号推断了一套画像。")
     logger.info("  请对每个维度打分：1=完全不准，2=不太准，3=基本准确，4=比较准，5=非常准")
     logger.info("  如果某个维度显示'数据不足'，直接按回车跳过。")
-    logger.info()
+    logger.info("")
 
     calibration = {
         "version": profile.version,

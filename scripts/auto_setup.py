@@ -164,7 +164,8 @@ def install_dependencies(yes_mode: bool = False) -> bool:
             r = subprocess.run(c, capture_output=True, text=True)
             return r.returncode == 0, r.stderr
         # 实时输出进度，避免用户长时间看不到反馈
-        print("  开始安装，请稍候...")
+        print("  开始安装依赖，预计需要 1-3 分钟（取决于网络速度）...")
+        print("  首次安装可能需要编译部分包，请耐心等待...")
         r = subprocess.run(c)
         if r.returncode == 0:
             return True, ""
@@ -417,6 +418,7 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
         except Exception as e:
             print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
 
+    data["mnemos_dir"] = str(_runtime_config_path().parent.parent)
     data.setdefault("wiki", {})["vault_path"] = str(wiki_dir)
     data.setdefault("memos", {})
     if memos_url:

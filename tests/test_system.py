@@ -107,7 +107,6 @@ def test_imports():
 
     info(f"导入测试: {passed} 通过, {failed} 失败")
     assert failed == 0, f"导入测试失败: {failed} 个模块无法导入"
-    return True
 
 
 # ========== 测试 2: Wiki 目录结构 ==========
@@ -136,7 +135,6 @@ def test_wiki_structure():
             warn(f"{d}/ - {desc} 不存在(将在首次运行时创建)")
 
     assert passed, "wiki 结构测试存在缺失目录"
-    return passed
 
 
 # ========== 测试 3: 数据库完整性 ==========
@@ -187,7 +185,6 @@ def test_databases():
         info("distill_queue: 目录不存在(首次运行时会创建)")
 
     assert all_passed, "数据库完整性测试失败"
-    return all_passed
 
 
 # ========== 测试 4: KIA 闭环系统 ==========
@@ -248,7 +245,6 @@ def test_kia_system():
         import traceback
         traceback.print_exc()
         assert False, f"KIA 系统测试失败: {e}"
-    return True
 
 
 # ========== 测试 5: 子系统初始化 ==========
@@ -342,7 +338,6 @@ def test_subsystems():
 
     info(f"子系统初始化: {passed}/{len(tests)} 通过")
     assert passed == len(tests), f"子系统测试失败: {len(tests) - passed} 个子系统初始化失败"
-    return True
 
 
 # ========== 测试 6: 端到端流程 ==========
@@ -409,8 +404,6 @@ def test_end_to_end():
             info("复盘系统: 目录不存在")
     except Exception as e:
         warn(f"复盘系统: {e}")
-
-    return True
 
 
 # ========== 主函数 ==========

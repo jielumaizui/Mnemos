@@ -61,7 +61,8 @@ class CaptureQueue:
                 retry_count INTEGER DEFAULT 0,
                 created_at TEXT,
                 processed_at TEXT,
-                error TEXT
+                error TEXT,
+                working_dir TEXT
             )
         """)
         cursor.execute("""

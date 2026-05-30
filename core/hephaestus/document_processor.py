@@ -179,11 +179,10 @@ class DocumentProcessor:
         except ImportError:
             pass
 
-        # 打印依赖状态
+        # 打印依赖状态（首次初始化时检查，缺失时仅 INFO 提示避免刷屏）
         missing = [k for k, v in self.deps.items() if not v]
         if missing:
-            logger.warning(f"[DocumentProcessor] ⚠️ 缺失依赖: {', '.join(missing)}")
-            logger.info(f"[DocumentProcessor] 安装: pip install {' '.join(missing)}")
+            logger.info(f"[DocumentProcessor] 可选依赖未安装: {', '.join(missing)} — 对应文档格式处理将不可用")
 
     def _call_claude_vision(self, file_content: str, doc_type: DocumentType, prompt: str) -> Optional[str]:
         """

@@ -266,16 +266,39 @@ def _count_daemon_processes() -> int:
     else:
         try:
             import subprocess
-            result = subprocess.run(
-                ["pgrep", "-af", "mnemos_daemon.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode not in (0, 1):
-                return 0
-            return sum(
-                1 for line in result.stdout.splitlines()
-                if "mnemos_daemon.py" in line and "pgrep" not in line
-            )
+            import platform
+            if platform.system() == "Darwin":
+                result = subprocess.run(
+                    ["pgrep", "-f", "mnemos_daemon.py"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode not in (0, 1):
+                    return 0
+                count = 0
+                for pid in result.stdout.splitlines():
+                    pid = pid.strip()
+                    if not pid.isdigit():
+                        continue
+                    ps_result = subprocess.run(
+                        ["ps", "-p", pid, "-o", "args="],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if ps_result.returncode == 0:
+                        cmd = ps_result.stdout.strip()
+                        if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
+                            count += 1
+                return count
+            else:
+                result = subprocess.run(
+                    ["pgrep", "-af", "mnemos_daemon.py"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode not in (0, 1):
+                    return 0
+                return sum(
+                    1 for line in result.stdout.splitlines()
+                    if "mnemos_daemon.py" in line and "pgrep" not in line
+                )
         except Exception:
             return 0
 
@@ -1280,6 +1303,9 @@ def start_daemon():
 
 def stop_daemon():
     """停止守护进程（跨平台）"""
+    # 先扫描并终止所有 mnemos_daemon 残留进程
+    _kill_all_daemon_processes()
+
     if not PID_FILE.exists():
         print("Mnemos daemon 未运行")
         return
@@ -1291,18 +1317,65 @@ def stop_daemon():
             subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                            capture_output=True, timeout=10)
         else:
-            os.kill(pid, signal.SIGTERM)
-            # 等待进程退出
-            for _ in range(30):
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except OSError:
-                    break
+            try:
+                os.kill(pid, signal.SIGTERM)
+                # 等待进程退出
+                for _ in range(30):
+                    try:
+                        os.kill(pid, 0)
+                        time.sleep(0.5)
+                    except OSError:
+                        break
+            except OSError:
+                pass  # 进程已不存在
         remove_pid()
         print("Mnemos daemon 已停止")
     except Exception as e:
         print(f"停止 daemon 失败: {e}")
+
+
+def _kill_all_daemon_processes():
+    """终止所有 mnemos_daemon.py 进程（清理残留）"""
+    try:
+        import subprocess
+        import platform
+        if platform.system() == "Darwin":
+            result = subprocess.run(
+                ["pgrep", "-f", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return
+            for pid_str in result.stdout.splitlines():
+                pid_str = pid_str.strip()
+                if not pid_str.isdigit():
+                    continue
+                pid = int(pid_str)
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+        elif sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "python.exe"],
+                capture_output=True, timeout=10,
+            )
+        else:
+            result = subprocess.run(
+                ["pgrep", "-af", "mnemos_daemon.py"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode not in (0, 1):
+                return
+            for line in result.stdout.splitlines():
+                if "mnemos_daemon.py" in line and "pgrep" not in line:
+                    try:
+                        pid = int(line.split()[0])
+                        os.kill(pid, signal.SIGTERM)
+                    except (ValueError, OSError):
+                        pass
+    except Exception:
+        pass
 
 
 def status_daemon():
@@ -1317,16 +1390,39 @@ def status_daemon():
     def _daemon_process_count() -> int:
         try:
             import subprocess
-            result = subprocess.run(
-                ["pgrep", "-af", "mnemos_daemon.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode not in (0, 1):
-                return 0
-            return sum(
-                1 for line in result.stdout.splitlines()
-                if "mnemos_daemon.py" in line and "pgrep" not in line
-            )
+            import platform
+            if platform.system() == "Darwin":
+                result = subprocess.run(
+                    ["pgrep", "-f", "mnemos_daemon.py"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode not in (0, 1):
+                    return 0
+                count = 0
+                for pid in result.stdout.splitlines():
+                    pid = pid.strip()
+                    if not pid.isdigit():
+                        continue
+                    ps_result = subprocess.run(
+                        ["ps", "-p", pid, "-o", "args="],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if ps_result.returncode == 0:
+                        cmd = ps_result.stdout.strip()
+                        if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
+                            count += 1
+                return count
+            else:
+                result = subprocess.run(
+                    ["pgrep", "-af", "mnemos_daemon.py"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode not in (0, 1):
+                    return 0
+                return sum(
+                    1 for line in result.stdout.splitlines()
+                    if "mnemos_daemon.py" in line and "pgrep" not in line
+                )
         except Exception:
             return 0
 

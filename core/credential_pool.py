@@ -325,14 +325,14 @@ class CredentialPool:
         """添加 key 到池中"""
         conn = self._get_conn()
 
-        # 检查是否已存在相同 key
-        existing = conn.execute(
-            "SELECT id FROM credentials WHERE api_key = ?",
-            (api_key,),
-        ).fetchone()
-
         key_hash = self._hash_key(api_key)
         encrypted_key = _encrypt_key(api_key)
+
+        # 检查是否已存在相同 key（数据库中存储的是加密后的 key）
+        existing = conn.execute(
+            "SELECT id FROM credentials WHERE api_key = ?",
+            (encrypted_key,),
+        ).fetchone()
         cred = Credential(
             id=f"cred_{provider.value}_{key_hash[:8]}",
             provider=provider,
