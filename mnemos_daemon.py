@@ -958,12 +958,17 @@ def service_event_bus(stop_event: threading.Event):
     processor.register("polled", _handle_polled)
 
     # KIA 事件触发步骤：由事件总线直接调用
+    # 复用 KnowledgeScheduler 实例，避免每次事件新建
+    _kia_scheduler = None
+
     def _handle_page_created(event):
         """页面创建 → 直接触发 connect_worker"""
         try:
-            from core.kia.chronos import KnowledgeScheduler
-            scheduler = KnowledgeScheduler()
-            result = scheduler.trigger_event("page.created", event.payload)
+            nonlocal _kia_scheduler
+            if _kia_scheduler is None:
+                from core.kia.chronos import KnowledgeScheduler
+                _kia_scheduler = KnowledgeScheduler()
+            result = _kia_scheduler.trigger_event("page.created", event.payload)
             logger.info(f"[事件总线] connect_worker: {result.get('status')}")
         except Exception as e:
             logger.warning(f"[事件总线] page.created 处理失败: {e}")
@@ -971,9 +976,11 @@ def service_event_bus(stop_event: threading.Event):
     def _handle_page_modified(event):
         """页面修改 → 直接触发 iteration_tracker"""
         try:
-            from core.kia.chronos import KnowledgeScheduler
-            scheduler = KnowledgeScheduler()
-            result = scheduler.trigger_event("page.modified", event.payload)
+            nonlocal _kia_scheduler
+            if _kia_scheduler is None:
+                from core.kia.chronos import KnowledgeScheduler
+                _kia_scheduler = KnowledgeScheduler()
+            result = _kia_scheduler.trigger_event("page.modified", event.payload)
             logger.info(f"[事件总线] iteration_tracker: {result.get('status')}")
         except Exception as e:
             logger.warning(f"[事件总线] page.modified 处理失败: {e}")

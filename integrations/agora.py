@@ -1524,7 +1524,7 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "file_path": {"type": "string", "description": "文件绝对路径（如 ~/notes/architecture.md 或 /Users/zhuwei/project/main.py）"},
+                        "file_path": {"type": "string", "description": "文件绝对路径（如 ~/notes/architecture.md 或 /home/user/project/main.py）"},
                         "title": {"type": "string", "description": "文档标题（可选，默认使用文件名）", "default": ""},
                         "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选）", "default": []},
                         "trigger_parse": {"type": "boolean", "description": "是否立即触发解析", "default": True},

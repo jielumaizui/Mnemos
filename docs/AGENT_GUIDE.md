@@ -130,7 +130,7 @@
 {
   "tool": "knowledge_import",
   "arguments": {
-    "file_path": "/Users/zhuwei/notes/architecture.md",
+    "file_path": "~/notes/architecture.md",
     "title": "系统架构笔记",
     "tags": ["architecture"],
     "trigger_parse": true
@@ -150,7 +150,7 @@
 {
   "tool": "document_process",
   "arguments": {
-    "file_path": "/Users/zhuwei/documents/spec.pdf",
+    "file_path": "~/documents/spec.pdf",
     "save_to_memos": true
   }
 }

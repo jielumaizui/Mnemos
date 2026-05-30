@@ -406,7 +406,7 @@ def cmd_doctor(args):
         warnings.append("retrospectives 目录不存在，运行 `mnemos init` 创建")
 
     # 检查 distill_queue 和 guard_state
-    distill_queue = config.claude_data_dir / "distill_queue"
+    distill_queue = config.data_dir / "distill_queue"
     if distill_queue.exists():
         queue_count = len(list(distill_queue.iterdir()))
         print(f"  ✓ 蒸馏队列: {queue_count} 条待处理")
@@ -543,7 +543,7 @@ def cmd_doctor(args):
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
-        ("mcp", "MCP SDK", "MCP 协议服务器", "pip install mnemos[mcp]"),
+        ("tomli_w", "TOML 写入", "Kimi hooks 配置", "pip install mnemos[kimi]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
     ]

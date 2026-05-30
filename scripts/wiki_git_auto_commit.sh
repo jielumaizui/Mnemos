@@ -4,7 +4,9 @@
 # 安装: chmod +x scripts/wiki_git_auto_commit.sh
 # 配置: 在 crontab 中添加 */5 * * * * /path/to/scripts/wiki_git_auto_commit.sh
 
-WIKI_DIR="/Users/zhuwei/Documents/Obsidian Vault/wiki"
+# 请修改为实际 Wiki 目录路径
+# WIKI_DIR="~/Documents/Obsidian Vault/wiki"
+WIKI_DIR="${WIKI_DIR:-~/Documents/Obsidian Vault/wiki}"
 cd "$WIKI_DIR" || exit 1
 
 # 检查是否有变更

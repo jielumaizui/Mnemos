@@ -136,7 +136,7 @@ class OpenCodeAdapter(AgentAdapter):
                 settings["mcpServers"] = {}
             settings["mcpServers"]["mnemos"] = {
                 "command": python_cmd,
-                "args": [str(Path(__file__).parent / "agora.py")]
+                "args": [str(Path(__file__).parent / "memos_mcp_server.py")]
             }
 
             settings_path.write_text(

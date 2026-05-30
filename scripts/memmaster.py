@@ -33,7 +33,7 @@ CRON_CONFIG = """# Memos Master Scheduler - Generated {timestamp}
 0 3 * * 0 {python} {heat_monitor} --l5-archive
 
 # Note: Knowledge Inbox is now manual trigger only
-# Run: python3 ~/memos-client/knowledge_inbox.py --run
+# Run: python3 /path/to/mnemos/knowledge_inbox.py --run
 
 # Note: Hermes Monitor disabled - handled by Hermes directly
 """

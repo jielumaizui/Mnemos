@@ -1576,18 +1576,4 @@ class MemosClient:
         }
 
 
-# ==================== 测试 ====================
 
-if __name__ == '__main__':
-    token = os.getenv("MEMOS_TOKEN", "your-token-here")
-    client = MemosClient(token=token, agent='claude')
-
-    # 测试保存
-    mem = client.save("我偏好使用 pathlib 而不是 os.path", tags=["shared:preferences"])
-    print(f"保存成功: ID={mem.id}, UID={mem.uid}")
-
-    # 测试查询
-    memories = client.list_by_tags(["shared"], limit=5)
-    print(f"\n找到 {len(memories)} 条共享记忆:")
-    for m in memories:
-        print(f"  - [{m.id}] {m.content[:50]}...")

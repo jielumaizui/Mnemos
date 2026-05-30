@@ -16,7 +16,7 @@ Auto Distill - 定时蒸馏检查与批量处理脚本
     python3 scripts/auto_distill.py --threshold 5    # 超过 N 个任务才触发
 
 Crontab 配置示例（每4小时检查一次）：
-    0 */4 * * * /opt/homebrew/bin/python3 /Users/zhuwei/memos-client/scripts/auto_distill.py --check --notify
+    0 */4 * * * /usr/bin/env python3 /path/to/mnemos/scripts/auto_distill.py --check --notify
 """
 
 import os

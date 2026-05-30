@@ -1610,7 +1610,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             if "hooks" not in settings:
                 settings["hooks"] = {}
             script_path = Path(__file__).resolve()
-            python_cmd = sys.executable if sys.platform == "win32" else "python3"
+            python_cmd = sys.executable
             settings["hooks"]["session_start"] = (
                 f'{python_cmd} {script_path} --session-start '
                 f'--working-dir "$PWD" --user-message "$USER_MESSAGE"'
