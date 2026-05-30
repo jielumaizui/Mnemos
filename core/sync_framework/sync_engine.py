@@ -176,6 +176,8 @@ class SyncEngine:
                 wiki_page_paths TEXT,
                 distill_error TEXT,
                 error TEXT,
+                working_dir TEXT,
+                tags TEXT,
                 UNIQUE(agent_name, session_id, turn_number)
             )
         """)
@@ -194,6 +196,18 @@ class SyncEngine:
             cursor.execute("SELECT persona_collected FROM sync_log LIMIT 1")
         except sqlite3.OperationalError:
             cursor.execute("ALTER TABLE sync_log ADD COLUMN persona_collected INTEGER DEFAULT 0")
+            conn.commit()
+        # 向后兼容：为旧数据库添加 working_dir 列
+        try:
+            cursor.execute("SELECT working_dir FROM sync_log LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE sync_log ADD COLUMN working_dir TEXT")
+            conn.commit()
+        # 向后兼容：为旧数据库添加 tags 列（画像信号采集用）
+        try:
+            cursor.execute("SELECT tags FROM sync_log LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE sync_log ADD COLUMN tags TEXT")
             conn.commit()
         # 画像信号表
         cursor.execute("""

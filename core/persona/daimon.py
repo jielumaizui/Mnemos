@@ -210,14 +210,36 @@ class SignalCollector:
 
             with sqlite3.connect(str(db_path), timeout=10) as conn:
                 conn.row_factory = sqlite3.Row
-                cursor = conn.execute("""
-                    SELECT session_id, agent_name, working_dir,
-                           turn_number, synced_at, tags
-                    FROM sync_log
-                    WHERE synced_at >= date('now', '-30 days')
-                      AND persona_collected = 0
-                    ORDER BY synced_at DESC
-                """)
+                # 防御式：旧数据库可能缺少 working_dir / tags 列
+                _queries = [
+                    """SELECT session_id, agent_name, working_dir,
+                              turn_number, synced_at, tags
+                       FROM sync_log
+                       WHERE synced_at >= date('now', '-30 days')
+                         AND persona_collected = 0
+                       ORDER BY synced_at DESC""",
+                    """SELECT session_id, agent_name,
+                              turn_number, synced_at, tags
+                       FROM sync_log
+                       WHERE synced_at >= date('now', '-30 days')
+                         AND persona_collected = 0
+                       ORDER BY synced_at DESC""",
+                    """SELECT session_id, agent_name,
+                              turn_number, synced_at
+                       FROM sync_log
+                       WHERE synced_at >= date('now', '-30 days')
+                         AND persona_collected = 0
+                       ORDER BY synced_at DESC""",
+                ]
+                cursor = None
+                for q in _queries:
+                    try:
+                        cursor = conn.execute(q)
+                        break
+                    except sqlite3.OperationalError:
+                        continue
+                if cursor is None:
+                    return count
                 for row in cursor.fetchall():
                     data = dict(row)
                     tags = data.get("tags", "")
