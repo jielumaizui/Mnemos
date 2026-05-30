@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS session_signals (
     working_dir TEXT,
     agent TEXT DEFAULT 'claude',
 
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, timestamp, agent)
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_time ON session_signals(timestamp);
@@ -370,7 +371,7 @@ class SignalStore:
 
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
-                INSERT INTO session_signals (
+                INSERT OR IGNORE INTO session_signals (
                     session_id, timestamp, task_type, task_subtype,
                     user_msg_count, avg_user_msg_length, provided_context_richness,
                     correction_count, correction_domains, follow_up_depth,
@@ -387,6 +388,15 @@ class SignalStore:
                 )
             """, data)
             signal_id = cursor.lastrowid
+            if signal_id is None:
+                # 被 IGNORE 了（重复信号），查询已有记录的 id
+                existing = conn.execute(
+                    "SELECT id FROM session_signals WHERE session_id = ? AND timestamp = ? AND agent = ?",
+                    (data["session_id"], data["timestamp"], data["agent"])
+                ).fetchone()
+                signal_id = existing[0] if existing else 0
+                conn.commit()
+                return signal_id
 
             # 插入元数据（支持 session_context JSON）
             context_json = json.dumps(session_context, ensure_ascii=False) if session_context else None

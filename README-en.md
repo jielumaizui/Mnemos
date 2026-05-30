@@ -88,7 +88,7 @@ Our brains are great for thinking and creating, but terrible for memory and retr
 
 ### Prerequisites
 - Python >= 3.10
-- An AI Agent (Claude Code, Hermes, OpenClaw, OpenCode, Codex, Kimi, etc.)
+- An AI Agent (Claude Code, Hermes, OpenClaw, OpenCode, Codex, etc.)
 - (Optional) [Memos](https://github.com/usememos/memos) instance — raw material entry
 - (Optional) [Obsidian](https://obsidian.md) — knowledge base visualization
 
@@ -133,9 +133,7 @@ If you prefer manual configuration:
 git clone https://github.com/jielumaizui/mnemos.git
 cd mnemos
 
-# Create virtual environment (avoids PEP 668 system restrictions)
-python3 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+# Install dependencies
 pip install -e ".[dev]"
 
 # Copy and edit configuration
@@ -146,8 +144,6 @@ cp config/config.example.json ~/.mnemos/configs/main.json
 # Run system diagnosis
 python3 mnemos_cli.py doctor
 ```
-
-> **Note**: If you used `setup.sh` for installation, dependencies are installed in `.venv`. Use `.venv/bin/python mnemos_cli.py ...` for subsequent commands.
 
 ### Verify System is Working
 
@@ -216,10 +212,9 @@ Supported host agents:
 |---------|-------|-----------|--------|
 | Apollon | Claude Code | Hooks (settings.json) | Full |
 | Caduceus | Hermes | Poll + Inbox | Full |
-| Typhon | OpenClaw | JSONL + Hooks | Full |
+| Typhon | OpenClaw | SQLite + Hooks | Full |
 | Musae | OpenCode | JSON Config + Hooks | Full |
 | Daedalus | Codex | File-based + Windows .bat | Full |
-| KimiAdapter | Kimi Code CLI | JSONL + Hooks | Full |
 
 This design avoids:
 1. **Duplicate API Key configuration** — your Agent already has one
@@ -248,7 +243,7 @@ Run `python3 mnemos_cli.py init` to automatically install hooks into `~/.claude/
 
 ### Method 3: Other Agents
 
-Each agent connects via its own adapter mechanism (Poll / JSONL / JSON Config / File-based), automatically collecting conversation records without extra configuration.
+Each agent connects via its own adapter mechanism (Poll / SQLite / JSON Config / File-based), automatically collecting conversation records without extra configuration.
 
 ---
 

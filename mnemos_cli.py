@@ -291,7 +291,6 @@ def cmd_doctor(args):
         "yaml": "pyyaml",
         "watchdog": "watchdog",
         "numpy": "numpy",
-        "mcp": "mcp",
     }
     for name, pkg in deps.items():
         try:
@@ -544,6 +543,7 @@ def cmd_doctor(args):
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
+        ("mcp", "MCP SDK", "MCP 协议服务器", "pip install mnemos[mcp]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
     ]
@@ -823,7 +823,7 @@ def cmd_mcp_serve(args):
         from integrations.agora import run_mcp_server
         run_mcp_server()
     except ImportError:
-        print("MCP SDK 导入失败。请检查安装是否完整：pip install -e .", file=sys.stderr)
+        print("MCP 服务器未实现。请先安装 mnemos[mcp] 依赖。")
         sys.exit(1)
 
 
