@@ -472,7 +472,7 @@ class MemosMCPServerSDK:
                 f"Invalid parameters for tool '{name}': {e}"
             )
         except Exception as e:
-            logger.error(f"Tool execution error ({name}): {e}")
+            logger.error(f"Tool execution error ({name}): {type(e).__name__}", exc_info=True)
             return self._make_jsonrpc_error(
                 req_id, MCP_TOOL_EXECUTION_ERROR,
                 f"Tool '{name}' execution failed: {e}",
@@ -504,9 +504,9 @@ class MemosMCPServerSDK:
                 )
                 print(json.dumps(resp, ensure_ascii=False), flush=True)
             except Exception as e:
-                logger.error(f"Unexpected error: {e}")
+                logger.error(f"Unexpected error: {type(e).__name__}", exc_info=True)
                 resp = self._make_jsonrpc_error(
-                    None, JSONRPC_INTERNAL_ERROR, f"Internal error: {e}"
+                    None, JSONRPC_INTERNAL_ERROR, "Internal server error"
                 )
                 print(json.dumps(resp, ensure_ascii=False), flush=True)
 

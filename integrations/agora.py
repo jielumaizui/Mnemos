@@ -170,10 +170,10 @@ class MCPServer:
                 "merged": True,
             }
         except Exception as e:
-            logger.error(f"会话搜索失败: {e}")
+            logger.error(f"会话搜索失败: {type(e).__name__}", exc_info=True)
             return {
                 "success": False,
-                "message": f"搜索失败: {e}",
+                "message": "搜索失败",
             }
 
     def _tool_knowledge_ingest(self, content: str, tags: List[str] = None,
@@ -222,10 +222,10 @@ class MCPServer:
                 "pipeline": "Memos → Wiki 00-Inbox → Charon(语义索引/标签/热度) → 知识图谱",
             }
         except Exception as e:
-            logger.error(f"知识摄入失败: {e}")
+            logger.error(f"知识摄入失败: {type(e).__name__}", exc_info=True)
             return {
                 "success": False,
-                "message": f"摄入失败: {e}",
+                "message": "摄入失败",
             }
 
     def _tool_knowledge_import(self, file_path: str, title: str = "",
@@ -434,8 +434,8 @@ tags: [{', '.join(tags or ['file_import'])}]
             try:
                 parse_result = run_connect_cycle(dry_run=False)
             except Exception as e:
-                logger.warning(f"Charon 解析触发失败: {e}")
-                parse_result = {"error": str(e)}
+                logger.warning(f"Charon 解析触发失败: {type(e).__name__}", exc_info=True)
+                parse_result = {"error": "parse_failed"}
 
         return {
             "success": True,

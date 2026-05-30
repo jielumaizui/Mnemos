@@ -29,6 +29,8 @@ from __future__ import annotations
 import logging
 logger = logging.getLogger(__name__)
 
+import base64
+import hashlib
 import os
 import json
 import sqlite3
@@ -151,6 +153,38 @@ class _LazyPath:
 
 
 DB_PATH = _LazyPath("credential_pool.db")
+
+
+# ==================== 3. Encryption Helpers ====================
+
+def _derive_key() -> bytes:
+    """派生轻量级加密密钥（基于用户环境，非强安全）"""
+    from pathlib import Path
+    seed = os.environ.get("HOME", "") + os.environ.get("USER", "") + str(Path.home())
+    return hashlib.sha256(seed.encode()).digest()
+
+
+def _encrypt_key(api_key: str) -> str:
+    """轻量 XOR 加密 + base64（防止数据库文件被直接读取时暴露明文）"""
+    if not api_key:
+        return ""
+    key = _derive_key()
+    data = api_key.encode("utf-8")
+    encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return "enc:" + base64.b64encode(encrypted).decode()
+
+
+def _decrypt_key(encrypted: str) -> str:
+    """解密 api_key，向后兼容明文存储"""
+    if not encrypted:
+        return ""
+    if not encrypted.startswith("enc:"):
+        # 向后兼容：明文存储的旧数据
+        return encrypted
+    key = _derive_key()
+    data = base64.b64decode(encrypted[4:].encode())
+    decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return decrypted.decode("utf-8")
 
 
 # ==================== 3. CredentialPool ====================
@@ -298,6 +332,7 @@ class CredentialPool:
         ).fetchone()
 
         key_hash = self._hash_key(api_key)
+        encrypted_key = _encrypt_key(api_key)
         cred = Credential(
             id=f"cred_{provider.value}_{key_hash[:8]}",
             provider=provider,
@@ -313,14 +348,14 @@ class CredentialPool:
                 """UPDATE credentials SET
                     api_base = ?, model = ?, label = ?, status = 'active'
                    WHERE api_key = ?""",
-                (api_base, model, label, api_key),
+                (api_base, model, label, encrypted_key),
             )
         else:
             conn.execute(
                 """INSERT INTO credentials
                     (id, provider, api_key, api_base, model, status, metadata)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (cred.id, cred.provider.value, cred.api_key, cred.api_base,
+                (cred.id, cred.provider.value, encrypted_key, cred.api_base,
                  cred.model, cred.status.value, json.dumps({})),
             )
 
@@ -559,7 +594,7 @@ class CredentialPool:
         return Credential(
             id=row["id"],
             provider=Provider(row["provider"]),
-            api_key=row["api_key"],
+            api_key=_decrypt_key(row["api_key"]),
             api_base=row["api_base"],
             model=row["model"],
             status=KeyStatus(row["status"]),

@@ -627,7 +627,14 @@ def cmd_config(args):
         print(f"✓ 已设置 {key} = {val}")
     else:
         import yaml
-        print(yaml.dump(config.to_dict(), allow_unicode=True, sort_keys=False))
+        import copy
+        safe_config = copy.deepcopy(config.to_dict())
+        # 脱敏敏感字段
+        for section in ["memos"]:
+            if section in safe_config and isinstance(safe_config[section], dict):
+                if safe_config[section].get("token"):
+                    safe_config[section]["token"] = "***"
+        print(yaml.dump(safe_config, allow_unicode=True, sort_keys=False))
 
 
 def cmd_daemon(args):

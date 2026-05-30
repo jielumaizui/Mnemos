@@ -1160,6 +1160,12 @@ def run_daemon():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
+    # 注册线程异常钩子，防止未捕获异常导致线程静默崩溃
+    def handle_thread_exception(args):
+        logger.error(f"未捕获的线程异常 in {args.thread.name}: {args.exc_type.__name__}: {args.exc_value}", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    threading.excepthook = handle_thread_exception
+
     # 启动所有服务线程。L1 扫描默认关闭：只消费 MCP/Hook 入队，避免首次运行全量扫历史会话。
     service_defs = [
         ("捕获消费", service_capture_worker, "daemon.services.capture_worker", True),
@@ -1218,7 +1224,7 @@ def _daemonize_unix():
         return
 
     os.setsid()
-    os.umask(0)
+    os.umask(0o022)  # 安全默认值: owner=rwx, group=rx, other=rx
 
     pid = os.fork()
     if pid > 0:

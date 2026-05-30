@@ -115,6 +115,9 @@ class Scheduler:
 
     def generate_wrapper_script(self, task_name: str) -> str:
         """生成包装脚本，处理跳过逻辑"""
+        import re
+        if not re.match(r"^[a-zA-Z0-9_-]+$", task_name):
+            raise ValueError(f"非法 task_name: {task_name}")
         task = self.TASKS.get(task_name)
 
         schedule_minutes = self._get_schedule_minutes(task)
@@ -175,6 +178,9 @@ with open(LOCK_FILE, 'w') as f:
 
     def generate_plist(self, task_name: str) -> str:
         """生成launchd plist配置"""
+        import re
+        if not re.match(r"^[a-zA-Z0-9_-]+$", task_name):
+            raise ValueError(f"非法 task_name: {task_name}")
         task = self.TASKS.get(task_name)
         if not task:
             raise ValueError(f"Unknown task: {task_name}")

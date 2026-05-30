@@ -1001,9 +1001,11 @@ class MemosClient:
                     results["successful"].append(result.uid)
 
                 except Exception as e:
-                    print(f"  [Ingest] 失败: {e}")
-                    batch_results.append({"status": "failed", "error": str(e)})
-                    results["failed"].append({"content": item.get("content", "")[:100], "error": str(e)})
+                    safe_err = type(e).__name__
+                    logger.debug(f"[Ingest] 原始错误: {e}")
+                    print(f"  [Ingest] 失败: {safe_err}")
+                    batch_results.append({"status": "failed", "error": safe_err})
+                    results["failed"].append({"content": item.get("content", "")[:100], "error": safe_err})
 
             results["batches"].append({
                 "batch": batch_num,

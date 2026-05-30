@@ -439,7 +439,7 @@ def main():
         if sys.platform == "darwin":
             subprocess.run(["open", str(output_path)])
         elif sys.platform == "win32":
-            subprocess.run(["start", str(output_path)], shell=True)
+            subprocess.run(["cmd", "/c", "start", "", str(output_path)])
         else:
             subprocess.run(["xdg-open", str(output_path)])
 

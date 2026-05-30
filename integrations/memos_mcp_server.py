@@ -68,8 +68,8 @@ class MemosMCPServer:
                 print(json.dumps({"error": f"Invalid JSON: {e}"}))
                 sys.stdout.flush()
             except Exception as e:
-                print(json.dumps({"error": str(e)}))
-                sys.stdout.flush()
+                logger.error(f"MCP 内部错误: {e}", exc_info=True)
+                print(json.dumps({"error": "Internal server error"}), flush=True)
 
     def _handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """处理 MCP 请求"""
