@@ -268,6 +268,7 @@ mnemos config                     # 查看/编辑配置
 # Agent 管理
 mnemos agent list                 # 列出本地可用的 AI Agent
 mnemos agent install              # 为所有可用 Agent 安装 hooks
+mnemos agent detect               # 检测已安装的 Agent
 mnemos agent doctor               # 诊断 Agent 状态
 
 # 后台服务
@@ -275,6 +276,11 @@ mnemos daemon start               # 启动后台守护进程
 mnemos daemon stop                # 停止后台守护进程
 mnemos daemon status              # 查看守护进程状态
 mnemos scheduler install-windows  # 注册 Windows 开机启动
+mnemos scheduler uninstall-windows # 卸载 Windows 开机启动
+
+# 事件系统
+mnemos events stats               # 查看事件队列统计
+mnemos events cleanup             # 清理过期事件
 
 # 评分系统
 mnemos scorer status              # 查看评分器状态和模式
@@ -319,11 +325,14 @@ mnemos mcp serve                  # 启动 MCP 服务器
 | `knowledge_distill` | 触发知识蒸馏 — 聊天记录转为结构化 Wiki 知识 |
 | `document_process` | 解析文档 — PDF/PPT/Excel/Word/HTML/EBOOK |
 
-**会话管理**
+**会话捕获（推荐）**
 
 | 工具 | 用途 |
 |------|------|
-| `session_save` | 保存完整聊天记录到 Memos（分片存储 + 完整性校验） |
+| `capture_turn` | 逐轮上报对话（低延迟 < 200ms，实时入队） |
+| `capture_session` | 批量上报整个 session 的多轮对话 |
+| `end_session` | 标记 session 结束，触发后续处理 |
+| `capture_status` | 查询 session/turn 在队列中的状态 |
 | `session_search` | 搜索历史会话（自动合并分片，恢复完整对话） |
 
 **KIA 闭环**
@@ -414,6 +423,18 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 
 运行时权威配置文件位于 `~/.mnemos/configs/main.json`（跨平台统一路径）。
 旧版 `~/.mnemos/config.yaml` 仅作为迁移来源，系统会在首次读取时迁移到 JSON。
+
+配置优先级：**代码默认值 < JSON 配置文件 < 环境变量**（环境变量优先级最高）。
+
+支持的环境变量：
+
+| 环境变量 | 对应配置项 | 说明 |
+|----------|-----------|------|
+| `MEMOS_TOKEN` | `memos.token` | Memos API Token |
+| `MEMOS_API_URL` | `memos.api_url` | Memos 实例地址 |
+| `MNEMOS_WIKI_DIR` / `WIKI_DIR` | `wiki.vault_path` | Wiki 知识库目录 |
+| `MNEMOS_DIR` | — | Mnemos 数据根目录（默认 `~/.mnemos`） |
+| `CLAUDE_SETTINGS_JSON` | — | Claude Code settings.json 路径 |
 
 关键配置项：
 

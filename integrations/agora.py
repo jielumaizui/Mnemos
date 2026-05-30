@@ -52,7 +52,6 @@ class MCPServer:
             "wiki_read": self._tool_wiki_read,
             "wiki_write": self._tool_wiki_write,
             "session_search": self._tool_session_search,
-            "session_save": self._tool_session_save,
             "capture_turn": self._tool_capture_turn,
             "capture_session": self._tool_capture_session,
             "end_session": self._tool_end_session,
@@ -106,7 +105,7 @@ class MCPServer:
             "path": page_path,
         }
 
-    def _tool_session_search(self, query: str, session_id: str = "",
+    def _tool_session_search(self, query: str = "", session_id: str = "",
                              limit: int = 10) -> Dict:
         """
         搜索历史会话记录，自动合并分片内容
@@ -197,7 +196,7 @@ class MCPServer:
         if not config.memos_enabled or not config.memos_token:
             return {
                 "success": False,
-                "message": "Memos 未配置，无法摄入知识。请在 ~/.mnemos/config.json 中配置 memos.token 和 memos.api_url",
+                "message": "Memos 未配置，无法摄入知识。请在 ~/.mnemos/configs/main.json 中配置 memos.token 和 memos.api_url",
             }
 
         try:
@@ -608,8 +607,12 @@ tags: [{', '.join(tags or ['file_import'])}]
             return {"success": True, "retrospectives": []}
 
         items = []
+        _MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
         for md_file in sorted(retro_dir.rglob("*.md"), reverse=True):
             try:
+                if md_file.stat().st_size > _MAX_FILE_SIZE:
+                    logger.warning(f"Retrospective 文件过大跳过: {md_file.name}")
+                    continue
                 content = md_file.read_text(encoding="utf-8", errors="ignore")
                 title = md_file.stem
                 if content.startswith("---"):
@@ -654,8 +657,12 @@ tags: [{', '.join(tags or ['file_import'])}]
             return {"success": True, "sources": sources, "total": 0}
 
         import yaml
+        _MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
         for md_file in wiki_dir.rglob("*.md"):
             try:
+                if md_file.stat().st_size > _MAX_FILE_SIZE:
+                    logger.warning(f"Wiki 文件过大跳过: {md_file.name}")
+                    continue
                 content = md_file.read_text(encoding="utf-8", errors="ignore")
                 src = "human_written"
                 if content.startswith("---"):
@@ -1436,7 +1443,7 @@ tags: [{', '.join(tags or ['file_import'])}]
             },
             "serverInfo": {
                 "name": "mnemos-mcp-server",
-                "version": "0.1.0",
+                "version": "2.0.0",
             },
         }
 
@@ -1493,16 +1500,61 @@ tags: [{', '.join(tags or ['file_import'])}]
                 },
             },
             {
-                "name": "session_save",
-                "description": "保存完整聊天记录到 Memos（L1 原始池）。按 hash/range/segment 分片存储，带 _meta 完整性校验。当 Agent 会话结束且对话有价值时使用此工具保存。",
+                "name": "capture_turn",
+                "description": "MCP 主动上报单轮对话。只做校验和入队，不直接写 Memos，返回 < 200ms。当 Agent 正在与用户对话时，每轮对话结束后调用此工具上报。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "source_agent": {"type": "string", "description": "Agent 来源标识（如 claude, kimi, codex）"},
                         "session_id": {"type": "string", "description": "会话唯一标识"},
-                        "messages": {"type": "array", "items": {"type": "object"}, "description": "消息列表 [{role, content, timestamp}]"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "额外标签（可选）", "default": []},
+                        "turn_id": {"type": "string", "description": "轮次 ID（可选）", "default": ""},
+                        "turn_number": {"type": "integer", "description": "轮次序号（可选）", "default": 0},
+                        "user_content": {"type": "string", "description": "用户消息内容（可选）", "default": ""},
+                        "assistant_content": {"type": "string", "description": "AI 回复内容（可选）", "default": ""},
+                        "timestamp": {"type": "string", "description": "时间戳 ISO 格式（可选）", "default": ""},
+                        "model": {"type": "string", "description": "使用的模型名称（可选）", "default": ""},
+                        "cwd": {"type": "string", "description": "当前工作目录（可选）", "default": ""},
+                        "metadata": {"type": "object", "description": "额外元数据（可选）", "default": {}},
                     },
-                    "required": ["session_id", "messages"],
+                    "required": ["source_agent", "session_id"],
+                },
+            },
+            {
+                "name": "capture_session",
+                "description": "MCP 批量上报整个 session 的多轮对话。适用于一次性上报完整对话记录的场景。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
+                        "session_id": {"type": "string", "description": "会话唯一标识"},
+                        "turns": {"type": "array", "items": {"type": "object"}, "description": "轮次列表 [{turn_number, user_content, assistant_content}]"},
+                    },
+                    "required": ["source_agent", "session_id", "turns"],
+                },
+            },
+            {
+                "name": "end_session",
+                "description": "标记 session 结束。通知 Mnemos 该会话已完成，触发后续处理（如队列排空、会话完整性校验）。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
+                        "session_id": {"type": "string", "description": "会话唯一标识"},
+                    },
+                    "required": ["source_agent", "session_id"],
+                },
+            },
+            {
+                "name": "capture_status",
+                "description": "查询指定 session/turn 在捕获队列中的状态。用于检查对话是否已成功入队或处理完成。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
+                        "session_id": {"type": "string", "description": "会话唯一标识"},
+                        "turn_number": {"type": "integer", "description": "轮次序号（可选，-1 表示查询整个 session）", "default": -1},
+                    },
+                    "required": ["source_agent", "session_id"],
                 },
             },
             {
@@ -1512,7 +1564,7 @@ tags: [{', '.join(tags or ['file_import'])}]
                     "type": "object",
                     "properties": {
                         "content": {"type": "string", "description": "用户提供的知识内容"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选，如 ['coding', 'important']）", "default": []},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选，如 ['coding', 'important']）"},
                         "source": {"type": "string", "description": "来源标记", "default": "human"},
                     },
                     "required": ["content"],
@@ -1526,7 +1578,7 @@ tags: [{', '.join(tags or ['file_import'])}]
                     "properties": {
                         "file_path": {"type": "string", "description": "文件绝对路径（如 ~/notes/architecture.md 或 /home/user/project/main.py）"},
                         "title": {"type": "string", "description": "文档标题（可选，默认使用文件名）", "default": ""},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选）", "default": []},
+                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选）"},
                         "trigger_parse": {"type": "boolean", "description": "是否立即触发解析", "default": True},
                     },
                     "required": ["file_path"],
@@ -1647,7 +1699,7 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "task_type": {"type": "string", "description": "按任务类型过滤"},
+                        "task_type": {"type": "string", "description": "按任务类型过滤", "default": None},
                         "limit": {"type": "integer", "description": "返回数量上限", "default": 10},
                     },
                 },

@@ -166,6 +166,7 @@ class EventBus:
         self._max_queue_depth = config.get("event_bus.max_queue_depth", 10000)
         self._max_recover_events = config.get("event_bus.max_recover_events", 1000)
         self._dead_letter_alert = config.get("event_bus.dead_letter_alert", 10)
+        self._dead_letter_max = config.get("event_bus.dead_letter_max", 1000)
         self._max_latency_ms = config.get("event_bus.max_latency_ms", 10)
 
         # SQLite
@@ -265,18 +266,20 @@ class EventBus:
             (limit,),
         )
         rows = cursor.fetchall()
-        for i, row in enumerate(rows):
+        recover_ids = []
+        for row in rows:
             event = Event.from_row(row)
             if event:
                 self._queue.put(event)
-                # processing 状态重置为 pending（crash recovery）
-                conn.execute(
-                    "UPDATE events SET status = 'pending' WHERE id = ?", (row["id"],)
-                )
-                # 每 100 条 commit 一次，减少锁持有时间
-                if (i + 1) % 100 == 0:
-                    conn.commit()
-        conn.commit()
+                recover_ids.append(row["id"])
+        if recover_ids:
+            # 批量 UPDATE 替代逐条，减少 SQLite 锁竞争和 WAL 增长
+            placeholders = ",".join("?" * len(recover_ids))
+            conn.execute(
+                f"UPDATE events SET status = 'pending' WHERE id IN ({placeholders})",
+                recover_ids,
+            )
+            conn.commit()
         if rows:
             logger.info(f"[EventBus] 恢复 {len(rows)} 个未完成事件")
         if total > limit:
@@ -766,18 +769,27 @@ class EventProcessor:
             )
         rows = cursor.fetchall()
 
-        count = 0
+        # 批量标记为 processing，减少逐条 UPDATE + commit 开销
+        process_ids = []
+        events = []
         for row in rows:
             event = Event.from_row(row)
             if event:
-                # 标记为 processing
-                conn.execute(
-                    "UPDATE events SET status = 'processing' WHERE id = ?",
-                    (row["id"],),
-                )
-                conn.commit()
-                self.process_one(event)
-                count += 1
+                process_ids.append(row["id"])
+                events.append(event)
+
+        if process_ids:
+            placeholders = ",".join("?" * len(process_ids))
+            conn.execute(
+                f"UPDATE events SET status = 'processing' WHERE id IN ({placeholders})",
+                process_ids,
+            )
+            conn.commit()
+
+        count = 0
+        for event in events:
+            self.process_one(event)
+            count += 1
 
         return count
 

@@ -524,7 +524,9 @@ def _word_match(text: str, term: str) -> bool:
     if not has_zh:
         # 纯英文/数字：整词匹配
         idx = 0
-        while True:
+        max_iter = len(text) + 1
+        iteration = 0
+        while iteration < max_iter:
             pos = text_lower.find(term_lower, idx)
             if pos == -1:
                 return False
@@ -534,6 +536,8 @@ def _word_match(text: str, term: str) -> bool:
             if prev_ok and next_ok:
                 return True
             idx = pos + 1
+            iteration += 1
+        return False
     else:
         # 含中文：子串匹配即可
         return term_lower in text_lower

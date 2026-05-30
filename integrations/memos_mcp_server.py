@@ -9,10 +9,13 @@ Memos MCP Server - HTTP API 版本
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import os
 from typing import Any, Dict, List, Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 相对项目根目录的路径
 PROJECT_ROOT = Path(__file__).parent.parent

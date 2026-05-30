@@ -120,7 +120,7 @@ def cleanup_tags(batch_size: int = None, dry_run: bool = False):
                 print(f"    [TagCleanup] 更新失败 {uid[:16]}...")
 
             # Small delay to avoid rate limiting
-            time.sleep(0.05)
+            time.sleep(0.5)
 
         except Exception as e:
             stats["errors"] += 1

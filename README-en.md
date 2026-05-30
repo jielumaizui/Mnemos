@@ -158,10 +158,53 @@ python3 -m mnemos_daemon status
 ls ~/Documents/Obsidian\ Vault/wiki/00-Inbox/
 
 # Check persona
-python3 mnemos_cli.py persona summary
+python3 mnemos_cli.py calibrate
 
 # Check scorer status
 python3 mnemos_cli.py scorer status
+```
+
+### CLI Commands
+
+```bash
+mnemos init                       # Interactive setup wizard
+mnemos doctor                     # System diagnosis
+mnemos status                     # View system status
+mnemos config                     # View/edit configuration
+
+# Agent management
+mnemos agent list                 # List available AI Agents
+mnemos agent install              # Install hooks for all Agents
+mnemos agent detect               # Detect installed Agents
+mnemos agent doctor               # Diagnose Agent status
+
+# Background services
+mnemos daemon start               # Start background daemon
+mnemos daemon stop                # Stop background daemon
+mnemos daemon status              # View daemon status
+mnemos scheduler install-windows  # Register Windows startup
+mnemos scheduler uninstall-windows # Unregister Windows startup
+
+# Event system
+mnemos events stats               # View event queue statistics
+mnemos events cleanup             # Clean up expired events
+
+# Scoring system
+mnemos scorer status              # View scorer status
+mnemos scorer retrain             # Manual retraining trigger
+mnemos scorer rollback            # Rollback to previous model
+
+# Sync system
+mnemos sync status                # View sync status
+mnemos sync retry-failed          # Retry failed sync tasks
+
+# Search & reports
+mnemos search <query>             # Context-aware search
+mnemos report generate            # Generate weekly persona report
+
+# Other
+mnemos calibrate                  # Launch persona calibration
+mnemos mcp serve                  # Start MCP server
 ```
 
 ---
@@ -230,11 +273,28 @@ This design avoids:
 Any MCP-compatible AI Agent can connect. After connection, the Agent can use tools such as:
 
 - `wiki_search` — Search knowledge base
+- `wiki_read` — Read specific wiki page
+- `wiki_write` — Write to wiki page
+- `knowledge_ingest` — Ingest user-provided knowledge
+- `knowledge_import` — Import local file to knowledge base
 - `knowledge_distill` — Trigger knowledge distillation
+- `document_process` — Parse documents (PDF/PPT/Excel/Word/HTML/EBOOK)
+- `capture_turn` — Report single conversation turn (< 200ms)
+- `capture_session` — Batch report entire session
+- `end_session` — Mark session as complete
+- `capture_status` — Query capture queue status
+- `session_search` — Search historical sessions
 - `preflight_inject` — Load relevant experience before tasks
 - `guard_check` — Risk guard during execution
 - `persona_summary` — Get user persona summary
+- `persona_behavior_prompt` — Get persona-driven behavior prompt
+- `persona_update` — Trigger persona update
+- `signal_collect` — Trigger signal collection
 - `context_aware_search` — Context-aware search with persona weighting
+- `intent_route` — Intent routing (recall/knowledge/task/chat)
+- `blindspot_check` — Knowledge gap detection
+- `freshness_check` — Knowledge freshness check
+- `predictive_push` — Proactive knowledge recommendation
 - `health_check` — System health check
 
 ### Method 2: Claude Code Hooks

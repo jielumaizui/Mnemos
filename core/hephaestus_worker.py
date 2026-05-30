@@ -666,12 +666,15 @@ tags: [distilled, {meta.get('source', 'unknown')}]
             try:
                 while True:
                     time.sleep(interval)
-                    # 定期轮询作为后备
-                    count = self.process_all()
-                    if count > 0:
-                        logger.info(f"[Hephaestus] 轮询处理 {count} 个任务")
-                        if callback:
-                            callback(count)
+                    try:
+                        # 定期轮询作为后备
+                        count = self.process_all()
+                        if count > 0:
+                            logger.info(f"[Hephaestus] 轮询处理 {count} 个任务")
+                            if callback:
+                                callback(count)
+                    except Exception as e:
+                        logger.error(f"[Hephaestus] 轮询处理失败: {e}")
             except KeyboardInterrupt:
                 pass
             finally:

@@ -293,15 +293,21 @@ class CaptureQueue:
                 # 3. 如果还有余量，按全局顺序补充
                 remaining = limit - len(results)
                 if remaining > 0:
-                    # 排除已经取过的 id
+                    # 排除已经取过的 id（用临时表替代 NOT IN，避免大数据集性能问题）
                     if ids:
-                        placeholders = ",".join("?" * len(ids))
-                        cursor.execute(f"""
-                            SELECT * FROM capture_events
-                            WHERE status = 'pending' AND id NOT IN ({placeholders})
-                            ORDER BY source_agent, session_id, turn_number
+                        cursor.execute("CREATE TEMP TABLE IF NOT EXISTS _deq_exclude (id INTEGER PRIMARY KEY)")
+                        cursor.execute("DELETE FROM _deq_exclude")
+                        cursor.executemany(
+                            "INSERT OR IGNORE INTO _deq_exclude (id) VALUES (?)",
+                            [(i,) for i in ids],
+                        )
+                        cursor.execute("""
+                            SELECT * FROM capture_events e
+                            WHERE e.status = 'pending'
+                              AND NOT EXISTS (SELECT 1 FROM _deq_exclude x WHERE x.id = e.id)
+                            ORDER BY e.source_agent, e.session_id, e.turn_number
                             LIMIT ?
-                        """, (*ids, remaining))
+                        """, (remaining,))
                     else:
                         cursor.execute("""
                             SELECT * FROM capture_events
