@@ -85,6 +85,11 @@ class CaptureWorkerPool:
         for t in self._worker_threads:
             t.join(timeout=5)
         self._worker_threads.clear()
+        # 清理内存字典，防止长期运行的 daemon 内存泄漏
+        with self._source_semaphore_lock:
+            self._source_semaphores.clear()
+        self._source_errors.clear()
+        self._source_last_retry.clear()
         logger.info("[CaptureWorkerPool] 已停止")
 
     def close(self):

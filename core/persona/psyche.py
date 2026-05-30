@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS knowledge_signals (
     tags_added TEXT,                   -- JSON list
     tags_removed TEXT,                 -- JSON list
 
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(page_path, timestamp, action_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_time ON knowledge_signals(timestamp);
@@ -146,7 +147,8 @@ CREATE TABLE IF NOT EXISTS git_signals (
     is_weekend INTEGER DEFAULT 0,
     hour_of_day INTEGER,
 
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(commit_hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_git_time ON git_signals(timestamp);
@@ -168,7 +170,8 @@ CREATE TABLE IF NOT EXISTS file_system_signals (
     is_in_inbox INTEGER DEFAULT 0,     -- 是否在临时/下载目录
     is_versioned INTEGER DEFAULT 0,    -- 是否在git仓库中
 
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(file_path, timestamp, action_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_fs_time ON file_system_signals(timestamp);
@@ -470,7 +473,7 @@ class SignalStore:
         data = asdict(signal)
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
-                INSERT INTO memos_signals (
+                INSERT OR IGNORE INTO memos_signals (
                     memo_uid, timestamp, content_length,
                     has_title, has_list, has_code_block, has_link, image_count,
                     tag_count, tags_json, is_ai_generated, ai_agent
@@ -481,6 +484,14 @@ class SignalStore:
                 )
             """, data)
             signal_id = cursor.lastrowid
+            if signal_id is None:
+                existing = conn.execute(
+                    "SELECT id FROM memos_signals WHERE memo_uid = ?",
+                    (data["memo_uid"],)
+                ).fetchone()
+                signal_id = existing[0] if existing else 0
+                conn.commit()
+                return signal_id
 
             conn.execute("""
                 INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
@@ -507,7 +518,7 @@ class SignalStore:
         data = asdict(signal)
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
-                INSERT INTO git_signals (
+                INSERT OR IGNORE INTO git_signals (
                     repo_path, commit_hash, timestamp,
                     message_length, has_issue_reference, has_pr_reference,
                     files_changed, lines_added, lines_deleted, test_files_changed,
@@ -520,6 +531,14 @@ class SignalStore:
                 )
             """, data)
             signal_id = cursor.lastrowid
+            if signal_id is None:
+                existing = conn.execute(
+                    "SELECT id FROM git_signals WHERE commit_hash = ?",
+                    (data["commit_hash"],)
+                ).fetchone()
+                signal_id = existing[0] if existing else 0
+                conn.commit()
+                return signal_id
 
             # Git信号可能有外部因素（公司规范）
             confidence = 0.7  # 默认较低，需要外部因素标注
@@ -576,12 +595,20 @@ class SignalStore:
         """插入知识库交互信号"""
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
-                INSERT INTO knowledge_signals (
+                INSERT OR IGNORE INTO knowledge_signals (
                     page_path, action_type, timestamp,
                     tags_added, tags_removed
                 ) VALUES (?, ?, ?, ?, ?)
             """, (page_path, action_type, timestamp, tags_added, tags_removed))
             signal_id = cursor.lastrowid
+            if signal_id is None:
+                existing = conn.execute(
+                    "SELECT id FROM knowledge_signals WHERE page_path = ? AND timestamp = ? AND action_type = ?",
+                    (page_path, timestamp, action_type)
+                ).fetchone()
+                signal_id = existing[0] if existing else 0
+                conn.commit()
+                return signal_id
             conn.execute("""
                 INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
                 VALUES (?, ?, ?, ?)
@@ -596,7 +623,7 @@ class SignalStore:
         """插入文件系统行为信号"""
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.execute("""
-                INSERT INTO file_system_signals (
+                INSERT OR IGNORE INTO file_system_signals (
                     file_path, action_type, timestamp,
                     file_extension, directory_depth, project_name,
                     is_in_inbox, is_versioned
@@ -604,6 +631,14 @@ class SignalStore:
             """, (file_path, action_type, timestamp, file_extension,
                   directory_depth, project_name, is_in_inbox, is_versioned))
             signal_id = cursor.lastrowid
+            if signal_id is None:
+                existing = conn.execute(
+                    "SELECT id FROM file_system_signals WHERE file_path = ? AND timestamp = ? AND action_type = ?",
+                    (file_path, timestamp, action_type)
+                ).fetchone()
+                signal_id = existing[0] if existing else 0
+                conn.commit()
+                return signal_id
             conn.execute("""
                 INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
                 VALUES (?, ?, ?, ?)

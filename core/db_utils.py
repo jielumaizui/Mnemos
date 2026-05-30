@@ -71,11 +71,23 @@ class SqlitePool:
         self._conns: Dict[int, sqlite3.Connection] = {}
         self._lock = threading.Lock()
 
+    def _cleanup_dead_connections(self):
+        """清理已终止线程的遗留连接，防止 ident 重用导致泄漏。"""
+        live_tids = {th.ident for th in threading.enumerate() if th.ident is not None}
+        dead_tids = [t for t in list(self._conns.keys()) if t not in live_tids]
+        for t in dead_tids:
+            try:
+                self._conns.pop(t, None).close()
+            except Exception:
+                pass
+
     def get_conn(self) -> sqlite3.Connection:
         """获取（或创建）当前线程的持久连接。"""
         tid = threading.current_thread().ident
         if tid not in self._conns:
             with self._lock:
+                # 先清理死连接，防止 ident 重用导致旧连接泄漏
+                self._cleanup_dead_connections()
                 if tid not in self._conns:
                     self._conns[tid] = sqlite3.connect(
                         str(self.db_path), timeout=self._timeout, check_same_thread=False

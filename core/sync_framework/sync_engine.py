@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
@@ -211,6 +211,23 @@ class SyncEngine:
             )
         """)
         conn.commit()
+        # 启动时清理旧 sync_log，防止表无限增长
+        self._cleanup_old_sync_log()
+
+    def _cleanup_old_sync_log(self, days: int = 90):
+        """清理超过 N 天的已同步记录"""
+        try:
+            conn = self._pool.get_conn()
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            cursor = conn.execute(
+                "DELETE FROM sync_log WHERE synced_at < ? AND status = 'synced'",
+                (cutoff,)
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"[SyncEngine] 清理 {cursor.rowcount} 条旧 sync_log")
+        except Exception:
+            pass
 
     # ---------- 公共 API ----------
 

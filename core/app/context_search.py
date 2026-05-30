@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -150,6 +151,8 @@ class ContextAwareSearch:
         keywords = self._query_terms(query)
 
         for md_file in self.wiki_base.rglob("*.md"):
+            if os.path.islink(md_file):
+                continue
             try:
                 rel_parts = md_file.relative_to(self.wiki_base).parts
                 if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):

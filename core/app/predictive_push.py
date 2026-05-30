@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -251,15 +252,23 @@ class PredictivePush:
 
         # 回退：文件名搜索
         for md_file in self.wiki_base.rglob("*.md"):
+            if os.path.islink(md_file):
+                continue
             if signal.topic.lower() in md_file.stem.lower():
                 return {"path": str(md_file.relative_to(self.wiki_base)), "title": md_file.stem}
 
         return None
 
     def _is_topic_cached(self, topic: str) -> bool:
-        """同主题 30 分钟缓存"""
+        """同主题 30 分钟缓存，定期清理过期条目防止内存泄漏"""
+        now = time.time()
+        # 每 100 次检查清理一次过期缓存
+        if len(self._topic_cache) > 100 and getattr(self, '_cache_check_count', 0) % 100 == 0:
+            cutoff = now - 1800
+            self._topic_cache = {k: v for k, v in self._topic_cache.items() if v > cutoff}
+        self._cache_check_count = getattr(self, '_cache_check_count', 0) + 1
         last_push = self._topic_cache.get(topic, 0)
-        return (time.time() - last_push) < 1800
+        return (now - last_push) < 1800
 
     def _is_blindspot_related(self, topic: str) -> bool:
         """检查主题是否与已知盲点相关"""

@@ -172,6 +172,8 @@ class EventBus:
         self._db_path = self._mnemos_dir / "events.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()  # 每线程独立连接
+        self._all_conns: set = set()      # 追踪所有创建的连接，用于 close() 统一清理
+        self._conns_lock = threading.Lock()
         self._init_db()
 
         # In-memory queue
@@ -203,17 +205,40 @@ class EventBus:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=30000")
             self._local.conn = conn
+            with self._conns_lock:
+                self._all_conns.add(conn)
         return self._local.conn
 
     def _init_db(self):
-        """初始化数据库表"""
+        """初始化数据库表并清理过期数据"""
         conn = self._get_conn()
         conn.executescript(self._SCHEMA_EVENTS)
         conn.executescript(self._SCHEMA_DEAD_LETTERS)
         conn.commit()
+        # 启动时清理旧数据，防止表无限增长
+        try:
+            conn.execute(
+                "DELETE FROM events WHERE status = 'done' AND created_at < datetime('now', '-7 days')"
+            )
+            conn.execute(
+                "DELETE FROM dead_letters WHERE timestamp < datetime('now', '-30 days')"
+            )
+            conn.execute(
+                "DELETE FROM events WHERE status = 'pending' AND created_at < datetime('now', '-3 days')"
+            )
+            conn.commit()
+        except Exception:
+            pass
 
     def close(self):
-        """关闭当前线程的数据库连接"""
+        """关闭所有线程的数据库连接"""
+        with self._conns_lock:
+            for conn in list(self._all_conns):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
         if hasattr(self._local, "conn") and self._local.conn is not None:
             try:
                 self._local.conn.close()
@@ -466,7 +491,7 @@ class EventBus:
             conn.execute("DELETE FROM events WHERE trace_id = ?", (trace_id,))
             conn.commit()
 
-            # 检查死信队列告警
+            # 检查死信队列告警并清理旧数据
             dl_count = conn.execute(
                 "SELECT COUNT(*) as cnt FROM dead_letters"
             ).fetchone()["cnt"]
@@ -475,6 +500,16 @@ class EventBus:
                     f"[EventBus] 死信队列数量 {dl_count} 超过告警阈值 "
                     f"{self._dead_letter_alert}"
                 )
+            if dl_count > self._dead_letter_max:
+                # 保留最新的死信，删除旧的
+                conn.execute(
+                    """DELETE FROM dead_letters WHERE id IN (
+                        SELECT id FROM dead_letters ORDER BY id ASC LIMIT ?
+                    )""",
+                    (dl_count - self._dead_letter_max,),
+                )
+                conn.commit()
+                logger.info(f"[EventBus] 死信队列清理完成，保留 {self._dead_letter_max} 条")
             logger.warning(
                 f"[EventBus] 事件 {trace_id} 重试 {new_retry} 次后移入死信队列"
             )
@@ -661,6 +696,7 @@ class EventProcessor:
         self._handlers: Dict[str, Callable[[Event], Any]] = {}
         self._results: Dict[str, Any] = {}  # 存储处理结果
         self._results_lock = threading.Lock()
+        self._max_results = 1000  # 防止内存无限增长
 
     def register(self, event_type: str, handler: Callable[[Event], Any]):
         """注册事件处理器
@@ -679,6 +715,10 @@ class EventProcessor:
                 result = handler(event)
                 with self._results_lock:
                     self._results[event.trace_id] = result
+                    # 防止内存无限增长：超出上限时淘汰最旧的记录
+                    if len(self._results) > self._max_results:
+                        for _key in list(self._results.keys())[:len(self._results) - self._max_results]:
+                            self._results.pop(_key, None)
                 return result
             except Exception:
                 logger.warning(f"Unexpected error in mnemos_bus.py", exc_info=True)

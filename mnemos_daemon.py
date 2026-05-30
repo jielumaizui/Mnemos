@@ -143,6 +143,14 @@ class _L1ScanState:
     def save(self) -> None:
         if not self._dirty:
             return
+        # 防止内存/磁盘无限增长：只保留最近 1000 条扫描记录
+        if len(self._data) > 1000:
+            sorted_items = sorted(
+                self._data.items(),
+                key=lambda kv: kv[1].get("scanned_at", ""),
+                reverse=True,
+            )
+            self._data = dict(sorted_items[:1000])
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp_path.write_text(
@@ -409,11 +417,15 @@ def service_l1_sync(stop_event: threading.Event):
                                         elif status == "error":
                                             error_count += 1
 
-                                    # 触发异步 end_session，让 Worker 优先 flush 该 session
-                                    capture_service.end_session(source.name, session_info.session_id)
                                     scanned_count += 1
                                     state.mark_scanned(source.name, session_info, file_state, "scanned")
                                 finally:
+                                    # 触发异步 end_session，让 Worker 优先 flush 该 session
+                                    # 放在 finally 中确保 capture_turn 异常时也会执行
+                                    try:
+                                        capture_service.end_session(source.name, session_info.session_id)
+                                    except Exception as e:
+                                        logger.warning(f"[L1同步] end_session 失败: {e}")
                                     # KIA Hook: session_end（无论入队是否成功都执行，避免泄漏）
                                     all_messages = []
                                     for turn in turns:
@@ -545,11 +557,13 @@ def service_distill_and_merge(stop_event: threading.Event):
     except Exception as e:
         logger.warning(f"[蒸馏合并] KnowledgeScheduler 初始化失败: {e}，回退到 Orchestrator")
 
+    # 在循环外初始化 worker，避免每次循环新建连接/资源
+    from core.hephaestus_worker import HephaestusWorker
+    worker = HephaestusWorker()
+
     while not stop_event.is_set():
         try:
             # 高频：处理 distill_queue
-            from core.hephaestus_worker import HephaestusWorker
-            worker = HephaestusWorker()
             pending = worker.process_all()
             if pending > 0:
                 logger.info(f"[蒸馏合并] 处理了 {pending} 个待蒸馏任务")
@@ -592,24 +606,28 @@ def service_heartbeat(stop_event: threading.Event):
     logger.info("[心跳] 服务启动")
     interval = 60
 
+    # 在循环外初始化评分器，避免每次循环新建
+    scorer = None
+    daemon = None
+    try:
+        from core.scoring.scorers.ops_scorer import OpsScorer
+        scorer = OpsScorer()
+    except ImportError:
+        from core.heartbeat import HeartbeatDaemon
+        daemon = HeartbeatDaemon()
+
     while not stop_event.is_set():
         try:
             # 优先使用 OpsScorer
-            try:
-                from core.scoring.scorers.ops_scorer import OpsScorer
-                scorer = OpsScorer()
-                if hasattr(scorer, "score_system"):
-                    result = scorer.score_system()
-                    health = result.get("health_score", 0)
-                    if health > 0:
-                        logger.debug(f"[心跳] 系统健康度: {health:.1f}")
-                else:
-                    logger.debug("[心跳] OpsScorer 未提供 score_system，跳过系统评分")
-            except ImportError:
-                # 回退到 HeartbeatDaemon
-                from core.heartbeat import HeartbeatDaemon
-                daemon = HeartbeatDaemon()
+            if scorer is not None and hasattr(scorer, "score_system"):
+                result = scorer.score_system()
+                health = result.get("health_score", 0)
+                if health > 0:
+                    logger.debug(f"[心跳] 系统健康度: {health:.1f}")
+            elif daemon is not None:
                 daemon.run_once()
+            else:
+                logger.debug("[心跳] OpsScorer 未提供 score_system，跳过系统评分")
         except Exception as e:
             logger.error(f"[心跳] 运行失败: {e}")
 
@@ -628,10 +646,18 @@ def service_inbox_scanner(stop_event: threading.Event):
 
     interval = 10 * 60  # 10分钟
 
+    # 在循环外初始化处理器，避免每次循环新建
+    try:
+        from core.kia.knowledge_inbox import KnowledgeInboxProcessor
+        inbox = KnowledgeInboxProcessor()
+    except ImportError:
+        inbox = None
+
     while not stop_event.is_set():
         try:
-            from core.kia.knowledge_inbox import KnowledgeInboxProcessor
-            inbox = KnowledgeInboxProcessor()
+            if inbox is None:
+                from core.kia.knowledge_inbox import KnowledgeInboxProcessor
+                inbox = KnowledgeInboxProcessor()
             inbox_dir = get_config().data_dir / "inbox"
             if inbox_dir.exists():
                 result = inbox.scan_inbox()
@@ -670,9 +696,18 @@ def service_signal_collector(stop_event: threading.Event):
             total_signals = 0
 
             for agent in adapters:
+                if stop_event.is_set():
+                    break
                 try:
                     signals = agent.collect_signals(days=7)
+                    # 限制单次采集数量，防止内存/时间爆炸
+                    max_signals_per_agent = 10000
+                    if len(signals) > max_signals_per_agent:
+                        logger.warning(f"[画像] {agent.name} 信号数 {len(signals)} 超过限制，截断到 {max_signals_per_agent}")
+                        signals = signals[:max_signals_per_agent]
                     for sig in signals:
+                        if stop_event.is_set():
+                            break
                         if isinstance(sig, dict):
                             # 统一转换为 SessionSignal，确保 agent 字段正确
                             from core.persona.psyche import SessionSignal
@@ -716,8 +751,14 @@ def service_signal_collector(stop_event: threading.Event):
     logger.info("[画像] 服务已停止")
 
 
+# 画像分析全局锁，防止多个服务线程同时触发分析
+_persona_analysis_lock = threading.Lock()
+
 def _trigger_persona_analysis():
     """触发画像分析（被 signal_collector 调用）"""
+    if not _persona_analysis_lock.acquire(blocking=False):
+        logger.debug("[画像] 分析已在进行中，跳过重复触发")
+        return
     try:
         from core.persona.pythia import analyze_preferences
         from core.persona.delphi import get_persona_store
@@ -732,6 +773,8 @@ def _trigger_persona_analysis():
             _generate_blindspot_challenges(profile)
     except Exception as e:
         logger.error(f"[画像] 画像分析失败: {e}")
+    finally:
+        _persona_analysis_lock.release()
 
 
 def _generate_blindspot_challenges(profile):
@@ -885,12 +928,17 @@ def service_event_bus(stop_event: threading.Event):
         except Exception as e:
             logger.warning(f"[事件总线] session.end 处理失败: {e}")
 
+    # 复用 HephaestusWorker 实例，避免事件高频触发时反复新建
+    _distill_worker = None
+
     def _handle_distill_request(event):
         """处理 distill.request 事件：触发蒸馏"""
         try:
-            from core.hephaestus_worker import HephaestusWorker
-            worker = HephaestusWorker()
-            processed = worker.process_all()
+            nonlocal _distill_worker
+            if _distill_worker is None:
+                from core.hephaestus_worker import HephaestusWorker
+                _distill_worker = HephaestusWorker()
+            processed = _distill_worker.process_all()
             if processed > 0:
                 logger.info(f"[事件总线] 处理 {processed} 个蒸馏任务")
         except Exception as e:
@@ -1143,12 +1191,12 @@ def run_daemon():
         logger.info("收到键盘中断，正在停止...")
         _stop_event.set()
 
-    # 等待所有线程退出（最多10秒）
+    # 等待所有线程退出（最多30秒，给 Worker 足够时间 flush）
     logger.info("等待所有服务停止...")
     for t in threads:
-        t.join(timeout=10)
+        t.join(timeout=30)
         if t.is_alive():
-            logger.warning(f"服务 [{t.name}] 未能在10秒内停止")
+            logger.warning(f"服务 [{t.name}] 未能在30秒内停止")
 
     remove_pid()
     logger.info("Mnemos daemon 已停止")
@@ -1335,9 +1383,31 @@ def status_daemon():
             logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
         if log_file.exists():
             print(f"\n最近日志:")
-            lines = log_file.read_text(encoding="utf-8").strip().split("\n")
-            for line in lines[-5:]:
-                print(f"  {line}")
+            try:
+                # 只读取最后 5 行，避免大日志文件导致内存问题
+                import subprocess
+                result = subprocess.run(
+                    ["tail", "-n", "5", str(log_file)],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    if line:
+                        print(f"  {line}")
+            except Exception:
+                # 回退：逐行读取最后 5 行
+                lines = []
+                with open(log_file, "rb") as f:
+                    f.seek(0, 2)
+                    pos = f.tell()
+                    while pos > 0 and len(lines) < 5:
+                        pos -= 1
+                        f.seek(pos)
+                        if f.read(1) == b"\n":
+                            line = f.readline().decode("utf-8", errors="ignore").strip()
+                            if line:
+                                lines.insert(0, line)
+                for line in lines:
+                    print(f"  {line}")
 
 
 def install_windows_task() -> bool:

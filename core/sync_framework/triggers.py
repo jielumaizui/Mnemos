@@ -103,6 +103,9 @@ class WatchdogTrigger(BaseTrigger):
         if not _WATCHDOG_AVAILABLE:
             logger.warning(f"[WatchdogTrigger:{self._source_name}] watchdog 未安装，跳过")
             return
+        if self._running:
+            logger.warning(f"[WatchdogTrigger:{self._source_name}] 已启动，跳过重复调用")
+            return
 
         self._running = True
         self._handler = _DebounceHandler(self._on_event, self._debounce, self._events)
@@ -119,6 +122,10 @@ class WatchdogTrigger(BaseTrigger):
             for timer in self._pending.values():
                 timer.cancel()
             self._pending.clear()
+
+        if self._handler:
+            self._handler.close()
+            self._handler = None
 
         if self._observer:
             self._observer.stop()
@@ -167,6 +174,9 @@ class PollingTrigger(BaseTrigger):
         self._pool = SqlitePool(self._db_path)
 
     def start(self, watch_path: Path):
+        if self._running:
+            logger.warning(f"[PollingTrigger:{self._source_name}] 已启动，跳过重复调用")
+            return
         self._running = True
         self._load_state()
         self._thread = threading.Thread(
@@ -206,8 +216,10 @@ class PollingTrigger(BaseTrigger):
         if not watch_path.exists():
             return
 
+        current_files = set()
         for f in watch_path.rglob(self._pattern):
             fpath = str(f)
+            current_files.add(fpath)
             try:
                 mtime = f.stat().st_mtime
             except OSError:
@@ -218,7 +230,17 @@ class PollingTrigger(BaseTrigger):
                 self._seen[fpath] = mtime
                 self._execute_callback(fpath)
 
+        # 清理已删除的文件记录，防止内存无限增长
+        for old_path in list(self._seen.keys()):
+            if old_path not in current_files:
+                self._seen.pop(old_path, None)
+
         self._save_state()
+
+    def stop(self):
+        """停止轮询并关闭持久连接"""
+        self._running = False
+        self.close()
 
     def close(self):
         """关闭持久连接"""
@@ -291,6 +313,11 @@ class HybridTrigger(BaseTrigger):
         self._running = False
         self._watchdog.stop()
         self._polling.stop()
+
+    def close(self):
+        """关闭子触发器资源"""
+        self._watchdog.close()
+        self._polling.close()
 
 
 class TriggerDispatcher:
@@ -408,6 +435,13 @@ class _DebounceHandler(FileSystemEventHandler if _WATCHDOG_AVAILABLE else object
             timer.daemon = True
             timer.start()
             self._pending[file_path] = timer
+
+    def close(self):
+        """取消所有待处理的定时器"""
+        with self._lock:
+            for timer in self._pending.values():
+                timer.cancel()
+            self._pending.clear()
 
     def _fire(self, file_path: str):
         with self._lock:

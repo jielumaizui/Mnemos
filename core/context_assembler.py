@@ -7,6 +7,7 @@ ContextAssembler — 上下文智能组装器
 
 import re
 from pathlib import Path
+import os
 from typing import Dict, List, Optional, Set
 import logging
 
@@ -77,6 +78,9 @@ class ContextAssembler:
             return candidates
 
         for md_file in self.wiki_dir.rglob("*.md"):
+            # 跳过符号链接，防止循环遍历
+            if os.path.islink(md_file):
+                continue
             try:
                 content = md_file.read_text(encoding="utf-8")
                 # 跳过 frontmatter

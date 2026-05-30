@@ -241,6 +241,9 @@ class AgentLifecycleManager:
 
     def start(self):
         """启动生命周期管理"""
+        if self._running:
+            logger.warning("[LifecycleManager] 已启动，跳过重复调用")
+            return
         self._running = True
         self._refresh_agents()
         self._refresh_thread = threading.Thread(

@@ -73,14 +73,24 @@ class CaptureService:
             # 启动 worker 池（consumer 进程才启动；MCP producer 传 start_worker=False）
             if start_worker:
                 self.worker_pool.start()
+            # 启动时清理旧 capture_events，防止表无限增长
+            try:
+                self.queue.cleanup_old(days=30)
+            except Exception:
+                pass
 
     def close(self):
-        """关闭持久连接"""
+        """关闭持久连接和 worker_pool"""
         if hasattr(self, '_sync_pool'):
             self._sync_pool.close()
         if hasattr(self, 'queue') and self.queue is not None:
             try:
                 self.queue.close()
+            except Exception:
+                pass
+        if hasattr(self, 'worker_pool') and self.worker_pool is not None:
+            try:
+                self.worker_pool.close()
             except Exception:
                 pass
 
