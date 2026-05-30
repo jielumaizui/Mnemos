@@ -73,12 +73,9 @@ class ConnectionDiagnostics:
                     token=config.memos_token,
                     base_url=config.memos_api_url,
                 )
-                resp = client.session.get(
-                    f"{client.base_url}/api/v1/auth/status",
-                    headers=client.headers,
-                    timeout=5,
-                )
-                status.reachable = resp.status_code == 200
+                # 使用 list_all_memos 做健康探测（兼容 REST 和 Connect API）
+                client.list_all_memos(max_records=1)
+                status.reachable = True
             except Exception as e:
                 status.reachable = False
                 status.error = str(e)

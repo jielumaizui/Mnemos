@@ -1392,13 +1392,9 @@ tags: [{', '.join(tags or ['file_import'])}]
                     token=config.memos_token,
                     base_url=config.memos_api_url,
                 )
-                # 简单 ping：获取用户自身信息
-                resp = client.session.get(
-                    f"{client.base_url}/api/v1/auth/status",
-                    headers=client.headers,
-                    timeout=5,
-                )
-                checks["memos_reachable"] = resp.status_code == 200
+                # 使用 list_all_memos 做健康探测（兼容 REST 和 Connect API）
+                client.list_all_memos(max_records=1)
+                checks["memos_reachable"] = True
             except Exception as e:
                 checks["memos_reachable"] = False
                 checks["memos_error"] = str(e)
@@ -1462,12 +1458,11 @@ tags: [{', '.join(tags or ['file_import'])}]
             # 验证连通性
             from integrations.styx import MemosClient
             client = MemosClient(token=token, base_url=api_url)
-            resp = client.session.get(
-                f"{client.base_url}/api/v1/auth/status",
-                headers=client.headers,
-                timeout=5,
-            )
-            reachable = resp.status_code == 200
+            try:
+                client.list_all_memos(max_records=1)
+                reachable = True
+            except Exception:
+                reachable = False
 
             return {
                 "success": True,

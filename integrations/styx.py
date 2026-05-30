@@ -138,6 +138,43 @@ class MemosClient:
         # 加载脱敏规则（优先从配置文件，否则用内置默认值）
         self.SENSITIVE_PATTERNS = self._load_sanitize_patterns()
 
+        # API 版本自动探测（Memos 0.22+ 使用 Connect/gRPC-over-HTTP API）
+        self._use_connect_api = self._detect_api_version()
+
+    @staticmethod
+    def _to_connect_visibility(visibility: str) -> str:
+        """将旧版 visibility 转换为 Connect API 格式"""
+        mapping = {
+            "PUBLIC": "VISIBILITY_PUBLIC",
+            "PRIVATE": "VISIBILITY_PRIVATE",
+            "PROTECTED": "VISIBILITY_PROTECTED",
+        }
+        return mapping.get(visibility.upper(), visibility)
+
+    @staticmethod
+    def _unwrap_response(data: Any) -> Any:
+        """处理旧版 API 的 data 包装"""
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        return data
+
+    def _detect_api_version(self) -> bool:
+        """探测 Memos API 版本。True=Connect API (0.22+), False=REST API (旧版)"""
+        if not self.base_url or not self.token:
+            return False
+        try:
+            resp = self.session.post(
+                f"{self.base_url}/memos.api.v1.MemoService/ListMemos",
+                headers={**self.headers, "Content-Type": "application/json"},
+                json={"pageSize": 1},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                return True
+        except Exception:
+            pass
+        return False
+
     # ==================== 配置加载 ====================
 
     @staticmethod
@@ -201,7 +238,9 @@ class MemosClient:
             MemosServerError: 5xx 服务器错误
         """
         start_time = time.time()
-        resp = getattr(self.session, method.lower())(url, headers=self.headers, **kwargs)
+        # Connect API 端点统一使用 POST（旧 REST API 保持原方法）
+        actual_method = "POST" if self._use_connect_api and "/memos.api.v1." in url else method
+        resp = getattr(self.session, actual_method.lower())(url, headers=self.headers, **kwargs)
         elapsed = time.time() - start_time
 
         # metrics 回调
@@ -499,16 +538,29 @@ class MemosClient:
             final_content = f"{truncated_content}\n\n{tag_str}".strip()
 
         # 7. 调用 API（使用统一请求入口）
-        resp = self._make_request(
-            "POST",
-            f"{self.base_url}/api/v1/memos",
-            json={
-                "content": final_content,
-                "visibility": visibility
-            }
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        if self._use_connect_api:
+            resp = self._make_request(
+                "POST",
+                f"{self.base_url}/memos.api.v1.MemoService/CreateMemo",
+                json={
+                    "memo": {
+                        "content": final_content,
+                        "visibility": self._to_connect_visibility(visibility),
+                    }
+                }
+            )
+            resp.raise_for_status()
+        else:
+            resp = self._make_request(
+                "POST",
+                f"{self.base_url}/api/v1/memos",
+                json={
+                    "content": final_content,
+                    "visibility": visibility
+                }
+            )
+            resp.raise_for_status()
+        data = self._unwrap_response(resp.json())
 
         # Parse name like "memos/UID" to get uid
         name = data.get("name", "")
@@ -594,13 +646,23 @@ class MemosClient:
         tag_line = " ".join([f"#{t}" for t in current_tags])
         new_content = f"{clean_content}\n\n{tag_line}"
 
-        # 4. PATCH 更新
+        # 4. 调用 API 更新
         try:
-            resp = self._make_request(
-                "PATCH",
-                f"{self.base_url}/api/v1/memos/{memo_uid}",
-                json={"content": new_content}
-            )
+            if self._use_connect_api:
+                resp = self._make_request(
+                    "POST",
+                    f"{self.base_url}/memos.api.v1.MemoService/UpdateMemo",
+                    json={
+                        "memo": {"name": f"memos/{memo_uid}", "content": new_content},
+                        "updateMask": "content"
+                    }
+                )
+            else:
+                resp = self._make_request(
+                    "PATCH",
+                    f"{self.base_url}/api/v1/memos/{memo_uid}",
+                    json={"content": new_content}
+                )
             return resp.ok
         except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
             return False
@@ -622,24 +684,39 @@ class MemosClient:
         safety_limit = 50  # 最多50页，防止无限循环
 
         for page_num in range(safety_limit):
-            params = {"pageSize": page_size}
-            if page_token:
-                params["pageToken"] = page_token
-
-            try:
-                resp = self._make_request(
-                    "GET",
-                    f"{self.base_url}/api/v1/memos",
-                    params=params
-                )
-            except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
-                break
+            if self._use_connect_api:
+                body = {"pageSize": page_size}
+                if page_token:
+                    body["pageToken"] = page_token
+                try:
+                    resp = self._make_request(
+                        "POST",
+                        f"{self.base_url}/memos.api.v1.MemoService/ListMemos",
+                        json=body
+                    )
+                except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                    break
+            else:
+                params = {"pageSize": page_size}
+                if page_token:
+                    params["pageToken"] = page_token
+                try:
+                    resp = self._make_request(
+                        "GET",
+                        f"{self.base_url}/api/v1/memos",
+                        params=params
+                    )
+                except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                    break
 
             if not resp.ok:
                 break
 
             data = resp.json()
             memos = data.get("memos", [])
+            if not memos and "data" in data:
+                payload = data["data"]
+                memos = payload if isinstance(payload, list) else []
 
             if filter_fn:
                 filtered = [m for m in memos if filter_fn(m)]
@@ -737,27 +814,45 @@ class MemosClient:
         safety_limit = 50
 
         for page_num in range(safety_limit):
-            params = {
-                "pageSize": page_size,
-                "filter": f"content.contains('{query}')"
-            }
-            if page_token:
-                params["pageToken"] = page_token
-
-            try:
-                resp = self._make_request(
-                    "GET",
-                    f"{self.base_url}/api/v1/memos",
-                    params=params
-                )
-            except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
-                break
+            if self._use_connect_api:
+                body = {
+                    "pageSize": page_size,
+                    "filter": f"content.contains('{query}')"
+                }
+                if page_token:
+                    body["pageToken"] = page_token
+                try:
+                    resp = self._make_request(
+                        "POST",
+                        f"{self.base_url}/memos.api.v1.MemoService/ListMemos",
+                        json=body
+                    )
+                except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                    break
+            else:
+                params = {
+                    "pageSize": page_size,
+                    "filter": f"content.contains('{query}')"
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                try:
+                    resp = self._make_request(
+                        "GET",
+                        f"{self.base_url}/api/v1/memos",
+                        params=params
+                    )
+                except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
+                    break
 
             if not resp.ok:
                 break
 
             data = resp.json()
             memos = data.get("memos", [])
+            if not memos and "data" in data:
+                payload = data["data"]
+                memos = payload if isinstance(payload, list) else []
 
             for m in memos:
                 content = m.get("content", "")
@@ -838,11 +933,18 @@ class MemosClient:
     def delete(self, memo_uid: str) -> bool:
         """删除记忆（使用 uid）"""
         try:
-            resp = self._make_request(
-                "PATCH",
-                f"{self.base_url}/api/v1/memos/{memo_uid}",
-                json={"rowStatus": "ARCHIVED"}
-            )
+            if self._use_connect_api:
+                resp = self._make_request(
+                    "POST",
+                    f"{self.base_url}/memos.api.v1.MemoService/DeleteMemo",
+                    json={"name": f"memos/{memo_uid}"}
+                )
+            else:
+                resp = self._make_request(
+                    "PATCH",
+                    f"{self.base_url}/api/v1/memos/{memo_uid}",
+                    json={"rowStatus": "ARCHIVED"}
+                )
             return resp.ok
         except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
             return False
@@ -865,7 +967,6 @@ class MemosClient:
             return None
 
         # 2. 准备更新数据
-        update_data = {}
         new_content = content or current.content
 
         if content is not None:
@@ -883,15 +984,28 @@ class MemosClient:
             tag_line = "\n\n" + " ".join([f"#{tag}" for tag in auto_tags])
             new_content = new_content + tag_line
 
-        update_data["content"] = new_content
-
         # 3. 调用 API 更新
         try:
-            resp = self._make_request(
-                "PATCH",
-                f"{self.base_url}/api/v1/memos/{memo_uid}",
-                json=update_data
-            )
+            if self._use_connect_api:
+                memo_body = {"name": f"memos/{memo_uid}"}
+                update_mask = []
+                if content is not None:
+                    memo_body["content"] = new_content
+                    update_mask.append("content")
+                if tags is not None:
+                    memo_body["tags"] = auto_tags
+                    update_mask.append("tags")
+                resp = self._make_request(
+                    "POST",
+                    f"{self.base_url}/memos.api.v1.MemoService/UpdateMemo",
+                    json={"memo": memo_body, "updateMask": ",".join(update_mask)}
+                )
+            else:
+                resp = self._make_request(
+                    "PATCH",
+                    f"{self.base_url}/api/v1/memos/{memo_uid}",
+                    json={"content": new_content}
+                )
         except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
             return None
 
@@ -899,7 +1013,7 @@ class MemosClient:
             return None
 
         # 4. 返回更新后的 Memory
-        data = resp.json()
+        data = self._unwrap_response(resp.json())
         name = data.get("name", "")
         uid = name.replace("memos/", "") if name.startswith("memos/") else name
 
@@ -917,17 +1031,24 @@ class MemosClient:
     def get_by_uid(self, memo_uid: str) -> Optional[Memory]:
         """根据 UID 获取记忆"""
         try:
-            resp = self._make_request(
-                "GET",
-                f"{self.base_url}/api/v1/memos/{memo_uid}"
-            )
+            if self._use_connect_api:
+                resp = self._make_request(
+                    "POST",
+                    f"{self.base_url}/memos.api.v1.MemoService/GetMemo",
+                    json={"name": f"memos/{memo_uid}"}
+                )
+            else:
+                resp = self._make_request(
+                    "GET",
+                    f"{self.base_url}/api/v1/memos/{memo_uid}"
+                )
         except (MemosRateLimitError, MemosAuthError, MemosPayloadTooLargeError, MemosServerError):
             return None
 
         if not resp.ok:
             return None
 
-        m = resp.json()
+        m = self._unwrap_response(resp.json())
         content = m.get("content", "")
         clean_content, tags = self._extract_tags(content)
 

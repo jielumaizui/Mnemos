@@ -70,7 +70,7 @@ class TestCheckMemos(unittest.TestCase):
 
         with patch("integrations.styx.MemosClient") as MockClient:
             instance = MockClient.return_value
-            instance.session.get.side_effect = Exception("Connection refused")
+            instance.list_all_memos.side_effect = Exception("Connection refused")
             status = ConnectionDiagnostics.check_memos(mock_config)
 
         self.assertTrue(status.configured)
