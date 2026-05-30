@@ -78,6 +78,23 @@ class KimiAdapter(AgentAdapter):
             logger.warning("Caught unexpected error at kimi_adapter.py", exc_info=True)
         return {"saved": True, "distill_task_id": sid}
 
+    def is_hooks_installed(self) -> bool:
+        """检查 Kimi config.toml 中是否已注册 Mnemos hooks"""
+        config_path = self.get_data_dir() / "config.toml"
+        wrapper_path = self.get_data_dir() / "mnemos_wrapper.py"
+        if not config_path.exists() or not wrapper_path.exists():
+            return False
+        try:
+            import tomllib
+            with open(config_path, "rb") as f:
+                cfg = tomllib.load(f)
+            hooks = cfg.get("hooks", [])
+            hook_cmds = [h.get("command", "") if isinstance(h, dict) else str(h) for h in hooks]
+            wrapper_cmd = f"python3 {wrapper_path}"
+            return wrapper_cmd in hook_cmds
+        except Exception:
+            return False
+
     def install_hooks(self) -> bool:
         """在 Kimi config.toml 中注册 session hooks"""
         try:

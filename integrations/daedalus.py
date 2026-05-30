@@ -99,6 +99,21 @@ class CodexAdapter(AgentAdapter):
             "distill_task_id": sid,
         }
 
+    def is_hooks_installed(self) -> bool:
+        """检查 Codex 的 wrapper 脚本是否已生成"""
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        wrapper_py = data_dir / "mnemos_wrapper.py"
+        wrapper_sh = data_dir / "mnemos-codex"
+        wrapper_bat = data_dir / "mnemos-codex.bat"
+        # 至少 Python wrapper + 当前平台对应的 shell wrapper 存在
+        if not wrapper_py.exists():
+            return False
+        if sys.platform == "win32":
+            return wrapper_bat.exists()
+        return wrapper_sh.exists()
+
     def install_hooks(self) -> bool:
         """安装 Codex 的 session hooks
 

@@ -95,6 +95,23 @@ class OpenCodeAdapter(AgentAdapter):
             pass
         return {"saved": True, "distill_task_id": sid}
 
+    def is_hooks_installed(self) -> bool:
+        """检查 OpenCode settings.json 中是否已安装 Mnemos hooks"""
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        settings_path = data_dir / "settings.json"
+        wrapper_path = data_dir / "mnemos_wrapper.py"
+        if not settings_path.exists() or not wrapper_path.exists():
+            return False
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            hooks = settings.get("hooks", {})
+            wrapper_str = str(wrapper_path)
+            return wrapper_str in hooks.get("session_start", "") and wrapper_str in hooks.get("session_end", "")
+        except Exception:
+            return False
+
     def install_hooks(self) -> bool:
         """安装 OpenCode 的 session hooks
 

@@ -752,6 +752,43 @@ def cmd_agent(args):
         else:
             print("未检测到任何 Agent")
 
+        # 使用统一诊断引擎
+        from core.diagnostics import ConnectionDiagnostics
+
+        print("\n" + "=" * 60)
+        print("连接状态检测")
+        print("=" * 60)
+
+        memos = ConnectionDiagnostics.check_memos()
+        wiki = ConnectionDiagnostics.check_wiki()
+        agents = ConnectionDiagnostics.check_agents()
+
+        # Memos
+        memos_status = "已连接且可连通" if (memos.configured and memos.reachable) else ("已配置但不可达" if memos.configured else "未配置")
+        print(f"  {'✓' if (memos.configured and memos.reachable) else '✗'} Memos: {memos_status}")
+
+        # Wiki
+        wiki_status = "就绪" if (wiki.exists and wiki.writable) else ("存在但不可写" if wiki.exists else "未就绪")
+        print(f"  {'✓' if (wiki.exists and wiki.writable) else '✗'} Wiki: {wiki_status} ({wiki.path})")
+
+        # Agent 数据源（带 hooks 状态）
+        for agent in agents:
+            hook_mark = "[hooks]" if agent.hooks_installed else ""
+            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
+
+        # 待办任务
+        tasks = ConnectionDiagnostics.generate_task_list(memos, wiki, agents)
+        pending = [t for t in tasks if not t.completed]
+        if pending:
+            print("\n待办连接任务:")
+            for i, t in enumerate(pending, 1):
+                marker = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(t.priority, "⚪")
+                print(f"  {marker} [{t.priority.upper()}] {t.task}")
+                print(f"      → {t.action}")
+            print("\n提示: 宿主 Agent 可以通过 MCP 调用 self_diagnose() 获取完整诊断报告")
+        else:
+            print("\n✓ 所有核心连接已就绪")
+
     elif args.agent_cmd == "install":
         print("=" * 60)
         print("安装 Agent hooks")
@@ -788,23 +825,12 @@ def cmd_agent(args):
             except Exception as e:
                 print(f"  ✗ 可用性检查失败: {e}")
 
-            # 2. Hooks 安装
-            data_dir = agent.get_data_dir()
-            if data_dir:
-                hooks_ok = False
-                if agent.name == "claude":
-                    hooks_ok = (data_dir / "settings.json").exists()
-                elif agent.name == "hermes":
-                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
-                elif agent.name == "openclaw":
-                    hooks_ok = (agent._sqlite_path()).exists()
-                elif agent.name == "opencode":
-                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
-                elif agent.name == "codex":
-                    hooks_ok = (data_dir / "mnemos_wrapper.py").exists()
+            # 2. Hooks 安装（使用 adapter 统一的 is_hooks_installed）
+            try:
+                hooks_ok = agent.is_hooks_installed()
                 print(f"  {'✓' if hooks_ok else '✗'} Hooks: {'已安装' if hooks_ok else '未安装'}")
-            else:
-                print(f"  ☐ 数据目录: 未配置")
+            except Exception as e:
+                print(f"  ✗ Hooks 检查失败: {e}")
 
             # 3. 事件目录
             event_dir = Path.home() / ".mnemos" / "events"

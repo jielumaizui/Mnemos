@@ -109,6 +109,14 @@ class AgentAdapter(ABC):
         """返回 Agent 的数据目录（可选覆盖）"""
         return None
 
+    def is_hooks_installed(self) -> bool:
+        """检查 hooks 是否已安装。
+
+        子类应覆盖此方法以提供适配器特定的验证逻辑。
+        默认返回 False（未知状态）。
+        """
+        return False
+
 
 class AgentRegistry:
     """Agent 注册表 — 自动发现和管理所有适配器"""

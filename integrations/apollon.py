@@ -1496,16 +1496,16 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def is_available(self) -> bool:
         """检测 Claude Code 是否安装"""
-        # 1. macOS 标准路径
+        # 1. 新版 Claude Code (>= 0.40) 默认路径 ~/.claude/settings.json
+        settings_path = Path.home() / ".claude" / "settings.json"
+        if settings_path.exists():
+            return True
+        # 2. macOS 旧版标准路径
         settings_path = Path.home() / "Library" / "Application Support" / "Claude" / "settings.json"
         if settings_path.exists():
             return True
-        # 2. Linux/Windows 标准路径
+        # 3. Linux/Windows 旧版标准路径
         settings_path = Path.home() / ".config" / "claude" / "settings.json"
-        if settings_path.exists():
-            return True
-        # 3. Claude Code CLI 常用路径（npm 全局安装）
-        settings_path = Path.home() / ".claude" / "settings.json"
         if settings_path.exists():
             return True
         # 4. 检查 claude 命令是否在 PATH 中
@@ -1515,10 +1515,11 @@ class ClaudeCodeAdapter(AgentAdapter):
         return False
 
     def get_config_path(self) -> Optional[Path]:
+        # 优先新版路径
         candidates = [
+            Path.home() / ".claude" / "settings.json",
             Path.home() / "Library" / "Application Support" / "Claude" / "settings.json",
             Path.home() / ".config" / "claude" / "settings.json",
-            Path.home() / ".claude" / "settings.json",
         ]
         for p in candidates:
             if p.exists():
@@ -1598,6 +1599,22 @@ class ClaudeCodeAdapter(AgentAdapter):
             "retrospective": retro_result,
             "distill_task_id": sid,
         }
+
+    def is_hooks_installed(self) -> bool:
+        """检查 Claude Code settings.json 中是否已安装 Mnemos hooks"""
+        settings_path = self.get_config_path()
+        if not settings_path:
+            return False
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+            hooks = settings.get("hooks", {})
+            script_path = str(Path(__file__).resolve())
+            start_hook = hooks.get("session_start", "")
+            end_hook = hooks.get("session_end", "")
+            return script_path in start_hook and script_path in end_hook
+        except Exception:
+            return False
 
     def install_hooks(self) -> bool:
         """安装 Claude Code settings.json hooks"""

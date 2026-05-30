@@ -329,12 +329,21 @@ class Config:
             return Path.home() / "wiki"
 
     def _default_claude_settings_path(self) -> Path:
+        # 新版 Claude Code (>= 0.40) 默认使用 ~/.claude/settings.json
+        # 旧版使用平台特定路径。优先检测新版路径。
+        candidates = [
+            Path.home() / ".claude" / "settings.json",
+        ]
         if sys.platform == "win32":
-            return Path.home() / "AppData" / "Roaming" / "Claude" / "settings.json"
+            candidates.append(Path.home() / "AppData" / "Roaming" / "Claude" / "settings.json")
         elif sys.platform == "darwin":
-            return Path.home() / "Library" / "Application Support" / "Claude" / "settings.json"
+            candidates.append(Path.home() / "Library" / "Application Support" / "Claude" / "settings.json")
         else:
-            return Path.home() / ".config" / "claude" / "settings.json"
+            candidates.append(Path.home() / ".config" / "claude" / "settings.json")
+        for p in candidates:
+            if p.exists():
+                return p
+        return candidates[0]  # 默认返回新版路径
 
     def _load_legacy_config(self) -> Dict:
         """读取旧 YAML 配置。旧文件只作为迁移来源，运行时权威文件始终是 main.json。"""
@@ -433,21 +442,17 @@ class Config:
 
     @property
     def claude_data_dir(self) -> Path:
+        # 新版 Claude Code 默认 ~/.claude，优先检测
+        modern = Path.home() / ".claude"
+        if modern.exists():
+            return modern
         if sys.platform == "win32":
             p = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude"
-            if p.exists():
-                return p
-            return Path.home() / ".claude"
         elif sys.platform == "darwin":
             p = Path.home() / "Library" / "Application Support" / "Claude"
-            if p.exists():
-                return p
-            return Path.home() / ".claude"
         else:
             p = Path.home() / ".config" / "claude"
-            if p.exists():
-                return p
-            return Path.home() / ".claude"
+        return p if p.exists() else modern
 
     def get(self, key: str, default=None) -> Any:
         """按点号路径获取配置值：config.get('scoring.retrain_buffer')"""

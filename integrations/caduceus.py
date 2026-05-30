@@ -85,6 +85,15 @@ class HermesAdapter(AgentAdapter):
             pass
         return {"saved": True, "distill_task_id": sid}
 
+    def is_hooks_installed(self) -> bool:
+        """检查 Hermes 的 Mnemos 配置文件和 wrapper 脚本是否存在"""
+        hermes_dir = self.get_data_dir()
+        if not hermes_dir:
+            return False
+        wrapper = hermes_dir / "mnemos_wrapper.py"
+        config = hermes_dir / "mnemos_config.toml"
+        return wrapper.exists() and config.exists()
+
     def install_hooks(self) -> bool:
         """安装 Hermes 的 session hooks
 

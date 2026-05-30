@@ -70,6 +70,10 @@ class MCPServer:
             "retrospective_list": self._tool_retrospective_list,
             "knowledge_source_list": self._tool_knowledge_source_list,
             "health_check": self._tool_health_check,
+            "self_diagnose": self._tool_self_diagnose,
+            "configure_memos": self._tool_configure_memos,
+            "configure_wiki": self._tool_configure_wiki,
+            "detect_sources": self._tool_detect_sources,
             "context_aware_search": self._tool_context_aware_search,
             "intent_route": self._tool_intent_route,
             "blindspot_check": self._tool_blindspot_check,
@@ -544,7 +548,7 @@ tags: [{', '.join(tags or ['file_import'])}]
         """获取用户画像摘要"""
         from core.persona.pythia import PreferenceAnalyzer
         analyzer = PreferenceAnalyzer()
-        profile = analyzer.analyze_full(days=30)
+        profile = analyzer.analyze(days=30)
         return {
             "success": True,
             "profile": {
@@ -556,10 +560,12 @@ tags: [{', '.join(tags or ['file_import'])}]
         }
 
     def _tool_persona_behavior_prompt(self) -> Dict:
-        """获取画像驱动的 AI 行为提示词"""
+        """获取画像驱动的 AI 行为提示词（含 Mnemos 连接指南）"""
         from core.persona.pythia import PreferenceAnalyzer
+
+        # 1. 画像分析
         analyzer = PreferenceAnalyzer()
-        profile = analyzer.analyze_full(days=30)
+        profile = analyzer.analyze(days=30)
         prompts = []
         if profile.energy:
             e = profile.energy
@@ -579,15 +585,65 @@ tags: [{', '.join(tags or ['file_import'])}]
                 prompts.append("用户重正确性轻效率，宁可慢也要对。")
             if v.perfection_vs_completion and v.perfection_vs_completion > 0.6:
                 prompts.append("用户追求完美，注意细节和边界条件。")
+
+        # 2. Mnemos 宿主 Agent 连接指南（提示词注入）
+        onboarding = self._load_onboarding_prompt()
+
         return {
             "success": True,
             "behavior_prompts": prompts,
+            "onboarding_prompt": onboarding,
             "raw_profile": {
                 "energy": profile.energy.__dict__ if profile.energy else {},
                 "cognitive": profile.cognitive.__dict__ if profile.cognitive else {},
                 "value": profile.value.__dict__ if profile.value else {},
             },
         }
+
+    def _load_onboarding_prompt(self) -> str:
+        """加载宿主 Agent 连接指南（根据当前系统状态动态裁剪）"""
+        from core.diagnostics import ConnectionDiagnostics
+
+        onboarding_path = Path(__file__).parent.parent / "prompts" / "agent_onboarding.md"
+        if onboarding_path.exists():
+            base = onboarding_path.read_text(encoding="utf-8")
+        else:
+            base = (
+                "\n[Mnemos Onboarding]\n"
+                "你是 Mnemos 的宿主 Agent。请帮用户完成以下连接任务：\n"
+                "1. 调用 self_diagnose() 查看系统状态\n"
+                "2. 如有 Memos，调用 configure_memos(api_url=..., token=...)\n"
+                "3. 确认 Wiki 路径，调用 configure_wiki(vault_path=...)\n"
+                "4. 调用 detect_sources() 检查 Agent 数据源\n"
+            )
+
+        # 获取当前状态，动态标注任务完成度
+        try:
+            report = ConnectionDiagnostics.full_report()
+            tasks = report.get("tasks", [])
+
+            # 构建状态摘要
+            lines = ["\n[Mnemos 连接状态快照]"]
+            pending_high = [t for t in tasks if t.get("priority") == "high" and not t.get("completed")]
+            pending_medium = [t for t in tasks if t.get("priority") == "medium" and not t.get("completed")]
+
+            if not pending_high and not pending_medium:
+                lines.append("✓ 所有核心连接已就绪，Mnemos 完全在线。")
+            else:
+                if pending_high:
+                    lines.append("🔴 高优先级待办:")
+                    for t in pending_high:
+                        lines.append(f"  • {t['task']}: {t['action']}")
+                if pending_medium:
+                    lines.append("🟡 中优先级待办:")
+                    for t in pending_medium:
+                        lines.append(f"  • {t['task']}: {t['action']}")
+
+            # 合并到 onboarding 末尾
+            return base + "\n" + "\n".join(lines) + "\n"
+        except Exception:
+            # 诊断失败时返回原始模板
+            return base
 
     def _tool_signal_collect(self, sources: List[str] = None) -> Dict:
         """触发信号采集"""
@@ -1127,7 +1183,7 @@ tags: [{', '.join(tags or ['file_import'])}]
 
             # 2. 分析画像
             analyzer = PreferenceAnalyzer()
-            profile = analyzer.analyze_full(days=30)
+            profile = analyzer.analyze(days=30)
 
             return {
                 "success": True,
@@ -1381,6 +1437,116 @@ tags: [{', '.join(tags or ['file_import'])}]
             "success": True,
             "healthy": healthy,
             "checks": checks,
+        }
+
+    def _tool_self_diagnose(self) -> Dict:
+        """Mnemos 自诊断 — 返回完整系统状态报告"""
+        from core.diagnostics import ConnectionDiagnostics
+
+        report = ConnectionDiagnostics.full_report()
+        report["success"] = True
+        return report
+
+    def _tool_configure_memos(self, api_url: str, token: str) -> Dict:
+        """配置 Memos 连接"""
+        from core.config import get_config
+
+        config = get_config()
+        try:
+            config._data.setdefault("memos", {})
+            config._data["memos"]["enabled"] = True
+            config._data["memos"]["api_url"] = api_url.rstrip("/")
+            config._data["memos"]["token"] = token
+            config.save()
+
+            # 验证连通性
+            from integrations.styx import MemosClient
+            client = MemosClient(token=token, base_url=api_url)
+            resp = client.session.get(
+                f"{client.base_url}/api/v1/auth/status",
+                headers=client.headers,
+                timeout=5,
+            )
+            reachable = resp.status_code == 200
+
+            return {
+                "success": True,
+                "memos_connected": reachable,
+                "api_url": api_url,
+                "message": "Memos 配置已保存" + (" 且连通性验证通过" if reachable else " 但连通性验证失败"),
+            }
+        except Exception as e:
+            logger.error(f"配置 Memos 失败: {e}")
+            return {"success": False, "message": f"配置失败: {e}"}
+
+    def _tool_configure_wiki(self, vault_path: str) -> Dict:
+        """配置 Wiki/Obsidian 路径"""
+        from core.config import get_config
+        from pathlib import Path
+
+        config = get_config()
+        try:
+            path = Path(vault_path).expanduser().resolve()
+            path.mkdir(parents=True, exist_ok=True)
+
+            config._data.setdefault("wiki", {})
+            config._data["wiki"]["vault_path"] = str(path)
+            config.save()
+
+            return {
+                "success": True,
+                "vault_path": str(path),
+                "exists": path.exists(),
+                "writable": os.access(path, os.W_OK),
+                "message": f"Wiki 路径已配置: {path}",
+            }
+        except Exception as e:
+            logger.error(f"配置 Wiki 失败: {e}")
+            return {"success": False, "message": f"配置失败: {e}"}
+
+    def _tool_detect_sources(self) -> Dict:
+        """检测所有数据源状态"""
+        from core.diagnostics import ConnectionDiagnostics
+
+        agents = ConnectionDiagnostics.check_agents()
+        memos = ConnectionDiagnostics.check_memos()
+        wiki = ConnectionDiagnostics.check_wiki()
+
+        sources = {
+            "memos": {
+                "enabled": memos.enabled,
+                "configured": memos.configured,
+                "reachable": memos.reachable,
+            },
+            "wiki": {
+                "path": wiki.path,
+                "exists": wiki.exists,
+                "writable": wiki.writable,
+            },
+        }
+
+        # Agent 数据源（带 hooks 状态）
+        for agent in agents:
+            sources[agent.name] = {
+                "detected": agent.available,
+                "path": agent.data_dir,
+                "hooks_installed": agent.hooks_installed,
+            }
+
+        # 补充 PathDiscover 发现的额外 Agent（无 adapter 的）
+        from core.sync_framework.registry import PathDiscover
+        for name in ["aider", "gemini", "cursor", "windsurf"]:
+            if name not in sources:
+                data_dir = PathDiscover.find(name)
+                sources[name] = {
+                    "detected": data_dir is not None,
+                    "path": str(data_dir) if data_dir else None,
+                    "hooks_installed": False,
+                }
+
+        return {
+            "success": True,
+            "sources": sources,
         }
 
     # ---- JSON-RPC 2.0 / MCP 协议处理 ----
@@ -1707,6 +1873,45 @@ tags: [{', '.join(tags or ['file_import'])}]
             {
                 "name": "health_check",
                 "description": "系统健康检查。检查 Mnemos 各组件状态：配置完整性、Memos API 连通性、Wiki 目录可写性、模块可导入性、最近文件统计。当用户说'检查系统状态'、'doctor'时使用此工具。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+            {
+                "name": "self_diagnose",
+                "description": "Mnemos 自诊断 — 返回完整的系统状态报告，包括：已连接的 Agent、数据源状态、Memos/Wiki 连接状态、缺失的配置项。宿主 Agent 应在每次会话开始时调用此工具，了解当前连接状态并决定下一步操作。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+            {
+                "name": "configure_memos",
+                "description": "配置 Memos 连接 — 设置 Memos API URL 和 Token。当用户说'我有 Memos'、'连上 Memos'时使用此工具。配置后会持久化到 ~/.mnemos/configs/main.json，并立即生效。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "api_url": {"type": "string", "description": "Memos API 地址，如 https://memos.example.com"},
+                        "token": {"type": "string", "description": "Memos API Token"},
+                    },
+                    "required": ["api_url", "token"],
+                },
+            },
+            {
+                "name": "configure_wiki",
+                "description": "配置 Wiki/Obsidian 路径 — 设置知识库根目录。当用户的 Obsidian Vault 路径与当前配置不一致时使用此工具。配置后会持久化到 ~/.mnemos/configs/main.json。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "vault_path": {"type": "string", "description": "Wiki 知识库根目录绝对路径，如 ~/Documents/Obsidian Vault/wiki"},
+                    },
+                    "required": ["vault_path"],
+                },
+            },
+            {
+                "name": "detect_sources",
+                "description": "数据源状态检测 — 返回所有 Agent 数据源和外部系统的连接状态。包括：各 Agent 数据目录是否存在、hooks 是否生效、Memos 是否连通、Wiki 目录是否可写。宿主 Agent 应在启动时调用此工具自检。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},

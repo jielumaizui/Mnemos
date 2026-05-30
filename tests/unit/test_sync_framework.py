@@ -505,6 +505,9 @@ class TestAgentRegistry(unittest.TestCase):
 
 
 class TestPathDiscover(unittest.TestCase):
+    def setUp(self):
+        PathDiscover.invalidate_cache()
+
     def test_find_user_config_priority(self):
         """用户配置优先级最高"""
         with tempfile.TemporaryDirectory() as td:

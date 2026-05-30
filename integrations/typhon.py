@@ -97,6 +97,25 @@ class OpenClawAdapter(AgentAdapter):
 
     # ── hooks 安装（保持 SQLite 方式，用于 Mnemos 内部事件通信）──
 
+    def is_hooks_installed(self) -> bool:
+        """检查 OpenClaw sessions.db 中是否已启用 Mnemos"""
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        db_path = data_dir / "sessions.db"
+        wrapper_path = data_dir / "mnemos_wrapper.py"
+        if not db_path.exists() or not wrapper_path.exists():
+            return False
+        try:
+            with sqlite3.connect(str(db_path), timeout=10) as conn:
+                row = conn.execute(
+                    "SELECT value FROM mnemos_config WHERE key = ?",
+                    ("mnemos_enabled",)
+                ).fetchone()
+                return row is not None and row[0] == "true"
+        except Exception:
+            return False
+
     def install_hooks(self) -> bool:
         """安装 OpenClaw 的 session hooks"""
         try:

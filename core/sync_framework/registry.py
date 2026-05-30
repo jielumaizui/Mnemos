@@ -117,7 +117,7 @@ class AgentRegistry:
 
 
 class PathDiscover:
-    """跨平台 Agent 数据目录发现"""
+    """跨平台 Agent 数据目录发现（5 层回退 + 缓存 + 启发式搜索）"""
 
     AGENT_CONFIG = {
         "claude":   {"env": [],               "std": ["~/.claude"]},
@@ -131,6 +131,21 @@ class PathDiscover:
         "windsurf": {"env": ["WINDSURF_HOME"], "std": ["~/.windsurf", "~/.config/Windsurf"]},
     }
 
+    # 进程名 → 可能的 CLI 参数映射（用于从 ps 输出推导数据目录）
+    PROCESS_ARG_MAP = {
+        "claude":   {"--data-dir": lambda v: Path(v).expanduser()},
+        "codex":    {"--home": lambda v: Path(v).expanduser()},
+        "openclaw": {"--profile": lambda v: Path.home() / f".openclaw-{v}"},
+    }
+
+    # 启发式搜索：文件名特征 → Agent 名称
+    HEURISTIC_PATTERNS = {
+        "claude":   {"filenames": ["settings.json"], "content_marker": '"hooks"'},
+        "kimi":     {"filenames": ["config.toml"],   "content_marker": None},
+        "codex":    {"filenames": ["settings.json"], "content_marker": None},
+        "hermes":   {"filenames": ["config.toml"],   "content_marker": None},
+    }
+
     AGENT_SUBDIRS = {
         "claude":   "projects",
         "kimi":     "sessions",
@@ -140,9 +155,26 @@ class PathDiscover:
         "gemini":   "sessions",
     }
 
+    _cache: Dict[str, tuple[Optional[Path], float]] = {}
+    _cache_ttl = 60  # 秒
+
     @classmethod
     def find(cls, agent_name: str) -> Optional[Path]:
-        """发现 Agent 数据目录（4 层回退）"""
+        """发现 Agent 数据目录（5 层回退）"""
+        # 缓存命中检查
+        cached = cls._cache.get(agent_name)
+        if cached:
+            path, ts = cached
+            if time.time() - ts < cls._cache_ttl:
+                return path
+
+        result = cls._do_find(agent_name)
+        cls._cache[agent_name] = (result, time.time())
+        return result
+
+    @classmethod
+    def _do_find(cls, agent_name: str) -> Optional[Path]:
+        """实际发现逻辑"""
         # 1. 用户显式配置
         config = cls._load_user_config()
         if agent_name in config:
@@ -162,14 +194,23 @@ class PathDiscover:
                 if path.exists():
                     return path
 
-        # 3. 进程探测（psutil）
+        # 3. 进程探测（增强为所有 Agent）
         try:
-            cls._discover_from_process(agent_name)
+            result = cls._discover_from_process(agent_name)
+            if result:
+                return result
         except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at registry.py", exc_info=True)
             pass
 
-        # 4. 标准路径
+        # 4. 文件系统启发式搜索（新增）
+        try:
+            result = cls._heuristic_search(agent_name)
+            if result:
+                return result
+        except Exception:
+            pass
+
+        # 5. 标准路径
         for std_path in cfg.get("std", []):
             path = Path(std_path).expanduser()
             if path.exists():
@@ -178,18 +219,22 @@ class PathDiscover:
         return None
 
     @classmethod
+    def invalidate_cache(cls, agent_name: str = None):
+        """使缓存失效。agent_name=None 时清空全部缓存。"""
+        if agent_name is None:
+            cls._cache.clear()
+        else:
+            cls._cache.pop(agent_name, None)
+
+    @classmethod
     def _discover_from_process(cls, agent_name: str) -> Optional[Path]:
-        """通过 psutil 进程探测发现数据目录"""
+        """通过 psutil 进程探测发现数据目录（支持所有 Agent）"""
         try:
             import psutil
         except ImportError:
             return None
 
-        profile_arg_map = {
-            "openclaw": {"--profile": lambda v: Path.home() / f".openclaw-{v}"},
-            "codex": {"--home": lambda v: Path(v).expanduser()},
-        }
-        arg_mapping = profile_arg_map.get(agent_name, {})
+        arg_mapping = cls.PROCESS_ARG_MAP.get(agent_name, {})
 
         for proc in psutil.process_iter(['name', 'cmdline']):
             name = proc.info.get('name', '') or ''
@@ -197,6 +242,7 @@ class PathDiscover:
                 continue
 
             cmdline = proc.info.get('cmdline') or []
+            # 1. 解析已知 CLI 参数
             for i, arg in enumerate(cmdline):
                 if arg in arg_mapping and i + 1 < len(cmdline):
                     val = cmdline[i + 1]
@@ -204,6 +250,61 @@ class PathDiscover:
                     if candidate.exists():
                         return candidate
 
+            # 2. 从进程 exe 路径推导（通用策略）
+            try:
+                exe = proc.exe()
+                if exe:
+                    # 例如 /usr/local/bin/claude → 查找 ~/.claude
+                    home = Path.home()
+                    dot_dir = home / f".{agent_name.lower()}"
+                    if dot_dir.exists():
+                        return dot_dir
+            except Exception:
+                pass
+
+        return None
+
+    @classmethod
+    def _heuristic_search(cls, agent_name: str) -> Optional[Path]:
+        """文件系统启发式搜索：在常见父目录中搜索已知配置文件"""
+        pattern = cls.HEURISTIC_PATTERNS.get(agent_name)
+        if not pattern:
+            return None
+
+        # 常见父目录（按优先级）
+        parents = [
+            Path.home(),
+            Path.home() / ".config",
+            Path.home() / "Library" / "Application Support",
+        ]
+
+        filenames = pattern["filenames"]
+        marker = pattern.get("content_marker")
+
+        for parent in parents:
+            if not parent.exists():
+                continue
+            try:
+                for entry in os.scandir(parent):
+                    if not entry.is_dir():
+                        continue
+                    # 目录名匹配 agent_name（如 .claude, kimi）
+                    if agent_name.lower() not in entry.name.lower():
+                        continue
+                    for fn in filenames:
+                        candidate = Path(entry.path) / fn
+                        if candidate.exists():
+                            if marker:
+                                try:
+                                    content = candidate.read_text(encoding="utf-8", errors="ignore")
+                                    if marker in content:
+                                        return Path(entry.path)
+                                except Exception:
+                                    continue
+                            else:
+                                return Path(entry.path)
+            except PermissionError:
+                continue
         return None
 
     @classmethod
@@ -215,7 +316,6 @@ class PathDiscover:
                 with open(config_file, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
         return {}
 
