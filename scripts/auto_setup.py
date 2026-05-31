@@ -490,6 +490,207 @@ def install_agent_hooks(yes_mode: bool = False) -> bool:
         return False
 
 
+# ── 步骤 7.5: 配置自动蒸馏 ──
+
+def _detect_installed_agents() -> Dict[str, bool]:
+    """检测本地安装的 AI Agent"""
+    agents = {}
+    # Kimi
+    agents["kimi"] = shutil.which("kimi") is not None
+    # Claude
+    agents["claude"] = shutil.which("claude") is not None or (Path.home() / ".claude").exists()
+    # Cursor
+    agents["cursor"] = (Path.home() / ".cursor").exists() or shutil.which("cursor") is not None
+    # Windsurf
+    agents["windsurf"] = (Path.home() / ".windsurf").exists() or shutil.which("windsurf") is not None
+    return agents
+
+
+def _detect_api_configs() -> Dict[str, bool]:
+    """检测已配置的 API key"""
+    apis = {}
+    apis["siliconflow"] = bool(os.getenv("SILICONFLOW_API_KEY"))
+    apis["openai"] = bool(os.getenv("OPENAI_API_KEY"))
+    apis["anthropic"] = bool(os.getenv("ANTHROPIC_API_KEY"))
+    apis["deepseek"] = bool(os.getenv("DEEPSEEK_API_KEY"))
+    # 也检查运行时配置
+    try:
+        from core.config import get_config
+        cfg = get_config()
+        providers = cfg.get("llm.providers", {})
+        for name in ["siliconflow", "openai", "anthropic", "deepseek"]:
+            if name in providers and providers[name].get("api_key"):
+                apis[name] = True
+    except Exception:
+        pass
+    return apis
+
+
+def setup_distillation(yes_mode: bool = False) -> str:
+    """交互式配置自动蒸馏方案
+
+    Returns:
+        用户选择的方案标识: "api" | "kimi" | "claude" | "generic"
+    """
+    print("  检测自动蒸馏环境...")
+    agents = _detect_installed_agents()
+    apis = _detect_api_configs()
+
+    # 显示检测结果
+    print("  检测到以下 AI Agent:")
+    for name, available in agents.items():
+        icon = "✓" if available else "✗"
+        print(f"    [{icon}] {name.title()}")
+
+    print("  检测到 API 配置:")
+    has_any_api = False
+    for name, available in apis.items():
+        icon = "✓" if available else "✗"
+        print(f"    [{icon}] {name.title()} API")
+        if available:
+            has_any_api = True
+
+    # 全自动模式：自动选择最佳方案
+    if yes_mode:
+        if has_any_api:
+            print("  自动选择: API 蒸馏模式")
+            _write_distill_config("api")
+            return "api"
+        elif agents.get("kimi"):
+            print("  自动选择: Kimi CLI 蒸馏模式")
+            _install_kimi_hook()
+            _write_distill_config("kimi")
+            return "kimi"
+        elif agents.get("claude"):
+            print("  自动选择: Claude 占位符模式")
+            _write_distill_config("claude")
+            return "claude"
+        else:
+            print("  自动选择: 手动模式")
+            _write_distill_config("generic")
+            return "generic"
+
+    # 交互式选择
+    print()
+    print("  请选择自动蒸馏方案:")
+    print("    A) 配置 API key（推荐，全自动，体验最佳）")
+    print("    B) 利用 Kimi CLI（利用 Coding Plan 额度，有 rate limit）")
+    print("    C) 利用 Claude Code（占位符模式，下次开 Claude 时提醒）")
+    print("    D) 手动模式（需要时运行 `mnemos distill`）")
+    print()
+
+    choice = ask("你的选择 (A/B/C/D):", default="", yes_mode=yes_mode).strip().upper()
+
+    if choice == "A":
+        print("  API 配置方式:")
+        print("    1. 环境变量: export SILICONFLOW_API_KEY=your_key")
+        print("    2. 配置文件: mnemos config set llm.providers.siliconflow.api_key your_key")
+        print()
+        print("  配置完成后，运行 `mnemos doctor` 验证。")
+        _write_distill_config("api")
+        return "api"
+
+    elif choice == "B":
+        if not agents.get("kimi"):
+            print_warn("未检测到 Kimi CLI，将回退到手动模式")
+            _write_distill_config("generic")
+            return "generic"
+        _install_kimi_hook()
+        _write_distill_config("kimi")
+        print_ok("Kimi SessionEnd hook 已安装")
+        print("  每次 Kimi 会话结束时，将自动触发蒸馏任务")
+        return "kimi"
+
+    elif choice == "C":
+        if not agents.get("claude"):
+            print_warn("未检测到 Claude Code，将回退到手动模式")
+            _write_distill_config("generic")
+            return "generic"
+        _write_distill_config("claude")
+        print_ok("Claude 占位符模式已配置")
+        print("  蒸馏任务将生成占位符，下次开 Claude 时自动提醒执行")
+        return "claude"
+
+    else:  # D 或其他
+        _write_distill_config("generic")
+        print_ok("手动模式已配置")
+        print("  运行 `mnemos distill --session <id>` 手动触发蒸馏")
+        return "generic"
+
+
+def _write_distill_config(strategy: str):
+    """将蒸馏策略写入运行时配置"""
+    try:
+        config_file = _runtime_config_path()
+        if config_file.exists():
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+        else:
+            data = {}
+        data.setdefault("distill", {})
+        data["distill"]["strategy"] = strategy
+        data["distill"]["auto_enabled"] = strategy != "generic"
+        config_file.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print_warn(f"写入蒸馏配置失败: {e}")
+
+
+def _install_kimi_hook():
+    """安装 Kimi SessionEnd hook"""
+    try:
+        config_path = Path.home() / ".kimi" / "config.toml"
+        if not config_path.exists():
+            print_warn("Kimi 配置文件不存在，跳过 hook 安装")
+            return
+
+        # 检查是否已有 mnemos hook（文本检查，兼容 Python 3.10）
+        config_text = config_path.read_text(encoding="utf-8")
+        has_mnemos = "mnemos" in config_text and "SessionEnd" in config_text
+        if has_mnemos:
+            print_warn("Kimi mnemos hook 已存在，跳过")
+            return
+
+        # 追加 hook
+        script_path = Path.home() / ".mnemos" / "hooks" / "kimi_session_end.py"
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_kimi_hook_script(script_path)
+
+        hook_text = f'\n[[hooks]]\ncommand = "python3 {script_path}"\nevent = "SessionEnd"\n'
+        with open(config_path, "a", encoding="utf-8") as f:
+            f.write(hook_text)
+        print_ok(f"Kimi hook 已写入: {config_path}")
+    except Exception as e:
+        print_warn(f"安装 Kimi hook 失败: {e}")
+
+
+def _write_kimi_hook_script(path: Path):
+    """写入 Kimi SessionEnd hook 脚本"""
+    script = '''#!/usr/bin/env python3
+"""Kimi SessionEnd hook — 会话结束时触发 Mnemos 蒸馏"""
+import os
+import sys
+from pathlib import Path
+
+# 确保能找到 Mnemos 模块
+mnemos_dir = Path.home() / "mnemos"
+if str(mnemos_dir) not in sys.path:
+    sys.path.insert(0, str(mnemos_dir))
+
+try:
+    from core.kia import amphora
+    # 触发收集完成的蒸馏结果
+    from core.hephaestus_worker import HephaestusWorker
+    worker = HephaestusWorker()
+    worker.collect_completed()
+except Exception:
+    pass
+'''
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+
+
 # ── 步骤 8: 启动 Daemon ──
 
 def start_daemon(yes_mode: bool = False) -> bool:
@@ -639,7 +840,7 @@ def main():
         sys.exit(0)
 
     yes_mode = args.yes
-    total_steps = 9
+    total_steps = 10
 
     print("=" * 60)
     print("Mnemos 自动部署")
@@ -687,20 +888,24 @@ def main():
         print_step(7, total_steps, "安装 Agent Hooks")
         print_warn("已跳过 (--skip-hooks)")
 
-    # 步骤 8
-    if not args.skip_daemon:
-        print_step(8, total_steps, "启动守护进程")
-        start_daemon(yes_mode=yes_mode)
-    else:
-        print_step(8, total_steps, "启动守护进程")
-        print_warn("已跳过 (--skip-daemon)")
+    # 步骤 8: 配置自动蒸馏
+    print_step(8, total_steps, "配置自动蒸馏")
+    distill_strategy = setup_distillation(yes_mode=yes_mode)
 
     # 步骤 9
+    if not args.skip_daemon:
+        print_step(9, total_steps, "启动守护进程")
+        start_daemon(yes_mode=yes_mode)
+    else:
+        print_step(9, total_steps, "启动守护进程")
+        print_warn("已跳过 (--skip-daemon)")
+
+    # 步骤 10
     if not args.skip_scheduler:
-        print_step(9, total_steps, "配置定时任务")
+        print_step(10, total_steps, "配置定时任务")
         setup_scheduler(yes_mode=yes_mode)
     else:
-        print_step(9, total_steps, "配置定时任务")
+        print_step(10, total_steps, "配置定时任务")
         print_warn("已跳过 (--skip-scheduler)")
 
     # 完成
@@ -711,13 +916,16 @@ def main():
     print(f"  Wiki: {wiki_dir}")
     if memos_url:
         print(f"  Memos: {memos_url}")
+    print(f"  蒸馏策略: {distill_strategy}")
     print()
     print("后续操作:")
     print("  python3 mnemos_cli.py doctor    # 系统诊断")
     print("  python3 mnemos_cli.py status    # 查看状态")
     print("  python3 mnemos_cli.py init      # 交互式调整配置")
+    if distill_strategy == "generic":
+        print("  python3 mnemos_cli.py distill   # 手动触发蒸馏")
     print()
-    print("Claude Code 重启后 hooks 生效。")
+    print("Claude Code / Kimi 重启后 hooks 生效。")
     print("=" * 60)
 
 
