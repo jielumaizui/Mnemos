@@ -1038,6 +1038,11 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     for _k in ("类型", "type"):
         cleaned_fm.pop(_k, None)
 
+    # 清理 fragment.frontmatter 中的旧类型字段，避免旧类型名覆盖代码映射的正确类型
+    cleaned_fm = dict(fragment.frontmatter or {})
+    for _k in ("类型", "type"):
+        cleaned_fm.pop(_k, None)
+
     defaults = {
         "type": entity_type,
         "name": fragment.title,
