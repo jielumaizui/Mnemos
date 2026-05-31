@@ -277,9 +277,13 @@ class CrossAgentLinker:
         if not results:
             results = self._find_similar_by_keywords(page_path, exclude_agent)
 
-        # 方案 C：文本相似度最终兜底（限制在同名文件附近，避免全库扫描）
+        # 方案 C：文本相似度最终兜底（限制在同名/内容相关文件附近，避免全库扫描）
         if not results:
             stem = page_path.stem.lower()
+            try:
+                page_content = page_path.read_text(encoding="utf-8").lower()
+            except Exception:
+                page_content = ""
             for search_path in [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]:
                 if not search_path.exists():
                     continue
@@ -289,8 +293,10 @@ class CrossAgentLinker:
                     other_agent = self._extract_agent_from_path(md_file)
                     if not other_agent or other_agent == exclude_agent:
                         continue
-                    # 只在同名或高度相关文件中搜索
-                    if stem not in md_file.stem.lower() and md_file.stem.lower() not in stem:
+                    cand_stem = md_file.stem.lower()
+                    # 放宽条件：文件名互相包含，或页面内容中提到候选文件名
+                    if (stem not in cand_stem and cand_stem not in stem
+                            and cand_stem not in page_content):
                         continue
                     try:
                         score = self._text_similarity(page_path, md_file)

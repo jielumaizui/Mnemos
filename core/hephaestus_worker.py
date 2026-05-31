@@ -78,11 +78,19 @@ class HephaestusWorker:
         return Path.home() / ".mnemos" / "distill_archive"
 
     def process_all(self, max_tasks: int = None) -> int:
-        """处理队列中所有待蒸馏任务（从 amphora SQLite 队列读取）
+        """处理队列中所有待蒸馏任务。
+
+        优先从 amphora SQLite 队列读取，若 amphora 不可用或为空，
+        则回退到直接从 queue_dir 扫描 *.json 文件（兼容旧测试和
+        未注册到 amphora 的直出管道）。
 
         Returns:
             处理的任务数量
         """
+        if not self.queue_dir.exists():
+            logger.debug(f"蒸馏队列不存在: {self.queue_dir}")
+            return 0
+
         # 先检查超时任务，恢复为待处理
         self._recover_expired_delegations()
 
@@ -92,30 +100,53 @@ class HephaestusWorker:
             logger.info("[Hephaestus] 本轮 max_tasks<=0，跳过队列处理")
             return 0
 
-        # 从 amphora 获取待处理任务
+        # 尝试从 amphora 获取待处理任务
+        amphora_available = False
+        pending_tasks = []
         try:
             from core.kia import amphora
             pending_tasks = amphora.list_pending(include_future_retry=False)
+            amphora_available = True
         except Exception as e:
-            logger.warning(f"[Hephaestus] 读取 amphora 队列失败: {e}")
-            return 0
-
-        if len(pending_tasks) > max_tasks:
-            logger.info(
-                "[Hephaestus] 队列积压 %d 个任务，本轮限量处理 %d 个",
-                len(pending_tasks), max_tasks,
-            )
+            logger.debug(f"[Hephaestus] 读取 amphora 队列失败，回退到文件扫描: {e}")
 
         processed = 0
-        for _ in range(max_tasks):
+
+        # --- 模式 A：amphora 驱动 ---
+        if amphora_available and pending_tasks:
+            if len(pending_tasks) > max_tasks:
+                logger.info(
+                    "[Hephaestus] 队列积压 %d 个任务，本轮限量处理 %d 个",
+                    len(pending_tasks), max_tasks,
+                )
+
+            for _ in range(max_tasks):
+                try:
+                    task = amphora.get_next()
+                    if not task:
+                        break
+                    if self.process_one_task(task):
+                        processed += 1
+                except Exception as e:
+                    logger.warning(f"处理蒸馏任务失败: {e}")
+                    continue
+            return processed
+
+        # --- 模式 B：文件扫描回退 ---
+        all_task_files = sorted(self.queue_dir.glob("*.json"))
+        task_files = all_task_files[:max_tasks]
+        if len(all_task_files) > max_tasks:
+            logger.info(
+                "[Hephaestus] 队列积压 %d 个任务，本轮限量处理 %d 个",
+                len(all_task_files), max_tasks,
+            )
+
+        for task_file in task_files:
             try:
-                task = amphora.get_next()
-                if not task:
-                    break
-                if self.process_one_task(task):
+                if self.process_one_file(task_file):
                     processed += 1
             except Exception as e:
-                logger.warning(f"处理蒸馏任务失败: {e}")
+                logger.warning(f"处理蒸馏任务失败 {task_file.name}: {e}")
                 continue
 
         return processed
@@ -144,14 +175,44 @@ class HephaestusWorker:
     MAX_RETRIES = 3  # 最大重试次数
 
     def process_one_file(self, task_file: Path) -> bool:
-        """[DEPRECATED] 处理单个蒸馏任务文件 — 保留兼容旧文件队列的调用"""
+        """[DEPRECATED] 处理单个蒸馏任务文件 — 保留兼容旧文件队列的调用
+
+        在 amphora 不可用的回退模式下，保持旧行为：委托成功后
+        将 .json 重命名为 .delegated 并记录重试次数。
+        """
         logger.warning("process_one_file() is deprecated. Use process_one_task() with amphora task dict.")
         try:
             data = json.loads(task_file.read_text(encoding="utf-8"))
         except Exception as e:
             logger.warning(f"读取任务文件失败 {task_file}: {e}")
             return False
-        return self.process_one_task(data)
+
+        session_id = data.get("session_id")
+        if not session_id:
+            logger.warning(f"任务缺少 session_id: {task_file}")
+            return False
+
+        # 检查重试次数
+        retry_count = data.get("retry_count", 0)
+        if retry_count >= self.MAX_RETRIES:
+            logger.error(
+                f"任务重试次数耗尽 ({retry_count}/{self.MAX_RETRIES})，标记为失败: {session_id}"
+            )
+            self._archive_failed_task(task_file, data, "重试次数耗尽，Agent持续不可用")
+            return False
+
+        # 复用 process_one_task 的核心逻辑，但委托成功后管理本地文件
+        ok = self.process_one_task(data)
+        if ok:
+            # 委托成功：将 .json 标记为 .delegated（回退模式兼容）
+            delegated_file = task_file.with_suffix(".delegated")
+            data["retry_count"] = retry_count + 1
+            delegated_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            task_file.unlink()
+        return ok
 
     def process_one_task(self, task: Dict) -> bool:
         """处理单个蒸馏任务（从 amphora SQLite 队列）
@@ -218,7 +279,11 @@ class HephaestusWorker:
         return True
 
     def collect_completed(self, max_files: int = None) -> int:
-        """收集已完成的蒸馏结果并移入 Inbox（从 amphora SQLite 队列）
+        """收集已完成的蒸馏结果并移入 Inbox。
+
+        优先从 amphora SQLite 队列获取 processing 任务，若 amphora 不可用
+        或为空，则回退到直接从 output_dir 扫描 *.md 文件（兼容旧测试
+        和未注册到 amphora 的直出管道）。
 
         Returns:
             收集的任务数量
@@ -232,62 +297,130 @@ class HephaestusWorker:
             logger.info("[Hephaestus] 本轮 max_files<=0，跳过结果收集")
             return 0
 
-        # 从 amphora 获取 processing 状态的任务
+        # 尝试从 amphora 获取 processing 状态的任务
+        processing_tasks = []
+        amphora_available = False
         try:
             from core.kia import amphora
             processing_tasks = amphora.list_processing()
+            amphora_available = True
         except Exception as e:
-            logger.warning(f"[Hephaestus] 读取 amphora processing 任务失败: {e}")
-            return 0
+            logger.debug(f"[Hephaestus] 读取 amphora processing 任务失败，回退到文件扫描: {e}")
 
         collected = 0
-        for task in processing_tasks[:max_files]:
-            session_id = task.get("session_id")
-            if not session_id:
-                continue
 
-            output_file = self.output_dir / f"{session_id}.md"
-            if not output_file.exists():
-                continue  # Agent 尚未生成输出
+        # --- 模式 A：amphora 驱动（有 processing 任务时）---
+        if amphora_available and processing_tasks:
+            for task in processing_tasks[:max_files]:
+                session_id = task.get("session_id")
+                if not session_id:
+                    continue
 
-            # 检查输出是否已完成（不是占位符）
-            content = output_file.read_text(encoding="utf-8")
-            if "MNEMOS_DISTILL_TASK" in content and len(content) < 200:
-                continue  # Agent 尚未覆盖占位符
+                output_file = self.output_dir / f"{session_id}.md"
+                if not output_file.exists():
+                    continue
 
-            # 验证输出格式：无效格式不入 Inbox，标记失败
-            validation = self._validate_distill_output(content)
-            if not validation["valid"]:
-                logger.warning(
-                    f"蒸馏输出格式验证失败 [{session_id[:8]}]: {validation['reason']}"
-                )
-                self._move_to_failed(output_file, session_id, task, validation["reason"])
+                if self._process_completed_file(output_file, session_id, task, amphora_available):
+                    collected += 1
+            return collected
+
+        # --- 模式 B：文件扫描回退（amphora 不可用或为空时）---
+        output_files = sorted(self.output_dir.glob("*.md"))
+        if len(output_files) > max_files:
+            logger.info(
+                "[Hephaestus] 完成结果积压 %d 个，本轮限量收集 %d 个",
+                len(output_files), max_files,
+            )
+
+        for output_file in output_files[:max_files]:
+            session_id = output_file.stem
+
+            # 尝试从 queue_dir 恢复任务数据
+            task_data = self._load_task_data(session_id)
+
+            if self._process_completed_file(output_file, session_id, task_data, amphora_available):
+                collected += 1
+
+        return collected
+
+    def _load_task_data(self, session_id: str) -> dict:
+        """从 queue_dir 加载任务数据（.json 或 .delegated）。"""
+        task_file = self.queue_dir / f"{session_id}.json"
+        delegated_file = self.queue_dir / f"{session_id}.delegated"
+
+        if task_file.exists():
+            try:
+                return json.loads(task_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        elif delegated_file.exists():
+            try:
+                return json.loads(delegated_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _process_completed_file(self, output_file: Path, session_id: str, task_data: dict, amphora_available: bool) -> bool:
+        """处理单个已完成文件：验证、移入 Inbox、标记完成/归档。
+
+        Returns:
+            True 表示成功收集，False 表示跳过或失败。
+        """
+        # 检查输出是否已完成（不是占位符）
+        content = output_file.read_text(encoding="utf-8")
+        if "MNEMOS_DISTILL_TASK" in content and len(content) < 200:
+            return False
+
+        # 验证输出格式：无效格式不入 Inbox，标记失败
+        validation = self._validate_distill_output(content)
+        if not validation["valid"]:
+            logger.warning(
+                f"蒸馏输出格式验证失败 [{session_id[:8]}]: {validation['reason']}"
+            )
+            self._move_to_failed(output_file, session_id, task_data, validation["reason"])
+            if amphora_available:
                 try:
+                    from core.kia import amphora
                     amphora.mark_failed(session_id, f"输出格式无效: {validation['reason']}")
                 except Exception:
                     pass
-                continue
+            else:
+                # 归档本地任务文件
+                task_file = self.queue_dir / f"{session_id}.json"
+                delegated_file = self.queue_dir / f"{session_id}.delegated"
+                if task_file.exists():
+                    self._archive_task(task_file)
+                if delegated_file.exists():
+                    self._archive_task(delegated_file)
+            return False
 
-            parsed = self._parse_distill_output(content)
-            if parsed and parsed.get("judgment") == "skip":
-                self._emit_progress(session_id, "skipped", "本次对话无新知识可提炼")
-            elif parsed:
-                fragments = parsed.get("fragments") or []
-                self._emit_progress(session_id, "extracted", f"已提炼 {len(fragments)} 条知识")
+        parsed = self._parse_distill_output(content)
+        if parsed and parsed.get("judgment") == "skip":
+            self._emit_progress(session_id, "skipped", "本次对话无新知识可提炼")
+        elif parsed:
+            fragments = parsed.get("fragments") or []
+            self._emit_progress(session_id, "extracted", f"已提炼 {len(fragments)} 条知识")
 
-            # 移入 Inbox
-            self._move_to_inbox(output_file, session_id, task)
+        # 移入 Inbox
+        self._move_to_inbox(output_file, session_id, task_data)
 
-            # 标记 amphora 任务完成
+        # 标记 amphora 任务完成或归档本地任务文件
+        if amphora_available:
             try:
+                from core.kia import amphora
                 inbox_path = self.inbox_dir / f"{session_id[:8]}.md"
                 amphora.mark_done(session_id, str(inbox_path) if inbox_path.exists() else None)
             except Exception as e:
                 logger.debug(f"标记 amphora 任务完成失败 {session_id}: {e}")
+        else:
+            task_file = self.queue_dir / f"{session_id}.json"
+            delegated_file = self.queue_dir / f"{session_id}.delegated"
+            if task_file.exists():
+                self._archive_task(task_file)
+            if delegated_file.exists():
+                self._archive_task(delegated_file)
 
-            collected += 1
-
-        return collected
+        return True
 
     def _rate_limit_delegate(self):
         """宿主 Agent 委托限速，避免积压恢复时连续唤起高负载任务。"""

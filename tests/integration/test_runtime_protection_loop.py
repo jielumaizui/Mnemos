@@ -61,6 +61,9 @@ def test_hephaestus_process_all_respects_batch_limit(tmp_path, monkeypatch):
 
 
 def test_eventbus_recover_pending_is_capped(tmp_path, monkeypatch):
+    import importlib
+    import core.mnemos_bus
+    importlib.reload(core.mnemos_bus)
     from core.mnemos_bus import EventBus
 
     recover_pending = EventBus._recover_pending

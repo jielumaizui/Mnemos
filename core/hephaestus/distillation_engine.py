@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import get_config
-from core.frontmatter import to_chinese_frontmatter
+from core.frontmatter import to_chinese_frontmatter, fm_get
 from core.kia.ingest_helpers import is_noise_message
 
 
@@ -1023,15 +1023,15 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
                        source: str = "") -> str:
     """生成 wiki 页面 Markdown — 对齐蓝图 32 字段规范"""
     # 实体类型优先从 LLM 输出获取，fallback 从知识形态映射
-    entity_type = (fragment.frontmatter or {}).get("类型", "")
+    entity_type = fm_get(fragment.frontmatter, "type", "")
     if not entity_type or entity_type in FORM_TO_ENTITY_TYPE:
         entity_type = _map_form_to_type(fragment.form)
 
-    # 摘要优先从 LLM 输出获取，fallback 到 title + core_content 组合
-    summary = (fragment.frontmatter or {}).get("摘要", "")
+    # 摘要优先从 LLM 输出获取，fallback 到 title + core_content 组合（截断至 150 字符）
+    summary = fm_get(fragment.frontmatter, "summary", "")
     if not summary:
         parts = [p for p in (fragment.title, fragment.background) if p]
-        summary = " — ".join(parts)[:150] if parts else fragment.title or ""
+        summary = " — ".join(parts)[:150] if parts else (fragment.title or "")[:150]
 
     # 清理 fragment.frontmatter 中的旧类型字段，避免旧类型名覆盖代码映射的正确类型
     cleaned_fm = dict(fragment.frontmatter or {})
