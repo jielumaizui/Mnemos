@@ -58,13 +58,13 @@ class TestGenerateWikiPage:
         page = generate_wiki_page(frag, "sess-123")
         assert "摘要: 自定义摘要" in page
 
-    def test_summary_truncated_to_80_chars(self):
+    def test_summary_truncated_to_150_chars(self):
         from core.hephaestus.distillation_engine import (
             generate_wiki_page,
             KnowledgeFragment,
         )
 
-        long_title = "A" * 100
+        long_title = "A" * 200
         frag = KnowledgeFragment(
             form="decision",
             title=long_title,
@@ -76,9 +76,9 @@ class TestGenerateWikiPage:
             related_concepts=[],
         )
         page = generate_wiki_page(frag, "sess-123")
-        # summary 应为前80字符
-        assert "摘要: " + "A" * 80 in page
-        assert "摘要: " + "A" * 81 not in page
+        # summary 应为前150字符（fallback 截断策略）
+        assert "摘要: " + "A" * 150 in page
+        assert "摘要: " + "A" * 151 not in page
 
 
 # ==================== 2. write_pages calls new linker ====================

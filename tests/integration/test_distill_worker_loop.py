@@ -157,60 +157,96 @@ class TestHephaestusWorkerLoop:
 
     def test_collect_completed_moves_to_inbox(self, dirs, monkeypatch):
         from core.hephaestus_worker import HephaestusWorker
+        from core.kia import amphora
 
-        # 预置一个已完成的输出文件（长度必须 >200，否则被当作占位符跳过）
-        output_file = dirs["output"] / "sess_001.md"
-        output_file.write_text(
-            'MNEMOS_DISTILL_TASK\n{"judgment": "knowledge", "fragments": [{"title": "Test Fragment", "form": "decision"}]}\n\n'
-            '# Test Fragment\n\nThis is a detailed content that must exceed two hundred characters '
-            'in total length so that the collect_completed method does not treat it as a placeholder.\n',
-            encoding="utf-8",
+        # 阻止 EventBus 加载 pending 事件
+        monkeypatch.setattr(
+            "core.mnemos_bus.EventBus._recover_pending",
+            lambda self: None,
         )
 
-        worker = HephaestusWorker(
-            queue_dir=dirs["queue"],
-            output_dir=dirs["output"],
-            inbox_dir=dirs["inbox"],
-            archive_dir=dirs["archive"],
-        )
-        result = worker.collect_completed()
+        # 临时替换 amphora DB 到临时目录
+        orig_db = amphora._DB_PATH
+        amphora._DB_PATH = dirs["queue"] / "amphora.db"
+        try:
+            # 在 amphora 中创建任务并标记为 processing
+            amphora.enqueue("sess_001", "test content", meta={"source": "claude"})
+            task = amphora.get_next()
+            assert task is not None
 
-        assert result >= 1
-        # inbox 中应有文件
-        assert len(list(dirs["inbox"].glob("*.md"))) >= 1
-        # 输出目录应被清理
-        assert len(list(dirs["output"].glob("*.md"))) == 0
+            # 预置一个已完成的输出文件（长度必须 >200，否则被当作占位符跳过）
+            output_file = dirs["output"] / "sess_001.md"
+            output_file.write_text(
+                'MNEMOS_DISTILL_TASK\n{"judgment": "knowledge", "fragments": [{"title": "Test Fragment", "form": "decision"}]}\n\n'
+                '# Test Fragment\n\nThis is a detailed content that must exceed two hundred characters '
+                'in total length so that the collect_completed method does not treat it as a placeholder.\n',
+                encoding="utf-8",
+            )
+
+            worker = HephaestusWorker(
+                queue_dir=dirs["queue"],
+                output_dir=dirs["output"],
+                inbox_dir=dirs["inbox"],
+                archive_dir=dirs["archive"],
+            )
+            result = worker.collect_completed()
+
+            assert result >= 1
+            # inbox 中应有文件
+            assert len(list(dirs["inbox"].glob("*.md"))) >= 1
+            # 输出目录应被清理
+            assert len(list(dirs["output"].glob("*.md"))) == 0
+        finally:
+            amphora._DB_PATH = orig_db
 
     def test_invalid_output_goes_to_failed(self, dirs, monkeypatch):
         from core.hephaestus_worker import HephaestusWorker
+        from core.kia import amphora
 
-        # 预置一个无效输出（缺少 judgment，长度 >200 避免占位符跳过）
-        output_file = dirs["output"] / "sess_bad.md"
-        output_file.write_text(
-            'MNEMOS_DISTILL_TASK\n{"fragments": []}\n\n'
-            'No judgment field here. This text needs to be longer than two hundred characters '
-            'so that collect_completed does not skip it as an unfinished placeholder output.\n',
-            encoding="utf-8",
-        )
-
-        worker = HephaestusWorker(
-            queue_dir=dirs["queue"],
-            output_dir=dirs["output"],
-            inbox_dir=dirs["inbox"],
-            archive_dir=dirs["archive"],
-        )
-        # mock _move_to_failed 使其写入临时目录，避免污染 ~/.mnemos
-        failed_tmp = dirs["queue"].parent / "distill_failed_tmp"
-        failed_tmp.mkdir(exist_ok=True)
-        def _mock_move_to_failed(self, output_path, session_id, task_data, reason):
-            (failed_tmp / f"{session_id}.md").write_text(reason, encoding="utf-8")
-            output_path.unlink()
+        # 阻止 EventBus 加载 pending 事件
         monkeypatch.setattr(
-            "core.hephaestus_worker.HephaestusWorker._move_to_failed",
-            _mock_move_to_failed,
+            "core.mnemos_bus.EventBus._recover_pending",
+            lambda self: None,
         )
 
-        result = worker.collect_completed()
+        # 临时替换 amphora DB
+        orig_db = amphora._DB_PATH
+        amphora._DB_PATH = dirs["queue"] / "amphora.db"
+        try:
+            # 在 amphora 中创建任务
+            amphora.enqueue("sess_bad", "test content", meta={"source": "claude"})
+            task = amphora.get_next()
+            assert task is not None
 
-        assert result == 0  # 无效输出不应被收集
-        assert len(list(failed_tmp.glob("*.md"))) >= 1
+            # 预置一个无效输出（缺少 judgment，长度 >200 避免占位符跳过）
+            output_file = dirs["output"] / "sess_bad.md"
+            output_file.write_text(
+                'MNEMOS_DISTILL_TASK\n{"fragments": []}\n\n'
+                'No judgment field here. This text needs to be longer than two hundred characters '
+                'so that collect_completed does not skip it as an unfinished placeholder output.\n',
+                encoding="utf-8",
+            )
+
+            worker = HephaestusWorker(
+                queue_dir=dirs["queue"],
+                output_dir=dirs["output"],
+                inbox_dir=dirs["inbox"],
+                archive_dir=dirs["archive"],
+            )
+            # mock _move_to_failed 使其写入临时目录，避免污染 ~/.mnemos
+            failed_tmp = dirs["queue"].parent / "distill_failed_tmp"
+            failed_tmp.mkdir(exist_ok=True)
+            def _mock_move_to_failed(self, output_path, session_id, task_data, reason):
+                (failed_tmp / f"{session_id}.md").write_text(reason, encoding="utf-8")
+                output_path.unlink()
+            monkeypatch.setattr(
+                "core.hephaestus_worker.HephaestusWorker._move_to_failed",
+                _mock_move_to_failed,
+            )
+
+            result = worker.collect_completed()
+
+            assert result == 0  # 无效输出不应被收集
+            assert len(list(failed_tmp.glob("*.md"))) >= 1
+        finally:
+            amphora._DB_PATH = orig_db

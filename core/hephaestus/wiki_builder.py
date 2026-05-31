@@ -75,7 +75,31 @@ def _ensure_wiki_dirs():
 # ========== SQLite 状态管理 ==========
 
 def _get_conn():
-    return sqlite3.connect(str(_get_wiki_db()), timeout=10)
+    db_path = _get_wiki_db()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=10)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS processed_sessions (
+            session_id TEXT PRIMARY KEY,
+            source TEXT,
+            message_count INTEGER,
+            quality_score REAL,
+            processed_at TEXT,
+            distill_method TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS wiki_pages (
+            page_id TEXT PRIMARY KEY,
+            file_path TEXT,
+            type TEXT,
+            source_session TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    conn.commit()
+    return conn
 
 
 def _is_session_completed(session_id: str, memos: List[Dict]) -> bool:
