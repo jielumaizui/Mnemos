@@ -184,7 +184,7 @@ class HostAgentCaller:
     """
 
     MAX_RETRIES = 2
-    TIMEOUT = 60
+    TIMEOUT = 180  # 长 prompt 蒸馏需要更长时间
 
     def __init__(self, timeout: int = None):
         self._timeout = timeout or self.TIMEOUT
@@ -515,18 +515,23 @@ class KnowledgeExtractor:
         return prompt
 
     def _parse_fragments(self, data: Dict, session_id: str) -> List[KnowledgeFragment]:
-        """从 LLM JSON 输出解析知识片段"""
+        """从 LLM JSON 输出解析知识片段 — 兼容列表和旧分层对象格式"""
         fragments = []
         for frag_data in data.get("fragments", []):
             try:
                 fm = frag_data.get("frontmatter", {})
                 kw = fm.get("关键词", {})
                 keywords = []
-                for layer_words in kw.values():
-                    if isinstance(layer_words, list):
-                        keywords.extend(layer_words)
-                    elif isinstance(layer_words, str):
-                        keywords.append(layer_words)
+                if isinstance(kw, list):
+                    # 新格式：简单列表
+                    keywords = kw
+                elif isinstance(kw, dict):
+                    # 旧格式：分层对象 {核心概念: [...], 场景标签: [...]}
+                    for layer_words in kw.values():
+                        if isinstance(layer_words, list):
+                            keywords.extend(layer_words)
+                        elif isinstance(layer_words, str):
+                            keywords.append(layer_words)
 
                 fragment = KnowledgeFragment(
                     form=frag_data.get("form", "未知"),
@@ -572,7 +577,7 @@ class KnowledgeExtractor:
 
     def _fallback_extract(self, session_text: str,
                           session_id: str) -> List[KnowledgeFragment]:
-        """LLM 不可用时的规则级降级提取"""
+        """LLM 不可用时的规则级降级提取 — 对齐蓝图标准"""
         try:
             from core.kia.assertion_extractor import extract_assertions, merge_similar_assertions
             assertions = extract_assertions(session_text, source=session_id)
@@ -593,13 +598,29 @@ class KnowledgeExtractor:
         fragments = []
         for form_value, form_assertions in by_form.items():
             best = max(form_assertions, key=lambda a: a.confidence)
+            # 生成摘要：用 context + 前3条 claim 组合
+            summary_parts = []
+            if best.context:
+                summary_parts.append(best.context[:100])
+            summary_parts.extend([a.claim[:60] for a in form_assertions[:2]])
+            summary = "；".join(summary_parts)[:180] if summary_parts else best.claim[:150]
+
+            # 提取关键词（中英文混合）
+            keywords = []
+            # 英文技术词汇
+            keywords.extend(re.findall(r'[a-zA-Z_]{3,}', best.claim))
+            # 中文关键词（2-6字名词）
+            keywords.extend(re.findall(r'[\u4e00-\u9fff]{2,6}', best.claim))
+            keywords = list(dict.fromkeys(keywords))[:12]  # 去重，最多12个
+
             fragments.append(KnowledgeFragment(
                 form=form_value,
                 title=best.claim[:80],
                 frontmatter={
-                    "类型": form_value,
+                    "类型": _map_form_to_type(form_value),
+                    "摘要": summary,
                     "置信度": best.confidence,
-                    "证据级别": best.evidence_level,
+                    "证据级别": best.evidence_level or "single",
                     "时效性": best.temporal_scope or "contextual",
                     "提取方式": "rule_fallback",
                 },
@@ -608,7 +629,7 @@ class KnowledgeExtractor:
                 boundaries={"applies": best.boundary_hint} if best.boundary_hint else {},
                 anti_patterns=[a.claim for a in form_assertions if a.is_negated],
                 related_concepts=[],
-                keywords=re.findall(r'[a-zA-Z_]{3,}', best.claim),
+                keywords=keywords,
             ))
         return fragments
 
@@ -968,28 +989,61 @@ def _yaml_safe(value):
     return value
 
 
+# 知识形态 → 实体类型 映射表
+FORM_TO_ENTITY_TYPE = {
+    "问题-解决": "concept",
+    "决策记录": "project",
+    "经验法则": "concept",
+    "反模式": "concept",
+    "方法论": "concept",
+    "洞察关联": "concept",
+    "pattern": "concept",
+    "pitfall": "concept",
+    "decision": "project",
+    "snippet": "technology",
+    "reference": "technology",
+    "todo": "project",
+}
+
+
+def _map_form_to_type(form: str) -> str:
+    """将知识形态映射为蓝图标准的实体类型"""
+    return FORM_TO_ENTITY_TYPE.get(form, "concept")
+
+
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
                        source: str = "") -> str:
-    """生成 wiki 页面 Markdown"""
+    """生成 wiki 页面 Markdown — 对齐蓝图 32 字段规范"""
+    # 实体类型优先从 LLM 输出获取，fallback 从知识形态映射
+    entity_type = (fragment.frontmatter or {}).get("类型", "")
+    if not entity_type or entity_type in FORM_TO_ENTITY_TYPE:
+        entity_type = _map_form_to_type(fragment.form)
+
+    # 摘要优先从 LLM 输出获取，fallback 到 title + core_content 组合
+    summary = (fragment.frontmatter or {}).get("摘要", "")
+    if not summary:
+        parts = [p for p in (fragment.title, fragment.background) if p]
+        summary = " — ".join(parts)[:150] if parts else fragment.title or ""
+
     defaults = {
-        "type": fragment.form or "knowledge",
+        "type": entity_type,
         "name": fragment.title,
-        "domain": "未分类",
-        "summary": (fragment.title or fragment.core_content or "")[:80],
+        "domain": (fragment.frontmatter or {}).get("领域", "未分类"),
+        "summary": summary,
         "status": "草稿",
         "knowledge_stage": "原始",
         "source_count": 1,
-        "evidence_level": "单源",
-        "confidence": 0.5,
-        "temporal_scope": "上下文相关",
+        "evidence_level": (fragment.frontmatter or {}).get("证据级别", "single"),
+        "confidence": (fragment.frontmatter or {}).get("置信度", 0.5),
+        "temporal_scope": (fragment.frontmatter or {}).get("时效性", "contextual"),
         "created_at": datetime.now().strftime("%Y-%m-%d"),
-        "source_session": session_id[:8],
+        "source": source or "unknown",
     }
     fm = to_chinese_frontmatter(fragment.frontmatter, defaults)
     lines = ["---"]
     ordered_keys = [
         "类型", "名称", "领域", "摘要", "状态", "知识阶段",
-        "来源数量", "证据级别", "置信度", "时效性", "创建日期", "来源会话",
+        "来源数量", "证据级别", "置信度", "时效性", "创建日期",
         "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
         "跨Agent关联",
     ]
@@ -1002,14 +1056,10 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         else:
             lines.append(f"{key}: {_yaml_safe(value)}")
 
-    # 保留少量历史中文字段，避免旧 Prompt 输出的信息丢失。
-    for key in ("适用角色", "触发场景", "复杂度", "情感倾向", "提取方式"):
-        value = (fragment.frontmatter or {}).get(key)
-        if value:
-            if isinstance(value, (list, dict)):
-                lines.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
-            else:
-                lines.append(f"{key}: {_yaml_safe(value)}")
+    # 仅保留提取方式标记（用于质量追踪），其余旧字段废弃
+    extract_method = (fragment.frontmatter or {}).get("提取方式", "")
+    if extract_method:
+        lines.append(f"提取方式: {_yaml_safe(extract_method)}")
 
     if not fragment.self_check_passed:
         lines.append(f"验证状态: pending-verification")

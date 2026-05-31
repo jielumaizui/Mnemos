@@ -283,11 +283,28 @@ class SyncEngine:
 
         content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
 
-        # 5. 去重检查
+        # 5. 去重检查（本地 sync_log）
         existing = self._check_synced(
             source.name, session_info.session_id, turn.turn_number
         )
         if existing and existing.get("content_hash") == content_hash:
+            return SyncResult(
+                session_id=session_info.session_id,
+                turn_number=turn.turn_number,
+                action="skipped",
+                content_hash=content_hash,
+            )
+
+        # 5b. 去重检查（Memos 端兜底）— 防止 sync_log 丢失导致全量重同步
+        memos_dupe = self._check_memos_duplicate(
+            source.name, session_info.session_id, turn.turn_number
+        )
+        if memos_dupe:
+            # 记录到 sync_log 防止下次再查
+            self._record_sync(
+                source.name, session_info.session_id,
+                turn.turn_number, content_hash, memos_dupe, "synced",
+            )
             return SyncResult(
                 session_id=session_info.session_id,
                 turn_number=turn.turn_number,
@@ -643,6 +660,24 @@ class SyncEngine:
             pass
         return None
 
+    def _check_memos_duplicate(
+        self, agent_name: str, session_id: str, turn_number: int
+    ) -> List[str]:
+        """查询 Memos 是否已有相同 session+turn 的记录 — 兜底防重"""
+        try:
+            tags = [
+                f"source={agent_name}",
+                f"session={session_id}",
+                f"turn={turn_number + 1}",
+            ]
+            # 使用 tag 过滤查询，限制 5 条
+            results = self.client.list_by_tags(tags, limit=5)
+            if results:
+                return [r.uid for r in results]
+        except Exception:
+            pass
+        return []
+
     def _record_sync(
         self,
         agent_name: str,
@@ -664,7 +699,8 @@ class SyncEngine:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 agent_name, session_id, turn_number, content_hash,
-                json.dumps(memos_uids), status, datetime.now().isoformat(),
+                json.dumps(memos_uids) if isinstance(memos_uids, list) else json.dumps([memos_uids]),
+                status, datetime.now().isoformat(),
                 "pending" if status in ("new", "updated") else "skipped",
                 error,
             ))

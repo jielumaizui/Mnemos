@@ -175,14 +175,21 @@ class CrossAgentLinker:
         # 方案 B：DNAEngine/SimHash 兼容降级
         if not results:
             dna = self._get_dna()
-            for ws in self.WORKSPACE_NAMES:
-                if ws == exclude_agent:
+            # 搜索范围：Agent workspaces + 00-Inbox
+            search_paths = [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]
+            inbox_path = self.wiki_root / "00-Inbox"
+            if inbox_path.exists() and inbox_path not in search_paths:
+                search_paths.append(inbox_path)
+
+            for search_path in search_paths:
+                if not search_path.exists():
                     continue
-                ws_path = self.wiki_root / ws
-                if not ws_path.exists():
-                    continue
-                for md_file in ws_path.rglob("*.md"):
+                for md_file in search_path.rglob("*.md"):
                     if md_file == page_path:
+                        continue
+                    # 跳过非目标 Agent 的页面
+                    other_agent = self._extract_agent_from_path(md_file)
+                    if other_agent == exclude_agent:
                         continue
                     try:
                         score = 0.0
@@ -240,7 +247,7 @@ class CrossAgentLinker:
         return min(1.0, score)
 
     def _extract_agent_from_path(self, page_path: Path) -> Optional[str]:
-        """从页面路径提取 agent 来源"""
+        """从页面路径提取 agent 来源 — 支持 workspace 和 Inbox 路径"""
         try:
             rel = page_path.relative_to(self.wiki_root)
             first_part = rel.parts[0].lower()
@@ -249,12 +256,17 @@ class CrossAgentLinker:
         except ValueError:
             pass
 
-        # frontmatter 推断
+        # frontmatter 推断（优先）
         try:
             fm = self._read_frontmatter(page_path)
+            # 先查蓝图标准字段 "来源"
+            agent = fm.get("来源") or fm.get("source")
+            if agent and agent != "unknown":
+                return agent.lower()
+            # 兼容旧字段
             agent = fm.get("source_agent")
             if agent:
-                return agent
+                return agent.lower()
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
             pass

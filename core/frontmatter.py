@@ -39,8 +39,7 @@ CANONICAL_TO_DISPLAY: Dict[str, str] = {
     "decision": "决策摘要",
     "merged_from": "合并来源",
     "cross_agent_refs": "跨Agent关联",
-    "source_session": "来源会话",
-    "source_agent": "来源Agent",
+    "source": "来源",
     "broken_links": "失效链接",
 }
 
@@ -73,8 +72,7 @@ DISPLAY_ALIASES: Dict[str, Iterable[str]] = {
     "decision": ("决策摘要",),
     "merged_from": ("合并来源",),
     "cross_agent_refs": ("跨Agent关联", "cross_agent_refs"),
-    "source_session": ("来源会话", "source_session"),
-    "source_agent": ("来源Agent", "source_agent"),
+    "source": ("来源", "source"),
     "broken_links": ("失效链接", "broken_links"),
 }
 
