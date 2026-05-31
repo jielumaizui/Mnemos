@@ -991,15 +991,23 @@ def _yaml_safe(value):
 
 # 知识形态 → 实体类型 映射表
 FORM_TO_ENTITY_TYPE = {
+    # 中文知识形态
     "问题-解决": "concept",
     "决策记录": "project",
     "经验法则": "concept",
     "反模式": "concept",
     "方法论": "concept",
     "洞察关联": "concept",
+    # 英文知识形态（assertion_extractor 及旧 LLM 输出）
+    "problem-solution": "concept",
+    "decision-log": "project",
+    "decision": "project",
+    "heuristic": "concept",
+    "anti-pattern": "concept",
+    "methodology": "concept",
+    "insight": "concept",
     "pattern": "concept",
     "pitfall": "concept",
-    "decision": "project",
     "snippet": "technology",
     "reference": "technology",
     "todo": "project",
@@ -1025,6 +1033,11 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         parts = [p for p in (fragment.title, fragment.background) if p]
         summary = " — ".join(parts)[:150] if parts else fragment.title or ""
 
+    # 清理 fragment.frontmatter 中的旧类型字段，避免旧类型名覆盖代码映射的正确类型
+    cleaned_fm = dict(fragment.frontmatter or {})
+    for _k in ("类型", "type"):
+        cleaned_fm.pop(_k, None)
+
     defaults = {
         "type": entity_type,
         "name": fragment.title,
@@ -1039,7 +1052,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         "created_at": datetime.now().strftime("%Y-%m-%d"),
         "source": source or "unknown",
     }
-    fm = to_chinese_frontmatter(fragment.frontmatter, defaults)
+    fm = to_chinese_frontmatter(cleaned_fm, defaults)
     lines = ["---"]
     ordered_keys = [
         "类型", "名称", "领域", "摘要", "状态", "知识阶段",

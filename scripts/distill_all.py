@@ -36,10 +36,10 @@ def main():
         ]
 
         if not pending:
-            print("All sessions processed!")
+            print("All sessions processed!", flush=True)
             break
 
-        print(f"\n=== Batch start: {len(pending)} pending ===")
+        print(f"\n=== Batch start: {len(pending)} pending ===", flush=True)
 
         for sid, memos in pending[:10]:  # 每批 10 个
             try:
@@ -61,13 +61,13 @@ def main():
 
                 _mark_processed(sid, meta.get('source', 'unknown'), len(messages), 0, 'pipeline')
                 total_ok += 1
-                print(f"OK: {sid[:8]} -> {len(result.fragments)} pages")
+                print(f"OK: {sid[:8]} -> {len(result.fragments)} pages", flush=True)
 
             except Exception as e:
                 total_fail += 1
-                print(f"FAIL: {sid[:8]}: {e}")
+                print(f"FAIL: {sid[:8]}: {e}", flush=True)
 
-        print(f"Running total: OK={total_ok}, SKIP={total_skip}, FAIL={total_fail}")
+        print(f"Running total: OK={total_ok}, SKIP={total_skip}, FAIL={total_fail}", flush=True)
 
 
 if __name__ == "__main__":
