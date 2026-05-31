@@ -268,6 +268,8 @@ def init_scorer_tables():
         existing = {row[1] for row in conn.execute("PRAGMA table_info(ground_truth_signals)")}
         if "session_id" not in existing:
             conn.execute("ALTER TABLE ground_truth_signals ADD COLUMN session_id TEXT NOT NULL DEFAULT ''")
+        if "latency_hours" not in existing:
+            conn.execute("ALTER TABLE ground_truth_signals ADD COLUMN latency_hours INTEGER DEFAULT 0")
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_gt_session ON ground_truth_signals(session_id)
         """)
