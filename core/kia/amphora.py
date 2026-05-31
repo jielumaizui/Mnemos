@@ -443,6 +443,18 @@ def update_progress(
         return cur.rowcount > 0
 
 
+def list_processing() -> List[Dict]:
+    """列出 processing 状态的任务（供 HephaestusWorker 收集结果）"""
+    _init_db()
+    with _connect() as conn:
+        rows = conn.execute("""
+            SELECT * FROM distillation_tasks
+            WHERE status = 'processing'
+            ORDER BY started_at ASC
+        """).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+
 def cleanup_old(days: int = 7) -> int:
     """
     归档 N 天前的完成/失败任务。

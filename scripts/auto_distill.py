@@ -2,22 +2,31 @@ from __future__ import annotations
 
 #!/usr/bin/env python3
 """
-Auto Distill - 定时蒸馏检查与批量处理脚本
+[DEPRECATED] Auto Distill - 定时蒸馏检查与批量处理脚本 — 已废弃，不再维护
 
-职责：
-- 定期检查 distill_queue 中的 pending 任务
-- 生成批量蒸馏 prompt（供 Claude Code Agent 使用）
-- 支持 crontab 定时触发
+原因：蒸馏队列已统一为 amphora SQLite 队列，HephaestusWorker 自动消费。
+该脚本的文件队列逻辑与新系统不兼容。
 
-用法：
+历史用法（已失效）：
     python3 scripts/auto_distill.py --check          # 检查队列状态
     python3 scripts/auto_distill.py --batch          # 生成批量蒸馏 prompt
-    python3 scripts/auto_distill.py --daemon         # 守护模式（每30分钟检查）
-    python3 scripts/auto_distill.py --threshold 5    # 超过 N 个任务才触发
+    python3 scripts/auto_distill.py --daemon         # 守护模式
 
-Crontab 配置示例（每4小时检查一次）：
-    0 */4 * * * /usr/bin/env python3 /path/to/mnemos/scripts/auto_distill.py --check --notify
+替代方案：
+    - 使用 mnemos daemon 自动处理蒸馏队列
+    - 使用 core/kia/distillation_agent.py --next 手动获取任务
+    - 使用 core/hephaestus/wiki_builder.py 手动触发 Wiki 构建
 """
+
+import warnings
+warnings.warn(
+    "auto_distill.py is deprecated. The distillation queue has been unified to amphora SQLite. "
+    "Use mnemos daemon or distillation_agent.py instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+# 保留原始代码作为参考，但不再推荐运行
 
 import os
 import sys

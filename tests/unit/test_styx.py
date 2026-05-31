@@ -810,7 +810,7 @@ class TestSaveSessionFull(unittest.TestCase):
             tags=["source=claude"],
         )
         self.assertEqual(len(memories), 1)
-        # 验证标签包含 level=L1 和 session=
+        # 验证标签包含 layer=L1 和 session=
         call_kwargs = self.mock_session.post.call_args[1]
         posted_content = call_kwargs["json"]["content"]
         self.assertIn("sess-1", posted_content)

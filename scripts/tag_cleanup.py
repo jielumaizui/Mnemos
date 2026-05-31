@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
 """
-Memos 标签清理脚本
+[DEPRECATED] Memos 标签清理脚本 — 已废弃，不再维护
+
+原因：标签体系已统一为 layer=L1，该脚本的功能已被新的同步框架取代。
+
+历史功能（已失效）：
 1. 删除无值标签 (from, scope)
 2. 将 claude-private 替换为 scope=private
-3. 给有 source+session 但缺 level 的记录补打 level=L1
+3. （历史行为）给有 source+session 但缺 level 的记录补打 level=L1 — 已废弃
+
+如需清理标签，请使用 mnemos CLI 的新工具或手动处理。
 """
+
+import warnings
+warnings.warn(
+    "tag_cleanup.py is deprecated. The tag system has been unified to layer=L1. "
+    "This script no longer serves its original purpose and will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+# 保留原始代码作为参考，但不再推荐运行
 
 from __future__ import annotations
 
@@ -79,13 +95,13 @@ def cleanup_tags(batch_size: int = None, dry_run: bool = False):
             if tag not in new_tags:
                 new_tags.append(tag)
 
-        # 3. Add level=L1 for records with source+session but no level
+        # 3. (Historical) Add level=L1 for records with source+session but no level — DEPRECATED
         has_session = any(t.startswith("session=") for t in new_tags)
         has_level = any(t.startswith("level=") for t in new_tags)
         has_source = any(t.startswith("source=") for t in new_tags)
 
         if has_source and has_session and not has_level:
-            new_tags.append("level=L1")
+            # Historical: new_tags.append("level=L1") — DO NOT USE, system now uses layer=L1
             stats["level_added"] += 1
             changed = True
 
@@ -130,7 +146,7 @@ def cleanup_tags(batch_size: int = None, dry_run: bool = False):
     print(f"  需更新: {stats['updated']}")
     print(f"  删除空值标签: {stats['empty_tag_removed']}")
     print(f"  修复 private: {stats['private_fixed']}")
-    print(f"  补打 level=L1: {stats['level_added']}")
+    print(f"  补打 level=L1 (历史功能/已废弃): {stats['level_added']}")
     print(f"  跳过: {stats['skipped']}")
     print(f"  错误: {stats['errors']}")
 

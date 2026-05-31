@@ -1305,11 +1305,11 @@ class MemosClient:
             chunk_tags = [t for t in chunk_tags if not t.startswith("session=")]
             chunk_tags.append(f"session={session_id}")
 
-            # P8: 确保 level=L1 标签存在（蒸馏层通过此标签识别原始数据）
+            # P8: 确保 layer=L1 标签存在（蒸馏层通过此标签识别原始数据）
             # 移除旧的状态标记 processed=false
             chunk_tags = [t for t in chunk_tags if t != "processed=false"]
-            if not any(t.startswith("level=") for t in chunk_tags):
-                chunk_tags.append("level=L1")
+            if not any(t.startswith("layer=") for t in chunk_tags):
+                chunk_tags.append("layer=L1")
 
             chunk_tags.append(f"hash={content_hash}")
             if total_chunks > 1:

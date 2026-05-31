@@ -5,7 +5,7 @@ import logging
 Wiki Builder - L1 → L2 蒸馏：将 Memos 原始会话转换为 Obsidian Wiki Markdown
 
 流程：
-    1. 从 Memos 查询 level=L1 记录
+    1. 从 Memos 查询 layer=L1 记录
     2. 按 session= 标签分组，重建完整会话
     3. Session 完成检测（最新 chunk 创建时间 > 5分钟）
     4. 回流防护（skip-distill 标签 + Wiki 引用检测）
@@ -162,7 +162,7 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
 # ========== Memos 查询与会话重建 ==========
 
 def fetch_l1_sessions(client: MemosClient) -> Dict[str, List[Dict]]:
-    """从 Memos 获取所有 level=L1 的记录，按 session= 标签分组"""
+    """从 Memos 获取所有 layer=L1 的记录，按 session= 标签分组"""
     logger.info("[WikiBuilder] 查询 Memos 中 L1 记录...")
     try:
         all_memos = client.list_all_memos()
@@ -176,7 +176,7 @@ def fetch_l1_sessions(client: MemosClient) -> Dict[str, List[Dict]]:
     for memo in all_memos:
         tags = memo.get("tags", [])
         tag_set = set(tags)
-        if "level=L1" not in tag_set:
+        if "layer=L1" not in tag_set:
             skipped += 1
             continue
         session_id = ""
@@ -194,7 +194,7 @@ def fetch_l1_sessions(client: MemosClient) -> Dict[str, List[Dict]]:
 
 
 def _try_parse_json(content: str) -> Optional[Dict]:
-    """尝试解析可能被截断的 JSON"""
+    """尝试解析可能被截断的 JSON（save_session_full 格式兼容）"""
     content = content.strip()
     if not content.startswith("{"):
         return None
@@ -222,6 +222,87 @@ def _try_parse_json(content: str) -> Optional[Dict]:
     if messages:
         return {"_meta": {"segment": segment or "1/1"}, "messages": messages}
     return None
+
+
+def _parse_markdown_turns(content: str) -> Optional[List[Dict]]:
+    """从 sync_engine 生成的 Markdown 内容中提取消息列表。
+
+    支持两种格式：
+    1. 标准格式（build_turn_markdown 生成）：
+        ## Turn N
+        **User** (model):\n\ncontent\n\n**Assistant**:\n\ncontent\n\n---\n
+    2. 简化格式（旧数据/短内容）：
+        **User** (model):\n\ncontent\n\n**Assistant**:\n\ncontent\n\n---\n
+    3. 分片格式（save_long_content 生成）：
+        [N/M] «title»\n\n...（上述格式之一）
+
+    Returns:
+        List[{"role": "user"|"assistant", "content": str}] 或 None
+    """
+    if not content or not content.strip():
+        return None
+
+    # 移除分片前缀 [N/M] «title»
+    content = re.sub(r'^\[\d+/\d+\] «[^»]+»\s*\n\n', '', content, count=1)
+
+    # 如果内容以 { 开头，说明是 JSON，不应走 Markdown 解析
+    if content.strip().startswith("{"):
+        return None
+
+    messages = []
+
+    # 模式1：带 ## Turn N 标题的格式
+    # 按 "## Turn" 分割，但保留第一个块（可能在标题前）
+    turn_blocks = re.split(r'\n## Turn\s+\d+\s*\n', content)
+    if len(turn_blocks) > 1:
+        # 有明确的 Turn 标题
+        for block in turn_blocks[1:]:  # 跳过第一个空块或前缀
+            block_msgs = _extract_messages_from_block(block)
+            if block_msgs:
+                messages.extend(block_msgs)
+        if messages:
+            return messages
+
+    # 模式2：无 Turn 标题，整个内容就是一个 turn
+    # 尝试从整个内容提取 User/Assistant 对
+    block_msgs = _extract_messages_from_block(content)
+    if block_msgs:
+        return block_msgs
+
+    return None
+
+
+def _extract_messages_from_block(block: str) -> List[Dict]:
+    """从单个 Markdown 块中提取 User/Assistant 消息对。"""
+    messages = []
+    block = block.strip()
+    if not block:
+        return messages
+
+    # 匹配 **User** (model):\n\ncontent\n\n**Assistant**:\n\ncontent
+    # 使用非贪婪匹配，但支持多行内容
+    # 分隔符可以是 **Assistant**: 或 **User** 或 --- 或文件末尾
+    user_pattern = r'\*\*User\*\*\s*(?:\([^)]+\))?\s*:\s*\n\n(.*?)(?=\n\n\*\*Assistant\*\*|\n\n---|\n\n\*\*User\*\*|\Z)'
+    assistant_pattern = r'\*\*Assistant\*\*\s*(?:\([^)]+\))?\s*:\s*\n\n(.*?)(?=\n\n\*\*User\*\*|\n\n---|\n\n\*\*Assistant\*\*|\Z)'
+
+    # 找到所有 User 和 Assistant 的位置
+    user_matches = list(re.finditer(user_pattern, block, re.DOTALL))
+    assistant_matches = list(re.finditer(assistant_pattern, block, re.DOTALL))
+
+    # 按在文本中出现的顺序交错合并
+    all_matches = []
+    for m in user_matches:
+        all_matches.append((m.start(), "user", m.group(1).strip()))
+    for m in assistant_matches:
+        all_matches.append((m.start(), "assistant", m.group(1).strip()))
+
+    all_matches.sort(key=lambda x: x[0])
+
+    for _, role, text in all_matches:
+        if text:
+            messages.append({"role": role, "content": text})
+
+    return messages
 
 
 def _clean_message_content(content: str) -> str:
@@ -272,10 +353,38 @@ def reconstruct_session(memos: List[Dict]) -> Tuple[List[Dict], Dict]:
 
     def _sort_key(m):
         content = m.get("content", "")
+        tags = m.get("tags", [])
+
+        # 1. JSON _meta.segment（save_session_full 格式，保留兼容）
         data = _try_parse_json(content)
-        if data:
-            seg = data.get("_meta", {}).get("segment", "1/1")
-            return int(seg.split("/")[0])
+        if data and "_meta" in data:
+            seg = data["_meta"].get("segment", "1/1")
+            try:
+                return int(seg.split("/")[0])
+            except ValueError:
+                pass
+
+        # 2. 标签中的 segment=N/M（统一后的 save_long_content 格式）
+        for tag in tags:
+            if tag.startswith("segment="):
+                try:
+                    return int(tag.split("=")[1].split("/")[0])
+                except (ValueError, IndexError):
+                    pass
+
+        # 3. 标签中的 turn=N
+        for tag in tags:
+            if tag.startswith("turn="):
+                try:
+                    return int(tag.split("=")[1])
+                except ValueError:
+                    pass
+
+        # 4. Markdown 内容中的 ## Turn N
+        turn_match = re.search(r'^## Turn\s+(\d+)', content, re.MULTILINE)
+        if turn_match:
+            return int(turn_match.group(1))
+
         return 0
 
     sorted_memos = sorted(memos, key=_sort_key)
@@ -297,6 +406,7 @@ def reconstruct_session(memos: List[Dict]) -> Tuple[List[Dict], Dict]:
         content = memo.get("content", "")
         data = _try_parse_json(content)
         if data:
+            # JSON 路径（save_session_full 格式，保留兼容）
             msgs = data.get("messages", [])
             if isinstance(msgs, list):
                 for msg in msgs:
@@ -306,14 +416,24 @@ def reconstruct_session(memos: List[Dict]) -> Tuple[List[Dict], Dict]:
                         msg["content"] = _mask_wiki_generated_blocks(msg["content"])
                 all_messages.extend(msgs)
         else:
-            cleaned = _clean_message_content(content)
-            cleaned = _mask_wiki_generated_blocks(cleaned)
-            if cleaned:
-                all_messages.append({
-                    "role": "system",
-                    "content": cleaned[:500],
-                    "timestamp": memo.get("createTime", ""),
-                })
+            # Markdown 路径（sync_engine 格式，新增）
+            md_msgs = _parse_markdown_turns(content)
+            if md_msgs:
+                for msg in md_msgs:
+                    if isinstance(msg, dict) and "content" in msg:
+                        msg["content"] = _clean_message_content(msg["content"])
+                        msg["content"] = _mask_wiki_generated_blocks(msg["content"])
+                all_messages.extend(md_msgs)
+            else:
+                # Fallback：纯文本，当作 system 消息处理
+                cleaned = _clean_message_content(content)
+                cleaned = _mask_wiki_generated_blocks(cleaned)
+                if cleaned:
+                    all_messages.append({
+                        "role": "system",
+                        "content": cleaned[:500],
+                        "timestamp": memo.get("createTime", ""),
+                    })
 
     return all_messages, meta
 
