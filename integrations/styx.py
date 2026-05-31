@@ -390,7 +390,7 @@ class MemosClient:
         for idx, chunk in enumerate(chunks):
             # 添加分片标记
             chunk_tags = auto_tags.copy()
-            chunk_tags.append(f"segment:{idx+1}/{len(chunks)}")
+            chunk_tags.append(f"segment={idx+1}/{len(chunks)}")
             chunk_tags.append(f"group={title}")
             chunk_tags.append("type=segmented")
 
