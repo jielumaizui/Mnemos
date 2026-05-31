@@ -1122,6 +1122,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     if not summary:
         parts = [p for p in (fragment.title, fragment.background) if p]
         summary = " — ".join(parts)[:150] if parts else (fragment.title or "")[:150]
+
     # 清理 fragment.frontmatter 中的旧类型字段，避免旧类型名覆盖代码映射的正确类型
     cleaned_fm = dict(fragment.frontmatter or {})
     for _k in ("类型", "type"):
@@ -1490,17 +1491,19 @@ class DistillationEngine:
                 try:
                     actions = linker.link_after_distill(file_path)
                     if actions:
-                        # 将关联结果写入 frontmatter（结构化查询用）
+                        # 将关联结果写入 frontmatter（只记录从当前页面出发的链接）
                         refs = [
                             {"page": str(a.to_page), "reason": a.reason,
                              "similarity": round(a.similarity, 4)}
                             for a in actions
+                            if a.from_page == file_path
                         ]
                         fragment.frontmatter["cross_agent_refs"] = refs
                         # 更新文件 frontmatter（保留 body 中 linker 已注入的链接）
-                        self._update_frontmatter_field(
-                            file_path, "cross_agent_refs", refs,
-                        )
+                        if refs:
+                            self._update_frontmatter_field(
+                                file_path, "cross_agent_refs", refs,
+                            )
                 except Exception:
                     logger.debug("Cross-agent linking failed for %s", file_path, exc_info=True)
 

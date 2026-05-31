@@ -56,16 +56,21 @@ class TestHephaestusWorker(unittest.TestCase):
 
     def test_process_empty_queue(self):
         from core.hephaestus_worker import HephaestusWorker
-        # 使用临时队列目录（空）
+        from unittest.mock import patch
+        # 使用临时队列目录（空），并 mock amphora 返回空列表以隔离真实数据
         worker = HephaestusWorker(queue_dir=self.queue_dir)
-        processed = worker.process_all()
+        with patch("core.kia.amphora.list_pending", return_value=[]):
+            with patch("core.kia.amphora.get_next", return_value=None):
+                processed = worker.process_all()
         self.assertEqual(processed, 0)
 
     def test_collect_completed_no_output(self):
         from core.hephaestus_worker import HephaestusWorker
-        # 使用临时输出目录（空）
+        from unittest.mock import patch
+        # 使用临时输出目录（空），并 mock amphora 以隔离真实数据
         worker = HephaestusWorker(output_dir=self.output_dir)
-        collected = worker.collect_completed()
+        with patch("core.kia.amphora.list_processing", return_value=[]):
+            collected = worker.collect_completed()
         self.assertEqual(collected, 0)
 
 
