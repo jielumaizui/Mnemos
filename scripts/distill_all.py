@@ -56,7 +56,7 @@ def main():
                     continue
 
                 for i, frag in enumerate(result.fragments):
-                    md = generate_wiki_page(frag, sid)
+                    md = generate_wiki_page(frag, sid, source=meta.get('source', 'unknown'))
                     (inbox / f'{sid[:8]}_{frag.form}_{i+1}.md').write_text(md, encoding='utf-8')
 
                 _mark_processed(sid, meta.get('source', 'unknown'), len(messages), 0, 'pipeline')

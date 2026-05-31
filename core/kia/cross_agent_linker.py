@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import yaml
+
 from core.config import get_config
 from core.kia.genos import DNAEngine
 
@@ -82,6 +84,7 @@ class CrossAgentLinker:
         self.wiki_root = wiki_root or get_config().wiki_dir
         self.vector_index = vector_index
         self.dna = None
+        self._keyword_index: Optional[Dict[str, List[Tuple[Path, str]]]] = None
 
     # ── 主入口 ──
 
@@ -140,6 +143,104 @@ class CrossAgentLinker:
 
     # ── 内部方法 ──
 
+    def _build_keyword_index(self) -> Dict[str, List[Tuple[Path, str]]]:
+        """构建关键词倒排索引：keyword -> [(page_path, agent), ...]
+
+        扫描主题分类目录 + 00-Inbox，按 frontmatter 中的「关键词」字段建立索引。
+        索引缓存在实例变量中，避免重复全量扫描。
+        """
+        if self._keyword_index is not None:
+            return self._keyword_index
+
+        index: Dict[str, List[Tuple[Path, str]]] = {}
+        search_dirs = [
+            "01-People", "02-Projects", "03-Tech", "04-Concepts",
+            "05-MOCs", "06-Retrospectives", "07-Shadow", "00-Inbox",
+        ] + self.WORKSPACE_NAMES
+        for d in search_dirs:
+            dir_path = self.wiki_root / d
+            if not dir_path.exists():
+                continue
+            for md_file in dir_path.rglob("*.md"):
+                try:
+                    fm = self._read_frontmatter(md_file)
+                    keywords = fm.get("关键词", [])
+                    if isinstance(keywords, str):
+                        try:
+                            import json
+                            keywords = json.loads(keywords)
+                        except Exception:
+                            keywords = [keywords]
+                    if not isinstance(keywords, list):
+                        continue
+                    agent = self._extract_agent_from_path(md_file) or "unknown"
+                    for kw in keywords:
+                        kw_clean = str(kw).strip().lower()
+                        if kw_clean:
+                            index.setdefault(kw_clean, []).append((md_file, agent))
+                except Exception:
+                    continue
+
+        self._keyword_index = index
+        logger.info(f"[CrossAgentLinker] 关键词索引构建完成: {len(index)} 个关键词, "
+                    f"{sum(len(v) for v in index.values())} 条映射")
+        return index
+
+    def _find_similar_by_keywords(self, page_path: Path,
+                                  exclude_agent: str) -> List[Tuple[Path, float]]:
+        """基于关键词倒排索引 + Jaccard 系数查找跨 Agent 相似页面"""
+        fm = self._read_frontmatter(page_path)
+        page_keywords = fm.get("关键词", [])
+        if isinstance(page_keywords, str):
+            try:
+                import json
+                page_keywords = json.loads(page_keywords)
+            except Exception:
+                page_keywords = [page_keywords]
+        if not isinstance(page_keywords, list):
+            return []
+
+        page_keywords = [str(k).strip().lower() for k in page_keywords if str(k).strip()]
+        if not page_keywords:
+            return []
+
+        keyword_index = self._build_keyword_index()
+
+        # 查倒排索引收集候选页面
+        candidate_counts: Dict[Path, Tuple[str, int]] = {}  # path -> (agent, overlap_count)
+        for kw in page_keywords:
+            for cand_path, cand_agent in keyword_index.get(kw, []):
+                if cand_path == page_path or cand_agent == exclude_agent:
+                    continue
+                _, count = candidate_counts.get(cand_path, (cand_agent, 0))
+                candidate_counts[cand_path] = (cand_agent, count + 1)
+
+        # 计算 Jaccard 系数
+        results = []
+        for cand_path, (cand_agent, overlap) in candidate_counts.items():
+            try:
+                cand_fm = self._read_frontmatter(cand_path)
+                cand_keywords = cand_fm.get("关键词", [])
+                if isinstance(cand_keywords, str):
+                    try:
+                        import json
+                        cand_keywords = json.loads(cand_keywords)
+                    except Exception:
+                        cand_keywords = [cand_keywords]
+                if not isinstance(cand_keywords, list):
+                    continue
+                cand_keywords = [str(k).strip().lower() for k in cand_keywords if str(k).strip()]
+                union = len(set(page_keywords) | set(cand_keywords))
+                if union == 0:
+                    continue
+                score = overlap / union
+                if score >= 0.05:  # Jaccard 阈值 — 关键词更稀疏，允许更低的重叠
+                    results.append((cand_path, score))
+            except Exception:
+                continue
+
+        return sorted(results, key=lambda x: x[1], reverse=True)
+
     def _find_cross_workspace_similar(self, page_path: Path,
                                       exclude_agent: str) -> List[Tuple[Path, float]]:
         """跨 workspace 查找相似页面"""
@@ -172,38 +273,30 @@ class CrossAgentLinker:
                 logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
                 pass
 
-        # 方案 B：DNAEngine/SimHash 兼容降级
+        # 方案 B：关键词倒排索引（替代 DNAEngine/SimHash O(n²) 降级）
         if not results:
-            dna = self._get_dna()
-            # 搜索范围：Agent workspaces + 00-Inbox
-            search_paths = [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]
-            inbox_path = self.wiki_root / "00-Inbox"
-            if inbox_path.exists() and inbox_path not in search_paths:
-                search_paths.append(inbox_path)
+            results = self._find_similar_by_keywords(page_path, exclude_agent)
 
-            for search_path in search_paths:
+        # 方案 C：文本相似度最终兜底（限制在同名文件附近，避免全库扫描）
+        if not results:
+            stem = page_path.stem.lower()
+            for search_path in [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]:
                 if not search_path.exists():
                     continue
                 for md_file in search_path.rglob("*.md"):
                     if md_file == page_path:
                         continue
-                    # 跳过非目标 Agent 的页面
                     other_agent = self._extract_agent_from_path(md_file)
-                    if other_agent == exclude_agent:
+                    if not other_agent or other_agent == exclude_agent:
+                        continue
+                    # 只在同名或高度相关文件中搜索
+                    if stem not in md_file.stem.lower() and md_file.stem.lower() not in stem:
                         continue
                     try:
-                        score = 0.0
-                        if dna:
-                            source_dna = dna.compute_dna(page_path)
-                            target_dna = dna.compute_dna(md_file)
-                            if source_dna and target_dna:
-                                score = dna.compare(source_dna, target_dna).overall_score
-                        if score == 0.0:
-                            score = self._text_similarity(page_path, md_file)
+                        score = self._text_similarity(page_path, md_file)
                         if score >= self.DNA_SIMILARITY_THRESHOLD:
                             results.append((md_file, score))
                     except Exception:
-                        logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
                         continue
 
         seen = set()
@@ -317,16 +410,25 @@ class CrossAgentLinker:
             return f"[[{to_page.stem}]]"
 
     def _read_frontmatter(self, page_path: Path) -> Dict:
-        """读取页面 frontmatter"""
+        """读取页面 frontmatter（支持 YAML 列表/对象）"""
         content = page_path.read_text(encoding="utf-8")
-        fm = {}
-        if content.startswith("---"):
+        if not content.startswith("---"):
+            return {}
+        try:
             _, yaml_block, _ = content.split("---", 2)
-            for line in yaml_block.strip().split("\n"):
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    fm[k.strip()] = v.strip()
-        return fm
+            return yaml.safe_load(yaml_block.strip()) or {}
+        except Exception:
+            # 降级：简单 key: value 解析
+            fm = {}
+            try:
+                _, yaml_block, _ = content.split("---", 2)
+                for line in yaml_block.strip().split("\n"):
+                    if ":" in line and not line.strip().startswith("-"):
+                        k, v = line.split(":", 1)
+                        fm[k.strip()] = v.strip()
+            except Exception:
+                pass
+            return fm
 
 
 class CrossAgentDivergenceDetector:
