@@ -31,13 +31,10 @@ import os
 import platform
 import re
 import shutil
-import socket
 import subprocess
 import sys
-import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
@@ -156,7 +153,6 @@ def install_dependencies(yes_mode: bool = False) -> bool:
 
     global _PYTHON_EXE
     extras = f"{PROJECT_ROOT}[dev]"
-    cmd = [_PYTHON_EXE, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
 
     def _try_install(python: str, silent: bool = False) -> tuple[bool, str]:
         c = [python, "-m", "pip", "install", "-e", str(PROJECT_ROOT), "-e", extras]
@@ -219,7 +215,9 @@ def find_memos_process() -> Optional[Path]:
             # Windows: wmic 已弃用，改用 PowerShell Get-Process
             try:
                 result = subprocess.run(
-                    ["powershell", "-Command", "Get-Process | Where-Object {$_.ProcessName -like '*memos*'} | Select-Object -ExpandProperty Path"],
+                    ["powershell", "-Command",
+                     "Get-Process | Where-Object {$_.ProcessName -like '*memos*'} "
+                     "| Select-Object -ExpandProperty Path"],
                     capture_output=True, text=True, timeout=5
                 )
                 if result.returncode == 0 and result.stdout.strip():
@@ -441,10 +439,12 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
     print_ok(f"配置已写入: {config_file}")
     return config_file
 
+
 # ── 步骤 6: 初始化 Wiki 目录 ──
 
 def init_wiki_structure(wiki_dir: Path) -> None:
     print(f"  初始化 Wiki 目录结构: {wiki_dir}")
+
     dirs = [
         "00-Inbox",
         "01-People",
@@ -801,7 +801,8 @@ def _setup_macos_scheduler(yes_mode: bool = False) -> bool:
 
 
 def _setup_linux_scheduler(yes_mode: bool = False) -> bool:
-    cron_line = f"*/5 * * * * {_PYTHON_EXE} {PROJECT_ROOT / 'mnemos_daemon.py'} run >> {Path.home() / '.mnemos' / 'logs' / 'daemon.cron.log'} 2>&1"
+    log_file = Path.home() / ".mnemos" / "logs" / "daemon.cron.log"
+    cron_line = f"*/5 * * * * {_PYTHON_EXE} {PROJECT_ROOT / 'mnemos_daemon.py'} run >> {log_file} 2>&1"
     print_warn("Linux 定时任务请手动配置 cron:")
     print(f"    echo '{cron_line}' | crontab -")
     return True

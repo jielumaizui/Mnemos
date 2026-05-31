@@ -21,7 +21,6 @@ from typing import Dict, List, Optional, Callable
 
 from core.config import get_config
 from core.prometheus_fire import AgentDelegate, DistillTask
-from core.helios import AgentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +224,7 @@ class HephaestusWorker:
         """
         session_id = task.get("session_id")
         if not session_id:
-            logger.warning(f"任务缺少 session_id")
+            logger.warning("任务缺少 session_id")
             return False
         self._emit_progress(session_id, "started", "正在提炼知识...")
 
@@ -448,7 +447,10 @@ class HephaestusWorker:
                 pass
         return {}
 
-    def _process_completed_file(self, output_file: Path, session_id: str, task_data: dict, amphora_available: bool) -> bool:
+    def _process_completed_file(
+        self, output_file: Path, session_id: str, task_data: dict,
+        amphora_available: bool
+    ) -> bool:
         """处理单个已完成文件：验证、移入 Inbox、标记完成/归档。
 
         Returns:
@@ -561,7 +563,7 @@ class HephaestusWorker:
             if amphora_step:
                 amphora.update_progress(session_id, amphora_step, message)
         except Exception:
-            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
             pass
 
     def _parse_distill_output(self, content: str) -> Optional[dict]:
@@ -570,7 +572,7 @@ class HephaestusWorker:
             parsed = extract_json(content)
             return parsed if isinstance(parsed, dict) else None
         except Exception:
-            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
             return None
 
     def _validate_distill_output(self, content: str) -> dict:
@@ -611,7 +613,7 @@ class HephaestusWorker:
         if not fragments or not isinstance(fragments, list):
             return {
                 "valid": False,
-                "reason": f"judgment=knowledge 但 fragments 缺失或不是数组"
+                "reason": "judgment=knowledge 但 fragments 缺失或不是数组"
             }
 
         # 6. 检查每个 fragment 的必要字段
@@ -690,7 +692,7 @@ tags: [distill-failed]
                 output_path.unlink()
                 return
         except Exception:
-            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
             pass
 
         # 构建 Inbox 文件名

@@ -495,7 +495,7 @@ class Config:
                     agents = json.load(f)
                 return agents.get(agent_name, {})
             except Exception:
-                logger.warning(f"Unexpected error in config.py", exc_info=True)
+                logger.warning("Unexpected error in config.py", exc_info=True)
                 pass
         return {}
 
