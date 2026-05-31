@@ -165,14 +165,17 @@ def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
 # ========== JSON 解析容错 ==========
 
 def extract_json(text: str) -> Optional[Dict]:
-    """从文本中提取 JSON，带容错处理"""
+    """从文本中提取 JSON，带容错处理（针对 DeepSeek-V3 等模型）"""
     if not text:
         return None
+
+    # 尝试 1: 直接解析
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
+    # 尝试 2: 提取 markdown 代码块
     match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
     if match:
         try:
@@ -180,20 +183,71 @@ def extract_json(text: str) -> Optional[Dict]:
         except json.JSONDecodeError:
             pass
 
+    # 尝试 3: 找最外层平衡花括号（处理前后有说明文字的情况）
+    candidates = []
     start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(text[start:end + 1])
-        except json.JSONDecodeError:
-            pass
+    while start != -1:
+        brace_count = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"' and not in_string:
+                in_string = True
+            elif ch == '"' and in_string:
+                in_string = False
+            elif ch == "{" and not in_string:
+                brace_count += 1
+            elif ch == "}" and not in_string:
+                brace_count -= 1
+                if brace_count == 0:
+                    candidates.append(text[start:i + 1])
+                    break
+        start = text.find("{", start + 1)
 
-    fixed = re.sub(r',(\s*[}\]])', r'\1', text)
-    fixed = fixed.replace("'", '"')
-    try:
-        return json.loads(fixed)
-    except json.JSONDecodeError:
-        pass
+    # 按长度排序，优先尝试最长的（最可能是完整 JSON）
+    for candidate in sorted(candidates, key=len, reverse=True):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    # 尝试 4: 自动修复常见语法错误
+    def _fix_json(s: str) -> Optional[Dict]:
+        fixes = [
+            # 修复尾随逗号
+            lambda x: re.sub(r',(\s*[}\]])', r'\1', x),
+            # 单引号转双引号
+            lambda x: x.replace("'", '"'),
+            # 去除 BOM 和控制字符
+            lambda x: x.strip('\ufeff\x00\x01\x02'),
+            # 修复未转义的换行符（简单替换）
+            lambda x: re.sub(r'(?<!\\)\n', '\\n', x),
+        ]
+        for fix in fixes:
+            s = fix(s)
+            try:
+                return json.loads(s)
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    # 对最长候选应用修复
+    for candidate in sorted(candidates, key=len, reverse=True):
+        result = _fix_json(candidate)
+        if result is not None:
+            return result
+
+    # 尝试 5: 对整个文本应用修复
+    result = _fix_json(text)
+    if result is not None:
+        return result
 
     return None
 
