@@ -584,8 +584,41 @@ def service_distill_and_merge(stop_event: threading.Event):
     from core.hephaestus_worker import HephaestusWorker
     worker = HephaestusWorker()
 
+    # Memos 客户端（复用，避免每次循环新建）
+    memos_client = None
+    try:
+        from integrations.styx import MemosClient
+        memos_client = MemosClient()
+    except Exception as e:
+        logger.warning(f"[蒸馏合并] MemosClient 初始化失败，无法自动入队: {e}")
+
     while not stop_event.is_set():
         try:
+            # Step 0: 扫描 Memos，将新完成的 L1 sessions 自动入队到 amphora
+            if memos_client:
+                try:
+                    from core.hephaestus.wiki_builder import (
+                        fetch_l1_sessions, reconstruct_session,
+                        _is_session_completed, _is_processed,
+                    )
+                    from core.kia import amphora
+
+                    sessions = fetch_l1_sessions(memos_client)
+                    enqueued = 0
+                    for sid, memos in sessions.items():
+                        if _is_session_completed(sid, memos) and not _is_processed(sid):
+                            try:
+                                messages, meta = reconstruct_session(memos)
+                                if len(messages) >= 5:  # 质量门槛
+                                    amphora.enqueue(sid, messages, meta)
+                                    enqueued += 1
+                            except Exception:
+                                continue
+                    if enqueued > 0:
+                        logger.info(f"[蒸馏合并] Memos 扫描: {enqueued} 个新 session 已入队")
+                except Exception as e:
+                    logger.debug(f"[蒸馏合并] Memos 扫描失败: {e}")
+
             # 高频：处理 distill_queue
             pending = worker.process_all()
             if pending > 0:
