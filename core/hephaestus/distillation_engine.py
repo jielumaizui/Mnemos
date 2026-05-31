@@ -1173,12 +1173,20 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body = [f"# {fragment.title}", ""]
 
     if fragment.background:
-        body.extend(["## 背景", "", fragment.background, ""])
+        # 如果 background 已包含 Markdown 标题，直接渲染；否则包装在 ## 背景 下
+        if fragment.background.strip().startswith("#"):
+            body.extend([fragment.background, ""])
+        else:
+            body.extend(["## 背景", "", fragment.background, ""])
 
     if fragment.core_content:
-        body.extend(["## 核心内容", "", fragment.core_content, ""])
+        # 如果 core_content 已包含 Markdown 标题（深度模式），直接渲染
+        if fragment.core_content.strip().startswith("#"):
+            body.extend([fragment.core_content, ""])
+        else:
+            body.extend(["## 核心内容", "", fragment.core_content, ""])
 
-    if fragment.boundaries:
+    if fragment.boundaries and (fragment.boundaries.get("applies") or fragment.boundaries.get("not_applies")):
         body.extend(["### 适用边界", ""])
         if fragment.boundaries.get("applies"):
             body.append(f"- 适用于：{fragment.boundaries['applies']}")
