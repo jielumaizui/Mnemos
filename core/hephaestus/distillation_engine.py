@@ -50,7 +50,6 @@ def _get_wiki_db() -> Path:
 
 # ========== 数据模型 ==========
 
-@dataclass
 class KnowledgeFragment:
     """知识片段"""
     form: str
@@ -66,6 +65,30 @@ class KnowledgeFragment:
     self_check_issues: List[str] = field(default_factory=list)
     cross_agent_links: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
+    # AI 关联扩充（与原始内容严格区分）
+    ai_expansion: str = ""
+
+    def __init__(self, form: str, title: str, frontmatter: Dict[str, Any],
+                 background: str, core_content: str, boundaries: Dict[str, str],
+                 anti_patterns: List[str], related_concepts: List[str],
+                 self_check_passed: bool = True,
+                 self_check_issues: List[str] = None,
+                 cross_agent_links: List[str] = None,
+                 keywords: List[str] = None,
+                 ai_expansion: str = ""):
+        self.form = form
+        self.title = title
+        self.frontmatter = frontmatter
+        self.background = background
+        self.core_content = core_content
+        self.boundaries = boundaries
+        self.anti_patterns = anti_patterns
+        self.related_concepts = related_concepts
+        self.self_check_passed = self_check_passed
+        self.self_check_issues = self_check_issues or []
+        self.cross_agent_links = cross_agent_links or []
+        self.keywords = keywords or []
+        self.ai_expansion = ai_expansion
 
 
 @dataclass
@@ -180,14 +203,15 @@ def extract_json(text: str) -> Optional[Dict]:
 class HostAgentCaller:
     """宿主 Agent 调用器 — 同源复用
 
-    优先级：claude -p → kimi --print → AgentDelegate 异步
+    优先级：claude -p → kimi --print → OpenAI 兼容 API → AgentDelegate 异步
     """
 
     MAX_RETRIES = 2
     TIMEOUT = 180  # 长 prompt 蒸馏需要更长时间
 
-    def __init__(self, timeout: int = None):
+    def __init__(self, timeout: int = None, force_provider: str = None):
         self._timeout = timeout or self.TIMEOUT
+        self._force_provider = force_provider  # "api" | "cli" | None
 
     def call(self, prompt: str, expect_json: bool = True,
              max_retries: int = None, timeout: int = None) -> Optional[Dict]:
@@ -220,13 +244,78 @@ class HostAgentCaller:
         return None
 
     def _invoke(self, prompt: str, timeout: int) -> Optional[str]:
+        if self._force_provider == "api":
+            raw = self._try_openai_compatible_api(prompt, timeout)
+            if raw is not None:
+                return raw
+            return self._try_delegate(prompt, timeout)
+
+        if self._force_provider == "cli":
+            raw = self._try_cli("claude", ["-p", prompt], timeout)
+            if raw is not None:
+                return raw
+            raw = self._try_cli("kimi", ["--print", prompt], timeout)
+            if raw is not None:
+                return raw
+            return self._try_delegate(prompt, timeout)
+
+        # 默认优先级：claude → kimi → api → delegate
         raw = self._try_cli("claude", ["-p", prompt], timeout)
         if raw is not None:
             return raw
         raw = self._try_cli("kimi", ["--print", prompt], timeout)
         if raw is not None:
             return raw
+        raw = self._try_openai_compatible_api(prompt, timeout)
+        if raw is not None:
+            return raw
         return self._try_delegate(prompt, timeout)
+
+    def _try_openai_compatible_api(self, prompt: str, timeout: int) -> Optional[str]:
+        """尝试通过 OpenAI 兼容 API 调用 LLM（如 SiliconFlow、OpenAI、Azure 等）
+
+        环境变量配置：
+        - OPENAI_API_KEY: OpenAI API 密钥
+        - SILICONFLOW_API_KEY: SiliconFlow API 密钥
+        - OPENAI_BASE_URL: API 基础地址（默认 https://api.openai.com/v1）
+        - OPENAI_MODEL: 模型名称（默认 gpt-4o-mini）
+        """
+        import urllib.request
+        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        # 根据提供商选择默认模型
+        if "siliconflow" in base_url.lower():
+            default_model = "deepseek-ai/DeepSeek-V3"
+        else:
+            default_model = "gpt-4o-mini"
+        model = os.environ.get("OPENAI_MODEL", default_model)
+
+        # 根据 base_url 智能选择对应的 API key
+        if "siliconflow" in base_url.lower():
+            api_key = os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("SILICONFLOW_API_KEY")
+
+        if not api_key:
+            return None
+        data = json.dumps({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4000,
+            "temperature": 0.2,
+        }).encode()
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=data,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            body = json.loads(resp.read())
+            content = body["choices"][0]["message"]["content"]
+            return content.strip() if content else None
+        except Exception:
+            return None
 
     def _try_cli(self, cmd: str, args: List[str], timeout: int) -> Optional[str]:
         try:
@@ -1011,6 +1100,7 @@ FORM_TO_ENTITY_TYPE = {
     "snippet": "technology",
     "reference": "technology",
     "todo": "project",
+    "data-insight": "dataset",
 }
 
 
@@ -1036,7 +1126,9 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     # 清理 fragment.frontmatter 中的旧类型字段，避免旧类型名覆盖代码映射的正确类型
     cleaned_fm = dict(fragment.frontmatter or {})
     for _k in ("类型", "type"):
-        cleaned_fm.pop(_k, None)
+        val = cleaned_fm.get(_k)
+        if val in FORM_TO_ENTITY_TYPE:
+            cleaned_fm.pop(_k, None)
 
     defaults = {
         "type": entity_type,
@@ -1082,12 +1174,20 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body = [f"# {fragment.title}", ""]
 
     if fragment.background:
-        body.extend(["## 背景", "", fragment.background, ""])
+        # 如果 background 已包含 Markdown 标题，直接渲染；否则包装在 ## 背景 下
+        if fragment.background.strip().startswith("#"):
+            body.extend([fragment.background, ""])
+        else:
+            body.extend(["## 背景", "", fragment.background, ""])
 
     if fragment.core_content:
-        body.extend(["## 核心内容", "", fragment.core_content, ""])
+        # 如果 core_content 已包含 Markdown 标题（深度模式），直接渲染
+        if fragment.core_content.strip().startswith("#"):
+            body.extend([fragment.core_content, ""])
+        else:
+            body.extend(["## 核心内容", "", fragment.core_content, ""])
 
-    if fragment.boundaries:
+    if fragment.boundaries and (fragment.boundaries.get("applies") or fragment.boundaries.get("not_applies")):
         body.extend(["### 适用边界", ""])
         if fragment.boundaries.get("applies"):
             body.append(f"- 适用于：{fragment.boundaries['applies']}")
@@ -1120,7 +1220,97 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
             body.append(f"- [[{concept}]]")
         body.append("")
 
+    # AI 关联扩充（与原始内容严格区分）
+    if fragment.ai_expansion:
+        body.extend(["## AI 关联扩充", ""])
+        body.append("> ⚠️ **此区域内容由 AI 根据原始文档生成，属于关联性补充和建议，"
+                   "可能与作者原意存在偏差。请结合原始内容独立判断。**")
+        body.append("")
+        body.append(fragment.ai_expansion)
+        body.append("")
+
     return "\n".join(lines + [""] + body)
+
+
+def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> int:
+    """处理外部文档 session：直接解析内容生成 wiki 页面，不走 LLM 蒸馏
+
+    用于 DocumentProcessor 导入的 PPT/PDF/Excel/Book 等外部文档，
+    这些文档已有结构化内容，无需 LLM 二次蒸馏。
+    """
+    if not messages:
+        return 0
+    content = messages[0].get("content", "")
+    if not content:
+        return 0
+
+    # 解析标题和文档类型（从第一行，如 "# 📄 PDF: 文件名"）
+    title_match = re.search(r'^#\s+[^\s]+\s+(\w+):\s*(.+)$', content, re.MULTILINE)
+    doc_type = "document"
+    title = sid
+    if title_match:
+        doc_type = title_match.group(1).strip().lower()
+        title = title_match.group(2).strip()
+
+    # 解析元数据块（如果存在）
+    meta_block = re.search(r'## 元数据\n\n(.+?)(?=\n## |\Z)', content, re.DOTALL)
+    summary = ""
+    filename = ""
+    if meta_block:
+        for line in meta_block.group(1).split('\n'):
+            if '文档类型' in line:
+                doc_type = line.split(':')[-1].strip().lower()
+            elif '内容摘要' in line:
+                summary = line.split(':', 1)[-1].strip()
+            elif '原始文件' in line:
+                filename = line.split(':', 1)[-1].strip()
+
+    # 解析 JSON 元数据
+    json_match = re.search(r'```json\n(.+?)\n```', content, re.DOTALL)
+    extra_meta = {}
+    if json_match:
+        try:
+            extra_meta = json.loads(json_match.group(1))
+        except Exception:
+            pass
+
+    # 提取正文内容（去掉元数据部分）
+    body = content
+    if '---\n\n## 元数据' in content:
+        body = content.split('---\n\n## 元数据')[0].strip()
+
+    # 映射文档类型到 form
+    type_to_form = {
+        "pdf": "reference",
+        "ppt": "reference",
+        "pptx": "reference",
+        "xlsx": "reference",
+        "xls": "reference",
+        "csv": "reference",
+        "book": "reference",
+    }
+    form = type_to_form.get(doc_type, "reference")
+
+    # 构建 KnowledgeFragment
+    fragment = KnowledgeFragment(
+        form=form,
+        title=title,
+        frontmatter={
+            "领域": extra_meta.get("category", "外部文档"),
+            "文档类型": doc_type,
+            "来源文件": filename or extra_meta.get("filename", ""),
+        },
+        background=summary or f"外部导入的 {doc_type.upper()} 文档",
+        core_content=body,
+        boundaries={},
+        anti_patterns=[],
+        related_concepts=[],
+    )
+
+    md = generate_wiki_page(fragment, sid, source=meta.get("source", "unknown"))
+    inbox_name = f"{sid[:8]}_{form}_1.md"
+    (inbox / inbox_name).write_text(md, encoding="utf-8")
+    return 1
 
 
 # ========== 蒸馏引擎 ==========

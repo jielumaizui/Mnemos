@@ -265,6 +265,28 @@ CREATE TABLE IF NOT EXISTS memos_signals (
 
 CREATE INDEX IF NOT EXISTS idx_memos_time ON memos_signals(timestamp);
 CREATE INDEX IF NOT EXISTS idx_memos_ai ON memos_signals(is_ai_generated);
+
+-- 核心信号表：外部文档导入
+CREATE TABLE IF NOT EXISTS document_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,                   -- doc-{hash}
+    filename TEXT,
+    doc_type TEXT,                     -- pdf/ppt/xlsx/docx/epub/...
+    doc_category TEXT,                 -- book/strategy/data/report/manual/reference
+    title TEXT,
+    key_topics TEXT,                   -- JSON array
+    entity_type TEXT,                  -- concept/project/dataset/retrospective/technology
+    page_count INTEGER DEFAULT 0,
+    import_timestamp TEXT,
+    import_source TEXT,                -- file_path
+    confidence REAL DEFAULT 0.0,
+    processed INTEGER DEFAULT 0,       -- 是否已参与画像分析
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_time ON document_signals(import_timestamp);
+CREATE INDEX IF NOT EXISTS idx_doc_category ON document_signals(doc_category);
+CREATE INDEX IF NOT EXISTS idx_doc_processed ON document_signals(processed);
 """
 
 
@@ -650,6 +672,38 @@ class SignalStore:
             INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
             VALUES (?, ?, ?, ?)
         """, ("file_system", signal_id, 0.6, 0))
+        conn.commit()
+        return signal_id
+
+    def insert_document_signal(self, session_id: str, filename: str, doc_type: str,
+                                doc_category: str, title: str, key_topics: str,
+                                entity_type: str, page_count: int,
+                                import_timestamp: str, import_source: str,
+                                confidence: float = 0.0) -> int:
+        """插入外部文档导入信号"""
+        conn = self._pool.get_conn()
+        cursor = conn.execute("""
+            INSERT OR IGNORE INTO document_signals (
+                session_id, filename, doc_type, doc_category,
+                title, key_topics, entity_type, page_count,
+                import_timestamp, import_source, confidence, processed
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, filename, doc_type, doc_category,
+              title, key_topics, entity_type, page_count,
+              import_timestamp, import_source, confidence, 0))
+        signal_id = cursor.lastrowid
+        if signal_id is None:
+            existing = conn.execute(
+                "SELECT id FROM document_signals WHERE session_id = ? AND import_timestamp = ?",
+                (session_id, import_timestamp)
+            ).fetchone()
+            signal_id = existing[0] if existing else 0
+            conn.commit()
+            return signal_id
+        conn.execute("""
+            INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
+            VALUES (?, ?, ?, ?)
+        """, ("document", signal_id, confidence, 0))
         conn.commit()
         return signal_id
 
