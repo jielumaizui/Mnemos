@@ -462,10 +462,12 @@ class DocumentProcessor:
             DocumentType.PDF: self._process_pdf,
             DocumentType.WORD: self._process_word,
             DocumentType.HTML: self._process_html,
+            DocumentType.EBOOK: self._process_ebook,
         }
 
         processor = processors.get(doc_type)
         if not processor:
+            logger.warning(f"[DocumentProcessor] ⚠️ 暂无 {doc_type.value} 类型处理器")
             return None
 
         try:
@@ -473,6 +475,75 @@ class DocumentProcessor:
         except Exception as e:
             logger.warning(f"[DocumentProcessor] ❌ 处理失败: {e}")
             return None
+
+    def process_and_distill(self, file_path: Path, inbox: Path = None, force_provider: str = None) -> int:
+        """
+        直接处理本地文档并蒸馏入 wiki（不走 Memos）
+
+        Args:
+            file_path: 本地文件路径
+            inbox: wiki Inbox 目录（默认自动检测）
+            force_provider: 强制 LLM 提供商 — "api" 强制走 API，"cli" 强制走本地 CLI，None 自动选择
+        """
+        from core.hephaestus.document_pipeline import DocumentDistillationPipeline
+        from core.hephaestus.distillation_engine import HostAgentCaller
+        import hashlib
+
+        doc = self.process_document(file_path)
+        if not doc:
+            return 0
+
+        # 生成 session_id
+        session_id = f"doc-{hashlib.md5(str(file_path).encode()).hexdigest()[:8]}"
+
+        # 构建 messages（模拟 reconstruct_session 输出）
+        messages = [{"role": "system", "content": doc.content}]
+        meta = {
+            "source": "human",
+            "filename": doc.filename,
+            "file_path": str(file_path),
+            "doc_type": doc.doc_type.value,
+            "pages": doc.metadata.get("pages", doc.metadata.get("slides", doc.metadata.get("chapters", 0))),
+        }
+
+        # 调用文档蒸馏管道（支持强制 provider）
+        caller = HostAgentCaller(force_provider=force_provider)
+        pipeline = DocumentDistillationPipeline(caller=caller)
+        if inbox:
+            pipeline.inbox_dir = inbox
+
+        result = pipeline.process(session_id, messages, meta)
+
+        if result.judgment == "skip" or not result.fragments:
+            logger.info(f"[DocumentProcessor] 文档被跳过: {file_path.name}")
+            return 0
+
+        # 写入 wiki
+        paths = pipeline.write_to_wiki(result, source="human")
+
+        # 写入画像信号
+        try:
+            from core.persona.psyche import get_signal_store
+            from datetime import datetime
+            store = get_signal_store()
+            store.insert_document_signal(
+                session_id=session_id,
+                filename=doc.filename,
+                doc_type=doc.doc_type.value,
+                doc_category=result.doc_category,
+                title=doc.title,
+                key_topics=json.dumps(result.fragments[0].keywords if result.fragments else [], ensure_ascii=False),
+                entity_type=result.fragments[0].frontmatter.get("类型", "reference") if result.fragments else "reference",
+                page_count=meta.get("pages", 0),
+                import_timestamp=datetime.now().isoformat(),
+                import_source=str(file_path),
+                confidence=0.8,
+            )
+        except Exception as e:
+            logger.debug(f"[DocumentProcessor] 文档信号写入失败: {e}")
+
+        logger.info(f"[DocumentProcessor] ✅ 文档已蒸馏入 wiki: {file_path.name} → {len(paths)} 页")
+        return len(paths)
 
     def _process_excel(self, file_path: Path) -> Optional[ExtractedDocument]:
         """
@@ -509,8 +580,8 @@ class DocumentProcessor:
             content_lines.append("")
 
             # 转换为 Markdown 表格
-            # 限制显示前100行，避免过大
-            display_df = df.head(100)
+            # 保留完整数据（分片保存由 save_to_memos 处理）
+            display_df = df
 
             # 生成表头
             headers = [str(col) for col in display_df.columns]
@@ -520,13 +591,9 @@ class DocumentProcessor:
             # 生成数据行
             for _, row in display_df.iterrows():
                 cells = [str(cell) if pd.notna(cell) else "" for cell in row]
-                # 截断过长的单元格
-                cells = [c[:100] + "..." if len(c) > 100 else c for c in cells]
+                # 截断过长的单元格（防止表格变形）
+                cells = [c[:200] + "..." if len(c) > 200 else c for c in cells]
                 content_lines.append("| " + " | ".join(cells) + " |")
-
-            if len(df) > 100:
-                content_lines.append("")
-                content_lines.append(f"*... 共 {len(df)} 行，显示前 100 行*")
 
             content_lines.append("")
 
@@ -772,7 +839,7 @@ class DocumentProcessor:
 
                 # 尝试按页分割（如果 pdftotext 支持 -f -l 参数）
                 content_lines = [f"# 📄 PDF: {file_path.stem}", ""]
-                content_lines.append(text[:50000])  # 限制大小
+                content_lines.append(text)  # 完整保留
 
                 return ExtractedDocument(
                     doc_type=DocumentType.PDF,
@@ -897,7 +964,7 @@ class DocumentProcessor:
             "",
             f"**源文件**: {file_path.name}",
             "",
-            markdown_content[:30000]  # 限制大小
+            markdown_content
         ]
 
         metadata = {
@@ -921,29 +988,121 @@ class DocumentProcessor:
             processing_method="local"
         )
 
+    def _process_ebook(self, file_path: Path) -> Optional[ExtractedDocument]:
+        """
+        处理电子书文件（epub/mobi/azw3）
+
+        提取章节结构和文本内容
+        """
+        ext = file_path.suffix.lower()
+        if ext == '.epub':
+            return self._process_epub(file_path)
+        # mobi/azw3 暂不支持，返回基础信息
+        logger.warning(f"[DocumentProcessor] ⚠️ {ext} 格式暂不支持完整提取，尝试作为纯文本读取")
+        try:
+            content = file_path.read_text(encoding='utf-8', errors='ignore')
+            return ExtractedDocument(
+                doc_type=DocumentType.EBOOK,
+                filename=file_path.name,
+                title=file_path.stem,
+                content=f"# 📖 Ebook: {file_path.stem}\n\n**格式**: {ext}\n\n{content[:5000]}",
+                metadata={"format": ext, "size": len(content)},
+                summary=f"电子书文件：{ext}格式",
+                validation_status="review",
+                needs_review=True,
+                review_reason=f"{ext}格式暂不支持完整提取，仅保留前5000字符",
+                confidence=0.3,
+                processing_method="fallback"
+            )
+        except Exception as e:
+            logger.warning(f"[DocumentProcessor] ❌ 电子书处理失败: {e}")
+            return None
+
+    def _process_epub(self, file_path: Path) -> Optional[ExtractedDocument]:
+        """处理 EPUB 电子书"""
+        try:
+            import ebooklib
+            from ebooklib import epub
+        except ImportError:
+            logger.warning("[DocumentProcessor] ⚠️ 缺少 ebooklib，无法处理 EPUB")
+            logger.info("[DocumentProcessor] 安装: pip install EbookLib")
+            return None
+
+        try:
+            book = epub.read_epub(str(file_path))
+
+            # 提取元数据
+            title = file_path.stem
+            try:
+                titles = book.get_metadata('DC', 'title')
+                if titles:
+                    title = titles[0][0]
+            except Exception:
+                pass
+
+            # 提取章节内容
+            content_lines = [f"# 📖 Ebook: {title}", ""]
+            chapters = []
+            chapter_count = 0
+
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    chapter_count += 1
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(item.get_content(), 'html.parser')
+                        # 移除 script/style
+                        for tag in soup(["script", "style"]):
+                            tag.decompose()
+                        text = soup.get_text(separator='\n', strip=True)
+                        if text.strip():
+                            chapters.append(f"## 第 {chapter_count} 章\n\n{text.strip()}")
+                    except Exception:
+                        # 回退：直接提取文本
+                        try:
+                            text = item.get_content().decode('utf-8', errors='ignore')
+                            text = re.sub(r'<[^>]+>', '', text)
+                            text = re.sub(r'\n\s*\n', '\n\n', text)
+                            if text.strip():
+                                chapters.append(f"## 第 {chapter_count} 章\n\n{text.strip()}")
+                        except Exception:
+                            continue
+
+            content_lines.extend(chapters)
+
+            metadata = {
+                "format": "epub",
+                "chapters": chapter_count,
+                "title": title
+            }
+
+            summary = f"EPUB电子书：{title}，共{chapter_count}章"
+
+            return ExtractedDocument(
+                doc_type=DocumentType.EBOOK,
+                filename=file_path.name,
+                title=title,
+                content="\n\n".join(content_lines),
+                metadata=metadata,
+                summary=summary,
+                validation_status="pending",
+                needs_review=False,
+                review_reason="",
+                confidence=0.7,
+                processing_method="local"
+            )
+
+        except Exception as e:
+            logger.warning(f"[DocumentProcessor] ❌ EPUB 处理失败: {e}")
+            return None
+
     def save_to_memos(self, doc: ExtractedDocument) -> Optional[str]:
-        """保存提取的内容到 Memos"""
-        # 使用正确的标签：人工导入使用 source=human，不使用 model 标签
-        tags = [
-            "source=human",
-            f"time={datetime.now().strftime('%Y%m%d')}",
-            "scope=public",
-            f"doc:type={doc.doc_type.value}",
-            f"doc:file={doc.filename}",
-            "inbox:document"
-        ]
+        """保存提取的内容到 Memos，大文档自动分片"""
+        import hashlib
+        session_id = f"doc-{hashlib.md5(doc.filename.encode()).hexdigest()[:8]}"
 
-        # 添加验证状态标签
-        if doc.validation_status == "validated":
-            tags.append("validation:passed")
-        elif doc.validation_status == "review":
-            tags.append("validation:needs-review")
-            tags.append("scope:private")  # 待审核内容设为私有
-
-        # 构建完整内容
-        full_content = f"""{doc.content}
-
----
+        # 构建元数据块
+        meta_block = f"""---
 
 ## 元数据
 
@@ -960,9 +1119,8 @@ class DocumentProcessor:
 {json.dumps(doc.metadata, ensure_ascii=False, indent=2)}
 ```
 """
-
         if doc.needs_review:
-            full_content += f"""
+            meta_block += f"""
 
 ---
 
@@ -980,14 +1138,117 @@ class DocumentProcessor:
 核对后请删除此提醒，并将 scope:private 标签移除。
 """
 
-        try:
-            result = self.client.save(content=full_content, tags=tags)
-            memos_uid = result.uid if hasattr(result, 'uid') else str(result)
-            logger.info(f"[DocumentProcessor] ✅ 已保存: {memos_uid[:16]}...")
-            return memos_uid
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ 保存失败: {e}")
-            return None
+        full_content = doc.content + meta_block
+
+        # 分片阈值：单条 memo 最大约 30000 字符（预留元数据空间）
+        MAX_MEMO_SIZE = 30000
+
+        if len(full_content) <= MAX_MEMO_SIZE:
+            # 小文档：单条保存
+            tags = [
+                "source=human",
+                "layer=L1",
+                f"session={session_id}",
+                f"time={datetime.now().strftime('%Y%m%d')}",
+                "scope=public",
+                f"doc:type={doc.doc_type.value}",
+                f"doc:file={doc.filename}",
+                "inbox:document"
+            ]
+            if doc.validation_status == "validated":
+                tags.append("validation:passed")
+            elif doc.validation_status == "review":
+                tags.append("validation:needs-review")
+                tags.append("scope:private")
+            try:
+                result = self.client.save(content=full_content, tags=tags)
+                memos_uid = result.uid if hasattr(result, 'uid') else str(result)
+                logger.info(f"[DocumentProcessor] ✅ 已保存: {memos_uid[:16]}...")
+                return memos_uid
+            except Exception as e:
+                logger.warning(f"[DocumentProcessor] ❌ 保存失败: {e}")
+                return None
+
+        # 大文档：分片保存
+        logger.info(f"[DocumentProcessor] 📦 内容较长({len(full_content)}字符)，分片保存...")
+        # 内容分片，每片预留元数据空间
+        content_chunks = self._split_content(doc.content, chunk_size=25000)
+        total = len(content_chunks)
+        uids = []
+
+        for i, chunk in enumerate(content_chunks, 1):
+            is_first = (i == 1)
+            is_last = (i == total)
+
+            # 只有第一片包含文档标题和元数据
+            if is_first:
+                chunk_content = f"{chunk}\n{meta_block}"
+            else:
+                chunk_content = chunk
+
+            tags = [
+                "source=human",
+                "layer=L1",
+                f"session={session_id}",
+                f"segment={i}/{total}",
+                f"time={datetime.now().strftime('%Y%m%d')}",
+                "scope=public",
+                f"doc:type={doc.doc_type.value}",
+                f"doc:file={doc.filename}",
+                "inbox:document"
+            ]
+            if doc.validation_status == "validated":
+                tags.append("validation:passed")
+            elif doc.validation_status == "review":
+                tags.append("validation:needs-review")
+                tags.append("scope:private")
+
+            try:
+                result = self.client.save(content=chunk_content, tags=tags)
+                uid = result.uid if hasattr(result, 'uid') else str(result)
+                uids.append(uid)
+                logger.info(f"[DocumentProcessor] ✅ 分片 {i}/{total} 已保存: {uid[:16]}...")
+            except Exception as e:
+                logger.warning(f"[DocumentProcessor] ❌ 分片 {i}/{total} 保存失败: {e}")
+
+        return uids[0] if uids else None
+
+    def _split_content(self, content: str, chunk_size: int = 25000) -> List[str]:
+        """按自然边界（段落/表格/章节）分片内容"""
+        if len(content) <= chunk_size:
+            return [content]
+
+        chunks = []
+        # 按二级标题（##）分割，尽量保持章节完整
+        sections = re.split(r'\n(?=##\s)', content)
+        current_chunk = ""
+
+        for section in sections:
+            if not section.strip():
+                continue
+            # 如果当前章节本身超过 chunk_size，按段落再分
+            if len(section) > chunk_size:
+                if current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+                paragraphs = section.split('\n\n')
+                for para in paragraphs:
+                    if len(current_chunk) + len(para) + 2 > chunk_size and current_chunk:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = para
+                    else:
+                        current_chunk = (current_chunk + "\n\n" + para).strip() if current_chunk else para
+            else:
+                if len(current_chunk) + len(section) + 1 > chunk_size and current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = section
+                else:
+                    current_chunk = (current_chunk + "\n" + section).strip() if current_chunk else section
+
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+
+        return chunks if chunks else [content]
 
     def save_to_memos_with_review(self, file_path: Path, doc: ExtractedDocument) -> Optional[str]:
         """

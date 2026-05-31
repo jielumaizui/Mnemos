@@ -605,17 +605,31 @@ def service_distill_and_merge(stop_event: threading.Event):
 
                     sessions = fetch_l1_sessions(memos_client)
                     enqueued = 0
+                    doc_processed = 0
                     for sid, memos in sessions.items():
                         if _is_session_completed(sid, memos) and not _is_processed(sid):
                             try:
                                 messages, meta = reconstruct_session(memos)
-                                if len(messages) >= 5:  # 质量门槛
+                                # Doc sessions (external documents) — 深度蒸馏，不入队
+                                if sid.startswith('doc-'):
+                                    from core.hephaestus.document_pipeline import process_doc_session
+                                    inbox = worker.inbox_dir
+                                    pages = process_doc_session(sid, messages, meta, inbox)
+                                    if pages > 0:
+                                        from core.hephaestus.wiki_builder import _mark_processed
+                                        _mark_processed(sid, meta.get('source', 'unknown'), len(messages), 0, 'pipeline')
+                                        doc_processed += 1
+                                    continue
+                                # Regular chat sessions — 质量门槛后入队
+                                if len(messages) >= 5:
                                     amphora.enqueue(sid, messages, meta)
                                     enqueued += 1
                             except Exception:
                                 continue
                     if enqueued > 0:
                         logger.info(f"[蒸馏合并] Memos 扫描: {enqueued} 个新 session 已入队")
+                    if doc_processed > 0:
+                        logger.info(f"[蒸馏合并] Memos 扫描: {doc_processed} 个外部文档已直接入库")
                 except Exception as e:
                     logger.debug(f"[蒸馏合并] Memos 扫描失败: {e}")
 
