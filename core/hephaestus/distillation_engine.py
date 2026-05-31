@@ -1491,17 +1491,19 @@ class DistillationEngine:
                 try:
                     actions = linker.link_after_distill(file_path)
                     if actions:
-                        # 将关联结果写入 frontmatter（结构化查询用）
+                        # 将关联结果写入 frontmatter（只记录从当前页面出发的链接）
                         refs = [
                             {"page": str(a.to_page), "reason": a.reason,
                              "similarity": round(a.similarity, 4)}
                             for a in actions
+                            if a.from_page == file_path
                         ]
                         fragment.frontmatter["cross_agent_refs"] = refs
                         # 更新文件 frontmatter（保留 body 中 linker 已注入的链接）
-                        self._update_frontmatter_field(
-                            file_path, "cross_agent_refs", refs,
-                        )
+                        if refs:
+                            self._update_frontmatter_field(
+                                file_path, "cross_agent_refs", refs,
+                            )
                 except Exception:
                     logger.debug("Cross-agent linking failed for %s", file_path, exc_info=True)
 

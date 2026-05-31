@@ -268,8 +268,22 @@ class HephaestusWorker:
         self._rate_limit_delegate()
         ok = self.delegate.delegate(distill_task, output_path)
         if not ok:
-            logger.warning(f"无可用的 Agent 执行蒸馏，任务保留: {session_id}")
-            return False
+            logger.warning(f"无可用的 Agent 执行蒸馏，尝试同步回退: {session_id}")
+            return self._sync_distill_and_complete(session_id, distill_task)
+
+        # 检测 Agent 是否只是写了占位符（不会自动执行蒸馏）
+        # 如果 output 文件包含占位符标记，说明 Agent 不支持自动蒸馏
+        is_placeholder = False
+        try:
+            if output_path.exists() and output_path.stat().st_size < 2000:
+                content = output_path.read_text(encoding="utf-8", errors="replace")
+                is_placeholder = "<!-- MNEMOS_DISTILL_TASK:" in content
+        except Exception:
+            pass
+
+        if is_placeholder:
+            logger.info(f"Agent 仅写入占位符，切换同步蒸馏: {session_id}")
+            return self._sync_distill_and_complete(session_id, distill_task)
 
         # 不阻塞等待 Agent 完成（异步模式）
         # 结果将在下次 collect_completed() 或 daemon 轮询时处理
@@ -277,6 +291,59 @@ class HephaestusWorker:
         self._emit_progress(session_id, "judged", "蒸馏任务已委托给宿主 Agent")
 
         return True
+
+    def _sync_distill_and_complete(self, session_id: str, distill_task: DistillTask) -> bool:
+        """同步执行蒸馏（API 回退模式），不依赖外部 Agent 异步处理。
+
+        当宿主 Agent 无法自动执行蒸馏时（如 Claude 适配器仅写占位符），
+        直接调用 distillation_engine 通过 OpenAI 兼容 API 完成蒸馏。
+        """
+        self._emit_progress(session_id, "extracting", "同步蒸馏中（API 模式）...")
+        try:
+            from core.hephaestus.distillation_engine import (
+                DistillationEngine, HostAgentCaller
+            )
+
+            caller = HostAgentCaller(force_provider="api")
+            engine = DistillationEngine(caller=caller)
+            result = engine.process(
+                session_id=session_id,
+                messages=distill_task.messages,
+                meta=distill_task.meta,
+            )
+
+            if result.judgment == "knowledge" and result.fragments:
+                written = engine.write_pages(result)
+                logger.info(
+                    f"[Hephaestus] 同步蒸馏完成 {session_id}: "
+                    f"判定={result.judgment}, 写入 {len(written)} 页"
+                )
+                self._emit_progress(
+                    session_id, "done",
+                    f"同步蒸馏完成，写入 {len(written)} 页到 Inbox"
+                )
+            else:
+                logger.info(
+                    f"[Hephaestus] 同步蒸馏完成 {session_id}: "
+                    f"判定={result.judgment}，无需写入"
+                )
+                self._emit_progress(
+                    session_id, "done",
+                    f"同步蒸馏完成，判定={result.judgment}"
+                )
+
+            # 标记 amphora 任务完成
+            try:
+                from core.kia import amphora
+                amphora.mark_done(session_id)
+            except Exception:
+                pass
+            return True
+
+        except Exception as e:
+            logger.error(f"[Hephaestus] 同步蒸馏失败 {session_id}: {e}")
+            self._emit_progress(session_id, "failed", f"同步蒸馏失败: {e}")
+            return False
 
     def collect_completed(self, max_files: int = None) -> int:
         """收集已完成的蒸馏结果并移入 Inbox。

@@ -1233,6 +1233,19 @@ class DocumentProcessor:
                     current_chunk = ""
                 paragraphs = section.split('\n\n')
                 for para in paragraphs:
+                    # 如果单个段落就超过 chunk_size，按句子强制分割
+                    if len(para) > chunk_size:
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                            current_chunk = ""
+                        sentences = re.split(r'(?<=[.!?。！？])\s+', para)
+                        for sent in sentences:
+                            if len(current_chunk) + len(sent) + 1 > chunk_size and current_chunk:
+                                chunks.append(current_chunk.strip())
+                                current_chunk = sent
+                            else:
+                                current_chunk = (current_chunk + " " + sent).strip() if current_chunk else sent
+                        continue
                     if len(current_chunk) + len(para) + 2 > chunk_size and current_chunk:
                         chunks.append(current_chunk.strip())
                         current_chunk = para
