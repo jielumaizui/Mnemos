@@ -1056,52 +1056,47 @@ def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) 
         logger.info(f"[Connect] [DRY RUN] 将生成 {total} 个实体节点 + MOC 枢纽")
         return stats
 
-    # 生成人物页面
-    for name, sessions in all_entities["people"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_person_page(name, relations, related_sessions)
-        (PEOPLE_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["people"] += 1
+    # 实体页面生成已禁用 — 与蒸馏产物的 32 字段规范冲突，且内容空洞
+    # 关系分析仍在后台数据库维护，供搜索和画像使用
+    # 如需恢复，取消下方注释并删除此行注释
+    #
+    # for name, sessions in all_entities["people"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_person_page(name, relations, related_sessions)
+    #     (PEOPLE_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["people"] += 1
+    #
+    # for name, sessions in all_entities["projects"].items():
+    #     if len(sessions) < 1: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     tech_stack = project_tech.get(name, set())
+    #     md_content, safe_name = generate_project_page(name, relations, related_sessions, tech_stack)
+    #     (PROJECTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["projects"] += 1
+    #
+    # for name, sessions in all_entities["tech"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_tech_page(name, relations, related_sessions)
+    #     (TECH_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["tech"] += 1
+    #
+    # for name, sessions in all_entities["concepts"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_concept_page(name, relations, related_sessions)
+    #     (CONCEPTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["concepts"] += 1
+    #
+    # stats["mocs"] = generate_moc_pages(all_entities)
+    # enrich_source_pages(extractor, relation_engine)
 
-    # 生成项目页面
-    for name, sessions in all_entities["projects"].items():
-        if len(sessions) < 1:  # 项目允许只出现1次
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        tech_stack = project_tech.get(name, set())
-        md_content, safe_name = generate_project_page(name, relations, related_sessions, tech_stack)
-        (PROJECTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["projects"] += 1
-
-    # 生成技术页面
-    for name, sessions in all_entities["tech"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_tech_page(name, relations, related_sessions)
-        (TECH_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["tech"] += 1
-
-    # 生成概念页面
-    for name, sessions in all_entities["concepts"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_concept_page(name, relations, related_sessions)
-        (CONCEPTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["concepts"] += 1
-
-    # 生成 MOC 枢纽页面（关键！）
-    stats["mocs"] = generate_moc_pages(all_entities)
-
-    # 增强 Source 页面
-    enrich_source_pages(extractor, relation_engine)
+    logger.info("[Connect] 实体页面生成已禁用，仅更新关系数据库")
 
     print(f"[Connect] 完成: {stats['people']} 人, {stats['projects']} 项目, "
           f"{stats['tech']} 技术, {stats['concepts']} 概念, {stats['mocs']} MOC")
