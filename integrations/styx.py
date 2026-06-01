@@ -13,6 +13,7 @@ import json
 import time
 import math
 import hashlib
+import sqlite3
 import uuid
 import threading
 from datetime import datetime, timedelta
@@ -306,6 +307,37 @@ class MemosClient:
         tags.append(f"agent={self.agent}")
         return tags
 
+    def _trace_sync_log(self, content, tags, memos_uids, status="ingested"):
+        """自动 sync_log 追踪，直接写 ~/.mnemos/sync_log.db"""
+        try:
+            agent_name = self.agent or "unknown"
+            session_id = "auto"
+            turn_number = 0
+            if tags:
+                for tag in tags:
+                    if tag.startswith("session="):
+                        session_id = tag.split("=", 1)[1]
+                    elif tag.startswith("turn="):
+                        try:
+                            turn_number = int(tag.split("=", 1)[1])
+                        except (ValueError, TypeError):
+                            turn_number = 0
+            content_hash = hashlib.md5(content.strip().encode()).hexdigest()[:16]
+            db_path = Path.home() / ".mnemos" / "sync_log.db"
+            with sqlite3.connect(str(db_path), timeout=5) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO sync_log
+                    (agent_name, session_id, turn_number, content_hash, memos_uids, status, synced_at, distill_status, error)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    agent_name, session_id, turn_number, content_hash,
+                    memos_uids, status,
+                    datetime.now().isoformat(),
+                    "pending", None
+                ))
+        except Exception:
+            pass
+
     # ==================== 核心 API ====================
 
     def _truncate_content(self, content: str, max_bytes: int) -> Tuple[str, bool, int]:
@@ -343,7 +375,8 @@ class MemosClient:
     def save_long_content(self, content: str, tags: List[str] = None,
                          visibility: str = "PRIVATE",
                          title: str = None,
-                         chunk_tag_factory: Callable[[int, str, int], List[str]] = None) -> List[Memory]:
+                         chunk_tag_factory: Callable[[int, str, int], List[str]] = None,
+                         _trace_sync_log: bool = True) -> List[Memory]:
         """
         保存长内容（自动分片）
 
@@ -390,7 +423,9 @@ class MemosClient:
 
         # 如果内容不需要分片，直接保存
         if content_bytes <= available_per_chunk:
-            result = self.save(content, tags, visibility)
+            result = self.save(content, tags, visibility, _trace_sync_log=False)
+            if _trace_sync_log:
+                self._trace_sync_log(content, auto_tags, str(result.uid))
             return [result]
 
         # 需要分片：智能分片（按字节计算，但保持段落边界）
@@ -417,8 +452,12 @@ class MemosClient:
             # 组装内容（添加分片提示）
             chunk_content = f"[{idx+1}/{len(chunks)}] «{title}»\n\n{chunk}"
 
-            result = self.save(chunk_content, chunk_tags, visibility)
+            result = self.save(chunk_content, chunk_tags, visibility, _trace_sync_log=False)
             memories.append(result)
+
+        if _trace_sync_log:
+            all_uids = ",".join(str(m.uid) for m in memories)
+            self._trace_sync_log(content, auto_tags, all_uids)
 
         return memories
 
@@ -514,7 +553,7 @@ class MemosClient:
 
         return chunks
 
-    def save(self, content: str, tags: List[str] = None, visibility: str = "PRIVATE") -> Memory:
+    def save(self, content: str, tags: List[str] = None, visibility: str = "PRIVATE", _trace_sync_log: bool = True) -> Memory:
         """保存记忆"""
         # 1. 脱敏
         content = self._sanitize(content)
@@ -535,17 +574,23 @@ class MemosClient:
         if available_bytes < 3000:
             available_bytes = 3000
 
-        # 5. 按字节数截断内容
-        truncated_content, was_truncated, original_bytes = self._truncate_content(
-            content, available_bytes
-        )
+        # 5. 内容过长时自动分片，不再截断
+        content_bytes = len(content.encode('utf-8'))
+        if content_bytes > available_bytes:
+            logger.info(f"[MemosClient] 内容 {content_bytes} 字节超过可用 {available_bytes} 字节，自动分片写入")
+            chunks = self.save_long_content(content, tags=auto_tags, visibility=visibility, _trace_sync_log=False)
+            if chunks:
+                # 返回首片作为代表，附加分片标记
+                first = chunks[0]
+                first.content = f"{content[:100]}... [已分片写入：{len(chunks)} 片]"
+                if _trace_sync_log:
+                    all_uids = ",".join(str(c.uid) for c in chunks)
+                    self._trace_sync_log(content, auto_tags, all_uids)
+                return first
+            raise RuntimeError("分片写入失败")
 
-        # 6. 组装最终内容
-        if was_truncated:
-            truncation_notice = f"\n\n[⚠️ 内容过长已截断：{original_bytes} 字节 → {len(truncated_content.encode('utf-8'))} 字节]"
-            final_content = f"{truncated_content}{truncation_notice}\n\n{tag_str}".strip()
-        else:
-            final_content = f"{truncated_content}\n\n{tag_str}".strip()
+        # 短内容直接写入
+        final_content = f"{content}\n\n{tag_str}".strip()
 
         # 7. 调用 API（使用统一请求入口）
         if self._use_connect_api:
@@ -579,15 +624,13 @@ class MemosClient:
         # 使用 API 返回的 tags（从内容中提取的）
         result_tags = data.get("tags", auto_tags)
 
-        # 如果被截断，在返回的 Memory 中标记
-        result_content = content
-        if was_truncated:
-            result_content = f"{content[:100]}... [⚠️ 已截断：{original_bytes} 字符]"
+        if _trace_sync_log:
+            self._trace_sync_log(content, auto_tags, str(uid))
 
         return Memory(
             id=uid,
             uid=uid,
-            content=result_content,
+            content=content,
             tags=result_tags,
             visibility=data.get("visibility", visibility),
             created_at=data.get("createTime"),

@@ -1542,10 +1542,10 @@ def service_event_bus(stop_event: threading.Event):
 
     interval = 10  # 10秒
 
-    from core.mnemos_bus import EventProcessor, EventBus
+    from core.mnemos_bus import EventProcessor, EventBus, _get_bus
 
-    processor = EventProcessor()
-    bus = EventBus()
+    bus = _get_bus()
+    processor = EventProcessor(bus=bus)
 
     # 注册事件处理器
     def _handle_session_start(event):
@@ -1624,6 +1624,26 @@ def service_event_bus(stop_event: threading.Event):
                             )
                 except Exception:
                     pass
+
+                # Session 跳过检测：如果被蒸馏系统标记为 skipped，自动创建复盘任务
+                try:
+                    if session_id:
+                        import sqlite3
+                        from core.config import get_config
+                        wiki_state_db = get_config().data_dir / "wiki_state.db"
+                        if wiki_state_db.exists():
+                            with sqlite3.connect(str(wiki_state_db), timeout=5) as conn:
+                                cursor = conn.execute(
+                                    "SELECT distill_method FROM processed_sessions WHERE session_id = ?",
+                                    (session_id,),
+                                )
+                                row = cursor.fetchone()
+                                if row and row[0] in ("skipped_low_quality", "skipped_by_pipeline"):
+                                    from core.app.forced_retrospective import ForcedRetrospective
+                                    fr = ForcedRetrospective()
+                                    fr._create_from_session_end(session_id, row[0])
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"[事件总线] session.end 处理失败: {e}")
 
@@ -1698,6 +1718,26 @@ def service_event_bus(stop_event: threading.Event):
     processor.register("page.created", _handle_page_created)
     processor.register("page.modified", _handle_page_modified)
     processor.register("message.exchanged", _handle_message_exchanged)
+
+    # 注册知识图谱事件处理器（蒸馏完成后自动更新实体和关系）
+    try:
+        from core.kia.kg_event_handler import KGEventHandler
+        _kg_handler = KGEventHandler()
+
+        def _handle_knowledge_distilled(event):
+            return _kg_handler.on_distilled(event.payload)
+
+        processor.register("knowledge_distilled", _handle_knowledge_distilled)
+        logger.info("[事件总线] 已注册 KGEventHandler 到 knowledge_distilled")
+    except Exception as e:
+        logger.warning(f"[事件总线] KGEventHandler 注册失败: {e}")
+
+    # 启动新分发线程（与旧轮询双轨运行，逐步过渡）
+    try:
+        bus.start_dispatch()
+        logger.info("[事件总线] 后台分发线程已启动")
+    except Exception as e:
+        logger.warning(f"[事件总线] 启动分发线程失败: {e}")
 
     while not stop_event.is_set():
         try:

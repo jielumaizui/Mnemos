@@ -1035,8 +1035,34 @@ def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) 
                 cwd = m.group(1).strip()
 
             entities = extractor.extract(text, cwd=cwd)
-            # NOTE: RelationEngine 已停用 — 关系分析统一由 KnowledgeGraph 承担
-            # relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
+
+            # 关系分析：实体共现写入 KnowledgeGraph
+            try:
+                from core.kia.knowledge_graph import KnowledgeGraph
+                from core.kia.relation_schema import Relation, RelationType, RelationEvidence
+                kg = KnowledgeGraph()
+                all_entities_in_doc = set()
+                for category_items in entities.values():
+                    all_entities_in_doc.update(category_items)
+                entities_list = list(all_entities_in_doc)
+                timestamp = _extract_page_timestamp(md_file)
+                for i, e1 in enumerate(entities_list):
+                    for e2 in entities_list[i + 1:]:
+                        if e1 != e2:
+                            kg.add_relation(Relation(
+                                source=e1,
+                                target=e2,
+                                relation_type=RelationType.CO_OCCURS,
+                                strength=0.5,
+                                confidence=0.5,
+                                source_method="connect_worker",
+                                evidence=[RelationEvidence(
+                                    evidence_type="co_occurrence",
+                                    content=f"共现于 {doc_name}",
+                                )],
+                            ))
+            except Exception:
+                pass
 
             for category, items in entities.items():
                 for item in items:
