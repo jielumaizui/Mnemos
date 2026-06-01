@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 即时推送 — 将当前对话记录推送到 Memos 并更新本地索引
 

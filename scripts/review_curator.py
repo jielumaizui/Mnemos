@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 Background Review — Curator 合并编排器
 合并多个审查 Agent 的建议，去重、排序、生成 action 列表

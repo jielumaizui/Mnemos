@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 [DEPRECATED] Auto Distill - 定时蒸馏检查与批量处理脚本 — 已废弃，不再维护
 

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 健康检查定时任务（OpenClaw P5 Config快照 + P6 Heartbeat）
 每天下午3点执行（与 scheduler.py 一致）

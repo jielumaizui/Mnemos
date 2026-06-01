@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 Background Review — 报告生成器
 将审查 Agent 的 JSON 输出转换为 ERRORS.md 格式并写入
