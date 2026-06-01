@@ -238,6 +238,9 @@ class MemosClient:
             MemosServerError: 5xx 服务器错误
         """
         start_time = time.time()
+        # 默认超时 30 秒，防止 Memos 挂掉时无限等待
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = 30
         # Connect API 端点统一使用 POST（旧 REST API 保持原方法）
         actual_method = "POST" if self._use_connect_api and "/memos.api.v1." in url else method
         resp = getattr(self.session, actual_method.lower())(url, headers=self.headers, **kwargs)

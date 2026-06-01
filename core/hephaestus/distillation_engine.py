@@ -1478,6 +1478,13 @@ def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> in
     }
     form = type_to_form.get(doc_type, "reference")
 
+    # 提取关键词（从标题 + 正文）
+    keywords = []
+    text_for_kw = f"{title} {body}"
+    keywords.extend(re.findall(r'[a-zA-Z_]{3,}', text_for_kw))
+    keywords.extend(re.findall(r'[\u4e00-\u9fff]{2,6}', text_for_kw))
+    keywords = list(dict.fromkeys(keywords))[:12]
+
     # 构建 KnowledgeFragment
     fragment = KnowledgeFragment(
         form=form,
@@ -1486,6 +1493,7 @@ def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> in
             "领域": extra_meta.get("category", "外部文档"),
             "文档类型": doc_type,
             "来源文件": filename or extra_meta.get("filename", ""),
+            "关键词": keywords,
         },
         background=summary or f"外部导入的 {doc_type.upper()} 文档",
         core_content=body,
