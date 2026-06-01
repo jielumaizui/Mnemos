@@ -158,10 +158,16 @@ class MemosClient:
             return data["data"]
         return data
 
+    # 类级缓存：同一 base_url 只探测一次 API 版本
+    _api_version_cache: Dict[str, bool] = {}
+
     def _detect_api_version(self) -> bool:
         """探测 Memos API 版本。True=Connect API (0.22+), False=REST API (旧版)"""
         if not self.base_url or not self.token:
             return False
+        cache_key = f"{self.base_url}:{self.token[:8]}"
+        if cache_key in MemosClient._api_version_cache:
+            return MemosClient._api_version_cache[cache_key]
         try:
             resp = self.session.post(
                 f"{self.base_url}/memos.api.v1.MemoService/ListMemos",
@@ -169,11 +175,12 @@ class MemosClient:
                 json={"pageSize": 1},
                 timeout=5,
             )
-            if resp.status_code == 200:
-                return True
+            result = resp.status_code == 200
+            MemosClient._api_version_cache[cache_key] = result
+            return result
         except Exception:
-            pass
-        return False
+            MemosClient._api_version_cache[cache_key] = False
+            return False
 
     # ==================== 配置加载 ====================
 
