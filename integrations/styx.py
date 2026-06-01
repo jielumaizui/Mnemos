@@ -761,7 +761,7 @@ class MemosClient:
 
         def filter_by_tags(memo):
             memo_tags = memo.get("tags", [])
-            return any(t in memo_tags for t in tags)
+            return all(t in memo_tags for t in tags)
 
         # 使用分页获取所有匹配的记录
         all_matching = self.list_all_memos(

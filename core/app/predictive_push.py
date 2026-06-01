@@ -239,7 +239,8 @@ class PredictivePush:
         return words[0] if words else match.group(0)
 
     def _find_related_page(self, signal: PushSignal) -> Optional[Dict]:
-        """查找与信号相关的 Wiki 页面"""
+        """查找与信号相关的 Wiki 页面（优先 KG，回退 context_aware_search，再回退文件名）"""
+        # 1. 优先 KnowledgeGraph
         try:
             from core.kia.knowledge_graph import KnowledgeGraph
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
@@ -247,10 +248,22 @@ class PredictivePush:
             if results:
                 return results[0]
         except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at predictive_push.py", exc_info=True)
             pass
 
-        # 回退：文件名搜索
+        # 2. 回退：context_aware_search（搜索正文和 frontmatter）
+        try:
+            from core.app.context_search import ContextAwareSearch
+            searcher = ContextAwareSearch(wiki_base=str(self.wiki_base))
+            results = searcher.search(signal.topic, limit=1)
+            if results:
+                return {
+                    "path": results[0].get("page_path", ""),
+                    "title": results[0].get("title", ""),
+                }
+        except Exception:
+            pass
+
+        # 3. 回退：文件名搜索
         for md_file in self.wiki_base.rglob("*.md"):
             if os.path.islink(md_file):
                 continue

@@ -297,13 +297,13 @@ class SyncEngine:
 
         # 5b. 去重检查（Memos 端兜底）— 防止 sync_log 丢失导致全量重同步
         memos_dupe = self._check_memos_duplicate(
-            source.name, session_info.session_id, turn.turn_number
+            source.name, session_info.session_id, turn.turn_number, content_hash
         )
         if memos_dupe:
             # 记录到 sync_log 防止下次再查
             self._record_sync(
                 source.name, session_info.session_id,
-                turn.turn_number, content_hash, memos_dupe, "synced",
+                turn.turn_number, content_hash, memos_dupe, "skipped_memos"
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -661,19 +661,25 @@ class SyncEngine:
         return None
 
     def _check_memos_duplicate(
-        self, agent_name: str, session_id: str, turn_number: int
+        self, agent_name: str, session_id: str, turn_number: int, content_hash: str
     ) -> List[str]:
-        """查询 Memos 是否已有相同 session+turn 的记录 — 兜底防重"""
+        """查询 Memos 是否已有相同 session+turn+content 的记录 — 兜底防重"""
+        import hashlib
         try:
             tags = [
                 f"source={agent_name}",
                 f"session={session_id}",
                 f"turn={turn_number + 1}",
             ]
-            # 使用 tag 过滤查询，限制 5 条
             results = self.client.list_by_tags(tags, limit=5)
-            if results:
-                return [r.uid for r in results]
+            matched = []
+            for r in results:
+                # content_hash 二次校验：防止不同 session 的相同 turn 号被误判
+                body = (r.content or "").strip()
+                body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+                if body_hash == content_hash:
+                    matched.append(r.uid)
+            return matched
         except Exception:
             pass
         return []

@@ -14,14 +14,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set
 
 from core.config import get_config
-from .relation_schema import Relation, RelationType, RelationEvidence, suggest_relation_type
+from .relation_schema import Relation, RelationType, RelationEvidence
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -91,7 +94,8 @@ class RelationManager:
                            (source, target, relation_type, strength, confidence, source_method, updated_at)
                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         (relation.source, relation.target, relation.relation_type.value,
-                         relation.strength, relation.confidence, relation.source_method, now)
+                         relation.strength, relation.confidence, relation.source_method, now),
+                    )
                 conn.commit()
         except sqlite3.Error as e:
             logger.warning(f"RelationManager 持久化失败: {e}")
@@ -310,5 +314,4 @@ class RelationManager:
         return fm
 
 
-import re
-logger = logging.getLogger(__name__)
+

@@ -69,7 +69,7 @@ class PreFlightInjector:
     """预加载注入器"""
 
     WIKI_BASE = get_config().wiki_dir
-    RETROSPECTIVES_DIR = WIKI_BASE / "retrospectives"
+    RETROSPECTIVES_DIR = WIKI_BASE / "06-Retrospectives"
 
     # 场景标签提取模式
     SCENARIO_PATTERNS = {
@@ -84,7 +84,7 @@ class PreFlightInjector:
     def __init__(self, wiki_base: Optional[str] = None):
         if wiki_base:
             self.WIKI_BASE = Path(wiki_base).expanduser()
-            self.RETROSPECTIVES_DIR = self.WIKI_BASE / "retrospectives"
+            self.RETROSPECTIVES_DIR = self.WIKI_BASE / "06-Retrospectives"
         self.persona_store = PersonaStore(self.WIKI_BASE)
         self.current_persona = None
 
@@ -120,8 +120,11 @@ class PreFlightInjector:
 
     def _load_full(self, task_type: str, subtype: str,
                    context_text: str) -> Optional[LoadedKnowledge]:
-        """装载完整清单"""
+        """装载完整清单（无专用复盘文件时从 Wiki 页面 fallback）"""
         latest = self._find_latest_version(task_type, subtype)
+        if not latest:
+            # Fallback：从 06-Retrospectives 搜索匹配类型的页面
+            latest = self._find_wiki_fallback(task_type)
         if not latest:
             return None
 
@@ -222,6 +225,39 @@ class PreFlightInjector:
                     pass
 
         return frontmatter, body
+
+    def _find_wiki_fallback(self, task_type: str) -> Optional[Path]:
+        """从 06-Retrospectives 搜索匹配 task_type 的页面"""
+        retro_dir = self.WIKI_BASE / "06-Retrospectives"
+        if not retro_dir.exists():
+            return None
+        candidates = []
+        for md_file in retro_dir.glob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                if not content.startswith("---"):
+                    continue
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    continue
+                fm = yaml.safe_load(parts[1]) or {}
+                page_type = fm.get("类型", "")
+                # 匹配 task_type 的多种写法
+                if task_type.lower() in page_type.lower():
+                    candidates.append(md_file)
+                elif task_type == "coding" and page_type in ("反模式", "问题-解决"):
+                    candidates.append(md_file)
+                elif task_type == "debugging" and page_type in ("反模式", "问题-解决"):
+                    candidates.append(md_file)
+                elif task_type == "design" and page_type in ("决策记录",):
+                    candidates.append(md_file)
+            except Exception:
+                continue
+        # 取最新修改的
+        if candidates:
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return candidates[0]
+        return None
 
     def _parse_checklist_item(self, raw: Dict) -> ChecklistItem:
         """解析 checklist 项"""

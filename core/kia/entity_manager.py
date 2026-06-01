@@ -122,6 +122,33 @@ class EntityManager:
             conn.executescript(self.ENTITY_INDEXES)
             conn.commit()
 
+    # 实体质量过滤：排除切片伪实体和停用词
+    _ENTITY_STOP_WORDS = {
+        "的", "了", "是", "在", "与", "及", "或", "为", "有", "和",
+        "中", "上", "下", "前", "后", "内", "外", "间", "下",
+    }
+
+    @classmethod
+    def _is_valid_entity_name(cls, name: str) -> bool:
+        """校验实体名称是否有效（排除切片伪实体）"""
+        if not isinstance(name, str):
+            return False
+        name = name.strip()
+        if len(name) < 2 or len(name) > 50:
+            return False
+        # 排除纯数字/纯标点
+        if not any(c.isalpha() or '\u4e00' <= c <= '\u9fff' for c in name):
+            return False
+        # 排除明显切片：包含不完整的连接词且总长度过短
+        if name in cls._ENTITY_STOP_WORDS:
+            return False
+        # 要求至少包含一个完整词汇（中文字数>=2 或 英文单词>=2字母）
+        zh_chars = sum(1 for c in name if '\u4e00' <= c <= '\u9fff')
+        en_words = [w for w in re.split(r'[^a-zA-Z0-9]', name) if len(w) >= 2]
+        if zh_chars < 2 and not en_words:
+            return False
+        return True
+
     def ingest_from_wiki(self, wiki_page: Path) -> List[Entity]:
         """从 Wiki 页面提取实体"""
         try:
@@ -140,7 +167,7 @@ class EntityManager:
                 words = kw.get(layer, [])
                 if isinstance(words, list):
                     for word in words:
-                        if isinstance(word, str) and len(word) >= 2:
+                        if self._is_valid_entity_name(word):
                             entity_type = "tool" if layer == "工具实体" else "concept"
                             entities.append(self._upsert_entity(
                                 name=word, entity_type=entity_type,
@@ -151,7 +178,7 @@ class EntityManager:
         links = re.findall(r'\[\[([^\]]+)\]\]', content)
         for link in links:
             link = link.split("|")[0].strip()
-            if len(link) >= 2:
+            if self._is_valid_entity_name(link):
                 entities.append(self._upsert_entity(
                     name=link, entity_type="concept",
                     wiki_page=str(wiki_page),

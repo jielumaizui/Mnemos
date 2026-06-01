@@ -515,12 +515,31 @@ tags: [{', '.join(tags or ['file_import'])}]
         time_window = TimeWindow(window=TimeWindowType.IMMEDIATE, days_until=0)
         knowledge = injector.inject(task_type, subtype, time_window, "")
 
+        # 无清单时回退到高风险默认规则
         if not knowledge or not knowledge.checklist:
-            return {
-                "success": True,
-                "alert": False,
-                "message": "无守护清单，跳过检查",
-            }
+            from core.kia.prophasis import LoadedKnowledge, ChecklistItem
+            knowledge = LoadedKnowledge(
+                task_type=task_type or "general",
+                subtype=subtype or "",
+                version=1,
+                checklist=[
+                    ChecklistItem(
+                        item="涉及删除/覆盖/生产环境/密钥/不可逆迁移的操作，请二次确认",
+                        source="default_guard",
+                        severity="critical",
+                        trigger_keywords=["删除", "清空", "覆盖", "drop", "truncate", "rm", "生产", "prod", "密钥", "key", "迁移", "migrate"],
+                        risk_patterns=[r"删除.*?(文件|数据|表|目录)", r"覆盖.*?配置", r"生产.*?部署", r"(api[_-]?key|token|密码|secret)"],
+                    ),
+                    ChecklistItem(
+                        item="未测试的代码提交可能导致回滚风险",
+                        source="default_guard",
+                        severity="high",
+                        trigger_keywords=["提交", "commit", "push", "合并", "merge"],
+                        risk_patterns=[r"提交.*?(未测试|没测试|无测试)"],
+                    ),
+                ],
+                lessons_summary="",
+            )
 
         # 2. 初始化 Guard 并检查
         guard = InProcessGuard(knowledge)
@@ -726,6 +745,7 @@ tags: [{', '.join(tags or ['file_import'])}]
                     if len(parts) >= 3:
                         try:
                             fm = yaml.safe_load(parts[1]) or {}
+                            from core.frontmatter import fm_get
                             tags = fm.get("tags", [])
                             # 根据标签判断来源
                             if "memos" in tags or "memos-sync" in tags:
@@ -736,16 +756,18 @@ tags: [{', '.join(tags or ['file_import'])}]
                                 src = "retrospective"
                             elif "git" in tags:
                                 src = "git_knowledge"
-                            # 也可根据 frontmatter 中的 source 字段
-                            explicit = fm.get("source", "")
-                            if explicit == "memos":
+                            # 根据 frontmatter 中的 source / 来源 字段
+                            explicit = fm_get(fm, "source", "")
+                            if explicit in ("memos", "memos-sync"):
                                 src = "memos_sync"
-                            elif explicit == "distill":
+                            elif explicit in ("distill", "distilled"):
                                 src = "distilled"
                             elif explicit == "retrospective":
                                 src = "retrospective"
                             elif explicit == "git":
                                 src = "git_knowledge"
+                            elif explicit in ("claude", "kimi", "codex", "openclaw", "hermes"):
+                                src = "distilled"
                         except Exception:
                             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                             pass

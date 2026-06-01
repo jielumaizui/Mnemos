@@ -42,6 +42,11 @@ try:
 except ImportError:
     _METRICS_AVAILABLE = False
 
+try:
+    from core.frontmatter import fm_get
+except ImportError:
+    fm_get = None
+
 
 @dataclass
 class WikiPage:
@@ -104,14 +109,18 @@ class WikiReader:
                     # 获取热力值
                     heat_info = self._get_heat_info(page_id)
 
+                    verification = fm_get(fm, "status") or ""
+                    confidence = float(fm_get(fm, "confidence") or 0.5)
                     self.index[page_id] = {
                         "type": subdir,
-                        "title": fm.get("title", file_path.stem),
-                        "entities": fm.get("entities", []),
-                        "concepts": fm.get("concepts", []),
+                        "title": fm_get(fm, "name") or file_path.stem,
+                        "entities": fm_get(fm, "keywords") or [],
+                        "concepts": fm_get(fm, "aliases") or [],
                         "path": file_path,
                         "heat_level": heat_info.get("level", "cold"),
                         "heat_score": heat_info.get("score", 0),
+                        "verification": verification,
+                        "confidence": confidence,
                     }
                 except Exception as e:
                     logger.warning(f"解析 frontmatter 失败: {e}")
@@ -357,14 +366,24 @@ class WikiReader:
                 reasons.append("path_match")
 
             if score > 0:
+                # 质量过滤：pending-verification 或低置信度页面大幅降权
+                confidence = info.get("confidence", 0.5)
+                verification = info.get("verification", "")
+                if verification == "pending-verification":
+                    score *= 0.1  # 降权 90%
+                elif confidence < 0.5:
+                    score *= 0.3  # 降权 70%
+
                 results.append({
                     "page_id": page_id,
                     "title": info["title"],
                     "type": info["type"],
                     "heat_level": info["heat_level"],
                     "heat_score": info["heat_score"],
-                    "relevance_score": score,
-                    "reasons": reasons
+                    "relevance_score": round(score, 2),
+                    "reasons": reasons,
+                    "verification": verification,
+                    "confidence": confidence,
                 })
 
         # 按热力值和关联度双重排序

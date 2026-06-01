@@ -148,8 +148,9 @@ class BlindspotDiscovery:
             return {"status": "error", "event_type": event_type, "error": str(e)}
 
     def _detect_blindspots(self, query: str) -> List[BlindSpotReminder]:
-        """从知识图谱和画像检测盲点"""
+        """从知识图谱和画像检测盲点（降级策略：组件缺失时不静默失败）"""
         results = []
+        degraded_notes: List[str] = []
 
         # 1. 检查知识空白 — 查询在图谱中无对应实体
         try:
@@ -160,8 +161,9 @@ class BlindspotDiscovery:
             for kw in keywords:
                 if len(kw) < 2:
                     continue
-                entities = kg.search_entities(kw, limit=1)
-                if not entities:
+                # 使用 search 替代不存在的 search_entities
+                search_results = kg.search(kw, limit=1)
+                if not search_results:
                     # 可能是盲点
                     results.append(BlindSpotReminder(
                         topic=kw,
@@ -170,15 +172,14 @@ class BlindspotDiscovery:
                         status="detected",
                         detected_at=datetime.now().isoformat(),
                     ))
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at blindspot_discovery.py", exc_info=True)
-            pass
+        except Exception as e:
+            degraded_notes.append(f"知识图谱检测不可用: {e}")
 
-        # 2. 检查画像盲区
+        # 2. 检查画像盲区（组件缺失时降级，不阻断）
         try:
-            from core.persona.hamartia import BlindSpotAnalyzer
-            analyzer = BlindSpotAnalyzer()
-            profile = analyzer.get_blindspot_profile()
+            from core.persona.hamartia import BlindSpotProfileManager
+            mgr = BlindSpotProfileManager()
+            profile = mgr.load_profile()
             if profile:
                 framing_rigidity = profile.get("framing_rigidity", 0)
                 if framing_rigidity > 0.6:
@@ -189,9 +190,11 @@ class BlindspotDiscovery:
                         status="detected",
                         detected_at=datetime.now().isoformat(),
                     ))
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at blindspot_discovery.py", exc_info=True)
-            pass
+        except Exception as e:
+            degraded_notes.append(f"画像盲区检测不可用: {e}")
+
+        if degraded_notes:
+            logger.info(f"[BlindspotDiscovery] 降级运行: {'; '.join(degraded_notes)}")
 
         # 保存新发现的盲点
         for bs in results:
