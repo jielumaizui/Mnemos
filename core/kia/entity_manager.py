@@ -125,8 +125,13 @@ class EntityManager:
     # 实体质量过滤：排除切片伪实体和停用词
     _ENTITY_STOP_WORDS = {
         "的", "了", "是", "在", "与", "及", "或", "为", "有", "和",
-        "中", "上", "下", "前", "后", "内", "外", "间", "下",
+        "中", "上", "下", "前", "后", "内", "外", "间",
     }
+    # 中文虚词出现在中间时，极可能是句子切片
+    _ZH_FUNCTION_WORDS_MIDDLE = {"与", "在", "过"}
+    # 明显是句子切片的起止模式
+    _BAD_STARTS = ("在", "被", "把", "将", "对", "从")
+    _BAD_ENDS = ("过", "的", "了", "是", "有")
 
     @classmethod
     def _is_valid_entity_name(cls, name: str) -> bool:
@@ -142,6 +147,13 @@ class EntityManager:
         # 排除明显切片：包含不完整的连接词且总长度过短
         if name in cls._ENTITY_STOP_WORDS:
             return False
+        # 排除句子切片模式
+        if name.startswith(cls._BAD_STARTS) or name.endswith(cls._BAD_ENDS):
+            return False
+        # 虚词出现在中间且前后都有内容 → 句子切片
+        for fw in cls._ZH_FUNCTION_WORDS_MIDDLE:
+            if fw in name[1:-1]:
+                return False
         # 要求至少包含一个完整词汇（中文字数>=2 或 英文单词>=2字母）
         zh_chars = sum(1 for c in name if '\u4e00' <= c <= '\u9fff')
         en_words = [w for w in re.split(r'[^a-zA-Z0-9]', name) if len(w) >= 2]

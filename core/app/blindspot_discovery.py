@@ -179,7 +179,7 @@ class BlindspotDiscovery:
         try:
             from core.persona.hamartia import BlindSpotProfileManager
             mgr = BlindSpotProfileManager()
-            profile = mgr.load_profile()
+            profile = mgr._load_profile()
             if profile:
                 framing_rigidity = profile.get("framing_rigidity", 0)
                 if framing_rigidity > 0.6:
