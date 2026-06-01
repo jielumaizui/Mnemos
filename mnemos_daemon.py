@@ -417,6 +417,17 @@ def service_l1_sync(stop_event: threading.Event):
                                     {"working_dir": session_info.working_dir, "agent": source.name},
                                 )
 
+                                # 发布 session.start 事件（供 task_classifier / kia_guard 消费）
+                                try:
+                                    from core.mnemos_bus import publish_event
+                                    publish_event("session.start", source.name, {
+                                        "session_id": session_info.session_id,
+                                        "user_message": turns[0].user_content if turns else "",
+                                        "working_dir": str(session_info.working_dir) if session_info.working_dir else "",
+                                    })
+                                except Exception:
+                                    pass
+
                                 try:
                                     for turn in turns:
                                         result = capture_service.capture_turn(
@@ -439,6 +450,18 @@ def service_l1_sync(stop_event: threading.Event):
                                             bp_count += 1
                                         elif status == "error":
                                             error_count += 1
+
+                                        # 发布 message.exchanged 事件（供 kia_guard 消费）
+                                        try:
+                                            from core.mnemos_bus import publish_event
+                                            publish_event("message.exchanged", source.name, {
+                                                "session_id": session_info.session_id,
+                                                "turn_number": turn.turn_number,
+                                                "role": "user" if turn.user_content else "assistant",
+                                                "content_preview": (turn.user_content or turn.assistant_content or "")[:200],
+                                            })
+                                        except Exception:
+                                            pass
 
                                     scanned_count += 1
                                     state.mark_scanned(source.name, session_info, file_state, "scanned")
@@ -646,6 +669,8 @@ def service_distill_and_merge(stop_event: threading.Event):
             tick_counter += poll_interval
             if tick_counter >= tick_interval:
                 tick_counter = 0
+                # 构造 Teiresias 推送上下文（从最近 memos）
+                push_context = _build_push_context(memos_client)
                 if scheduler:
                     results = scheduler.tick()
                     if results:
@@ -653,12 +678,26 @@ def service_distill_and_merge(stop_event: threading.Event):
                         err_count = sum(1 for r in results.values() if r.get("status") == "error")
                         skip_count = sum(1 for r in results.values() if r.get("status") == "skipped")
                         logger.info(f"[蒸馏合并] KIA tick: {ok_count}成功, {err_count}失败, {skip_count}跳过")
+                    # KIA tick 后额外运行 Teiresias 推送引擎
+                    if push_context:
+                        try:
+                            from core.orchestrator import Orchestrator
+                            orch = Orchestrator(wiki_dir=get_config().wiki_dir)
+                            push_result = orch.run_push(context=push_context)
+                            if push_result.get("triggered"):
+                                logger.info(f"[推送] Teiresias 触发推送: {push_result.get('reason', '')}")
+                        except Exception:
+                            pass
                 else:
                     # 回退到 Orchestrator
                     from core.orchestrator import Orchestrator
                     orch = Orchestrator(wiki_dir=get_config().wiki_dir)
-                    report = orch.run_full()
+                    report = orch.run_full(push_context=push_context)
                     logger.info(f"[蒸馏合并] Orchestrator 完成: {len(report.get('errors', []))} 错误")
+                    # 报告推送结果
+                    push_res = report.get("push", {})
+                    if push_res.get("triggered"):
+                        logger.info(f"[推送] Teiresias 触发推送: {push_res.get('reason', '')}")
 
         except Exception as e:
             logger.error(f"[蒸馏合并] 运行失败: {e}")
@@ -686,6 +725,16 @@ def service_heartbeat(stop_event: threading.Event):
         from core.heartbeat import HeartbeatDaemon
         daemon = HeartbeatDaemon()
 
+    # 初始化蒸馏评分器状态追踪
+    distill_scorer = None
+    try:
+        from core.scoring.scorers.distill_scorer import DistillScorer
+        distill_scorer = DistillScorer()
+    except Exception:
+        pass
+
+    heartbeat_count = 0
+
     while not stop_event.is_set():
         try:
             # 优先使用 OpsScorer
@@ -698,6 +747,118 @@ def service_heartbeat(stop_event: threading.Event):
                 daemon.run_once()
             else:
                 logger.debug("[心跳] OpsScorer 未提供 score_system，跳过系统评分")
+
+            # 每 5 次心跳（5 分钟）报告蒸馏评分器状态
+            heartbeat_count += 1
+            if heartbeat_count % 5 == 0 and distill_scorer is not None:
+                try:
+                    status = distill_scorer._scorer.get_status()
+                    mode = status.get("mode", "unknown")
+                    version = status.get("model_version", 0)
+                    buffer = status.get("retrain_buffer_size", 0)
+                    threshold = status.get("retrain_threshold", 40)
+                    dims = status.get("dimensions", [])
+                    versions = status.get("versions_on_disk", [])
+
+                    if version == 0 and buffer == 0:
+                        logger.info(
+                            f"[心跳] 蒸馏评分器: 模式={mode}, 尚未积累反馈样本"
+                        )
+                    elif version == 0 and buffer > 0:
+                        progress = min(100, int(buffer / threshold * 100))
+                        logger.info(
+                            f"[心跳] 蒸馏评分器: 模式={mode}, 重训练缓冲={buffer}/{threshold} "
+                            f"({progress}%), 维度={dims}"
+                        )
+                    else:
+                        logger.info(
+                            f"[心跳] 蒸馏评分器: 模式={mode}, 版本=v{version}, "
+                            f"缓冲={buffer}/{threshold}, 维度={dims}, "
+                            f"磁盘版本={len(versions)}"
+                        )
+                except Exception:
+                    pass
+
+            # 每 24 小时（1440 次心跳）运行一次争议扫描
+            if heartbeat_count % 1440 == 0:
+                try:
+                    dr = _run_dispute_scan()
+                    logger.info(
+                        f"[争议] 每日扫描: 新建={dr.get('new_disputes', 0)}, "
+                        f"未解决={dr.get('unresolved', 0)}, "
+                        f"需升级={dr.get('escalated', 0)}"
+                    )
+                except Exception:
+                    pass
+
+            # 每 24 小时运行知识新鲜度检查
+            if heartbeat_count % 1440 == 0:
+                try:
+                    from core.app.freshness_alert import FreshnessAlertChecker
+                    checker = FreshnessAlertChecker()
+                    alerts = checker.scan_all_freshness()
+                    if alerts:
+                        logger.info(
+                            f"[新鲜度] 发现 {len(alerts)} 条过期知识: "
+                            f"{', '.join(a.entity_name for a in alerts[:3])}"
+                        )
+                    else:
+                        logger.debug("[新鲜度] 知识库状态良好")
+                except Exception:
+                    pass
+
+            # 每 12 小时（720 次心跳）注入 synthetic ground_truth
+            if heartbeat_count % 720 == 0:
+                try:
+                    injected = _inject_synthetic_ground_truth()
+                    if injected > 0:
+                        logger.info(f"[评分器] 注入 {injected} 条 synthetic ground_truth")
+                except Exception:
+                    pass
+
+            # 每 12 小时（720 次心跳）运行评分器训练调度
+            if heartbeat_count % 720 == 0:
+                try:
+                    from core.scoring.training_scheduler import ScorerTrainingScheduler
+                    sched = ScorerTrainingScheduler()
+                    jobs = sched.on_hourly_tick()
+                    if jobs:
+                        logger.info(
+                            f"[评分调度] 触发 {len(jobs)} 个训练任务: "
+                            f"{', '.join(j.dimension for j in jobs)}"
+                        )
+                    cleanup = sched.on_daily_cleanup()
+                    if cleanup.get("cleaned"):
+                        logger.info(
+                            f"[评分调度] 清理 {cleanup.get('cleaned', 0)} 个过期任务"
+                        )
+                except Exception:
+                    pass
+
+            # 每 30 分钟（30 次心跳）运行搜索索引健康检查
+            if heartbeat_count % 30 == 0:
+                try:
+                    from core.app.context_search import ContextAwareSearch
+                    searcher = ContextAwareSearch()
+                    # 用最近更新页面做一次空查询，验证索引连通性
+                    results = searcher.search("recent", limit=3)
+                    if results:
+                        logger.debug(
+                            f"[搜索] 索引健康: {len(results)} 条候选"
+                        )
+                except Exception:
+                    pass
+
+            # 每 30 分钟运行问答检索缓存刷新
+            if heartbeat_count % 30 == 0:
+                try:
+                    from core.app.question_answer_search import QuestionAnswerSearch
+                    qa = QuestionAnswerSearch()
+                    # 空查询验证模块可用
+                    _ = qa.search("", limit=1)
+                    logger.debug("[问答检索] 模块可用")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[心跳] 运行失败: {e}")
 
@@ -824,6 +985,281 @@ def service_signal_collector(stop_event: threading.Event):
 # 画像分析全局锁，防止多个服务线程同时触发分析
 _persona_analysis_lock = threading.Lock()
 
+def _run_persona_extensions(profile):
+    """激活所有 Persona 边缘/死代码模块。在画像分析完成后调用。"""
+    results = {}
+
+    # ── 1. Daimon — 补充信号采集 ──────────────────────────────────
+    try:
+        from core.persona.daimon import SignalCollector
+        collector = SignalCollector()
+        d_total = 0
+        d_total += collector.collect_from_distill_queue()
+        d_total += collector.collect_from_wiki_state()
+        if d_total:
+            logger.info(f"[画像扩展] Daimon 补充采集 {d_total} 条信号")
+        results["daimon"] = {"signals_collected": d_total}
+    except Exception as e:
+        logger.debug(f"[画像扩展] Daimon 失败: {e}")
+
+    # ── 2. Echo — 微信信号采集（条件性）────────────────────────────
+    try:
+        from core.persona.echo import WeChatCollector
+        wc = WeChatCollector()
+        dbs = wc.discover_databases()
+        if dbs:
+            count = wc.collect_and_store(days=7)
+            if count:
+                logger.info(f"[画像扩展] Echo 采集 {count} 条微信信号")
+            results["echo"] = {"wechat_signals": count}
+    except Exception as e:
+        logger.debug(f"[画像扩展] Echo 失败: {e}")
+
+    # ── 3. ContextualPersona — 情境隔离画像 ────────────────────────
+    try:
+        from core.persona.contextual_persona import ContextualPersona
+        cp = ContextualPersona()
+        context = cp.detect_context()
+        # 将当前画像按情境存储
+        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
+        cp.add_signal(profile_dict, context=context)
+        contexts = list(cp.get_profile().keys())
+        logger.info(f"[画像扩展] ContextualPersona 情境: {contexts}")
+        results["contextual_persona"] = {"contexts": contexts}
+    except Exception as e:
+        logger.debug(f"[画像扩展] ContextualPersona 失败: {e}")
+
+    # ── 4. EvolutionTimeline — 14 维演化时间线 ─────────────────────
+    try:
+        from core.persona.evolution_timeline import PersonaEvolutionTimeline
+        timeline = PersonaEvolutionTimeline()
+        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
+        timeline.add_snapshot(profile_dict)
+        report_path = timeline.generate()
+        logger.info(f"[画像扩展] 演化时间线更新: {report_path}")
+        results["evolution_timeline"] = {"report_path": str(report_path)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] EvolutionTimeline 失败: {e}")
+
+    # ── 5. CrossValidator — 双画像交叉验证 ─────────────────────────
+    try:
+        from core.persona.cross_validator import ProfileCrossValidator
+        validator = ProfileCrossValidator()
+        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
+        behavior = {}
+        for layer in ("energy", "cognitive", "value"):
+            layer_data = profile_dict.get(layer, {})
+            if hasattr(layer_data, "items"):
+                behavior.update(layer_data)
+        knowledge = {}  # 知识画像暂时为空，待后续接入
+        contradictions = validator.validate(behavior, knowledge)
+        if contradictions:
+            logger.info(f"[画像扩展] CrossValidator 发现 {len(contradictions)} 个矛盾")
+        results["cross_validator"] = {"contradictions": len(contradictions)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] CrossValidator 失败: {e}")
+
+    # ── 6. Rhapsode — 画像报告生成 ─────────────────────────────────
+    try:
+        from core.persona.rhapsode import SelfReportGenerator
+        gen = SelfReportGenerator()
+        report = gen.generate(days=30)
+        if report:
+            path = gen.save_to_wiki(report)
+            logger.info(f"[画像扩展] Rhapsode 报告: {path}")
+            results["rhapsode"] = {"report_path": str(path)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] Rhapsode 失败: {e}")
+
+    # ── 7. Harmonia + CalibrationCLI — 自动校准 ────────────────────
+    try:
+        from core.persona.calibration_cli import run_calibration
+        # 提取非交互式校准（使用当前画像作为 ground_truth）
+        cal_result = run_calibration()
+        logger.info(f"[画像扩展] 自动校准完成")
+        results["harmonia"] = {"calibrated": True}
+    except Exception as e:
+        logger.debug(f"[画像扩展] Harmonia 失败: {e}")
+
+    # ── 8. DialogueStrategy — 对话策略 ─────────────────────────────
+    try:
+        from core.persona.dialogue_strategy import PersonaDrivenDialogueStrategy
+        strategy = PersonaDrivenDialogueStrategy()
+        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
+        adapted = strategy.adapt_prompt("", preference_profile=profile_dict)
+        # 保存策略到画像元数据
+        logger.info(f"[画像扩展] DialogueStrategy 策略已生成")
+        results["dialogue_strategy"] = {"adapted": bool(adapted)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] DialogueStrategy 失败: {e}")
+
+    # ── 9. BehaviorDrivenSkillEngine — 行为驱动技能 ────────────────
+    try:
+        from core.persona.behavior_driven_skill_engine import BehaviorDrivenSkillEngine
+        from core.persona.psyche import get_signal_store
+        engine = BehaviorDrivenSkillEngine()
+        store = get_signal_store()
+        # 获取最近行为数据（session 信号）
+        actions = []
+        try:
+            stats = store.get_signal_stats(days=30)
+            for sig in store.get_recent_signals(limit=100):
+                if hasattr(sig, "task_type"):
+                    actions.append({
+                        "action": sig.task_type,
+                        "timestamp": sig.timestamp if hasattr(sig, "timestamp") else "",
+                        "context": sig.working_dir if hasattr(sig, "working_dir") else "",
+                    })
+        except Exception:
+            pass
+        if actions:
+            patterns = engine.analyze_behavior(actions)
+            suggestions = engine.suggest_skill_updates([], patterns)
+            if patterns:
+                logger.info(f"[画像扩展] BehaviorDrivenSkillEngine: {len(patterns)} 个模式, {len(suggestions)} 个建议")
+            results["behavior_driven_skill"] = {
+                "patterns": len(patterns),
+                "suggestions": len(suggestions),
+            }
+    except Exception as e:
+        logger.debug(f"[画像扩展] BehaviorDrivenSkillEngine 失败: {e}")
+
+    # ── 10. AvoidanceDetector — 回避模式检测 ───────────────────────
+    try:
+        from core.app.avoidance_detector import AvoidanceDetector
+        from core.persona.psyche import get_signal_store
+        detector = AvoidanceDetector()
+        store = get_signal_store()
+        history = []
+        try:
+            for sig in store.get_recent_signals(limit=200):
+                content = getattr(sig, "working_dir", "") or ""
+                history.append({
+                    "query": content,
+                    "timestamp": getattr(sig, "timestamp", ""),
+                    "clicked": True,
+                })
+        except Exception:
+            pass
+        if len(history) >= 3:
+            patterns = detector.analyze(history)
+            if patterns:
+                logger.info(
+                    f"[画像扩展] AvoidanceDetector: {len(patterns)} 个回避模式, "
+                    f"主题: {', '.join(p.topic for p in patterns[:3])}"
+                )
+            results["avoidance_detector"] = {"patterns": len(patterns)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] AvoidanceDetector 失败: {e}")
+
+    # ── 11. CrossAgentDivergenceDetector — 跨 Agent 分歧检测 ───────
+    try:
+        from core.app.cross_agent_divergence_detector import CrossAgentDivergenceDetector
+        from core.persona.psyche import get_signal_store
+        detector = CrossAgentDivergenceDetector()
+        store = get_signal_store()
+        # 按 agent 分组收集最近信号
+        agent_outputs: Dict[str, List[str]] = {}
+        try:
+            for sig in store.get_recent_signals(limit=300):
+                agent = getattr(sig, "agent", "unknown") or "unknown"
+                content = getattr(sig, "working_dir", "") or ""
+                if content:
+                    agent_outputs.setdefault(agent, []).append(content)
+        except Exception:
+            pass
+        # 当存在 2+ 个 agent 且每个都有足够数据时检测分歧
+        if len(agent_outputs) >= 2:
+            # 构建对比列表：取每个 agent 的输出拼接
+            outputs_for_comparison = []
+            for agent, texts in agent_outputs.items():
+                if len(texts) >= 5:
+                    outputs_for_comparison.append({
+                        "agent_id": agent,
+                        "output": " ".join(texts[:20]),
+                        "topic": "behavior_patterns",
+                    })
+            if len(outputs_for_comparison) >= 2:
+                reports = detector.detect_divergence(outputs_for_comparison)
+                if reports:
+                    logger.info(
+                        f"[画像扩展] CrossAgentDivergenceDetector: {len(reports)} 个分歧报告, "
+                        f"主题: {', '.join(r.topic for r in reports[:3])}"
+                    )
+                results["cross_agent_divergence"] = {"reports": len(reports)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] CrossAgentDivergenceDetector 失败: {e}")
+
+    # 汇总日志
+    active = [k for k, v in results.items() if v]
+    if active:
+        logger.info(f"[画像扩展] 激活模块: {', '.join(active)}")
+    return results
+
+
+def _inject_synthetic_ground_truth() -> int:
+    """从 persona 信号中推断并注入 synthetic ground_truth，加速评分器冷启动。"""
+    import sqlite3
+    from pathlib import Path
+
+    db_dir = Path.home() / ".mnemos"
+    signals_db = db_dir / "user_signals.db"
+    gt_db = db_dir / "mnemos.db"
+
+    if not signals_db.exists():
+        return 0
+
+    try:
+        with sqlite3.connect(str(signals_db)) as conn:
+            # 读取最近 7 天未处理的 session_signals
+            rows = conn.execute("""
+                SELECT session_id, task_type, user_msg_count, avg_user_msg_length,
+                       correction_count, follow_up_depth, working_dir
+                FROM session_signals
+                WHERE timestamp > datetime('now', '-7 days')
+                ORDER BY timestamp DESC
+                LIMIT 50
+            """).fetchall()
+    except Exception:
+        return 0
+
+    if not rows:
+        return 0
+
+    injected = 0
+    try:
+        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+        for row in rows:
+            session_id, task_type, msg_count, avg_len, corrections, follow_up, wd = row
+            if msg_count is None or avg_len is None:
+                continue
+            base_confidence = min(1.0, 0.5 + msg_count * 0.05 + avg_len * 0.001)
+
+            # 为每个 session 生成 3 个维度的 ground_truth
+            signals = [
+                (task_type or "session_quality", 1 if (msg_count >= 3 and corrections == 0) else 0),
+                ("engagement", 1 if msg_count >= 5 else 0),
+                ("correction_pattern", 0 if corrections == 0 else 1),
+            ]
+            for signal_type, label in signals:
+                try:
+                    AdaptiveScorerV2.insert_ground_truth(
+                        session_id=session_id,
+                        signal_type=signal_type,
+                        label=label,
+                        confidence=round(base_confidence, 2),
+                        latency_hours=0,
+                        db_path=gt_db,
+                    )
+                    injected += 1
+                except Exception:
+                    continue
+    except Exception:
+        return 0
+
+    return injected
+
+
 def _trigger_persona_analysis():
     """触发画像分析（被 signal_collector 调用）"""
     if not _persona_analysis_lock.acquire(blocking=False):
@@ -841,22 +1277,157 @@ def _trigger_persona_analysis():
             logger.info(f"[画像] 画像分析完成，signal_count={profile.signal_count}")
             # 生成盲区挑战问题，供用户校准
             _generate_blindspot_challenges(profile)
+            # 激活所有 Persona 边缘模块
+            _run_persona_extensions(profile)
     except Exception as e:
         logger.error(f"[画像] 画像分析失败: {e}")
     finally:
         _persona_analysis_lock.release()
 
 
+def _build_push_context(memos_client) -> str:
+    """从最近 memos 笔记构造 Teiresias 推送上下文。"""
+    if not memos_client:
+        return ""
+    try:
+        recent = memos_client.list_all_memos(max_records=3)
+        if not recent:
+            return ""
+        # 取最近一条的非空内容作为 push context
+        for m in recent:
+            content = m.get("content", "").strip()
+            if content:
+                # 截断过长内容，保留前 300 字符
+                return content[:300] if len(content) <= 300 else content[:300] + "..."
+    except Exception:
+        pass
+    return ""
+
+
+def _run_dispute_scan() -> Dict:
+    """运行争议扫描：检测知识图谱 suspect 关系 + wiki 争议标记，生成仲裁页面。"""
+    result = {"new_disputes": 0, "unresolved": 0, "escalated": 0}
+    try:
+        from core.app.dispute_resolver import DisputeResolver, DisputeAssertion
+        resolver = DisputeResolver()
+
+        # 1. 报告未解决争议（含升级）
+        unresolved = resolver.get_unresolved_disputes()
+        result["unresolved"] = len(unresolved)
+        escalated = [d for d in unresolved if d.get("needs_escalation")]
+        result["escalated"] = len(escalated)
+        if escalated:
+            titles = ", ".join(d["title"] for d in escalated[:3])
+            logger.warning(f"[争议] {len(escalated)} 个争议超过 7 天未解决: {titles}")
+        elif unresolved:
+            logger.info(f"[争议] 当前 {len(unresolved)} 个未解决争议")
+
+        # 2. 扫描知识图谱 suspect 关系，生成新争议
+        try:
+            from core.kia.knowledge_graph import DB_PATH
+            import sqlite3
+            if DB_PATH.exists():
+                with sqlite3.connect(str(DB_PATH)) as conn:
+                    # 取最近 7 天内标记为 suspect 的关系
+                    week_ago = (datetime.now(timezone.utc) - __import__(
+                        "datetime"
+                    ).timedelta(days=7)).isoformat()
+                    rows = conn.execute("""
+                        SELECT source, target, relation_type, confidence, created_at
+                        FROM relations
+                        WHERE source_method = 'suspect'
+                          AND created_at >= ?
+                        ORDER BY confidence ASC
+                        LIMIT 10
+                    """, (week_ago,)).fetchall()
+
+                    seen_topics = set()
+                    for source, target, rel_type, confidence, created_at in rows:
+                        topic = f"{source} → {target} ({rel_type})"
+                        if topic in seen_topics:
+                            continue
+                        seen_topics.add(topic)
+
+                        new_assertion = DisputeAssertion(
+                            page_path=source,
+                            title=source,
+                            content=f"实体 '{source}' 与 '{target}' 存在低置信度关系（{rel_type}），置信度 {confidence:.2f}",
+                            reference_count=1,
+                        )
+                        conflicts = [DisputeAssertion(
+                            page_path=target,
+                            title=target,
+                            content=f"目标实体 '{target}' 在知识图谱中被质疑",
+                            reference_count=1,
+                        )]
+                        resolver.create_dispute_page(
+                            new_assertion=new_assertion,
+                            conflicts=conflicts,
+                            conflict_strength=1.0 - confidence,
+                            is_core_knowledge=(confidence < 0.1),
+                        )
+                        result["new_disputes"] += 1
+        except Exception as e:
+            logger.debug(f"[争议] suspect 扫描失败: {e}")
+
+        # 3. 扫描 wiki 中的争议标记
+        try:
+            from core.config import get_config
+            wiki_base = get_config().wiki_dir
+            dispute_markers = ["⚠️ 争议", "conflict:", "contradiction", "TODO: verify"]
+            for md_file in wiki_base.rglob("*.md"):
+                if "08-Disputes" in str(md_file):
+                    continue
+                try:
+                    content = md_file.read_text(encoding="utf-8")
+                    lower = content.lower()
+                    if any(m.lower() in lower for m in dispute_markers):
+                        rel_path = str(md_file.relative_to(wiki_base))
+                        topic = md_file.stem
+                        # 避免重复创建（检查 08-Disputes 中是否已有）
+                        dispute_dir = wiki_base / "08-Disputes"
+                        existing = list(dispute_dir.glob(f"*-{topic[:30].replace('/', '-').replace(' ', '_')}.md"))
+                        if existing:
+                            continue
+                        new_assertion = DisputeAssertion(
+                            page_path=rel_path,
+                            title=topic,
+                            content=f"页面中包含争议标记: {[m for m in dispute_markers if m.lower() in lower][0]}",
+                            reference_count=1,
+                        )
+                        resolver.create_dispute_page(
+                            new_assertion=new_assertion,
+                            conflicts=[],
+                            conflict_strength=0.5,
+                            is_core_knowledge=False,
+                        )
+                        result["new_disputes"] += 1
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"[争议] wiki 标记扫描失败: {e}")
+
+        if result["new_disputes"]:
+            logger.info(f"[争议] 新建 {result['new_disputes']} 个争议仲裁页面")
+    except Exception as e:
+        logger.debug(f"[争议] 扫描失败: {e}")
+    return result
+
+
 def _generate_blindspot_challenges(profile):
-    """基于画像生成盲区挑战问题，写入待处理队列"""
+    """基于画像生成盲区挑战问题，写入待处理队列。
+
+    整合硬编码规则（确定性画像挑战）与 BlindspotDiscovery 动态检测。
+    """
     try:
         challenges = []
-        # 能量层挑战：对高置信度维度提出反向假设
+        # ── 1. 硬编码画像挑战（确定性规则）─────────────────────────────
         if profile.energy.confidence >= 0.6:
             if profile.energy.focus_depth > 0.7:
                 challenges.append({
                     "dimension": "energy.focus_depth",
                     "type": "反向验证",
+                    "source": "profile_rule",
                     "question": "系统推断你倾向于深度专注。但最近你是否有刻意浅层浏览、快速扫过大量信息的时刻？",
                     "suggestion": "如果经常有这样的时刻，你的专注模式可能比画像显示的更灵活。",
                 })
@@ -864,41 +1435,80 @@ def _generate_blindspot_challenges(profile):
                 challenges.append({
                     "dimension": "energy.switching_flexibility",
                     "type": "盲区检测",
+                    "source": "profile_rule",
                     "question": "画像显示你偏单线程。你是否注意到有些任务并行处理反而更高效？",
                     "suggestion": "多线程不一定意味着分心，有些组合任务可以并行而不损失质量。",
                 })
-        # 认知层挑战
         if profile.cognitive.confidence >= 0.6:
             if profile.cognitive.skepticism > 0.7:
                 challenges.append({
                     "dimension": "cognitive.skepticism",
                     "type": "反向验证",
+                    "source": "profile_rule",
                     "question": "画像显示你经常质疑前提。但你是否有时会过度质疑，导致决策拖延？",
                     "suggestion": "质疑是优点，但时机和对象很重要。",
                 })
-        # 价值层挑战
         if profile.value.confidence >= 0.6:
             if profile.value.perfection_vs_completion > 0.7:
                 challenges.append({
                     "dimension": "value.perfection_vs_completion",
                     "type": "盲区检测",
+                    "source": "profile_rule",
                     "question": "画像显示你追求完美。回想一下，是否有'先完成再优化'反而效果更好的经历？",
                     "suggestion": "完成度有时候比完美度更有价值，尤其是在信息不完备的早期阶段。",
                 })
 
+        # ── 2. 激活 BlindspotDiscovery 动态模块 ──────────────────────
+        try:
+            from core.app.blindspot_discovery import BlindspotDiscovery
+            bd = BlindspotDiscovery()
+
+            # 2a. 触发周期性信用恢复
+            credit_resp = bd.handle_event("periodic_persona_analysis")
+            if credit_resp.get("status") == "ok":
+                logger.debug(
+                    f"[画像] 盲区信用恢复: {credit_resp.get('challenge_credit', 'n/a')}"
+                )
+
+            # 2b. 获取本周动态盲点并转成挑战格式
+            weekly = bd.get_weekly_summary()
+            for bs in weekly:
+                if bs.get("status") not in ("resolved", "mitigated"):
+                    challenges.append({
+                        "dimension": bs.get("topic", "unknown"),
+                        "type": "动态盲点",
+                        "source": "blindspot_discovery",
+                        "confidence": bs.get("confidence", 0.5),
+                        "question": bs.get("description", ""),
+                        "suggestion": "可在 mnemos-cli 中通过 `blindspot-feedback <topic> resolved|mitigated|ignored` 反馈。",
+                    })
+        except Exception as e:
+            logger.debug(f"[画像] BlindspotDiscovery 调用失败: {e}")
+
+        # ── 3. 持久化 ────────────────────────────────────────────────
         if challenges:
             calib_dir = Path.home() / ".mnemos" / "calibrations"
             calib_dir.mkdir(parents=True, exist_ok=True)
             challenge_file = calib_dir / "pending_challenges.json"
+            profile_rules = sum(1 for c in challenges if c.get("source") == "profile_rule")
+            dynamic = sum(1 for c in challenges if c.get("source") == "blindspot_discovery")
             challenge_file.write_text(
                 json.dumps({
                     "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "profile_version": profile.version,
+                    "profile_version": getattr(profile, "version", "unknown"),
+                    "summary": {
+                        "total": len(challenges),
+                        "profile_rules": profile_rules,
+                        "dynamic_blindspots": dynamic,
+                    },
                     "challenges": challenges,
                 }, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            logger.info(f"[画像] 已生成 {len(challenges)} 个盲区挑战问题")
+            logger.info(
+                f"[画像] 已生成 {len(challenges)} 个盲区挑战问题"
+                f"（规则{profile_rules} / 动态{dynamic}）"
+            )
     except Exception as e:
         logger.debug(f"[画像] 生成挑战问题失败: {e}")
 
@@ -995,6 +1605,25 @@ def service_event_bus(stop_event: threading.Event):
                         agent=event.agent,
                     )
                     store.insert_session_signal(signal)
+
+                # 自动回顾触发
+                try:
+                    from core.kia.epimetheus import AutoRetrospective, generate_retrospective
+                    ar = AutoRetrospective()
+                    if ar.should_trigger(messages):
+                        result = generate_retrospective(
+                            task_type=meta.get("source", "unknown"),
+                            subtype="",
+                            messages=messages,
+                            checklist_usage=[],
+                        )
+                        if result and result.lessons:
+                            logger.info(
+                                f"[事件总线] 自动复盘生成: {len(result.lessons)} 条教训, "
+                                f"gaps={len(result.gaps)}"
+                            )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"[事件总线] session.end 处理失败: {e}")
 
@@ -1106,6 +1735,48 @@ def _run_startup_compensation():
             logger.debug("启动补偿: 无过期任务")
     except Exception as e:
         logger.warning(f"启动补偿执行失败: {e}")
+
+
+def _print_model_status():
+    """CLI: 打印蒸馏评分器模型状态"""
+    try:
+        from core.scoring.scorers.distill_scorer import DistillScorer
+        scorer = DistillScorer()
+        status = scorer._scorer.get_status()
+
+        print("\n" + "=" * 50)
+        print("🧠 Mnemos 蒸馏评分器模型状态")
+        print("=" * 50)
+        print(f"  Domain:        {status.get('domain', '?')}")
+        print(f"  Mode:          {status.get('mode', '?').upper()}")
+        print(f"  Dimensions:    {', '.join(status.get('dimensions', []))}")
+        print(f"  Model Version: v{status.get('model_version', 0)}")
+        print(f"  Retrain Buffer: {status.get('retrain_buffer_size', 0)} / {status.get('retrain_threshold', 40)}")
+        print(f"  Min Samples/Dim: {status.get('min_samples_per_dim', 12)}")
+        print(f"  Model Dir:     {status.get('model_dir', '?')}")
+
+        versions = status.get("versions_on_disk", [])
+        if versions:
+            print(f"\n  📦 磁盘版本 ({len(versions)} 个):")
+            for v in versions:
+                print(f"    v{v.get('version', '?')} | {v.get('mode', '?')} | {', '.join(v.get('dimensions', []))} | {v.get('timestamp', '?')}")
+        else:
+            print("\n  📦 磁盘版本: 无 (模型尚未持久化)")
+
+        print("=" * 50 + "\n")
+    except Exception as e:
+        print(f"获取模型状态失败: {e}")
+
+
+def _generate_drift_report():
+    """CLI: 生成漂移检测报告"""
+    try:
+        from scripts.drift_report import generate_report
+        path = generate_report()
+        print(f"\n✅ 漂移检测报告已生成: {path}")
+        print("   请用浏览器打开查看")
+    except Exception as e:
+        print(f"生成报告失败: {e}")
 
 
 def _run_preflight_checks() -> List[str]:
@@ -1644,6 +2315,8 @@ def main():
     sub.add_parser("run", help="前台运行（调试用）")
     sub.add_parser("install-windows", help="注册为 Windows 开机启动任务")
     sub.add_parser("uninstall-windows", help="注销 Windows 开机启动任务")
+    sub.add_parser("model-status", help="查看蒸馏评分器模型状态")
+    sub.add_parser("drift-report", help="生成漂移检测报告 HTML")
     args = parser.parse_args()
 
     if args.cmd == "start":
@@ -1659,6 +2332,10 @@ def main():
         install_windows_task()
     elif args.cmd == "uninstall-windows":
         uninstall_windows_task()
+    elif args.cmd == "model-status":
+        _print_model_status()
+    elif args.cmd == "drift-report":
+        _generate_drift_report()
     else:
         parser.print_help()
 

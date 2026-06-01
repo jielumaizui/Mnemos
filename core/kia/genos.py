@@ -677,6 +677,94 @@ class DNAEngine(PluggableModule):
             "pattern_distribution": {r[0] or "unknown": r[1] for r in pattern_rows},
         }
 
+    # ========== 向量索引（轻量 ANN） ==========
+
+    def build_vector_index(self) -> Dict:
+        """构建基于语义签名的轻量向量索引"""
+        try:
+            import numpy as np
+        except ImportError:
+            return {"status": "error", "reason": "numpy 未安装"}
+
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM knowledge_dna").fetchall()
+
+        if len(rows) < 2:
+            return {"status": "ok", "indexed": 0, "reason": "数据不足"}
+
+        # 将 semantic_signature 转为 TF 向量（字符 n-gram）
+        signatures = [r["semantic_signature"] or "" for r in rows]
+        vocab = sorted(set("".join(signatures)))
+        char_to_idx = {c: i for i, c in enumerate(vocab)}
+
+        vectors = []
+        self._vector_index_pages = []
+        for row in rows:
+            sig = row["semantic_signature"] or ""
+            vec = np.zeros(len(vocab), dtype=np.float32)
+            for c in sig:
+                if c in char_to_idx:
+                    vec[char_to_idx[c]] += 1
+            if vec.sum() > 0:
+                vec = vec / np.linalg.norm(vec)
+            vectors.append(vec)
+            self._vector_index_pages.append(row["page_path"])
+
+        self._vector_index = np.array(vectors)
+
+        # 尝试使用 sklearn NearestNeighbors
+        try:
+            from sklearn.neighbors import NearestNeighbors
+            self._vector_nn = NearestNeighbors(n_neighbors=min(10, len(vectors)), metric="cosine")
+            self._vector_nn.fit(self._vector_index)
+        except ImportError:
+            self._vector_nn = None
+
+        return {"status": "ok", "indexed": len(vectors), "vocab_size": len(vocab)}
+
+    def vector_search(self, query_dna: KnowledgeDNA, top_k: int = 5) -> List[Dict]:
+        """向量索引搜索相似页面"""
+        if not hasattr(self, "_vector_index") or self._vector_index is None:
+            self.build_vector_index()
+
+        if not hasattr(self, "_vector_index") or self._vector_index is None:
+            return []
+
+        try:
+            import numpy as np
+        except ImportError:
+            return []
+
+        sig = query_dna.semantic_signature or ""
+        vocab = sorted(set("".join(self._vector_index_pages)))
+        char_to_idx = {c: i for i, c in enumerate(vocab)}
+        vec = np.zeros(len(vocab), dtype=np.float32)
+        for c in sig:
+            if c in char_to_idx:
+                vec[char_to_idx[c]] += 1
+        if vec.sum() > 0:
+            vec = vec / np.linalg.norm(vec)
+
+        if hasattr(self, "_vector_nn") and self._vector_nn is not None:
+            distances, indices = self._vector_nn.kneighbors([vec], n_neighbors=min(top_k + 1, len(self._vector_index)))
+            results = []
+            for dist, idx in zip(distances[0], indices[0]):
+                page = self._vector_index_pages[idx]
+                if page != query_dna.page_path:
+                    results.append({"page_path": page, "distance": float(dist)})
+            return results[:top_k]
+        else:
+            # 暴力搜索回退
+            similarities = np.dot(self._vector_index, vec)
+            top_indices = np.argsort(similarities)[-top_k - 1:][::-1]
+            results = []
+            for idx in top_indices:
+                page = self._vector_index_pages[idx]
+                if page != query_dna.page_path:
+                    results.append({"page_path": page, "similarity": float(similarities[idx])})
+            return results[:top_k]
+
     # ========== 辅助方法 ==========
 
     @staticmethod

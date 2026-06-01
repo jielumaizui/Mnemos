@@ -206,6 +206,33 @@ def _ensure_dirs():
 class EntityExtractor:
     """多维度实体提取器"""
 
+    # 停用词：不应被提取为独立实体的系统术语、frontmatter 字段名、通用片段
+    STOP_WORDS: set[str] = {
+        # frontmatter 字段名（LLM 输出中常见，会被误提取）
+        "名称", "领域", "摘要", "触发器", "别名", "跨agent关联", "标签推荐系统",
+        "类型", "状态", "知识阶段", "来源数量", "证据级别", "置信度", "时效性",
+        "创建日期", "关键词", "版本标记", "决策摘要", "合并来源", "提取方式",
+        # 系统术语（单独出现时不应作为实体）
+        "系统", "模块", "接口", "引擎", "服务", "组件", "数据库",
+        "服务器", "客户端", "中间件", "微服务", "程序", "框架", "平台", "模型",
+        "协议", "算法", "代码", "函数", "方法", "类", "对象", "变量",
+        # 通用中文停用词/片段
+        "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都",
+        "一", "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会",
+        "着", "没有", "看", "好", "自己", "这", "那", "之", "与", "或", "及",
+        "等", "中", "内", "外", "下", "前", "后", "时", "间", "地", "方",
+        "法", "情", "理", "事", "实", "现", "当", "从", "把", "被", "给",
+        "让", "向", "往", "于", "而", "却", "但是", "因为", "所以", "如果",
+        "那么", "虽然", "而且", "或者", "还是", "只要", "只有", "除非", "假如",
+        "例如", "比如", "像", "似乎", "也许", "大概", "大约", "差不多", "几乎",
+        "根本", "简直", "完全", "绝对", "比较", "最", "更", "太", "非常", "特别",
+        "十分", "极其", "相当", "颇", "挺", "怪", "老", "真", "够", "多么",
+        "怎么", "怎样", "如何", "为什么", "为何", "难道", "别", "不要", "不能",
+        "不会", "不可", "不得", "不该", "不必", "不用", "何必", "未必", "首先",
+        "其次", "再次", "最后", "总之", "综上所述", "由此看来", "也就是说",
+        "换句话说", "换言之", "简言之", "归根结底", "归根到底", "说到底",
+    }
+
     def __init__(self, wiki_base: str | Path | None = None, bootstrap_from_existing: bool = True):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else Path(str(WIKI_DIR))
         self.tech_keywords = set(TECH_KEYWORDS)
@@ -326,6 +353,13 @@ class EntityExtractor:
                 lib = lib.split('/')[-1]
             if len(lib) >= 2 and not lib.startswith('http'):
                 result["tech"].add(lib.lower())
+
+        # 11. 停用词过滤：防止系统术语、frontmatter 字段名、通用片段被当成实体
+        for category in result:
+            result[category] = {
+                item for item in result[category]
+                if item.lower() not in self.STOP_WORDS
+            }
 
         return result
 
@@ -921,16 +955,16 @@ class ConnectModule:
         removed = old_entities - new_entities
         added = new_entities - old_entities
 
-        for e1 in removed:
-            for e2 in old_entities:
-                if e1 != e2:
-                    self.relation_engine.decrement(e1, e2)
-
-        self.relation_engine.analyze_session(
-            page_path.stem[:40],
-            new_entities_by_type,
-            timestamp=_extract_page_timestamp(page_path),
-        )
+        # NOTE: RelationEngine 已停用 — 关系分析统一由 KnowledgeGraph 承担
+        # for e1 in removed:
+        #     for e2 in old_entities:
+        #         if e1 != e2:
+        #             self.relation_engine.decrement(e1, e2)
+        # self.relation_engine.analyze_session(
+        #     page_path.stem[:40],
+        #     new_entities_by_type,
+        #     timestamp=_extract_page_timestamp(page_path),
+        # )
         self._store_entities(page_path, new_entities)
 
         return {
@@ -1001,7 +1035,8 @@ def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) 
                 cwd = m.group(1).strip()
 
             entities = extractor.extract(text, cwd=cwd)
-            relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
+            # NOTE: RelationEngine 已停用 — 关系分析统一由 KnowledgeGraph 承担
+            # relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
 
             for category, items in entities.items():
                 for item in items:
@@ -1022,52 +1057,47 @@ def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) 
         logger.info(f"[Connect] [DRY RUN] 将生成 {total} 个实体节点 + MOC 枢纽")
         return stats
 
-    # 生成人物页面
-    for name, sessions in all_entities["people"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_person_page(name, relations, related_sessions)
-        (PEOPLE_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["people"] += 1
+    # 实体页面生成已禁用 — 与蒸馏产物的 32 字段规范冲突，且内容空洞
+    # 关系分析仍在后台数据库维护，供搜索和画像使用
+    # 如需恢复，取消下方注释并删除此行注释
+    #
+    # for name, sessions in all_entities["people"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_person_page(name, relations, related_sessions)
+    #     (PEOPLE_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["people"] += 1
+    #
+    # for name, sessions in all_entities["projects"].items():
+    #     if len(sessions) < 1: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     tech_stack = project_tech.get(name, set())
+    #     md_content, safe_name = generate_project_page(name, relations, related_sessions, tech_stack)
+    #     (PROJECTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["projects"] += 1
+    #
+    # for name, sessions in all_entities["tech"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_tech_page(name, relations, related_sessions)
+    #     (TECH_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["tech"] += 1
+    #
+    # for name, sessions in all_entities["concepts"].items():
+    #     if len(sessions) < 2: continue
+    #     relations = relation_engine.get_relations(name)
+    #     related_sessions = relation_engine.get_related_sessions(name)
+    #     md_content, safe_name = generate_concept_page(name, relations, related_sessions)
+    #     (CONCEPTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
+    #     stats["concepts"] += 1
+    #
+    # stats["mocs"] = generate_moc_pages(all_entities)
+    # enrich_source_pages(extractor, relation_engine)
 
-    # 生成项目页面
-    for name, sessions in all_entities["projects"].items():
-        if len(sessions) < 1:  # 项目允许只出现1次
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        tech_stack = project_tech.get(name, set())
-        md_content, safe_name = generate_project_page(name, relations, related_sessions, tech_stack)
-        (PROJECTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["projects"] += 1
-
-    # 生成技术页面
-    for name, sessions in all_entities["tech"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_tech_page(name, relations, related_sessions)
-        (TECH_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["tech"] += 1
-
-    # 生成概念页面
-    for name, sessions in all_entities["concepts"].items():
-        if len(sessions) < 2:
-            continue
-        relations = relation_engine.get_relations(name)
-        related_sessions = relation_engine.get_related_sessions(name)
-        md_content, safe_name = generate_concept_page(name, relations, related_sessions)
-        (CONCEPTS_DIR / f"{safe_name}.md").write_text(md_content, encoding="utf-8")
-        stats["concepts"] += 1
-
-    # 生成 MOC 枢纽页面（关键！）
-    stats["mocs"] = generate_moc_pages(all_entities)
-
-    # 增强 Source 页面
-    enrich_source_pages(extractor, relation_engine)
+    logger.info("[Connect] 实体页面生成已禁用，仅更新关系数据库")
 
     print(f"[Connect] 完成: {stats['people']} 人, {stats['projects']} 项目, "
           f"{stats['tech']} 技术, {stats['concepts']} 概念, {stats['mocs']} MOC")

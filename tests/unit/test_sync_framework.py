@@ -579,17 +579,24 @@ class TestBaseTrigger(unittest.TestCase):
 
 @unittest.skipUnless(_WATCHDOG_AVAILABLE, "watchdog 未安装")
 class TestWatchdogTrigger(unittest.TestCase):
-    def test_start_stop_lifecycle(self):
+    @patch("core.sync_framework.triggers.Observer")
+    def test_start_stop_lifecycle(self, mock_observer_cls):
         """启动和停止生命周期"""
+        mock_observer = MagicMock()
+        mock_observer_cls.return_value = mock_observer
         with tempfile.TemporaryDirectory() as td:
             trigger = WatchdogTrigger(callback=lambda x: None, source_name="test", debounce=0.1)
             trigger.start(Path(td))
             self.assertTrue(trigger._running)
             trigger.stop()
             self.assertFalse(trigger._running)
+            mock_observer.stop.assert_called_once()
 
-    def test_debounce_delays_callback(self):
+    @patch("core.sync_framework.triggers.Observer")
+    def test_debounce_delays_callback(self, mock_observer_cls):
         """去抖动延迟回调执行"""
+        mock_observer = MagicMock()
+        mock_observer_cls.return_value = mock_observer
         with tempfile.TemporaryDirectory() as td:
             calls = []
             trigger = WatchdogTrigger(callback=lambda p: calls.append(p), source_name="test", debounce=0.1)

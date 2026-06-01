@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 
 import os
 from core.config import get_config

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 四分离学习系统（OpenClaw P7）
 

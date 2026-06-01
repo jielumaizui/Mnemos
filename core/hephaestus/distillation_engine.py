@@ -881,6 +881,38 @@ class DistillSelfCheck:
         # 9. 断言内部冲突检测（复用 conflict_resolver 规则）
         issues.extend(self._check_internal_conflicts(content))
 
+        # 10. 前提验证（PremiseValidator）
+        try:
+            from core.kia.premise_validator import PremiseValidator
+            validator = PremiseValidator()
+            result = validator.validate(
+                premise=frag.core_content[:500],
+                current_context=content,
+            )
+            if not result.get("valid", True):
+                issues.append(
+                    f"前提验证未通过: {result.get('reason', 'unknown')} "
+                    f"(置信度 {result.get('confidence', 0):.2f})"
+                )
+        except Exception:
+            pass
+
+        # 11. 决策依赖提取（DecisionDependencyExtractor）
+        try:
+            from core.kia.decision_dependency_extractor import DecisionDependencyExtractor
+            extractor = DecisionDependencyExtractor()
+            decision_keywords = ["选择", "决定", "决策", "如果", "则", "否则", "option", "decide", "choose"]
+            if any(kw in content.lower() for kw in decision_keywords):
+                graph = extractor.extract(content)
+                if graph.nodes:
+                    frag.frontmatter["decision_graph"] = {
+                        "nodes": len(graph.nodes),
+                        "edges": len(graph.edges),
+                        "roots": len(graph.get_root_decisions()),
+                    }
+        except Exception:
+            pass
+
         return issues
 
     def _check_python_syntax(self, code: str) -> bool:
@@ -1034,10 +1066,18 @@ class DistillFeedbackLoop:
         return self._scorer_v2
 
     def evaluate(self, result: DistillationResult) -> List[Dict]:
-        """评估蒸馏结果，生成反馈信号"""
-        signals = []
+        """评估蒸馏结果，生成反馈信号并驱动模型进化
 
-        # 信号1：预判与最终判断不一致
+        信号分为三类：
+        - 质量信号：自检通过率、片段丰富度
+        - 校准信号：预判与LLM判断的偏差
+        - 结构信号：跨Agent关联强度、知识形态多样性
+        """
+        signals = []
+        logger = logging.getLogger(__name__)
+        session_id = getattr(result, "session_id", "unknown")
+
+        # ── 信号1-2：预判校准信号 ──
         if result.prejudgment == ValuePrejudgment.CERTAINLY_NO and result.judgment == "knowledge":
             signals.append({
                 "type": "prejudgment_mismatch",
@@ -1046,8 +1086,6 @@ class DistillFeedbackLoop:
                 "actual": 0.7,
                 "reason": "预判为低价值但LLM判断为知识，应调高预判阈值",
             })
-
-        # 信号2：预判为高价值但LLM跳过
         if result.prejudgment == ValuePrejudgment.CERTAINLY_YES and result.judgment == "skip":
             signals.append({
                 "type": "prejudgment_mismatch",
@@ -1057,7 +1095,7 @@ class DistillFeedbackLoop:
                 "reason": "预判为高价值但LLM判断为跳过，应调低预判阈值",
             })
 
-        # 信号3：自检失败率
+        # ── 信号3：自检质量信号 ──
         if result.fragments:
             failed_count = sum(1 for f in result.fragments if not f.self_check_passed)
             fail_rate = failed_count / len(result.fragments)
@@ -1069,8 +1107,17 @@ class DistillFeedbackLoop:
                     "actual": 1.0 - fail_rate,
                     "reason": f"自检失败率 {fail_rate:.0%}，提取质量需改善",
                 })
+            elif fail_rate == 0.0 and len(result.fragments) >= 3:
+                # 正向信号：高质量提取
+                signals.append({
+                    "type": "high_quality_extraction",
+                    "dimension": "quality_score",
+                    "expected": 0.9,
+                    "actual": 1.0,
+                    "reason": f"高质量提取：{len(result.fragments)} 个片段，自检全部通过",
+                })
 
-        # 信号4：零提取（有价值判断但无片段）
+        # ── 信号4：零提取 ──
         if result.judgment == "knowledge" and not result.fragments:
             signals.append({
                 "type": "zero_extraction",
@@ -1080,9 +1127,76 @@ class DistillFeedbackLoop:
                 "reason": "判断为知识但提取无片段，提取逻辑需改善",
             })
 
-        # ── 写入 V1 AdaptiveScorer（保留向后兼容）──
+        # ── 信号5：跨Agent关联强度 ──
+        total_links = len(result.cross_agent_links)
+        if result.judgment == "knowledge" and total_links >= 3:
+            signals.append({
+                "type": "cross_agent_link_strong",
+                "dimension": "link_score",
+                "expected": 0.8,
+                "actual": 1.0,
+                "reason": f"强跨Agent关联：{total_links} 条链接",
+            })
+        elif result.judgment == "knowledge" and total_links == 0 and result.fragments:
+            signals.append({
+                "type": "cross_agent_link_weak",
+                "dimension": "link_score",
+                "expected": 0.6,
+                "actual": 0.2,
+                "reason": "知识未关联到任何已有页面，关联逻辑需改善",
+            })
+
+        # ── 信号6：知识形态多样性 ──
+        if result.fragments and len(result.fragments) >= 2:
+            forms = [f.form for f in result.fragments]
+            unique_forms = len(set(forms))
+            if unique_forms == 1:
+                signals.append({
+                    "type": "fragment_diversity_low",
+                    "dimension": "diversity_score",
+                    "expected": 0.7,
+                    "actual": 0.3,
+                    "reason": f"所有片段均为同一形态 '{forms[0]}'，形态多样性不足",
+                })
+            elif unique_forms >= 3:
+                signals.append({
+                    "type": "fragment_diversity_high",
+                    "dimension": "diversity_score",
+                    "expected": 0.8,
+                    "actual": 1.0,
+                    "reason": f"高形态多样性：{unique_forms} 种形态",
+                })
+
+        # ── 信号7：提取效率 ──
+        if result.judgment == "knowledge" and result.fragments:
+            if len(result.fragments) >= 5:
+                signals.append({
+                    "type": "extraction_rich",
+                    "dimension": "yield_score",
+                    "expected": 0.8,
+                    "actual": 1.0,
+                    "reason": f"丰富提取：{len(result.fragments)} 个知识片段",
+                })
+            elif len(result.fragments) == 1:
+                signals.append({
+                    "type": "extraction_sparse",
+                    "dimension": "yield_score",
+                    "expected": 0.6,
+                    "actual": 0.3,
+                    "reason": "稀疏提取：仅 1 个知识片段",
+                })
+
+        # ── 可见性：记录信号摘要 ──
+        if signals:
+            sig_summary = ", ".join(f"{s['type']}({s['dimension']})" for s in signals)
+            logger.info(f"[FeedbackLoop] {session_id} 生成 {len(signals)} 个反馈信号: {sig_summary}")
+        else:
+            logger.debug(f"[FeedbackLoop] {session_id} 无反馈信号")
+
+        # ── 写入 V1 AdaptiveScorer ──
         scorer = self._get_scorer()
         if scorer and signals:
+            v1_ok = 0
             try:
                 from core.scoring.adaptive_scorer import Feedback
                 for sig in signals:
@@ -1095,23 +1209,42 @@ class DistillFeedbackLoop:
                         weight=0.3,
                     )
                     scorer._scorer.feedback(fb)
-            except Exception:
-                logging.getLogger(__name__).warning("V1 feedback dispatch failed", exc_info=True)
+                    v1_ok += 1
+                logger.info(f"[FeedbackLoop] V1 写入 {v1_ok} 条反馈到 AdaptiveScorer")
+            except Exception as e:
+                logger.warning(f"[FeedbackLoop] V1 feedback dispatch failed: {e}")
 
-        # ── 写入 V2 ground_truth_signals（阶段二桥接）──
+        # ── 写入 V2 ground_truth_signals ──
+        v2_ok = 0
         try:
             from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
             for sig in signals:
-                # 信号转为二元标签：expected > actual → 正例（模型低估了）
                 label = 1 if sig["expected"] > sig["actual"] else 0
                 AdaptiveScorerV2.insert_ground_truth(
-                    session_id=getattr(result, "session_id", "unknown"),
+                    session_id=session_id,
                     signal_type=sig["type"],
                     label=label,
                     confidence=abs(sig["expected"] - sig["actual"]),
                 )
+                v2_ok += 1
+            if v2_ok > 0:
+                logger.info(f"[FeedbackLoop] V2 写入 {v2_ok} 条 ground_truth")
+        except Exception as e:
+            logger.warning(f"[FeedbackLoop] V2 ground_truth insert failed: {e}")
+
+        # ── 发布反馈事件到 EventBus ──
+        try:
+            from core.mnemos_bus import publish_event
+            publish_event("feedback_loop", "distill", {
+                "session_id": session_id,
+                "signal_count": len(signals),
+                "signal_types": [s["type"] for s in signals],
+                "judgment": result.judgment,
+                "fragment_count": len(result.fragments) if result.fragments else 0,
+                "cross_agent_links": len(result.cross_agent_links),
+            })
         except Exception:
-            logging.getLogger(__name__).debug("V2 ground_truth insert failed", exc_info=True)
+            pass
 
         return signals
 
@@ -1345,6 +1478,13 @@ def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> in
     }
     form = type_to_form.get(doc_type, "reference")
 
+    # 提取关键词（从标题 + 正文）
+    keywords = []
+    text_for_kw = f"{title} {body}"
+    keywords.extend(re.findall(r'[a-zA-Z_]{3,}', text_for_kw))
+    keywords.extend(re.findall(r'[\u4e00-\u9fff]{2,6}', text_for_kw))
+    keywords = list(dict.fromkeys(keywords))[:12]
+
     # 构建 KnowledgeFragment
     fragment = KnowledgeFragment(
         form=form,
@@ -1353,6 +1493,7 @@ def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> in
             "领域": extra_meta.get("category", "外部文档"),
             "文档类型": doc_type,
             "来源文件": filename or extra_meta.get("filename", ""),
+            "关键词": keywords,
         },
         background=summary or f"外部导入的 {doc_type.upper()} 文档",
         core_content=body,

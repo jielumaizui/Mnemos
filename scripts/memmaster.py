@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
 """
 Memos Master Scheduler - Memos 主调度器
@@ -9,8 +7,11 @@ Memos Master Scheduler - Memos 主调度器
 - Knowledge Inbox 处理
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime
 from core.config import get_config

@@ -338,6 +338,16 @@ class HephaestusWorker:
                 amphora.mark_done(session_id)
             except Exception:
                 pass
+
+            # 清理 output_dir 中的占位符文件，避免 collect_completed 误报
+            output_path = self.output_dir / f"{session_id}.md"
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                    logger.debug(f"[Hephaestus] 已清理占位符文件: {output_path}")
+                except Exception:
+                    pass
+
             return True
 
         except Exception as e:

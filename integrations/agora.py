@@ -205,7 +205,7 @@ class MCPServer:
 
         try:
             client = MemosClient(
-                host=config.memos_api_url,
+                base_url=config.memos_api_url,
                 token=config.memos_token,
             )
             # 自动添加 source 标签，便于后续溯源

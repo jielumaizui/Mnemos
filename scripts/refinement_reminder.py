@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 Memos 统计提醒脚本
 每周六下午运行，统计 Memos 记录数量

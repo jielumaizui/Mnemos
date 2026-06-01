@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 #!/usr/bin/env python3
+
+from __future__ import annotations
 """
 【已废弃】batch_clean_submit
 

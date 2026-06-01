@@ -300,14 +300,32 @@ class KnowledgeScheduler:
         ))
         self.register(ScheduledStep(
             name="knowledge_dna",
-            func=lambda: self._run_kia_module("genos", "DNAEngine", "compute_and_save_all", wiki_base=wiki_base),
+            func=lambda: self._run_kia_module("genos", "DNAEngine", "scan_all_pages", wiki_base=wiki_base),
             trigger=CronTrigger("0 3 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
+            name="graph_build",
+            func=lambda: self._run_graph_build(wiki_base),
+            trigger=CronTrigger("30 3 * * *"),
             timeout=300,
         ))
         self.register(ScheduledStep(
             name="entropy_engine",
             func=lambda: self._run_kia_module("eris", "EntropyEngine", "scan", wiki_base=wiki_base),
             trigger=CronTrigger("0 4 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
+            name="falsify_mark",
+            func=lambda: self._run_falsify_mark(wiki_base),
+            trigger=CronTrigger("30 4 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
+            name="heat_map",
+            func=lambda: self._run_heat_map(wiki_base),
+            trigger=CronTrigger("0 1 * * *"),
             timeout=300,
         ))
         self.register(ScheduledStep(
@@ -321,6 +339,12 @@ class KnowledgeScheduler:
             func=lambda: self._run_kia_module("aion", "TimeCapsule", "scan_for_auto_reminders", wiki_base=wiki_base),
             trigger=CronTrigger("0 * * * *"),
             timeout=60,
+        ))
+        self.register(ScheduledStep(
+            name="version_snapshot",
+            func=lambda: self._run_kia_module("ananke", "VersionTimeTravel", "scan_and_snapshot_all", wiki_base=wiki_base),
+            trigger=CronTrigger("0 6 * * *"),
+            timeout=300,
         ))
         # TODO: dark_knowledge 原由 erebus 模块执行，该模块已按蓝图合并到知识图谱。
         # 如需恢复周度盲区扫描，请注册 hygieia.detect_knowledge_gaps 或 knowledge_graph 关系发现。
@@ -346,7 +370,7 @@ class KnowledgeScheduler:
         # --- 条件触发步骤 ---
         self.register(ScheduledStep(
             name="skill_flywheel",
-            func=lambda: self._run_kia_module("ixion", "SkillFlywheel", "run_cycle", wiki_base=wiki_base),
+            func=lambda: self._run_kia_module("ixion", "SkillWikiFlywheel", "run_cycle", wiki_base=wiki_base),
             trigger=ConditionTrigger(
                 predicate=self._flywheel_predicate,
                 description="profile_signals>=50",
@@ -355,9 +379,23 @@ class KnowledgeScheduler:
             timeout=300,
         ))
 
-        # --- 事件触发步骤（注册但不参与 tick） ---
+        # --- 定时构图步骤（MOC + 实体页面全量更新） ---
         self.register(ScheduledStep(
             name="connect_worker",
+            func=lambda: self._run_connect_worker(wiki_base),
+            trigger=CronTrigger("0 9 * * *"),
+            timeout=600,
+        ))
+        self.register(ScheduledStep(
+            name="knowledge_evolution",
+            func=lambda: self._run_knowledge_evolution(wiki_base),
+            trigger=CronTrigger("0 11 * * *"),
+            timeout=300,
+        ))
+
+        # --- 事件触发步骤（注册但不参与 tick） ---
+        self.register(ScheduledStep(
+            name="connect_worker_event",
             func=lambda: {"status": "event_only"},
             trigger=EventTrigger("page.created"),
         ))
@@ -424,6 +462,14 @@ class KnowledgeScheduler:
             timeout=60,
         ))
 
+        # --- 画像周报生成（每周一 9:00） ---
+        self.register(ScheduledStep(
+            name="weekly_report",
+            func=lambda: self._run_weekly_report(wiki_base=wiki_base),
+            trigger=CronTrigger("0 9 * * 1"),
+            timeout=300,
+        ))
+
     def _flywheel_predicate(self) -> bool:
         """skill_flywheel 条件：画像信号数 >= 50"""
         try:
@@ -450,6 +496,98 @@ class KnowledgeScheduler:
             return {"status": "ok", "result": str(result)}
         except Exception as e:
             logger.error(f"KIA 模块执行失败 {module_name}.{class_name}.{method_name}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_graph_build(self, wiki_base: str) -> Dict:
+        """知识图谱关系构建：遍历 wiki 页面发现新关系"""
+        try:
+            from core.kia.knowledge_graph import KnowledgeGraph
+            kg = KnowledgeGraph(wiki_base=wiki_base)
+            wiki_path = Path(wiki_base)
+            pages = []
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                pages.append(p)
+            added = 0
+            for page in pages[:100]:
+                try:
+                    for rel in kg.discover_relations(page):
+                        if kg.add_relation(rel):
+                            added += 1
+                except Exception:
+                    continue
+            return {"status": "ok", "relations_added": added}
+        except Exception as e:
+            logger.error(f"图谱构建失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_falsify_mark(self, wiki_base: str) -> Dict:
+        """可证伪性标记：为 wiki 页面初始化 falsifiability mark"""
+        try:
+            from core.kia.aporia import FalsifiabilityMarker
+            marker = FalsifiabilityMarker(wiki_base=wiki_base)
+            wiki_path = Path(wiki_base)
+            pages = []
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                pages.append(p)
+            created = 0
+            for page in pages[:100]:
+                try:
+                    if marker.get_mark(str(page)) is None:
+                        if marker.init_mark_for_page(page):
+                            created += 1
+                except Exception:
+                    continue
+            to_test = marker.scan_all_marks()
+            return {"status": "ok", "marks_created": created, "pending_tests": len(to_test)}
+        except Exception as e:
+            logger.error(f"可证伪性标记失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_heat_map(self, wiki_base: str) -> Dict:
+        """热力地图：衰减热力分数 + 反写 frontmatter + 生成报告"""
+        try:
+            from core.wiki_metrics import WikiMetrics
+            wm = WikiMetrics(wiki_dir=wiki_base)
+
+            # 1. 全局热力衰减
+            decayed = wm.decay_all()
+
+            # 2. 反写 frontmatter 到所有页面
+            wiki_path = Path(wiki_base)
+            synced = 0
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                try:
+                    if wm.sync_heat_to_frontmatter(p):
+                        synced += 1
+                except Exception:
+                    continue
+
+            # 3. 生成热力地图报告
+            report = wm.generate_heat_report(write=True, wiki_dir=wiki_base)
+
+            return {
+                "status": "ok",
+                "decayed": decayed,
+                "frontmatter_synced": synced,
+                "report_length": len(report),
+            }
+        except Exception as e:
+            logger.error(f"热力地图失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _run_sched_maintenance(self) -> Dict:
@@ -536,6 +674,17 @@ class KnowledgeScheduler:
             }
         except Exception as e:
             logger.error(f"对话提醒清理失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_weekly_report(self, wiki_base: str = None) -> Dict:
+        """画像周报生成"""
+        try:
+            from core.app.weekly_report import WeeklyReportGenerator
+            gen = WeeklyReportGenerator(wiki_base=wiki_base)
+            content = gen.generate_weekly_report()
+            return {"status": "ok", "content_length": len(content)}
+        except Exception as e:
+            logger.error(f"周报生成失败: {e}")
             return {"status": "error", "error": str(e)}
 
     # ----------------------------------------------------------
@@ -714,6 +863,48 @@ class KnowledgeScheduler:
 
         except Exception as e:
             logger.error(f"事件触发执行失败 {event_type}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_connect_worker(self, wiki_base: str) -> Dict:
+        """连接Worker：全量构图，生成实体页面和MOC枢纽"""
+        try:
+            from core.kia.charon import run_connect_cycle
+            result = run_connect_cycle(dry_run=False)
+            return {
+                "status": "ok",
+                "people": result.get("people", 0),
+                "projects": result.get("projects", 0),
+                "tech": result.get("tech", 0),
+                "concepts": result.get("concepts", 0),
+                "mocs": result.get("mocs", 0),
+            }
+        except Exception as e:
+            logger.error(f"连接Worker失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_knowledge_evolution(self, wiki_base: str) -> Dict:
+        """知识演化：扫描 wiki 版本并生成演化报告 + 新鲜度检查"""
+        try:
+            from core.kia.proteus import IterationTracker, KnowledgeFreshnessChecker
+
+            # 1. 生成演化报告
+            tracker = IterationTracker(wiki_base=wiki_base)
+            report = tracker.scan_and_report(wiki_base)
+
+            # 2. 新鲜度全库扫描
+            checker = KnowledgeFreshnessChecker()
+            alerts = checker.scan_all(wiki_base)
+            if alerts:
+                logger.info(f"[知识演化] 发现 {len(alerts)} 条过期知识")
+
+            return {
+                "status": "ok",
+                "reports": report.get("reports", 0),
+                "topics": report.get("topics", []),
+                "freshness_alerts": len(alerts),
+            }
+        except Exception as e:
+            logger.error(f"知识演化失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _trigger_page_created(self, payload: Dict) -> Dict:

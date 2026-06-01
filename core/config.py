@@ -55,10 +55,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # === 评分层常量 ===
     "scoring": {
-        "retrain_buffer": 100,
+        "retrain_buffer": 40,
         "retrain_interval_seconds": 3600,
         "ewma_alpha": 0.1,
-        "min_samples_per_dimension": 20,
+        "min_samples_per_dimension": 12,
         "model_version_keep": 5,
         "feedback_fatigue_max_daily": 3,
         "feedback_fatigue_min_interval_minutes": 30,

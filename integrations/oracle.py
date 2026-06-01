@@ -94,7 +94,7 @@ class WikiReader:
             if not dir_path.exists():
                 continue
 
-            for file_path in dir_path.glob("*.md"):
+            for file_path in dir_path.rglob("*.md"):
                 rel_path = file_path.relative_to(self.wiki_path)
                 page_id = str(rel_path.with_suffix(''))
 
@@ -110,7 +110,7 @@ class WikiReader:
                         "entities": fm.get("entities", []),
                         "concepts": fm.get("concepts", []),
                         "path": file_path,
-                        "heat_level": heat_info.get("level", "L1"),
+                        "heat_level": heat_info.get("level", "cold"),
                         "heat_score": heat_info.get("score", 0),
                     }
                 except Exception as e:
@@ -169,7 +169,7 @@ class WikiReader:
             logger.warning(f"读取页面内容失败: {e}")
             return None
 
-        config = self.READ_DEPTH.get(heat_level, self.READ_DEPTH["L1"])
+        config = self.READ_DEPTH.get(heat_level, self.READ_DEPTH["cold"])
         read_type = config["type"]
 
         if read_type == "metadata":
@@ -311,12 +311,10 @@ class WikiReader:
     def read_page(self, page_path: str) -> Optional[Dict]:
         """读取指定 wiki 页面（MCP / Agora 兼容接口）
 
-        page_path 可以是相对路径或 page_id。
+        page_path 可以是相对路径或 page_id（支持 .md 后缀）。
         """
-        # 如果传入的是文件路径，提取 page_id
-        page_id = page_path
-        if "/" in page_path or "\\" in page_path:
-            page_id = Path(page_path).stem
+        # Normalize: 去掉 .md 后缀，统一路径分隔符
+        page_id = page_path.replace("\\", "/").removesuffix(".md")
         return self.read_page_by_heat(page_id)
 
     def search_all_relevant(self, query: str) -> List[Dict]:
@@ -410,27 +408,24 @@ class WikiReader:
         if not all_relevant:
             return {"found": False, "message": "未找到相关知识"}
 
-        # 2. 按热力值分组
+        # 2. 按热力值分组（统一为 cold/warm/hot）
         by_level = {
-            "L9": [],
-            "L7-L8": [],
-            "L4-L6": [],
-            "L1-L3": [],
-            "L0": []
+            "hot": [],
+            "warm": [],
+            "cold": [],
+            "unknown": []
         }
 
         for item in all_relevant:
             level = item["heat_level"]
-            if level == "L9":
-                by_level["L9"].append(item)
-            elif level in ["L7", "L8"]:
-                by_level["L7-L8"].append(item)
-            elif level in ["L4", "L5", "L6"]:
-                by_level["L4-L6"].append(item)
-            elif level in ["L1", "L2", "L3"]:
-                by_level["L1-L3"].append(item)
+            if level == "hot":
+                by_level["hot"].append(item)
+            elif level == "warm":
+                by_level["warm"].append(item)
+            elif level == "cold":
+                by_level["cold"].append(item)
             else:
-                by_level["L0"].append(item)
+                by_level["unknown"].append(item)
 
         # 3. 根据热力值读取对应深度
         results = {
@@ -442,7 +437,7 @@ class WikiReader:
         }
 
         # 按优先级读取（高热力优先）
-        for level_group in ["L9", "L7-L8", "L4-L6", "L1-L3", "L0"]:
+        for level_group in ["hot", "warm", "cold", "unknown"]:
             pages = by_level[level_group]
             if not pages:
                 continue
@@ -450,7 +445,7 @@ class WikiReader:
             group_result = {
                 "count": len(pages),
                 "pages": [],
-                "depth": self.READ_DEPTH.get(level_group.split("-")[0], {}).get("desc", "未知")
+                "depth": self.READ_DEPTH.get(level_group, {}).get("desc", "未知")
             }
 
             for item in pages:
