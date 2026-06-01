@@ -1372,6 +1372,7 @@ def _run_dispute_scan() -> Dict:
 
         # 3. 扫描 wiki 中的争议标记
         try:
+            from core.config import get_config
             wiki_base = get_config().wiki_dir
             dispute_markers = ["⚠️ 争议", "conflict:", "contradiction", "TODO: verify"]
             for md_file in wiki_base.rglob("*.md"):

@@ -132,7 +132,7 @@ def check_database() -> Dict:
 
         # SQLite 健康检测
         try:
-            conn = sqlite3.connect(str(db_path, timeout=10), timeout=5)
+            conn = sqlite3.connect(str(db_path), timeout=5)
             cursor = conn.cursor()
 
             # 表列表

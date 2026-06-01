@@ -2,7 +2,8 @@
 # Mnemos 一键安装脚本 (macOS / Linux)
 # 用法: ./setup.sh [--yes] [--skip-memos] [--skip-obsidian] [--skip-daemon] [--skip-scheduler] [--skip-hooks] [--dry-run]
 
-PROJECT_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+PROJECT_ROOT="$SCRIPT_DIR"
 
 # --help / -h 直接透传给 Python 脚本，避免先执行环境检查
 for arg in "$@"; do

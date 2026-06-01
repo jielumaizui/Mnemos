@@ -821,10 +821,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="只检查环境，不执行任何安装/启动操作")
     args = parser.parse_args()
 
-    # 非交互式终端自动启用 --yes，避免 input() 抛 EOFError
-    if not sys.stdin.isatty():
-        args.yes = True
-        print("检测到非交互式终端，自动启用 --yes 模式")
+    # 非交互式终端：不自动启用 --yes，避免在 CI/后台自动修改系统状态
+    # 如需非交互安装，请显式传入 --yes
+    if not sys.stdin.isatty() and not args.yes:
+        print("检测到非交互式终端，未传入 --yes，仅执行 dry-run 检查")
+        args.dry_run = True
 
     if args.dry_run:
         print("=" * 60)

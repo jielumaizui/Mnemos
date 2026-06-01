@@ -493,8 +493,8 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
 def main():
     path = generate_report()
     print(f"漂移检测报告已生成: {path}")
-    import os
-    os.system(f"open '{path}'")
+    import subprocess
+    subprocess.run(["open", str(path)], check=False)
 
 
 if __name__ == "__main__":

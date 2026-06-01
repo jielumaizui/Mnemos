@@ -1,5 +1,6 @@
 # Mnemos 核心依赖
 # Python 3.10+
+# 推荐使用: pip install -e ".[dev]"
 
 # 核心依赖
 requests>=2.28.0
@@ -7,11 +8,15 @@ pyyaml>=6.0
 watchdog>=3.0.0
 numpy>=1.24.0
 
-# 可选：Claude API（用于蒸馏 Agent）
-# anthropic>=0.18.0
-
-# Tavily API（用于影子页面外部验证）
-# tavily-python>=0.3.0
+# 文档处理
+pandas>=1.5.0
+openpyxl>=3.0.0
+python-pptx>=0.6.0
+PyPDF2>=2.0.0
+python-docx>=0.8.0
+beautifulsoup4>=4.11.0
+markdownify>=0.11.0
+ebooklib>=0.18.0
 
 # MCP 协议支持
 mcp>=1.0.0

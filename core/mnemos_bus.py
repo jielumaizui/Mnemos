@@ -224,6 +224,17 @@ class EventBus:
             conn.execute(
                 "DELETE FROM dead_letters WHERE timestamp < datetime('now', '-30 days')"
             )
+            # 超龄 pending 转为 dead_letter，保留审计痕迹，而非静默删除
+            conn.execute(
+                """INSERT INTO dead_letters (timestamp, trace_id, event_type, source,
+                    payload_json, status, retry_count, created_at, failure_reason)
+                SELECT timestamp, trace_id, event_type, source,
+                    payload_json, 'expired', retry_count, created_at,
+                    'pending event expired after 3 days, moved to dead_letters on startup'
+                FROM events
+                WHERE status = 'pending' AND created_at < datetime('now', '-3 days')
+                """
+            )
             conn.execute(
                 "DELETE FROM events WHERE status = 'pending' AND created_at < datetime('now', '-3 days')"
             )

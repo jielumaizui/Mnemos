@@ -12,6 +12,8 @@
 如需清理标签，请使用 mnemos CLI 的新工具或手动处理。
 """
 
+from __future__ import annotations
+
 import warnings
 warnings.warn(
     "tag_cleanup.py is deprecated. The tag system has been unified to layer=L1. "
@@ -21,8 +23,6 @@ warnings.warn(
 )
 
 # 保留原始代码作为参考，但不再推荐运行
-
-from __future__ import annotations
 
 import os
 import sys
