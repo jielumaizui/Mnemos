@@ -213,9 +213,47 @@ class AdaptiveScorer:
         if len(self._retrain_buffer) >= self._retrain_buffer_size:
             self._schedule_retrain()
 
-        # 漂移检测
+        # 漂移检测 + 3-sigma 自动校准
         if self._stats.check_drift(f"{dim}.value", fb.expected):
-            logger.warning(f"[AdaptiveScorer] 检测到 {dim} 特征漂移")
+            logger.warning(f"[AdaptiveScorer] 检测到 {dim} 特征漂移，触发自动校准")
+            self._auto_calibrate_dimension(dim, fb)
+
+    def _auto_calibrate_dimension(self, dimension: str, fb: Feedback) -> None:
+        """3-sigma 自动校准：漂移检测后触发"""
+        # 1. 加速重训练：将该维度样本加入缓冲区（重复加入以提升权重）
+        for _ in range(3):
+            self._retrain_buffer.append({
+                "dimension": dimension,
+                "features": self._extract_features(fb.context or {}),
+                "label": fb.expected,
+                "source": "drift_calibration",
+                "weight": fb.weight * 2,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+        # 2. 贝叶斯融合重新校准
+        if self._bayesian_fusion is not None:
+            try:
+                self._bayesian_fusion.update_from_ground_truth(
+                    dimension=dimension,
+                    label=1 if fb.expected >= 0.5 else 0,
+                    confidence=abs(fb.expected - fb.actual),
+                )
+            except Exception:
+                pass
+
+        # 3. 重置该维度的在线统计（清空历史，重新开始统计）
+        try:
+            self._stats._stats.pop(f"{dimension}.value", None)
+            self._stats._stats.pop(f"{dimension}.confidence", None)
+        except Exception:
+            pass
+
+        # 4. 触发重训练（如果缓冲足够）
+        if len(self._retrain_buffer) >= self._retrain_buffer_size // 2:
+            self._schedule_retrain()
+
+        logger.info(f"[AdaptiveScorer] {dimension} 自动校准完成，缓冲加速")
 
     # ==================== 评分流水线 ====================
 

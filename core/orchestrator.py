@@ -56,11 +56,58 @@ class Orchestrator:
         self.logs: List[str] = []
         self.errors: List[tuple] = []
 
+        # 热插拔阶段注册表（模块级故障隔离）
+        self._stage_registry: Dict[str, Dict] = {}
+        self._register_default_stages()
+
     def log(self, msg: str, level: str = "INFO"):
         line = f"[{level}] {msg}"
         self.logs.append(line)
         if self.verbose or level in ("ERROR", "WARN"):
             logger.info(line)
+
+    # ========== 热插拔阶段管理 ==========
+
+    def _register_default_stages(self):
+        """注册默认阶段（核心处理链 + 外部联动链 + 报告）"""
+        stages = [
+            ("distill", self.run_distill, True),
+            ("dna", self.run_dna, True),
+            ("graph", self.run_graph, True),
+            ("immune", self.run_immune, True),
+            ("entropy", self.run_entropy, True),
+            ("stress", self.run_stress, True),
+            ("falsify", self.run_falsify, True),
+            ("shadow", self.run_shadow, True),
+            ("capsule", self.run_capsule, True),
+            ("snapshot", self.run_snapshot, True),
+            ("push", lambda: self.run_push(context=None), True),
+            ("profile", self.run_profile, True),
+        ]
+        for name, func, enabled in stages:
+            self._stage_registry[name] = {
+                "func": func,
+                "enabled": enabled,
+                "errors": 0,
+            }
+
+    def enable_stage(self, name: str) -> bool:
+        """启用阶段"""
+        if name in self._stage_registry:
+            self._stage_registry[name]["enabled"] = True
+            return True
+        return False
+
+    def disable_stage(self, name: str) -> bool:
+        """禁用阶段"""
+        if name in self._stage_registry:
+            self._stage_registry[name]["enabled"] = False
+            return True
+        return False
+
+    def list_stages(self) -> Dict[str, bool]:
+        """列出所有阶段及其启用状态"""
+        return {name: info["enabled"] for name, info in self._stage_registry.items()}
 
     # ========== 阶段 1: 蒸馏 ==========
 
@@ -476,37 +523,41 @@ class Orchestrator:
     # ========== 完整循环 ==========
 
     def run_full(self, push_context: str | None = None) -> Dict:
-        """运行完整循环"""
+        """运行完整循环（热插拔阶段管理）"""
         self.log("=" * 50)
         self.log("Memos-Wiki v2.0.0 完整循环开始")
         self.log(f"Wiki 路径: {self.wiki_base}")
         self.log(f"Dry run: {self.dry_run}, Limit: {self.limit}")
+        active_stages = [n for n, i in self._stage_registry.items() if i["enabled"]]
+        self.log(f"活跃阶段: {len(active_stages)}/{len(self._stage_registry)}")
         self.log("=" * 50)
 
         results = {}
 
-        # 核心处理链
-        results["distill"] = self.run_distill()
-        results["dna"] = self.run_dna()
-        results["graph"] = self.run_graph()
-        results["immune"] = self.run_immune()
-        results["entropy"] = self.run_entropy()
-        results["stress"] = self.run_stress()
-        results["falsify"] = self.run_falsify()
-
-        # 外部联动链
-        results["shadow"] = self.run_shadow()
-        results["capsule"] = self.run_capsule()
-        results["snapshot"] = self.run_snapshot()
-        results["push"] = self.run_push(context=push_context)
-
-        # 报告
-        results["profile"] = self.run_profile()
+        # 热插拔阶段执行：每个阶段独立运行，互不影响
+        for name, info in self._stage_registry.items():
+            if not info["enabled"]:
+                continue
+            try:
+                if name == "push" and push_context is not None:
+                    results[name] = self.run_push(context=push_context)
+                else:
+                    results[name] = info["func"]()
+            except Exception as e:
+                self.errors.append((name, str(e)))
+                self.log(f"阶段 {name} 失败: {e}", "ERROR")
+                info["errors"] += 1
+                # 连续失败 3 次自动禁用该阶段（故障隔离）
+                if info["errors"] >= 3:
+                    info["enabled"] = False
+                    self.log(f"阶段 {name} 连续失败 3 次，已自动禁用", "ERROR")
+                results[name] = {"status": "error", "error": str(e)}
 
         # 汇总
         self.log("=" * 50)
         self.log("循环完成")
-        self.log(f"错误数: {len(self.errors)}")
+        ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
+        self.log(f"成功: {ok_count}, 错误: {len(self.errors)}")
         for stage, err in self.errors:
             self.log(f"  {stage}: {err}", "ERROR")
 
