@@ -148,19 +148,10 @@ class ConnectWorker:
 
     def _write_to_knowledge_graph(self, entities: List[str], concepts: List[str],
                                   relations: List[Relation], source_page: str):
-        """将提取的内容写入知识图谱"""
+        """将提取的内容写入知识图谱（统一由 KnowledgeGraph 管理）"""
         try:
-            # 写入关系
             for relation in relations:
                 self.kg.add_relation(relation)
-
-            # 通过 relation_manager 批量处理
-            kg_input = {
-                "entities": entities + concepts,
-                "relations": [self._relation_to_dict(r) for r in relations],
-            }
-            self._relation_manager.add_from_distill(kg_input)
-
         except Exception:
             # 写入失败不影响提取结果
             pass

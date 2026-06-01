@@ -26,7 +26,9 @@ from .relation_schema import Relation, RelationType, RelationEvidence, suggest_r
 
 
 def _get_db_path() -> Path:
-    return Path.home() / ".mnemos" / "wiki_state.db"
+    # 统一存储到 knowledge_graph.db，与 EntityManager / KnowledgeGraph 共享
+    from core.config import get_config
+    return Path(get_config().data_dir) / "knowledge_graph.db"
 
 
 @dataclass
@@ -48,7 +50,7 @@ class RelationManager:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def add_from_distill(self, kg_input: Dict) -> List[Relation]:
-        """从蒸馏输出提取关系
+        """从蒸馏输出提取关系并持久化到数据库
 
         kg_input 格式：
         {
@@ -59,26 +61,40 @@ class RelationManager:
         }
         """
         relations = []
-        for rel_data in kg_input.get("relations", []):
-            rel_type_str = rel_data.get("type", "references")
-            try:
-                rel_type = RelationType(rel_type_str)
-            except ValueError:
-                rel_type = RelationType.REFERENCES
+        try:
+            with sqlite3.connect(str(self._db_path), timeout=5) as conn:
+                for rel_data in kg_input.get("relations", []):
+                    rel_type_str = rel_data.get("type", "references")
+                    try:
+                        rel_type = RelationType(rel_type_str)
+                    except ValueError:
+                        rel_type = RelationType.REFERENCES
 
-            relation = Relation(
-                source=rel_data["source"],
-                target=rel_data["target"],
-                relation_type=rel_type,
-                strength=rel_data.get("strength", 0.5),
-                confidence=rel_data.get("confidence", 0.5),
-                source_method="distill",
-                evidence=[RelationEvidence(
-                    evidence_type="distill_extraction",
-                    content=rel_data.get("reason", ""),
-                )],
-            )
-            relations.append(relation)
+                    relation = Relation(
+                        source=rel_data["source"],
+                        target=rel_data["target"],
+                        relation_type=rel_type,
+                        strength=rel_data.get("strength", 0.5),
+                        confidence=rel_data.get("confidence", 0.5),
+                        source_method="distill",
+                        evidence=[RelationEvidence(
+                            evidence_type="distill_extraction",
+                            content=rel_data.get("reason", ""),
+                        )],
+                    )
+                    relations.append(relation)
+
+                    # 持久化到数据库
+                    now = datetime.now().isoformat()
+                    conn.execute(
+                        """INSERT OR REPLACE INTO relations
+                           (source, target, relation_type, strength, confidence, source_method, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (relation.source, relation.target, relation.relation_type.value,
+                         relation.strength, relation.confidence, relation.source_method, now)
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning(f"RelationManager 持久化失败: {e}")
         return relations
 
     def add_from_dark_knowledge(self, association: Dict) -> Relation:
