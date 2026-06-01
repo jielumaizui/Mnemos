@@ -30,6 +30,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Compile check
+        run: |
+          python -m compileall core/ integrations/ mnemos_cli.py -q
+
       - name: Lint with flake8
         run: |
           flake8 core/ integrations/ mnemos_cli.py --count --select=E9,F63,F7,F82 --show-source --statistics
