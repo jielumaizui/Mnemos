@@ -802,6 +802,31 @@ def service_heartbeat(stop_event: threading.Event):
                         )
                 except Exception:
                     pass
+
+            # 每 30 分钟（30 次心跳）运行搜索索引健康检查
+            if heartbeat_count % 30 == 0:
+                try:
+                    from core.app.context_search import ContextAwareSearch
+                    searcher = ContextAwareSearch()
+                    # 用最近更新页面做一次空查询，验证索引连通性
+                    results = searcher.search("recent", limit=3)
+                    if results:
+                        logger.debug(
+                            f"[搜索] 索引健康: {len(results)} 条候选"
+                        )
+                except Exception:
+                    pass
+
+            # 每 30 分钟运行问答检索缓存刷新
+            if heartbeat_count % 30 == 0:
+                try:
+                    from core.app.question_answer_search import QuestionAnswerSearch
+                    qa = QuestionAnswerSearch()
+                    # 空查询验证模块可用
+                    _ = qa.search("", limit=1)
+                    logger.debug("[问答检索] 模块可用")
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[心跳] 运行失败: {e}")
 
@@ -1484,6 +1509,25 @@ def service_event_bus(stop_event: threading.Event):
                         agent=event.agent,
                     )
                     store.insert_session_signal(signal)
+
+                # 自动回顾触发
+                try:
+                    from core.kia.epimetheus import AutoRetrospective, generate_retrospective
+                    ar = AutoRetrospective()
+                    if ar.should_trigger(messages):
+                        result = generate_retrospective(
+                            task_type=meta.get("source", "unknown"),
+                            subtype="",
+                            messages=messages,
+                            checklist_usage=[],
+                        )
+                        if result and result.lessons:
+                            logger.info(
+                                f"[事件总线] 自动复盘生成: {len(result.lessons)} 条教训, "
+                                f"gaps={len(result.gaps)}"
+                            )
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"[事件总线] session.end 处理失败: {e}")
 

@@ -323,6 +323,12 @@ class KnowledgeScheduler:
             timeout=300,
         ))
         self.register(ScheduledStep(
+            name="heat_map",
+            func=lambda: self._run_heat_map(wiki_base),
+            trigger=CronTrigger("0 1 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
             name="knowledge_profile",
             func=lambda: self._run_kia_module("metis", "ProfileGenerator", "generate_and_report", wiki_base=wiki_base),
             trigger=CronTrigger("0 5 * * *"),
@@ -531,6 +537,43 @@ class KnowledgeScheduler:
             return {"status": "ok", "marks_created": created, "pending_tests": len(to_test)}
         except Exception as e:
             logger.error(f"可证伪性标记失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_heat_map(self, wiki_base: str) -> Dict:
+        """热力地图：衰减热力分数 + 反写 frontmatter + 生成报告"""
+        try:
+            from core.wiki_metrics import WikiMetrics
+            wm = WikiMetrics(wiki_dir=wiki_base)
+
+            # 1. 全局热力衰减
+            decayed = wm.decay_all()
+
+            # 2. 反写 frontmatter 到所有页面
+            wiki_path = Path(wiki_base)
+            synced = 0
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                try:
+                    if wm.sync_heat_to_frontmatter(p):
+                        synced += 1
+                except Exception:
+                    continue
+
+            # 3. 生成热力地图报告
+            report = wm.generate_heat_report(write=True, wiki_dir=wiki_base)
+
+            return {
+                "status": "ok",
+                "decayed": decayed,
+                "frontmatter_synced": synced,
+                "report_length": len(report),
+            }
+        except Exception as e:
+            logger.error(f"热力地图失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _run_sched_maintenance(self) -> Dict:
