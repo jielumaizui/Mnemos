@@ -955,16 +955,16 @@ class ConnectModule:
         removed = old_entities - new_entities
         added = new_entities - old_entities
 
-        for e1 in removed:
-            for e2 in old_entities:
-                if e1 != e2:
-                    self.relation_engine.decrement(e1, e2)
-
-        self.relation_engine.analyze_session(
-            page_path.stem[:40],
-            new_entities_by_type,
-            timestamp=_extract_page_timestamp(page_path),
-        )
+        # NOTE: RelationEngine 已停用 — 关系分析统一由 KnowledgeGraph 承担
+        # for e1 in removed:
+        #     for e2 in old_entities:
+        #         if e1 != e2:
+        #             self.relation_engine.decrement(e1, e2)
+        # self.relation_engine.analyze_session(
+        #     page_path.stem[:40],
+        #     new_entities_by_type,
+        #     timestamp=_extract_page_timestamp(page_path),
+        # )
         self._store_entities(page_path, new_entities)
 
         return {
@@ -1035,7 +1035,8 @@ def run_connect_cycle(dry_run: bool = False, db_path: str | Path | None = None) 
                 cwd = m.group(1).strip()
 
             entities = extractor.extract(text, cwd=cwd)
-            relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
+            # NOTE: RelationEngine 已停用 — 关系分析统一由 KnowledgeGraph 承担
+            # relation_engine.analyze_session(doc_name, entities, timestamp=_extract_page_timestamp(md_file))
 
             for category, items in entities.items():
                 for item in items:
