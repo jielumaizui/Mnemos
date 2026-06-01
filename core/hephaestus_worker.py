@@ -364,6 +364,15 @@ class HephaestusWorker:
             logger.error(f"[Hephaestus] 同步蒸馏失败 {session_id}: {e}")
             self._emit_progress(session_id, "failed", f"同步蒸馏失败: {e}")
             return False
+        finally:
+            # 清理 output_dir 中的占位符文件，避免 collect_completed 误报
+            output_path = self.output_dir / f"{session_id}.md"
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                    logger.debug(f"[Hephaestus] 已清理占位符: {output_path}")
+                except Exception:
+                    pass
 
     def collect_completed(self, max_files: int = None) -> int:
         """收集已完成的蒸馏结果并移入 Inbox。
