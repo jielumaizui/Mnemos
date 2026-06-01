@@ -767,6 +767,25 @@ def service_heartbeat(stop_event: threading.Event):
                     )
                 except Exception:
                     pass
+
+            # 每 12 小时（720 次心跳）运行评分器训练调度
+            if heartbeat_count % 720 == 0:
+                try:
+                    from core.scoring.training_scheduler import ScorerTrainingScheduler
+                    sched = ScorerTrainingScheduler()
+                    jobs = sched.on_hourly_tick()
+                    if jobs:
+                        logger.info(
+                            f"[评分调度] 触发 {len(jobs)} 个训练任务: "
+                            f"{', '.join(j.dimension for j in jobs)}"
+                        )
+                    cleanup = sched.on_daily_cleanup()
+                    if cleanup.get("cleaned"):
+                        logger.info(
+                            f"[评分调度] 清理 {cleanup.get('cleaned', 0)} 个过期任务"
+                        )
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"[心跳] 运行失败: {e}")
 

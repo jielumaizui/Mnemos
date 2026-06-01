@@ -108,6 +108,18 @@ class AdaptiveScorer:
         # 在线统计
         self._stats = DimensionStats()
 
+        # 贝叶斯融合（多信号源融合）
+        try:
+            from core.scoring.beta_bayesian import BetaBayesianFusion
+            self._bayesian_fusion = BetaBayesianFusion(
+                dimensions=list(self._cold_rules.keys())
+            )
+        except Exception:
+            self._bayesian_fusion = None
+
+        # 轻量 ML 模型（无 sklearn 依赖，并行训练）
+        self._lightweight_models: Dict[str, Any] = {}
+
         # EWMA 参数
         self._ewma_alpha = self.config.get("scoring.ewma_alpha", 0.1)
 
@@ -208,17 +220,50 @@ class AdaptiveScorer:
     # ==================== 评分流水线 ====================
 
     def _score_dimension(self, dimension: str, features: Dict) -> ScoreCard:
-        """单维度评分：规则先验 → ML似然 → 贝叶斯后验"""
+        """单维度评分：规则先验 → ML似然 → 贝叶斯后验（融合版）"""
         # 1. 规则先验
         rule_prior = self._rule_prior(dimension, features)
 
         # 2. ML 似然（COLD 阶段跳过）
         ml_likelihood = 0.5
+        lw_likelihood = 0.5
         if self._mode in ("warm", "hot"):
             ml_likelihood = self._ml_likelihood(dimension, features)
+            # 2b. 轻量 ML 似然（无 sklearn 依赖）
+            lw_model = self._lightweight_models.get(dimension)
+            if lw_model is not None:
+                try:
+                    vec = self._features_to_dict(features)
+                    proba = lw_model.predict_proba([vec])[0]
+                    lw_likelihood = float(proba.get(1, 0.5))
+                except Exception:
+                    pass
 
-        # 3. 贝叶斯后验
-        posterior = self._bayesian_update(rule_prior, ml_likelihood)
+        # 3. 贝叶斯后验（多信号融合）
+        stats_dim = f"{dimension}.value"
+        stats_mean = 0.5
+        stats_std = 0.2
+        try:
+            dim_stat = self._stats._stats.get(stats_dim)
+            if dim_stat:
+                stats_mean = dim_stat.mean()
+                stats_std = max(0.01, dim_stat.std())
+        except Exception:
+            pass
+
+        if self._bayesian_fusion is not None:
+            try:
+                posterior = self._bayesian_fusion.fuse(
+                    rule_prior=rule_prior,
+                    ml_likelihood=ml_likelihood,
+                    stats_mean=stats_mean,
+                    stats_std=stats_std,
+                    dimension=dimension,
+                )
+            except Exception:
+                posterior = self._bayesian_update(rule_prior, ml_likelihood)
+        else:
+            posterior = self._bayesian_update(rule_prior, ml_likelihood)
 
         # 4. 确定置信度
         confidence = self._compute_confidence(dimension)
@@ -367,6 +412,26 @@ class AdaptiveScorer:
 
         return features
 
+    def _features_to_dict(self, features: Dict) -> Dict[str, float]:
+        """将特征字典转为标准化字典（用于 LightweightComplementNB）"""
+        return {
+            "length": float(features.get("length", 0)),
+            "has_code": float(features.get("has_code", 0)),
+            "has_questions": float(features.get("has_questions", 0)),
+            "has_list": float(features.get("has_list", 0)),
+            "has_heading": float(features.get("has_heading", 0)),
+            "has_url": float(features.get("has_url", 0)),
+            "has_file_path": float(features.get("has_file_path", 0)),
+            "has_mention": float(features.get("has_mention", 0)),
+            "code_block_count": float(features.get("code_block_count", 0)),
+            "url_count": float(features.get("url_count", 0)),
+            "list_item_count": float(features.get("list_item_count", 0)),
+            "has_chinese": float(features.get("has_chinese", 0)),
+            "has_english": float(features.get("has_english", 0)),
+            "hour_of_day": float(features.get("hour_of_day", 0)),
+            "day_of_week": float(features.get("day_of_week", 0)),
+        }
+
     def _features_to_vector(self, features: Dict) -> Optional[np.ndarray]:
         """将特征字典转为向量（ColumnTransformer 风格）"""
         try:
@@ -453,7 +518,31 @@ class AdaptiveScorer:
         self._retrain_buffer.clear()
 
     def _retrain_dimension(self, dimension: str, records: List[Dict]) -> None:
-        """重训练指定维度的模型"""
+        """重训练指定维度的模型（sklearn + 轻量模型并行）"""
+        # ── 1. 轻量模型训练（无 sklearn 依赖）─────────────────────────
+        try:
+            from core.scoring.lightweight_nb import LightweightComplementNB
+
+            X_dicts = []
+            y_list = []
+            for r in records:
+                feat_dict = self._features_to_dict(r["features"])
+                if feat_dict:
+                    X_dicts.append(feat_dict)
+                    label = 1 if r["label"] >= 0.5 else 0
+                    y_list.append(label)
+
+            if len(X_dicts) >= 5:
+                lw_model = LightweightComplementNB()
+                lw_model.fit(X_dicts, y_list)
+                self._lightweight_models[dimension] = lw_model
+                logger.debug(
+                    f"[AdaptiveScorer] 轻量模型训练 {dimension}: {len(X_dicts)} 样本"
+                )
+        except Exception as e:
+            logger.debug(f"[AdaptiveScorer] 轻量模型训练失败 {dimension}: {e}")
+
+        # ── 2. sklearn 模型训练 ──────────────────────────────────────
         try:
             from sklearn.naive_bayes import ComplementNB
 
@@ -463,7 +552,6 @@ class AdaptiveScorer:
                 X = self._features_to_vector(r["features"])
                 if X is not None:
                     X_list.append(X[0])
-                    # ADR-016 修复：用 rule_prior 作为标签，不用 posterior
                     label = 1 if r["label"] >= 0.5 else 0
                     y_list.append(label)
 
@@ -657,7 +745,7 @@ class AdaptiveScorer:
         return self._mode
 
     def get_status(self) -> Dict:
-        """获取评分器状态"""
+        """获取评分器状态（含 OnlineStats 统计）"""
         # 扫描磁盘上的模型版本
         versions = []
         try:
@@ -675,6 +763,22 @@ class AdaptiveScorer:
         except Exception:
             pass
 
+        # 在线统计详情
+        stats_detail = {}
+        try:
+            for dim_name in self._stats.dimensions:
+                dim_stat = self._stats._stats.get(dim_name)
+                if dim_stat and dim_stat.n() > 0:
+                    stats_detail[dim_name] = {
+                        "n": dim_stat.n(),
+                        "mean": round(dim_stat.mean(), 4),
+                        "std": round(dim_stat.std(), 4),
+                        "min": round(dim_stat.min(), 4),
+                        "max": round(dim_stat.max(), 4),
+                    }
+        except Exception:
+            pass
+
         return {
             "domain": self.domain,
             "mode": self._mode,
@@ -684,6 +788,9 @@ class AdaptiveScorer:
             "retrain_threshold": self._retrain_buffer_size,
             "min_samples_per_dim": self.config.get("scoring.min_samples_per_dimension", 12),
             "stats_dimensions": self._stats.dimensions,
+            "stats_detail": stats_detail,
+            "lightweight_models": list(self._lightweight_models.keys()),
+            "bayesian_fusion": self._bayesian_fusion is not None,
             "model_dir": str(self._model_dir),
             "versions_on_disk": versions,
             "current_version": self._model_version if versions else None,

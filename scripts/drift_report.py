@@ -91,6 +91,50 @@ def _build_pie_data(records: List[Dict]) -> List[Dict]:
     return [{"name": k, "value": v} for k, v in sorted(counts.items(), key=lambda x: -x[1])]
 
 
+def _run_clustering(records: List[Dict]) -> Dict:
+    """对 ground_truth 信号进行聚类分析"""
+    if len(records) < 10:
+        return {"clusters": 0, "keywords": [], "outliers": []}
+    try:
+        from core.scoring.clustering_engine import ClusteringEngine
+        # 用 signal_type + signal_value 拼接作为文本
+        texts = [
+            f"{r.get('signal_type', '')} {r.get('signal_value', '')}"
+            for r in records
+        ]
+        engine = ClusteringEngine(domain="distill")
+        labels = engine.fit(texts, algorithm="kmeans", n_clusters=min(4, len(texts) // 3))
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        keywords = []
+        for cid in range(n_clusters):
+            kw = engine.get_cluster_keywords(cid, top_k=5)
+            keywords.append({"cluster": cid, "keywords": kw})
+        outliers = engine.detect_outliers()
+        return {
+            "clusters": n_clusters,
+            "keywords": keywords,
+            "outliers": len(outliers),
+        }
+    except Exception:
+        return {"clusters": 0, "keywords": [], "outliers": []}
+
+
+def _build_cluster_html(clustering: Dict) -> str:
+    """构建聚类分析 HTML"""
+    if clustering.get("clusters", 0) == 0:
+        return '<p style="color:#888;">数据不足（需 ≥10 条），暂无法聚类。</p>'
+    lines = [
+        f'<p>发现 <strong>{clustering["clusters"]}</strong> 个聚类，'
+        f'异常值 <strong>{clustering.get("outliers", 0)}</strong> 个</p>',
+        '<table><tr><th>聚类</th><th>关键词</th></tr>',
+    ]
+    for item in clustering.get("keywords", []):
+        kw = ", ".join(item.get("keywords", []))
+        lines.append(f'<tr><td>Cluster {item["cluster"]}</td><td>{kw}</td></tr>')
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
 def _build_gauge_data(status: Dict) -> List[Dict]:
     """构建仪表盘数据"""
     buffer = status.get("retrain_buffer_size", 0)
@@ -292,6 +336,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             __RECENT_ROWS__
         </table>
     </div>
+
+    <div class="card">
+        <h2>🔬 聚类分析 (ClusteringEngine)</h2>
+        __CLUSTER_INFO__
+    </div>
 </div>
 
 <script>
@@ -369,6 +418,7 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
     time_series = _build_time_series(records)
     pie_data = _build_pie_data(records)
     gauge_data = _build_gauge_data(status)
+    clustering = _run_clustering(records)
 
     # 处理空状态默认值
     mode = status.get("mode", "cold")
@@ -401,6 +451,7 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
         .replace("__TS_DAYS__", json.dumps(time_series["days"]))
         .replace("__TS_SERIES__", json.dumps(time_series["series"]))
         .replace("__PIE_DATA__", json.dumps(pie_data))
+        .replace("__CLUSTER_INFO__", _build_cluster_html(clustering))
     )
 
     output_path.write_text(html, encoding="utf-8")
