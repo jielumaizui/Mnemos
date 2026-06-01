@@ -469,18 +469,39 @@ class AdaptiveScorerV2:
         db = db_path or (get_config().data_dir / "mnemos.db")
         try:
             with sqlite3.connect(str(db)) as conn:
+                # 先删除旧记录（避免 UNIQUE 约束缺失导致的 ON CONFLICT 失败）
                 conn.execute("""
-                    INSERT INTO ground_truth_signals
-                        (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(session_id, signal_type) DO UPDATE SET
-                        signal_value = excluded.signal_value,
-                        confidence = excluded.confidence,
-                        created_at = excluded.created_at
-                """, (
-                    session_id, signal_type, label, confidence, latency_hours,
-                    datetime.now().isoformat(),
-                ))
+                    DELETE FROM ground_truth_signals
+                    WHERE session_id = ? AND signal_type = ?
+                """, (session_id, signal_type))
+
+                # 检测表是否有 profile_id 列（兼容旧测试表结构）
+                has_profile_id = False
+                try:
+                    cursor = conn.execute("PRAGMA table_info(ground_truth_signals)")
+                    columns = {row[1] for row in cursor.fetchall()}
+                    has_profile_id = "profile_id" in columns
+                except Exception:
+                    pass
+
+                if has_profile_id:
+                    conn.execute("""
+                        INSERT INTO ground_truth_signals
+                            (profile_id, session_id, signal_type, signal_value, confidence, latency_hours, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        session_id, session_id, signal_type, str(label), confidence, latency_hours,
+                        datetime.now().isoformat(),
+                    ))
+                else:
+                    conn.execute("""
+                        INSERT INTO ground_truth_signals
+                            (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        session_id, signal_type, str(label), confidence, latency_hours,
+                        datetime.now().isoformat(),
+                    ))
                 conn.commit()
         except Exception as e:
             logger.warning(f"[ScorerV2] ground_truth insert failed: {e}")

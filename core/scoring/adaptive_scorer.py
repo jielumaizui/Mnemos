@@ -79,8 +79,8 @@ class AdaptiveScorer:
     # 模式：COLD → WARM → HOT
     _SAMPLE_THRESHOLDS = {
         "cold": 0,      # 无训练样本
-        "warm": 20,     # ≥20 样本进入 WARM
-        "hot": 100,     # ≥100 样本进入 HOT
+        "warm": 15,     # ≥15 样本进入 WARM
+        "hot": 50,      # ≥50 样本进入 HOT
     }
 
     def __init__(
@@ -658,11 +658,33 @@ class AdaptiveScorer:
 
     def get_status(self) -> Dict:
         """获取评分器状态"""
+        # 扫描磁盘上的模型版本
+        versions = []
+        try:
+            if self._model_dir.exists():
+                for vdir in sorted(self._model_dir.glob("v*")):
+                    meta_path = vdir / "meta.json"
+                    if meta_path.exists():
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        versions.append({
+                            "version": meta.get("version"),
+                            "timestamp": meta.get("timestamp"),
+                            "dimensions": meta.get("dimensions", []),
+                            "mode": meta.get("mode"),
+                        })
+        except Exception:
+            pass
+
         return {
             "domain": self.domain,
             "mode": self._mode,
             "model_version": self._model_version,
             "dimensions": list(self._models.keys()) or list(self._cold_rules.keys()),
             "retrain_buffer_size": len(self._retrain_buffer),
+            "retrain_threshold": self._retrain_buffer_size,
+            "min_samples_per_dim": self.config.get("scoring.min_samples_per_dimension", 12),
             "stats_dimensions": self._stats.dimensions,
+            "model_dir": str(self._model_dir),
+            "versions_on_disk": versions,
+            "current_version": self._model_version if versions else None,
         }

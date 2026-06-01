@@ -55,10 +55,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # === 评分层常量 ===
     "scoring": {
-        "retrain_buffer": 100,
+        "retrain_buffer": 40,
         "retrain_interval_seconds": 3600,
         "ewma_alpha": 0.1,
-        "min_samples_per_dimension": 20,
+        "min_samples_per_dimension": 12,
         "model_version_keep": 5,
         "feedback_fatigue_max_daily": 3,
         "feedback_fatigue_min_interval_minutes": 30,
@@ -66,13 +66,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # === 蒸馏层常量 ===
     "distill": {
-        # 自动蒸馏策略: api | kimi | claude | generic
-        #   api:     使用配置的外部 API（全自动）
-        #   kimi:    利用 Kimi CLI --print（需 Kimi Coding Plan）
-        #   claude:  占位符模式（下次开 Claude 时提醒）
-        #   generic: 手动模式（需要时运行 mnemos distill）
-        "strategy": "generic",
-        "auto_enabled": False,
         "trigger_threshold": 0.4,
         "similarity_dedup_threshold": 0.85,
         "single_threshold": 0.30,
@@ -495,7 +488,7 @@ class Config:
                     agents = json.load(f)
                 return agents.get(agent_name, {})
             except Exception:
-                logger.warning("Unexpected error in config.py", exc_info=True)
+                logger.warning(f"Unexpected error in config.py", exc_info=True)
                 pass
         return {}
 

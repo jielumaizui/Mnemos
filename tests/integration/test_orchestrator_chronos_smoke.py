@@ -34,7 +34,7 @@ class TestOrchestratorSmoke:
         try:
             from core.kia.eris import EntropyEngine
             monkeypatch.setattr(
-                EntropyEngine, "scan", lambda self, pages=None: [],
+                EntropyEngine, "scan", lambda self, **kwargs: [],
             )
         except Exception:
             pass
@@ -185,10 +185,10 @@ class TestOrchestratorSmoke:
         assert "timestamp" in result
         assert "results" in result
         assert "errors" in result
-        # 15 个阶段都应返回 dict（即使内部出错也是 dict）
+        # 12 个阶段都应返回 dict（即使内部出错也是 dict）
         for key in ["distill", "dna", "graph", "immune", "entropy",
-                    "stress", "falsify", "dark", "entangle",
-                    "shadow", "capsule", "snapshot", "push", "profile"]:
+                    "stress", "falsify", "shadow", "capsule",
+                    "snapshot", "push", "profile"]:
             assert key in result["results"], f"{key} 阶段缺失"
             assert isinstance(result["results"][key], dict)
 

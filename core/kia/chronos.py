@@ -305,9 +305,21 @@ class KnowledgeScheduler:
             timeout=300,
         ))
         self.register(ScheduledStep(
+            name="graph_build",
+            func=lambda: self._run_graph_build(wiki_base),
+            trigger=CronTrigger("30 3 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
             name="entropy_engine",
             func=lambda: self._run_kia_module("eris", "EntropyEngine", "scan", wiki_base=wiki_base),
             trigger=CronTrigger("0 4 * * *"),
+            timeout=300,
+        ))
+        self.register(ScheduledStep(
+            name="falsify_mark",
+            func=lambda: self._run_falsify_mark(wiki_base),
+            trigger=CronTrigger("30 4 * * *"),
             timeout=300,
         ))
         self.register(ScheduledStep(
@@ -321,6 +333,12 @@ class KnowledgeScheduler:
             func=lambda: self._run_kia_module("aion", "TimeCapsule", "scan_for_auto_reminders", wiki_base=wiki_base),
             trigger=CronTrigger("0 * * * *"),
             timeout=60,
+        ))
+        self.register(ScheduledStep(
+            name="version_snapshot",
+            func=lambda: self._run_kia_module("ananke", "VersionTimeTravel", "scan_and_snapshot_all", wiki_base=wiki_base),
+            trigger=CronTrigger("0 6 * * *"),
+            timeout=300,
         ))
         # TODO: dark_knowledge 原由 erebus 模块执行，该模块已按蓝图合并到知识图谱。
         # 如需恢复周度盲区扫描，请注册 hygieia.detect_knowledge_gaps 或 knowledge_graph 关系发现。
@@ -450,6 +468,61 @@ class KnowledgeScheduler:
             return {"status": "ok", "result": str(result)}
         except Exception as e:
             logger.error(f"KIA 模块执行失败 {module_name}.{class_name}.{method_name}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_graph_build(self, wiki_base: str) -> Dict:
+        """知识图谱关系构建：遍历 wiki 页面发现新关系"""
+        try:
+            from core.kia.knowledge_graph import KnowledgeGraph
+            kg = KnowledgeGraph(wiki_base=wiki_base)
+            wiki_path = Path(wiki_base)
+            pages = []
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                pages.append(p)
+            added = 0
+            for page in pages[:100]:
+                try:
+                    for rel in kg.discover_relations(page):
+                        if kg.add_relation(rel):
+                            added += 1
+                except Exception:
+                    continue
+            return {"status": "ok", "relations_added": added}
+        except Exception as e:
+            logger.error(f"图谱构建失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_falsify_mark(self, wiki_base: str) -> Dict:
+        """可证伪性标记：为 wiki 页面初始化 falsifiability mark"""
+        try:
+            from core.kia.aporia import FalsifiabilityMarker
+            marker = FalsifiabilityMarker(wiki_base=wiki_base)
+            wiki_path = Path(wiki_base)
+            pages = []
+            for p in wiki_path.rglob("*.md"):
+                rel = p.relative_to(wiki_path)
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
+                if p.name.endswith(".shadow.md"):
+                    continue
+                pages.append(p)
+            created = 0
+            for page in pages[:100]:
+                try:
+                    if marker.get_mark(str(page)) is None:
+                        if marker.init_mark_for_page(page):
+                            created += 1
+                except Exception:
+                    continue
+            to_test = marker.scan_all_marks()
+            return {"status": "ok", "marks_created": created, "pending_tests": len(to_test)}
+        except Exception as e:
+            logger.error(f"可证伪性标记失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _run_sched_maintenance(self) -> Dict:

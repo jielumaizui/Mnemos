@@ -129,6 +129,24 @@ class Orchestrator:
 
     # ========== 阶段 3: 知识图谱 ==========
 
+    def _collect_source_pages(self) -> List[Path]:
+        """收集待扫描页面：优先 inbox，空时回退 wiki 全量（排除隐藏目录）。"""
+        if self.inbox.exists():
+            inbox_pages = list(self.inbox.glob("*.md"))
+            if inbox_pages:
+                return inbox_pages[:self.limit] if self.limit else inbox_pages
+        # 回退到 wiki 全量
+        pages = []
+        for p in self.wiki_base.rglob("*.md"):
+            rel = p.relative_to(self.wiki_base)
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            if p.name.endswith(".shadow.md"):
+                continue
+            pages.append(p)
+        limit = self.limit or 100
+        return pages[:limit]
+
     def run_graph(self) -> Dict:
         """构建知识图谱关系"""
         self.log("阶段 3: 知识图谱关系构建")
@@ -136,12 +154,9 @@ class Orchestrator:
             from core.kia.knowledge_graph import KnowledgeGraph, Relation, RelationType
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
 
-            if not self.inbox.exists():
-                return {"status": "ok", "relations_added": 0}
-
-            pages = list(self.inbox.glob("*.md"))
-            if self.limit:
-                pages = pages[:self.limit]
+            pages = self._collect_source_pages()
+            if not pages:
+                return {"status": "ok", "relations_added": 0, "note": "无页面可扫描"}
 
             added = 0
             for page in pages:
@@ -254,12 +269,9 @@ class Orchestrator:
             from core.kia.aporia import FalsifiabilityMarker
             marker = FalsifiabilityMarker(wiki_base=str(self.wiki_base))
 
-            if not self.inbox.exists():
-                return {"status": "ok", "marks_created": 0}
-
-            pages = list(self.inbox.glob("*.md"))
-            if self.limit:
-                pages = pages[:self.limit]
+            pages = self._collect_source_pages()
+            if not pages:
+                return {"status": "ok", "marks_created": 0, "note": "无页面可扫描"}
 
             created = 0
             for page in pages:
@@ -343,12 +355,9 @@ class Orchestrator:
             from core.kia.hecate import ShadowPageManager
             spm = ShadowPageManager(wiki_base=str(self.wiki_base))
 
-            if not self.inbox.exists():
-                return {"status": "ok", "updated": 0}
-
-            pages = list(self.inbox.glob("*.md"))
-            if self.limit:
-                pages = pages[:self.limit]
+            pages = self._collect_source_pages()
+            if not pages:
+                return {"status": "ok", "updated": 0, "note": "无页面可扫描"}
 
             updated = 0
             for page in pages:
@@ -485,10 +494,6 @@ class Orchestrator:
         results["stress"] = self.run_stress()
         results["falsify"] = self.run_falsify()
 
-        # 洞察发现链
-        results["dark"] = self.run_dark()
-        results["entangle"] = self.run_entangle()
-
         # 外部联动链
         results["shadow"] = self.run_shadow()
         results["capsule"] = self.run_capsule()
@@ -533,8 +538,6 @@ class Orchestrator:
             "entropy": "熵减扫描",
             "stress": "压力测试",
             "falsify": "可证伪性",
-            "dark": "暗知识",
-            "entangle": "量子纠缠",
             "shadow": "影子页面",
             "capsule": "时间胶囊",
             "snapshot": "版本快照",
