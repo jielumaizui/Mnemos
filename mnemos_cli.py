@@ -888,6 +888,7 @@ def cmd_scorer(args):
         try:
             from core.kia.chronos import KnowledgeScheduler
             scheduler = KnowledgeScheduler()
+            scheduler.register_all_default_steps()
             steps = scheduler.get_step_status()
             print("KIA 调度步骤状态:")
             if not steps:

@@ -90,6 +90,18 @@ class MCPServer:
         wiki_dir = get_config().wiki_dir
         reader = WikiReader(wiki_dir)
         results = reader.search(query, limit=limit)
+        # 记录训练样本：用户搜索 → 正样本（kg 维度）
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            AdaptiveScorerV2.enqueue_training_sample(
+                session_id=f"search-{hash(query) & 0xFFFFFFFF}",
+                dimension="kg",
+                features={"query_length": len(query), "result_count": len(results), "tool": "wiki_search"},
+                expected_score=0.7 if results else 0.4,
+                source="wiki_search",
+            )
+        except Exception:
+            pass
         return {
             "success": True,
             "results": results,
@@ -103,6 +115,18 @@ class MCPServer:
         wiki_dir = get_config().wiki_dir
         reader = WikiReader(wiki_dir)
         content = reader.read_page(page_path)
+        # 记录训练样本：用户阅读页面 → 正样本（distill 维度）
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            AdaptiveScorerV2.enqueue_training_sample(
+                session_id=f"read-{hash(page_path) & 0xFFFFFFFF}",
+                dimension="distill",
+                features={"page_path": page_path, "content_length": len(content) if content else 0, "tool": "wiki_read"},
+                expected_score=0.6,
+                source="wiki_read",
+            )
+        except Exception:
+            pass
         return {
             "success": True,
             "content": content,
@@ -498,7 +522,8 @@ tags: [{', '.join(tags or ['file_import'])}]
         }
 
     def _tool_guard_check(self, user_message: str, ai_response: str = "",
-                          task_type: str = "", subtype: str = "") -> Dict:
+                          task_type: str = "", subtype: str = "",
+                          context: Dict = None) -> Dict:
         """
         KIA 闭环 - 执行中守护检查
 
@@ -543,7 +568,7 @@ tags: [{', '.join(tags or ['file_import'])}]
 
         # 2. 初始化 Guard 并检查
         guard = InProcessGuard(knowledge)
-        alert = guard.check(user_message, ai_response)
+        alert = guard.check(user_message, ai_response, context=context)
 
         if not alert:
             return {
@@ -552,10 +577,26 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "message": "无风险触发",
             }
 
+        # 记录训练样本：guard 触发警报 → 负样本（ops 维度，规则可能过度敏感）
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            AdaptiveScorerV2.enqueue_training_sample(
+                session_id=f"guard-{hash(user_message) & 0xFFFFFFFF}",
+                dimension="ops",
+                features={"triggered_by": alert.triggered_by, "level": alert.level.value, "tool": "guard_check"},
+                expected_score=0.2,
+                source="guard_check",
+            )
+        except Exception:
+            pass
+
+        level_val = alert.level.value
+        risk_level = "alert" if level_val == "interrupt" else "warn" if level_val == "hint" else "info"
         return {
             "success": True,
             "alert": True,
-            "level": alert.level.value,
+            "risk_level": risk_level,
+            "level": level_val,
             "triggered_by": alert.triggered_by,
             "trigger_text": alert.trigger_text,
             "suggestion": alert.suggestion,
@@ -1240,6 +1281,19 @@ tags: [{', '.join(tags or ['file_import'])}]
 
         search = ContextAwareSearch()
         results = search.search(query, context=context, limit=limit)
+        # 记录训练样本：用户执行上下文搜索 → 正样本（kg + profile 维度）
+        try:
+            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+            for dim in ("kg", "profile"):
+                AdaptiveScorerV2.enqueue_training_sample(
+                    session_id=f"ctx-search-{hash(query) & 0xFFFFFFFF}",
+                    dimension=dim,
+                    features={"query_length": len(query), "result_count": len(results), "has_working_dir": bool(working_dir), "tool": "context_aware_search"},
+                    expected_score=0.7 if results else 0.4,
+                    source="context_aware_search",
+                )
+        except Exception:
+            pass
 
         return {
             "success": True,

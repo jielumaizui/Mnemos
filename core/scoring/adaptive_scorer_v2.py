@@ -270,6 +270,48 @@ class AdaptiveScorerV2:
         self._insert_training_queue(fb)
         logger.debug(f"[ScorerV2] Feedback recorded for session={fb.session_id}")
 
+    @classmethod
+    def enqueue_training_sample(
+        cls,
+        session_id: str,
+        dimension: str,
+        features: Dict[str, Any],
+        expected_score: float,
+        source: str,
+        db_path: Optional[str] = None,
+    ) -> None:
+        """将真实用户行为样本写入 scorer_training_queue。
+
+        Args:
+            session_id: 会话/行为标识
+            dimension: 评分维度（distill/kg/sync/profile/ops/memos）
+            features: 特征字典
+            expected_score: 期望得分（0-1，越高表示越正向）
+            source: 样本来源标识
+            db_path: 数据库路径（默认 ~/.mnemos/mnemos.db）
+        """
+        db = Path(db_path) if db_path else (get_config().data_dir / "mnemos.db")
+        try:
+            with sqlite3.connect(str(db)) as conn:
+                conn.execute("""
+                    INSERT INTO scorer_training_queue
+                        (session_id, dimension, features_json, priority, earliest_train_at, status)
+                    VALUES (?, ?, ?, ?, ?, 'pending')
+                """, (
+                    session_id,
+                    dimension,
+                    json.dumps(features, ensure_ascii=False, default=str),
+                    int(max(0.0, min(1.0, expected_score)) * 10),
+                    (datetime.now() + timedelta(hours=0)).isoformat(),
+                ))
+                conn.commit()
+                logger.debug(
+                    f"[ScorerV2] Training sample enqueued: "
+                    f"session={session_id}, dim={dimension}, source={source}"
+                )
+        except Exception as e:
+            logger.warning(f"[ScorerV2] enqueue_training_sample failed: {e}")
+
     # ── 批量训练接口 ──
 
     def process_training_queue(self, dimension: Optional[str] = None) -> int:

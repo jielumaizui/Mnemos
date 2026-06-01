@@ -387,8 +387,8 @@ class TestSave(unittest.TestCase):
         url = self.mock_session.post.call_args[0][0]
         self.assertIn("/api/v1/memos", url)
 
-    def test_save_truncates_long_content(self):
-        """save 对超长内容自动截断"""
+    def test_save_chunks_long_content(self):
+        """save 对超长内容自动分片写入，不再截断"""
         resp = _make_response(200, {
             "name": "memos/uid-456",
             "content": "x",
@@ -400,8 +400,8 @@ class TestSave(unittest.TestCase):
         self.mock_session.post.return_value = resp
         long_text = "A" * 20000
         mem = self.client.save(long_text, tags=["t"])
-        # 被截断的 Memory 内容会带截断标记
-        self.assertIn("已截断", mem.content)
+        # 分片写入的 Memory 内容会带分片标记
+        self.assertIn("已分片写入", mem.content)
 
     def test_save_sanitizes_content(self):
         """save 自动脱敏"""
