@@ -31,36 +31,42 @@ from core.config import get_config
 
 
 def check_process(name: str, pattern: str) -> Dict:
-    """检查进程是否存在"""
+    """检查进程是否存在（过滤编辑器误匹配）"""
     try:
         result = subprocess.run(
-            ["pgrep", "-f", pattern],
+            ["pgrep", "-af", pattern],
             capture_output=True,
             text=True,
         )
-        pids = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        lines = [ln.strip() for ln in result.stdout.strip().split("\n") if ln.strip()]
+        # 排除编辑器/搜索工具的误匹配
+        excluded = {"vi ", "vim ", "nvim ", "code ", "cursor ", "grep ", "rg ", "cat ", "less ", "more "}
+        valid = []
+        for ln in lines:
+            if any(ln.lower().startswith(ex) for ex in excluded):
+                continue
+            parts = ln.split(None, 1)
+            if parts:
+                valid.append(int(parts[0]))
         return {
             "name": name,
-            "running": len(pids) > 0,
-            "pids": [int(p) for p in pids if p],
+            "running": len(valid) > 0,
+            "pids": valid,
         }
     except Exception as e:
         return {"name": name, "running": False, "error": str(e)}
 
 
 def check_memos_api() -> Dict:
-    """检查 Memos API 是否可达"""
-    import urllib.request
-    cfg = get_config()
-    url = cfg.memos_api_url or "http://localhost:5230"
+    """检查 Memos API 是否可达（使用统一诊断层）"""
     try:
-        req = urllib.request.Request(
-            f"{url}/api/v1/memos?limit=1",
-            headers={"Authorization": f"Bearer {cfg.memos_token}"},
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return {"reachable": True, "status_code": resp.status}
+        from core.diagnostics import ConnectionDiagnostics
+        status = ConnectionDiagnostics.check_memos()
+        return {
+            "reachable": status.reachable is True,
+            "configured": status.configured,
+            "error": status.error,
+        }
     except Exception as e:
         return {"reachable": False, "error": str(e)}
 

@@ -1647,12 +1647,9 @@ class DistillationEngine:
             try:
                 from core.mnemos_bus import publish_event
                 for frag in result.fragments:
-                    publish_event("knowledge_distilled", "distill", {
-                        "fragment_id": f"{session_id}_{frag.form}",
-                        "form": frag.form,
-                        "title": frag.title,
-                        "session_id": session_id,
-                    })
+                    # NOTE: knowledge_distilled 事件改在 write_pages() 后由 distill_and_write() 统一发射
+                    # 以确保 payload 包含完整的 wiki_pages 和 kg_input
+                    pass
             except Exception:
                 logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
                 pass
@@ -1814,4 +1811,32 @@ def distill_and_write(session_id: str, messages: List[Dict],
     engine = DistillationEngine(wiki_base=wiki_base)
     result = engine.process(session_id, messages)
     written = engine.write_pages(result)
+
+    # 发射 knowledge_distilled 事件（带上完整 wiki_pages 和 kg_input）
+    if written and result.fragments:
+        try:
+            from core.mnemos_bus import publish_event
+            entities = []
+            relations = []
+            for frag in result.fragments:
+                entities.extend(frag.keywords or [])
+                entities.extend(frag.related_concepts or [])
+                for link in frag.cross_agent_links or []:
+                    relations.append({
+                        "source": frag.title,
+                        "target": link,
+                        "type": "related_to",
+                        "confidence": 0.5,
+                    })
+            publish_event("knowledge_distilled", "distill", {
+                "session_id": session_id,
+                "wiki_pages": written,
+                "kg_input": {
+                    "entities": list(set(entities)),
+                    "relations": relations,
+                },
+            })
+        except Exception:
+            logging.getLogger(__name__).warning(f"knowledge_distilled event emit failed", exc_info=True)
+
     return result, written

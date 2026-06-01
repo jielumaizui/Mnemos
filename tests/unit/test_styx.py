@@ -664,16 +664,30 @@ class TestListByTags(unittest.TestCase):
         self.assertEqual(result[0].uid, "uid-1")
 
     def test_deduplicates_by_uid(self):
-        """相同 UID 去重"""
+        """相同 UID 去重（记录必须同时包含所有查询标签）"""
         self.mock_session.get.return_value = _make_response(200, {
             "memos": [
-                {"name": "memos/uid-1", "content": "a", "tags": ["t1"], "visibility": "PRIVATE"},
-                {"name": "memos/uid-1", "content": "b", "tags": ["t2"], "visibility": "PRIVATE"},
+                {"name": "memos/uid-1", "content": "a", "tags": ["t1", "t2"], "visibility": "PRIVATE"},
+                {"name": "memos/uid-1", "content": "b", "tags": ["t1", "t2"], "visibility": "PRIVATE"},
             ],
             "nextPageToken": None,
         })
         result = self.client.list_by_tags(["t1", "t2"])
         self.assertEqual(len(result), 1)
+
+    def test_all_tags_must_match(self):
+        """多标签查询要求所有标签同时存在"""
+        self.mock_session.get.return_value = _make_response(200, {
+            "memos": [
+                {"name": "memos/uid-a", "content": "a", "tags": ["t1"], "visibility": "PRIVATE"},
+                {"name": "memos/uid-b", "content": "b", "tags": ["t1", "t2"], "visibility": "PRIVATE"},
+                {"name": "memos/uid-c", "content": "c", "tags": ["t2"], "visibility": "PRIVATE"},
+            ],
+            "nextPageToken": None,
+        })
+        result = self.client.list_by_tags(["t1", "t2"])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].uid, "uid-b")
 
 
 class TestGetByUid(unittest.TestCase):
