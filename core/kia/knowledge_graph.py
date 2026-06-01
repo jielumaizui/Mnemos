@@ -132,6 +132,12 @@ CREATE TABLE IF NOT EXISTS relation_stats (
     hub_score REAL DEFAULT 0.0,
     last_calculated TEXT
 );
+
+-- FTS5 全文索引（加速关系搜索）
+CREATE VIRTUAL TABLE IF NOT EXISTS relations_fts USING fts5(
+    content,
+    content_rowid=rowid
+);
 """
 
 
@@ -232,6 +238,13 @@ class KnowledgeGraph:
                 )
                 rel_id = cursor.lastrowid
 
+                # 同步 FTS5 索引
+                fts_text = f"{relation.source} {relation.target} {relation.relation_type.value}"
+                conn.execute(
+                    "INSERT INTO relations_fts(rowid, content) VALUES (?, ?)",
+                    (rel_id, fts_text)
+                )
+
                 # 插入证据
                 for ev in (relation.evidence or []):
                     conn.execute(
@@ -242,13 +255,19 @@ class KnowledgeGraph:
 
                 # 对称关系：自动添加反向
                 if relation.is_symmetric and relation.source != relation.target:
-                    conn.execute(
+                    cursor = conn.execute(
                         """INSERT OR REPLACE INTO relations
                            (source, target, relation_type, strength, confidence, source_method, updated_at)
                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
                         (relation.target, relation.source, relation.relation_type.value,
                          relation.strength, relation.confidence, relation.source_method,
                          datetime.now(timezone.utc).isoformat()[:19])
+                    )
+                    # 同步 FTS5 索引
+                    fts_text = f"{relation.target} {relation.source} {relation.relation_type.value}"
+                    conn.execute(
+                        "INSERT INTO relations_fts(rowid, content) VALUES (?, ?)",
+                        (cursor.lastrowid, fts_text)
                     )
 
                 conn.commit()
@@ -258,10 +277,18 @@ class KnowledgeGraph:
 
     def remove_relation(self, source: str, target: str,
                         relation_type: RelationType = None) -> bool:
-        """删除关系"""
+        """删除关系（同步清理 FTS5 索引）"""
         try:
             with self._conn() as conn:
                 if relation_type:
+                    # 先查 rowid 再删，确保 FTS5 同步
+                    rows = conn.execute(
+                        "SELECT id FROM relations WHERE source=? AND target=? AND relation_type=?",
+                        (source, target, relation_type.value)
+                    ).fetchall()
+                    for row in rows:
+                        conn.execute("DELETE FROM relations_fts WHERE rowid=?", (row[0],))
+
                     conn.execute(
                         "DELETE FROM relations WHERE source=? AND target=? AND relation_type=?",
                         (source, target, relation_type.value)
@@ -269,11 +296,23 @@ class KnowledgeGraph:
                     # 对称关系同时删反向
                     meta = RELATION_META.get(relation_type, {})
                     if meta.get("symmetric"):
+                        rows = conn.execute(
+                            "SELECT id FROM relations WHERE source=? AND target=? AND relation_type=?",
+                            (target, source, relation_type.value)
+                        ).fetchall()
+                        for row in rows:
+                            conn.execute("DELETE FROM relations_fts WHERE rowid=?", (row[0],))
                         conn.execute(
                             "DELETE FROM relations WHERE source=? AND target=? AND relation_type=?",
                             (target, source, relation_type.value)
                         )
                 else:
+                    rows = conn.execute(
+                        "SELECT id FROM relations WHERE source=? AND target=?",
+                        (source, target)
+                    ).fetchall()
+                    for row in rows:
+                        conn.execute("DELETE FROM relations_fts WHERE rowid=?", (row[0],))
                     conn.execute(
                         "DELETE FROM relations WHERE source=? AND target=?",
                         (source, target)
@@ -755,24 +794,39 @@ WHERE file.path = "{page}"
 
         results_map: Dict[str, Dict] = {}
 
-        # 1. 从关系数据库召回
+        # 1. 从关系数据库召回（优先 FTS5，回退 LIKE）
         try:
             with self._conn() as conn:
-                conditions = []
-                params = []
-                for kw in keywords:
-                    like = f"%{kw}%"
-                    conditions.extend([
-                        "source LIKE ?", "target LIKE ?", "relation_type LIKE ?"
-                    ])
-                    params.extend([like, like, like])
+                # 尝试 FTS5 MATCH
+                fts_query = " OR ".join(keywords)
+                try:
+                    rows = conn.execute(
+                        """SELECT r.source, r.target, r.relation_type, r.strength, r.confidence
+                           FROM relations_fts fts
+                           JOIN relations r ON fts.rowid = r.id
+                           WHERE fts.content MATCH ?""",
+                        (fts_query,)
+                    ).fetchall()
+                except sqlite3.Error:
+                    rows = []
 
-                where = " OR ".join(conditions)
-                rows = conn.execute(
-                    f"""SELECT source, target, relation_type, strength, confidence
-                        FROM relations WHERE {where}""",
-                    params
-                ).fetchall()
+                # FTS5 无结果时回退到 LIKE
+                if not rows:
+                    conditions = []
+                    params = []
+                    for kw in keywords:
+                        like = f"%{kw}%"
+                        conditions.extend([
+                            "source LIKE ?", "target LIKE ?", "relation_type LIKE ?"
+                        ])
+                        params.extend([like, like, like])
+
+                    where = " OR ".join(conditions)
+                    rows = conn.execute(
+                        f"""SELECT source, target, relation_type, strength, confidence
+                            FROM relations WHERE {where}""",
+                        params
+                    ).fetchall()
 
                 for row in rows:
                     for col in ("source", "target"):

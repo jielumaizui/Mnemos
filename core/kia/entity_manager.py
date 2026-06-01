@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 def _get_db_path() -> Path:
-    return Path.home() / ".mnemos" / "wiki_state.db"
+    # 统一存储到 knowledge_graph.db，与 RelationManager / KnowledgeGraph 共享
+    from core.config import get_config
+    return Path(get_config().data_dir) / "knowledge_graph.db"
 
 
 @dataclass
