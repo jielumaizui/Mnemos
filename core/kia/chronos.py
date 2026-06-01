@@ -386,6 +386,12 @@ class KnowledgeScheduler:
             trigger=CronTrigger("0 9 * * *"),
             timeout=600,
         ))
+        self.register(ScheduledStep(
+            name="knowledge_evolution",
+            func=lambda: self._run_knowledge_evolution(wiki_base),
+            trigger=CronTrigger("0 11 * * *"),
+            timeout=300,
+        ))
 
         # --- 事件触发步骤（注册但不参与 tick） ---
         self.register(ScheduledStep(
@@ -874,6 +880,31 @@ class KnowledgeScheduler:
             }
         except Exception as e:
             logger.error(f"连接Worker失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_knowledge_evolution(self, wiki_base: str) -> Dict:
+        """知识演化：扫描 wiki 版本并生成演化报告 + 新鲜度检查"""
+        try:
+            from core.kia.proteus import IterationTracker, KnowledgeFreshnessChecker
+
+            # 1. 生成演化报告
+            tracker = IterationTracker(wiki_base=wiki_base)
+            report = tracker.scan_and_report(wiki_base)
+
+            # 2. 新鲜度全库扫描
+            checker = KnowledgeFreshnessChecker()
+            alerts = checker.scan_all(wiki_base)
+            if alerts:
+                logger.info(f"[知识演化] 发现 {len(alerts)} 条过期知识")
+
+            return {
+                "status": "ok",
+                "reports": report.get("reports", 0),
+                "topics": report.get("topics", []),
+                "freshness_alerts": len(alerts),
+            }
+        except Exception as e:
+            logger.error(f"知识演化失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _trigger_page_created(self, payload: Dict) -> Dict:
