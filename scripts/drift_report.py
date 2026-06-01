@@ -119,6 +119,32 @@ def _run_clustering(records: List[Dict]) -> Dict:
         return {"clusters": 0, "keywords": [], "outliers": []}
 
 
+def _build_qa_summary(records: List[Dict]) -> str:
+    """使用 QuestionAnswerSearch 对高频信号类型生成问答摘要"""
+    if len(records) < 5:
+        return '<p style="color:#888;">数据不足，暂无法生成问答摘要。</p>'
+    try:
+        from core.app.question_answer_search import QuestionAnswerSearch
+        from core.config import get_config
+        qa = QuestionAnswerSearch(wiki_dir=get_config().wiki_dir)
+        # 取最常见的信号类型
+        counts: Dict[str, int] = {}
+        for r in records:
+            st = r.get("signal_type", "unknown")
+            counts[st] = counts.get(st, 0) + 1
+        top_type = max(counts, key=counts.get)
+        question = f"什么是 {top_type} 信号？它代表什么含义？"
+        answer = qa.answer(question)
+        if answer:
+            return (
+                f'<p><strong>Q: {question}</strong></p>'
+                f'<p style="color:#555;">A: {answer.get("answer", "")[:200]}...</p>'
+            )
+    except Exception:
+        pass
+    return '<p style="color:#888;">问答摘要生成失败。</p>'
+
+
 def _build_cluster_html(clustering: Dict) -> str:
     """构建聚类分析 HTML"""
     if clustering.get("clusters", 0) == 0:
@@ -341,6 +367,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <h2>🔬 聚类分析 (ClusteringEngine)</h2>
         __CLUSTER_INFO__
     </div>
+
+    <div class="card">
+        <h2>❓ 问答摘要 (QuestionAnswerSearch)</h2>
+        __QA_SUMMARY__
+    </div>
 </div>
 
 <script>
@@ -452,6 +483,7 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
         .replace("__TS_SERIES__", json.dumps(time_series["series"]))
         .replace("__PIE_DATA__", json.dumps(pie_data))
         .replace("__CLUSTER_INFO__", _build_cluster_html(clustering))
+        .replace("__QA_SUMMARY__", _build_qa_summary(records))
     )
 
     output_path.write_text(html, encoding="utf-8")

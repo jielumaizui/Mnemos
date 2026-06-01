@@ -317,6 +317,39 @@ class PredictivePushEngine:
         # 5. 生成推送内容
         push_content = self._generate_push_content(signal, top_matches)
 
+        # 5b. ApplicationHub 过滤（速率限制 + 冷却期）
+        try:
+            from core.app.application_hub import ApplicationHub, AppOutput
+            hub = ApplicationHub()
+            outputs = hub.submit([
+                AppOutput(
+                    output_type="predictive_push",
+                    content=push_content,
+                    topic=top_matches[0].page_title if top_matches else "general",
+                    priority="medium",
+                )
+            ])
+            if not outputs:
+                return PushDecision(
+                    should_push=False,
+                    reason="ApplicationHub 过滤：速率限制或冷却期",
+                )
+        except Exception:
+            pass
+
+        # 5c. IntentRouter 意图分析（优化推送策略）
+        try:
+            from core.app.intent_router import IntentRouter
+            router = IntentRouter()
+            decision = router.route(user_message, context={"current_task": current_task})
+            if decision.confidence > 0.7 and decision.intent == "ignore_push":
+                return PushDecision(
+                    should_push=False,
+                    reason=f"IntentRouter 判断用户意图为忽略推送 (置信度 {decision.confidence:.2f})",
+                )
+        except Exception:
+            pass
+
         return PushDecision(
             should_push=True,
             reason=f"上下文信号: {signal.signal_type} (置信度 {signal.confidence:.2f})，"

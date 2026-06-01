@@ -442,6 +442,14 @@ class KnowledgeScheduler:
             timeout=60,
         ))
 
+        # --- 画像周报生成（每周一 9:00） ---
+        self.register(ScheduledStep(
+            name="weekly_report",
+            func=lambda: self._run_weekly_report(wiki_base=wiki_base),
+            trigger=CronTrigger("0 9 * * 1"),
+            timeout=300,
+        ))
+
     def _flywheel_predicate(self) -> bool:
         """skill_flywheel 条件：画像信号数 >= 50"""
         try:
@@ -609,6 +617,17 @@ class KnowledgeScheduler:
             }
         except Exception as e:
             logger.error(f"对话提醒清理失败: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_weekly_report(self, wiki_base: str = None) -> Dict:
+        """画像周报生成"""
+        try:
+            from core.app.weekly_report import WeeklyReportGenerator
+            gen = WeeklyReportGenerator(wiki_base=wiki_base)
+            content = gen.generate_weekly_report()
+            return {"status": "ok", "content_length": len(content)}
+        except Exception as e:
+            logger.error(f"周报生成失败: {e}")
             return {"status": "error", "error": str(e)}
 
     # ----------------------------------------------------------

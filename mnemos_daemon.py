@@ -768,6 +768,22 @@ def service_heartbeat(stop_event: threading.Event):
                 except Exception:
                     pass
 
+            # 每 24 小时运行知识新鲜度检查
+            if heartbeat_count % 1440 == 0:
+                try:
+                    from core.app.freshness_alert import FreshnessAlertChecker
+                    checker = FreshnessAlertChecker()
+                    alerts = checker.scan_all_freshness()
+                    if alerts:
+                        logger.info(
+                            f"[新鲜度] 发现 {len(alerts)} 条过期知识: "
+                            f"{', '.join(a.entity_name for a in alerts[:3])}"
+                        )
+                    else:
+                        logger.debug("[新鲜度] 知识库状态良好")
+                except Exception:
+                    pass
+
             # 每 12 小时（720 次心跳）运行评分器训练调度
             if heartbeat_count % 720 == 0:
                 try:
@@ -1050,6 +1066,34 @@ def _run_persona_extensions(profile):
             }
     except Exception as e:
         logger.debug(f"[画像扩展] BehaviorDrivenSkillEngine 失败: {e}")
+
+    # ── 10. AvoidanceDetector — 回避模式检测 ───────────────────────
+    try:
+        from core.app.avoidance_detector import AvoidanceDetector
+        from core.persona.psyche import get_signal_store
+        detector = AvoidanceDetector()
+        store = get_signal_store()
+        history = []
+        try:
+            for sig in store.get_recent_signals(limit=200):
+                content = getattr(sig, "working_dir", "") or ""
+                history.append({
+                    "query": content,
+                    "timestamp": getattr(sig, "timestamp", ""),
+                    "clicked": True,
+                })
+        except Exception:
+            pass
+        if len(history) >= 3:
+            patterns = detector.analyze(history)
+            if patterns:
+                logger.info(
+                    f"[画像扩展] AvoidanceDetector: {len(patterns)} 个回避模式, "
+                    f"主题: {', '.join(p.topic for p in patterns[:3])}"
+                )
+            results["avoidance_detector"] = {"patterns": len(patterns)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] AvoidanceDetector 失败: {e}")
 
     # 汇总日志
     active = [k for k, v in results.items() if v]
