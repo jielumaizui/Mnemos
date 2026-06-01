@@ -325,7 +325,7 @@ class EntityManager:
 
         entity = Entity(
             uid=uid, name=name, entity_type=entity_type,
-            wiki_page=wiki_page, first_seen=datetime.now().isoformat(),
+            source_page=wiki_page, first_seen=datetime.now().isoformat(),
             last_updated=datetime.now().isoformat(), source_count=1,
         )
         self._save_entity(entity)
