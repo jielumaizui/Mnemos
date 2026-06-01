@@ -1095,6 +1095,44 @@ def _run_persona_extensions(profile):
     except Exception as e:
         logger.debug(f"[画像扩展] AvoidanceDetector 失败: {e}")
 
+    # ── 11. CrossAgentDivergenceDetector — 跨 Agent 分歧检测 ───────
+    try:
+        from core.app.cross_agent_divergence_detector import CrossAgentDivergenceDetector
+        from core.persona.psyche import get_signal_store
+        detector = CrossAgentDivergenceDetector()
+        store = get_signal_store()
+        # 按 agent 分组收集最近信号
+        agent_outputs: Dict[str, List[str]] = {}
+        try:
+            for sig in store.get_recent_signals(limit=300):
+                agent = getattr(sig, "agent", "unknown") or "unknown"
+                content = getattr(sig, "working_dir", "") or ""
+                if content:
+                    agent_outputs.setdefault(agent, []).append(content)
+        except Exception:
+            pass
+        # 当存在 2+ 个 agent 且每个都有足够数据时检测分歧
+        if len(agent_outputs) >= 2:
+            # 构建对比列表：取每个 agent 的输出拼接
+            outputs_for_comparison = []
+            for agent, texts in agent_outputs.items():
+                if len(texts) >= 5:
+                    outputs_for_comparison.append({
+                        "agent_id": agent,
+                        "output": " ".join(texts[:20]),
+                        "topic": "behavior_patterns",
+                    })
+            if len(outputs_for_comparison) >= 2:
+                reports = detector.detect_divergence(outputs_for_comparison)
+                if reports:
+                    logger.info(
+                        f"[画像扩展] CrossAgentDivergenceDetector: {len(reports)} 个分歧报告, "
+                        f"主题: {', '.join(r.topic for r in reports[:3])}"
+                    )
+                results["cross_agent_divergence"] = {"reports": len(reports)}
+    except Exception as e:
+        logger.debug(f"[画像扩展] CrossAgentDivergenceDetector 失败: {e}")
+
     # 汇总日志
     active = [k for k, v in results.items() if v]
     if active:

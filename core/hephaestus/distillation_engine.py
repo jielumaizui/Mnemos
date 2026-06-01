@@ -881,6 +881,38 @@ class DistillSelfCheck:
         # 9. 断言内部冲突检测（复用 conflict_resolver 规则）
         issues.extend(self._check_internal_conflicts(content))
 
+        # 10. 前提验证（PremiseValidator）
+        try:
+            from core.kia.premise_validator import PremiseValidator
+            validator = PremiseValidator()
+            result = validator.validate(
+                premise=frag.core_content[:500],
+                current_context=content,
+            )
+            if not result.get("valid", True):
+                issues.append(
+                    f"前提验证未通过: {result.get('reason', 'unknown')} "
+                    f"(置信度 {result.get('confidence', 0):.2f})"
+                )
+        except Exception:
+            pass
+
+        # 11. 决策依赖提取（DecisionDependencyExtractor）
+        try:
+            from core.kia.decision_dependency_extractor import DecisionDependencyExtractor
+            extractor = DecisionDependencyExtractor()
+            decision_keywords = ["选择", "决定", "决策", "如果", "则", "否则", "option", "decide", "choose"]
+            if any(kw in content.lower() for kw in decision_keywords):
+                graph = extractor.extract(content)
+                if graph.nodes:
+                    frag.frontmatter["decision_graph"] = {
+                        "nodes": len(graph.nodes),
+                        "edges": len(graph.edges),
+                        "roots": len(graph.get_root_decisions()),
+                    }
+        except Exception:
+            pass
+
         return issues
 
     def _check_python_syntax(self, code: str) -> bool:
