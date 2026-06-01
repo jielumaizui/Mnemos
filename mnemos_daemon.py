@@ -417,6 +417,17 @@ def service_l1_sync(stop_event: threading.Event):
                                     {"working_dir": session_info.working_dir, "agent": source.name},
                                 )
 
+                                # 发布 session.start 事件（供 task_classifier / kia_guard 消费）
+                                try:
+                                    from core.mnemos_bus import publish_event
+                                    publish_event("session.start", source.name, {
+                                        "session_id": session_info.session_id,
+                                        "user_message": turns[0].user_content if turns else "",
+                                        "working_dir": str(session_info.working_dir) if session_info.working_dir else "",
+                                    })
+                                except Exception:
+                                    pass
+
                                 try:
                                     for turn in turns:
                                         result = capture_service.capture_turn(
@@ -439,6 +450,18 @@ def service_l1_sync(stop_event: threading.Event):
                                             bp_count += 1
                                         elif status == "error":
                                             error_count += 1
+
+                                        # 发布 message.exchanged 事件（供 kia_guard 消费）
+                                        try:
+                                            from core.mnemos_bus import publish_event
+                                            publish_event("message.exchanged", source.name, {
+                                                "session_id": session_info.session_id,
+                                                "turn_number": turn.turn_number,
+                                                "role": "user" if turn.user_content else "assistant",
+                                                "content_preview": (turn.user_content or turn.assistant_content or "")[:200],
+                                            })
+                                        except Exception:
+                                            pass
 
                                     scanned_count += 1
                                     state.mark_scanned(source.name, session_info, file_state, "scanned")
@@ -781,6 +804,15 @@ def service_heartbeat(stop_event: threading.Event):
                         )
                     else:
                         logger.debug("[新鲜度] 知识库状态良好")
+                except Exception:
+                    pass
+
+            # 每 12 小时（720 次心跳）注入 synthetic ground_truth
+            if heartbeat_count % 720 == 0:
+                try:
+                    injected = _inject_synthetic_ground_truth()
+                    if injected > 0:
+                        logger.info(f"[评分器] 注入 {injected} 条 synthetic ground_truth")
                 except Exception:
                     pass
 
@@ -1163,6 +1195,69 @@ def _run_persona_extensions(profile):
     if active:
         logger.info(f"[画像扩展] 激活模块: {', '.join(active)}")
     return results
+
+
+def _inject_synthetic_ground_truth() -> int:
+    """从 persona 信号中推断并注入 synthetic ground_truth，加速评分器冷启动。"""
+    import sqlite3
+    from pathlib import Path
+
+    db_dir = Path.home() / ".mnemos"
+    signals_db = db_dir / "user_signals.db"
+    gt_db = db_dir / "mnemos.db"
+
+    if not signals_db.exists():
+        return 0
+
+    try:
+        with sqlite3.connect(str(signals_db)) as conn:
+            # 读取最近 7 天未处理的 session_signals
+            rows = conn.execute("""
+                SELECT session_id, task_type, user_msg_count, avg_user_msg_length,
+                       correction_count, follow_up_depth, working_dir
+                FROM session_signals
+                WHERE timestamp > datetime('now', '-7 days')
+                ORDER BY timestamp DESC
+                LIMIT 50
+            """).fetchall()
+    except Exception:
+        return 0
+
+    if not rows:
+        return 0
+
+    injected = 0
+    try:
+        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+        for row in rows:
+            session_id, task_type, msg_count, avg_len, corrections, follow_up, wd = row
+            if msg_count is None or avg_len is None:
+                continue
+            base_confidence = min(1.0, 0.5 + msg_count * 0.05 + avg_len * 0.001)
+
+            # 为每个 session 生成 3 个维度的 ground_truth
+            signals = [
+                (task_type or "session_quality", 1 if (msg_count >= 3 and corrections == 0) else 0),
+                ("engagement", 1 if msg_count >= 5 else 0),
+                ("correction_pattern", 0 if corrections == 0 else 1),
+            ]
+            for signal_type, label in signals:
+                try:
+                    AdaptiveScorerV2.insert_ground_truth(
+                        session_id=session_id,
+                        signal_type=signal_type,
+                        label=label,
+                        confidence=round(base_confidence, 2),
+                        latency_hours=0,
+                        db_path=gt_db,
+                    )
+                    injected += 1
+                except Exception:
+                    continue
+    except Exception:
+        return 0
+
+    return injected
 
 
 def _trigger_persona_analysis():

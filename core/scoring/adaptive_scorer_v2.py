@@ -868,17 +868,36 @@ class AdaptiveScorerV2:
                         SELECT COUNT(*) FROM scorer_training_queue
                         WHERE status = 'pending' AND earliest_train_at <= ? AND dimension = ?
                     """, (now, dimension)).fetchone()
+                    # 同时统计 ground_truth_signals
+                    gt_row = conn.execute("""
+                        SELECT COUNT(*) FROM ground_truth_signals
+                        WHERE signal_type = ?
+                    """, (dimension,)).fetchone()
                 else:
                     row = conn.execute("""
                         SELECT COUNT(*) FROM scorer_training_queue
                         WHERE status = 'pending' AND earliest_train_at <= ?
                     """, (now,)).fetchone()
-                return row[0] if row else 0
+                    gt_row = conn.execute("""
+                        SELECT COUNT(*) FROM ground_truth_signals
+                    """).fetchone()
+                return (row[0] if row else 0) + (gt_row[0] if gt_row else 0)
         except Exception:
             logger.warning(f"Unexpected error in adaptive_scorer_v2.py", exc_info=True)
             return 0
 
+    def _update_mode(self) -> None:
+        """根据样本数更新冷启动阶段"""
+        total = self._count_ready_samples()
+        if total < self.WARM_THRESHOLD:
+            self._mode = "cold"
+        elif total < self.HOT_THRESHOLD:
+            self._mode = "warm"
+        else:
+            self._mode = "hot"
+
     def get_status(self) -> Dict[str, Any]:
+        self._update_mode()
         return {
             "domain": self.domain,
             "mode": self._mode,
