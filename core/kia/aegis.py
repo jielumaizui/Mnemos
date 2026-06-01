@@ -332,13 +332,15 @@ class InProcessGuard:
 
         return level
 
-    def check(self, user_message: str, ai_response: str = "") -> Optional[GuardAlert]:
+    def check(self, user_message: str, ai_response: str = "",
+              context: Optional[Dict] = None) -> Optional[GuardAlert]:
         """
         检测当前对话是否触及风险点
 
         Args:
             user_message: 用户消息
             ai_response: AI 回复（如果有）
+            context: 用户操作上下文（current_file, current_command, git_status）
 
         Returns:
             GuardAlert 或 None
@@ -357,6 +359,11 @@ class InProcessGuard:
         if critical:
             # 严重偏差不受情境模式影响，始终告警
             return critical
+
+        # 1.5 上下文语义风险检查
+        ctx_alert = self._check_context_risk(context, user_message)
+        if ctx_alert:
+            return ctx_alert
 
         # 2. 重复工作检测（SmartMatcher Layer 3 语义匹配）
         is_dup, dup_score, dup_reason = self.duplicate_detector.is_duplicate(user_message)
@@ -491,6 +498,68 @@ class InProcessGuard:
                     suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？"
                 )
 
+        return None
+
+    def _check_context_risk(self, context: Optional[Dict], user_message: str = "") -> Optional[GuardAlert]:
+        """基于用户操作上下文进行语义风险匹配"""
+        if not context:
+            return None
+        score = 0
+        hints = []
+        current_file = context.get("current_file", "") or ""
+        current_command = context.get("current_command", "") or ""
+        git_status = context.get("git_status", "") or ""
+
+        file_lower = current_file.lower()
+        op_text = ((current_command or "") + " " + user_message).lower()
+
+        # 高风险：生产环境文件 + 危险操作
+        if any(p in file_lower for p in ("prod/", "production/")):
+            if any(k in op_text for k in ("rm", "delete", "覆盖", "truncate", "drop")):
+                score += 4
+                hints.append("生产环境文件危险操作")
+
+        # 高风险：高危命令
+        cmd_lower = (current_command or "").lower()
+        if any(k in cmd_lower for k in ("git push --force", "terraform apply", "kubectl delete")):
+            score += 4
+            hints.append("高危命令执行")
+
+        # 中风险：未提交修改 + git checkout
+        git_status_text = git_status or ""
+        if "未提交" in git_status_text or "modified" in git_status_text.lower() or "changes" in git_status_text.lower():
+            if "git checkout" in cmd_lower or "git checkout" in op_text:
+                score += 2
+                hints.append("未提交修改下切换分支")
+
+        if score >= 4:
+            msg = "⚠️ " + "，".join(hints) + "，请确认。"
+            msg = msg[:80]
+            return GuardAlert(
+                level=GuardLevel.INTERRUPT,
+                checklist_item=ChecklistItem(
+                    item="上下文高风险",
+                    source="context_guard",
+                    severity="critical"
+                ),
+                triggered_by="system",
+                trigger_text="; ".join(hints),
+                suggestion=msg
+            )
+        elif score >= 2:
+            msg = "⚠️ " + "，".join(hints) + "，建议检查。"
+            msg = msg[:80]
+            return GuardAlert(
+                level=GuardLevel.HINT,
+                checklist_item=ChecklistItem(
+                    item="上下文中风险",
+                    source="context_guard",
+                    severity="high"
+                ),
+                triggered_by="system",
+                trigger_text="; ".join(hints),
+                suggestion=msg
+            )
         return None
 
     def smart_check(self, user_message: str, ai_response: str = "") -> List[GuardAlert]:

@@ -125,7 +125,10 @@ class ContextAwareSearch:
                 freshness_alert=freshness_alert,
             ))
 
-        # 3. 排序并截取
+        # 3. 过滤低质量内容
+        results = [r for r in results if r.confidence >= 0.5]
+
+        # 4. 排序并截取
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
 

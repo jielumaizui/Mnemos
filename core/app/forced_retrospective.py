@@ -291,6 +291,20 @@ class ForcedRetrospective:
 
         return task_id
 
+    def _create_from_session_end(self, session_id: str, skip_reason: str) -> Optional[str]:
+        """当 session 被蒸馏系统跳过时，自动创建系统复盘任务。"""
+        if skip_reason not in ("skipped_low_quality", "skipped_by_pipeline"):
+            return None
+        severity = "medium" if skip_reason == "skipped_low_quality" else "high"
+        topic = f"Session {session_id[:8]} 被跳过: {skip_reason}"
+        task_id = self.create_system_recap(
+            topic=topic,
+            severity=severity,
+            target_page="00-Dashboard.md",
+        )
+        logger.info(f"[ForcedRetrospective] Session skip 触发复盘: {topic} -> {task_id}")
+        return task_id
+
     def get_pending_system_recaps(self) -> List[RecapTask]:
         """获取所有待处理的系统复盘待办"""
         now = datetime.now()

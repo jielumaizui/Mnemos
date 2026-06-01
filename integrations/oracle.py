@@ -190,6 +190,9 @@ class WikiReader:
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
+                "verification": info.get("verification", ""),
+                "confidence": info.get("confidence", 0.5),
+                "source": fm_get(fm, "source") or "",
                 "note": "沉睡知识，低活跃度，可唤醒",
                 "depth": "metadata_only"
             }
@@ -205,6 +208,9 @@ class WikiReader:
                 "title": frontmatter.get("title", page_id),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
+                "verification": info.get("verification", ""),
+                "confidence": info.get("confidence", 0.5),
+                "source": fm_get(fm, "source") or "",
                 "depth": f"summary_{max_chars}"
             }
 
@@ -220,6 +226,9 @@ class WikiReader:
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
+                "verification": info.get("verification", ""),
+                "confidence": info.get("confidence", 0.5),
+                "source": fm_get(fm, "source") or "",
                 "depth": f"paragraph_{max_chars}"
             }
 
@@ -238,6 +247,9 @@ class WikiReader:
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
+                "verification": info.get("verification", ""),
+                "confidence": info.get("confidence", 0.5),
+                "source": fm_get(fm, "source") or "",
                 "depth": "full",
                 "related": self._get_related_pages(page_id, limit=5) if config["related"] else []
             }
@@ -252,6 +264,9 @@ class WikiReader:
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
+                "verification": info.get("verification", ""),
+                "confidence": info.get("confidence", 0.5),
+                "source": fm_get(fm, "source") or "",
                 "depth": "full_plus",
                 "related": self._get_related_pages(page_id, limit=5),
                 "deep_traced": True,
@@ -326,6 +341,60 @@ class WikiReader:
         page_id = page_path.replace("\\", "/").removesuffix(".md")
         return self.read_page_by_heat(page_id)
 
+    @staticmethod
+    def _query_terms(query: str) -> List[str]:
+        terms = re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z0-9_\-]{2,}", query.lower())
+        return terms or [query.lower()]
+
+    def _fallback_body_search(self, query: str, limit: int = 20) -> List[Dict]:
+        """回退：遍历所有 markdown 文件搜索正文内容（与 ContextAwareSearch._recall_from_files 逻辑一致）"""
+        keywords = self._query_terms(query)
+        if not keywords:
+            return []
+        results = []
+        for subdir in ['00-Inbox', '01-People', '02-Projects', '03-Tech', '04-Concepts', '05-MOCs', '06-Retrospectives']:
+            dir_path = self.wiki_path / subdir
+            if not dir_path.exists():
+                continue
+            for file_path in dir_path.rglob("*.md"):
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    frontmatter, body = self._parse_content(content)
+                    body_lower = body.lower()
+                    if not any(kw in body_lower for kw in keywords):
+                        continue
+                    match_count = sum(1 for kw in keywords if kw in body_lower)
+                    score = 5 + match_count * 2
+                    rel_path = file_path.relative_to(self.wiki_path)
+                    page_id = str(rel_path.with_suffix(''))
+                    title = fm_get(frontmatter, "name") or file_path.stem
+                    verification = fm_get(frontmatter, "status") or ""
+                    confidence = float(fm_get(frontmatter, "confidence") or 0.5)
+                    if verification == "pending-verification":
+                        score *= 0.1
+                    elif confidence < 0.5:
+                        score *= 0.3
+                    heat_info = self._get_heat_info(page_id)
+                    results.append({
+                        "page_id": page_id,
+                        "title": title,
+                        "type": subdir,
+                        "heat_level": heat_info.get("level", "cold"),
+                        "heat_score": heat_info.get("score", 0),
+                        "relevance_score": round(score, 2),
+                        "reasons": ["body_match"],
+                        "verification": verification,
+                        "confidence": confidence,
+                    })
+                    if len(results) >= limit:
+                        break
+                except Exception:
+                    continue
+            if len(results) >= limit:
+                break
+        results.sort(key=lambda x: (x["heat_score"], x["relevance_score"]), reverse=True)
+        return results
+
     def search_all_relevant(self, query: str) -> List[Dict]:
         """
         搜索所有相关页面（不限制数量，返回全部）
@@ -397,6 +466,8 @@ class WikiReader:
             return base_score
 
         results.sort(key=_sort_key, reverse=True)
+        if not results:
+            results = self._fallback_body_search(query)
         return results
 
     def read_page_by_heat(self, page_id: str) -> Optional[Dict]:

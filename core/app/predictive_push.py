@@ -210,6 +210,18 @@ class PredictivePush:
                     tracker.record_ignore(topic)
                 elif action == "accept":
                     tracker.record_accept(topic)
+                    # 记录训练样本：用户采纳推送 → 强正样本（profile 维度）
+                    try:
+                        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+                        AdaptiveScorerV2.enqueue_training_sample(
+                            session_id=f"push-{push_id}",
+                            dimension="profile",
+                            features={"topic": topic, "action": "accept", "tool": "predictive_push"},
+                            expected_score=0.9,
+                            source="predictive_push_accept",
+                        )
+                    except Exception:
+                        pass
 
     def _detect_signals(self, text: str) -> List[PushSignal]:
         """Layer 1: 正则关键词检测"""
@@ -239,14 +251,18 @@ class PredictivePush:
         return words[0] if words else match.group(0)
 
     def _find_related_page(self, signal: PushSignal) -> Optional[Dict]:
-        """查找与信号相关的 Wiki 页面（优先 KG，回退 context_aware_search，再回退文件名）"""
+        """查找与信号相关的 Wiki 页面（优先 KG，回退 context_aware_search，再回退文件名）
+        
+        过滤：pending-verification 和低置信度(<0.5)页面不进入主动推送。
+        """
         # 1. 优先 KnowledgeGraph
         try:
             from core.kia.knowledge_graph import KnowledgeGraph
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
-            results = kg.search(signal.topic, limit=1)
-            if results:
-                return results[0]
+            results = kg.search(signal.topic, limit=5)
+            for r in results:
+                if self._is_pushable(r):
+                    return r
         except Exception:
             pass
 
@@ -254,12 +270,11 @@ class PredictivePush:
         try:
             from core.app.context_search import ContextAwareSearch
             searcher = ContextAwareSearch(wiki_base=str(self.wiki_base))
-            results = searcher.search(signal.topic, limit=1)
-            if results:
-                return {
-                    "path": results[0].get("page_path", ""),
-                    "title": results[0].get("title", ""),
-                }
+            results = searcher.search(signal.topic, limit=5)
+            for r in results:
+                page = {"path": r.page_path, "title": r.title, "confidence": r.confidence}
+                if self._is_pushable(page):
+                    return page
         except Exception:
             pass
 
@@ -271,6 +286,16 @@ class PredictivePush:
                 return {"path": str(md_file.relative_to(self.wiki_base)), "title": md_file.stem}
 
         return None
+
+    def _is_pushable(self, page: Dict) -> bool:
+        """判断页面是否适合主动推送"""
+        # 过滤 pending-verification
+        if page.get("verification") == "pending-verification":
+            return False
+        # 过滤低置信度
+        if page.get("confidence", 0.5) < 0.5:
+            return False
+        return True
 
     def _is_topic_cached(self, topic: str) -> bool:
         """同主题 30 分钟缓存，定期清理过期条目防止内存泄漏"""

@@ -60,6 +60,12 @@ class WeeklyReportGenerator:
         # 5. 系统指标
         lines.extend(self._section_system_metrics())
 
+        # 6. 反复遇到的问题
+        lines.extend(self._section_repeated_issues())
+
+        # 7. 下周行动建议
+        lines.extend(self._section_action_items())
+
         content = "\n".join(lines)
 
         # 写入 Wiki
@@ -71,28 +77,29 @@ class WeeklyReportGenerator:
         return content
 
     def _section_knowledge_growth(self) -> List[str]:
-        """本周知识增长统计"""
+        """本周知识增长统计——直接查询 wiki_state.db"""
         lines = [
             "## 知识增长",
             "",
         ]
 
         try:
-            from core.kia.knowledge_graph import KnowledgeGraph
-            kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
-            stats = kg.get_stats()
+            import sqlite3
+            from core.config import get_config
+            wiki_state_db = get_config().data_dir / "wiki_state.db"
+            total_pages = 0
+            new_this_week = 0
+            if wiki_state_db.exists():
+                with sqlite3.connect(str(wiki_state_db), timeout=10) as conn:
+                    cursor = conn.execute("SELECT COUNT(*) FROM wiki_pages")
+                    total_pages = cursor.fetchone()[0]
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM wiki_pages WHERE created_at >= datetime('now', '-7 days')"
+                    )
+                    new_this_week = cursor.fetchone()[0]
 
-            lines.append(f"- 总知识条目：{stats.get('total_entities', 0)}")
-            lines.append(f"- 本周新增：{stats.get('new_this_week', 0)}")
-
-            # 按形态分类
-            by_form = stats.get("by_form", {})
-            if by_form:
-                lines.append("")
-                lines.append("| 形态 | 数量 |")
-                lines.append("|------|------|")
-                for form, count in sorted(by_form.items(), key=lambda x: -x[1]):
-                    lines.append(f"| {form} | {count} |")
+            lines.append(f"- 总 Wiki 页面：{total_pages}")
+            lines.append(f"- 本周新增：{new_this_week}")
         except Exception as e:
             lines.append(f"- 统计数据获取失败: {e}")
 
@@ -100,25 +107,37 @@ class WeeklyReportGenerator:
         return lines
 
     def _section_domain_shifts(self) -> List[str]:
-        """领域注意力变化"""
+        """领域注意力变化——从 user_signals.db 读取本周高频 task_type"""
         lines = [
             "## 领域注意力变化",
             "",
         ]
 
         try:
-            from core.persona.daimon import SignalCollector
-            from core.persona.psyche import get_signal_store
-            store = get_signal_store()
-            stats = store.get_signal_stats(days=7)
-
-            if stats:
-                lines.append("| 源 | 信号数 |")
-                lines.append("|----|--------|")
-                for source, count in sorted(stats.items(), key=lambda x: -x[1]):
-                    lines.append(f"| {source} | {count} |")
+            import sqlite3
+            from core.config import get_config
+            signals_db = get_config().data_dir / "user_signals.db"
+            if signals_db.exists():
+                with sqlite3.connect(str(signals_db), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT task_type, COUNT(*) as cnt
+                        FROM session_signals
+                        WHERE timestamp >= datetime('now', '-7 days')
+                          AND task_type IS NOT NULL
+                        GROUP BY task_type
+                        ORDER BY cnt DESC
+                        LIMIT 8
+                    """)
+                    rows = cursor.fetchall()
+                    if rows:
+                        lines.append("| 领域 | Session 数 |")
+                        lines.append("|------|------------|")
+                        for task_type, count in rows:
+                            lines.append(f"| {task_type or '未分类'} | {count} |")
+                    else:
+                        lines.append("- 本周无足够数据")
             else:
-                lines.append("- 本周无足够数据")
+                lines.append("- 信号数据库未就绪")
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
             lines.append("- 数据采集未就绪")
@@ -127,22 +146,47 @@ class WeeklyReportGenerator:
         return lines
 
     def _section_blindspots(self) -> List[str]:
-        """盲点发现"""
+        """盲点发现——基于 wiki_metrics.db query_log 中搜索无结果的查询"""
         lines = [
             "## 盲点发现",
             "",
         ]
 
         try:
-            from core.app.blindspot_discovery import BlindspotDiscovery
-            bd = BlindspotDiscovery(wiki_base=str(self.wiki_base))
-            blindspots = bd.get_weekly_summary()
+            import sqlite3
+            from core.config import get_config
+            metrics_db = get_config().data_dir / "wiki_metrics.db"
+            no_result_queries = []
+            if metrics_db.exists():
+                with sqlite3.connect(str(metrics_db), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT query_text, COUNT(*) as cnt
+                        FROM query_log
+                        WHERE created_at >= datetime('now', '-7 days')
+                          AND matched_pages = '[]'
+                          AND query_text IS NOT NULL
+                        GROUP BY query_text
+                        ORDER BY cnt DESC
+                        LIMIT 5
+                    """)
+                    no_result_queries = cursor.fetchall()
 
-            if blindspots:
-                for bs in blindspots[:5]:
-                    lines.append(f"- **{bs.get('topic', '')}**：{bs.get('description', '')}")
+            if no_result_queries:
+                for query_text, count in no_result_queries:
+                    lines.append(f"- **{query_text}**（搜索 {count} 次无结果）")
             else:
-                lines.append("- 本周未发现新盲点")
+                # 回退到 blindspots.db
+                try:
+                    from core.app.blindspot_discovery import BlindspotDiscovery
+                    bd = BlindspotDiscovery(wiki_base=str(self.wiki_base))
+                    blindspots = bd.get_weekly_summary()
+                    if blindspots:
+                        for bs in blindspots[:5]:
+                            lines.append(f"- **{bs.get('topic', '')}**：{bs.get('description', '')}")
+                    else:
+                        lines.append("- 本周未发现新盲点")
+                except Exception:
+                    lines.append("- 盲点检测未就绪")
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
             lines.append("- 盲点检测未就绪")
@@ -172,33 +216,144 @@ class WeeklyReportGenerator:
         return lines
 
     def _section_system_metrics(self) -> List[str]:
-        """系统指标"""
+        """系统指标——从 sync_log.db 读取本周同步/跳过/失败统计"""
         lines = [
             "## 系统指标",
             "",
         ]
 
         try:
+            import sqlite3
             from core.config import get_config
             data_dir = get_config().data_dir
-
-            # 蒸馏统计
-            from core.hephaestus.distillation_engine import DistillationEngine
-            # 简单统计
             lines.append("| 指标 | 值 |")
             lines.append("|------|-----|")
 
-            # sync_log 统计
-            import sqlite3
             sync_db = data_dir / "sync_log.db"
             if sync_db.exists():
                 with sqlite3.connect(str(sync_db), timeout=10) as conn:
-                    cursor = conn.execute("SELECT COUNT(*) FROM sync_log WHERE date(synced_at) >= date('now', '-7 days')")
+                    # 本周同步
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM sync_log WHERE synced_at >= datetime('now', '-7 days')"
+                    )
                     weekly_syncs = cursor.fetchone()[0]
                     lines.append(f"| 本周同步 | {weekly_syncs} |")
-
+                    # 按状态分组
+                    cursor = conn.execute("""
+                        SELECT status, COUNT(*) FROM sync_log
+                        WHERE synced_at >= datetime('now', '-7 days')
+                        GROUP BY status
+                    """)
+                    for status, count in cursor.fetchall():
+                        lines.append(f"| 状态: {status or 'unknown'} | {count} |")
+                    # 失败数
+                    cursor = conn.execute("""
+                        SELECT COUNT(*) FROM sync_log
+                        WHERE synced_at >= datetime('now', '-7 days')
+                          AND (error IS NOT NULL OR distill_error IS NOT NULL)
+                    """)
+                    failed = cursor.fetchone()[0]
+                    lines.append(f"| 失败/错误 | {failed} |")
+            else:
+                lines.append("- sync_log 数据库未找到")
         except Exception as e:
             lines.append(f"- 指标获取失败: {e}")
+
+        lines.append("")
+        return lines
+
+    def _section_repeated_issues(self) -> List[str]:
+        """反复遇到的问题——从 sync_log 读取本周高频跳过/错误原因"""
+        lines = [
+            "## 反复遇到的问题",
+            "",
+        ]
+
+        try:
+            import sqlite3
+            from collections import Counter
+            from core.config import get_config
+            sync_db = get_config().data_dir / "sync_log.db"
+            if sync_db.exists():
+                with sqlite3.connect(str(sync_db), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT error, distill_error, status
+                        FROM sync_log
+                        WHERE synced_at >= datetime('now', '-7 days')
+                    """)
+                    reasons = Counter()
+                    for error, distill_error, status in cursor.fetchall():
+                        if error:
+                            reasons[f"同步错误: {error[:40]}"] += 1
+                        if distill_error:
+                            reasons[f"蒸馏错误: {distill_error[:40]}"] += 1
+                        if status and status not in ("synced", "pending"):
+                            reasons[f"状态: {status}"] += 1
+                    if reasons:
+                        lines.append("| 问题 | 次数 |")
+                        lines.append("|------|------|")
+                        for reason, count in reasons.most_common(5):
+                            lines.append(f"| {reason} | {count} |")
+                    else:
+                        lines.append("- 本周未发现高频问题")
+            else:
+                lines.append("- sync_log 数据库未找到")
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at weekly_report.py", exc_info=True)
+            lines.append("- 问题统计未就绪")
+
+        lines.append("")
+        return lines
+
+    def _section_action_items(self) -> List[str]:
+        """下周行动建议——基于上述数据生成避免重复工作的建议"""
+        lines = [
+            "## 下周行动建议",
+            "",
+        ]
+
+        suggestions = []
+        try:
+            import sqlite3
+            from core.config import get_config
+            # 1. 如果有大量同步错误，建议检查配置
+            sync_db = get_config().data_dir / "sync_log.db"
+            if sync_db.exists():
+                with sqlite3.connect(str(sync_db), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT COUNT(*) FROM sync_log
+                        WHERE synced_at >= datetime('now', '-7 days') AND error IS NOT NULL
+                    """)
+                    if cursor.fetchone()[0] >= 3:
+                        suggestions.append("- sync_log 本周错误较多，建议检查 Memos API 连接和 Token 有效性")
+
+            # 2. 如果有搜索无结果的查询，建议补充知识
+            metrics_db = get_config().data_dir / "wiki_metrics.db"
+            if metrics_db.exists():
+                with sqlite3.connect(str(metrics_db), timeout=10) as conn:
+                    cursor = conn.execute("""
+                        SELECT COUNT(DISTINCT query_text) FROM query_log
+                        WHERE created_at >= datetime('now', '-7 days') AND matched_pages = '[]'
+                    """)
+                    if cursor.fetchone()[0] >= 2:
+                        suggestions.append("- 本周多次搜索无结果，建议将盲区主题补充进知识库")
+
+            # 3. 如果新增页面少，建议增加蒸馏
+            wiki_state_db = get_config().data_dir / "wiki_state.db"
+            if wiki_state_db.exists():
+                with sqlite3.connect(str(wiki_state_db), timeout=10) as conn:
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM wiki_pages WHERE created_at >= datetime('now', '-7 days')"
+                    )
+                    if cursor.fetchone()[0] < 2:
+                        suggestions.append("- 本周 Wiki 新增页面较少，建议检查蒸馏流水线是否正常运转")
+        except Exception:
+            pass
+
+        if suggestions:
+            lines.extend(suggestions)
+        else:
+            lines.append("- 系统运行平稳，暂无特别建议")
 
         lines.append("")
         return lines

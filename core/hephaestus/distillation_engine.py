@@ -1699,6 +1699,41 @@ class DistillationEngine:
                 except Exception:
                     logger.debug("Cross-agent linking failed for %s", file_path, exc_info=True)
 
+        # 回写评分结果到 frontmatter（质量分/热度/使用次数）
+        if file_fragments:
+            try:
+                from core.wiki_metrics import WikiMetrics
+                metrics = WikiMetrics()
+                for file_path, fragment in file_fragments:
+                    rel_path = str(file_path.relative_to(self.wiki_base))
+                    page = metrics.get_page(rel_path)
+                    if page is None:
+                        content = file_path.read_text(encoding="utf-8")
+                        metrics.assess_quality(rel_path, content)
+                        metrics.upsert_page(
+                            rel_path,
+                            title=fragment.title,
+                            source_count=1,
+                            heat_score=1.0,
+                            heat_level="warm",
+                        )
+                        page = metrics.get_page(rel_path)
+                    if page:
+                        self._update_frontmatter_field(
+                            file_path, "mnemos_quality_score", round(page.quality_score / 100, 2)
+                        )
+                        self._update_frontmatter_field(
+                            file_path, "mnemos_heat_score", int(page.heat_score)
+                        )
+                        self._update_frontmatter_field(
+                            file_path, "mnemos_usage_count", page.source_count
+                        )
+                        self._update_frontmatter_field(
+                            file_path, "mnemos_last_scored", datetime.now().strftime("%Y-%m-%d")
+                        )
+            except Exception:
+                logger.debug("Frontmatter metrics writeback failed", exc_info=True)
+
         # 发射 distill_complete 事件（阶段三：事件总线 wiring）
         if written:
             try:

@@ -87,6 +87,8 @@ class PreFlightInjector:
             self.RETROSPECTIVES_DIR = self.WIKI_BASE / "06-Retrospectives"
         self.persona_store = PersonaStore(self.WIKI_BASE)
         self.current_persona = None
+        self._cache_db_path = Path.home() / ".mnemos" / "checklist_cache.db"
+        self._warm_checklist_cache()
 
     def inject(self, task_type: str, subtype: str,
                time_window: TimeWindow,
@@ -123,9 +125,21 @@ class PreFlightInjector:
         """装载完整清单（无专用复盘文件时从 Wiki 页面 fallback）"""
         latest = self._find_latest_version(task_type, subtype)
         if not latest:
-            # Fallback：从 06-Retrospectives 搜索匹配类型的页面
-            latest = self._find_wiki_fallback(task_type)
-        if not latest:
+            # Fallback：从缓存或 Wiki 页面搜索匹配类型的页面
+            checklist_items = self._get_checklist_for_type(task_type)
+            if checklist_items:
+                return LoadedKnowledge(
+                    task_type=task_type,
+                    subtype=subtype,
+                    version=1,
+                    checklist=checklist_items,
+                    lessons_summary="",
+                    loaded_at=datetime.now().isoformat(),
+                    is_compact=len(checklist_items) > 10,
+                    total_items=len(checklist_items),
+                    hit_items=0,
+                    ignored_items=0,
+                )
             return None
 
         frontmatter, body = self._parse_retrospective(latest)
@@ -176,6 +190,123 @@ class PreFlightInjector:
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error at prophasis.py", exc_info=True)
             self.current_persona = None
+
+    def _warm_checklist_cache(self):
+        """遍历 04-Concepts/ 和 06-Retrospectives/，预热 checklist 缓存"""
+        import sqlite3
+        self._cache_db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self._cache_db_path))
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS checklist_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_type TEXT,
+                keyword TEXT,
+                title TEXT,
+                page_path TEXT,
+                source TEXT,
+                created_at TEXT
+            )
+        """)
+        conn.commit()
+
+        allowed_types = {"retrospective", "problem-solution", "anti-pattern", "methodology", "insight"}
+        dirs = [self.WIKI_BASE / "04-Concepts", self.WIKI_BASE / "06-Retrospectives"]
+        current_paths = set()
+        for d in dirs:
+            if not d.exists():
+                continue
+            for md_file in d.rglob("*.md"):
+                try:
+                    page_path = str(md_file.relative_to(self.WIKI_BASE))
+                    current_paths.add(page_path)
+                    frontmatter, body = self._parse_retrospective(md_file)
+                    page_type = frontmatter.get("类型", "")
+                    if page_type not in allowed_types:
+                        continue
+                    title = frontmatter.get("title", frontmatter.get("name", md_file.stem))
+                    task_types = []
+                    applies_when = frontmatter.get("applies_when", {})
+                    if isinstance(applies_when, dict):
+                        task_types = applies_when.get("task_type", [])
+                    if isinstance(task_types, str):
+                        task_types = [task_types]
+                    if not task_types:
+                        task_types = frontmatter.get("task_type", [])
+                        if isinstance(task_types, str):
+                            task_types = [task_types]
+                    if not task_types:
+                        stem = md_file.stem
+                        if "反模式" in stem or "问题-解决" in stem:
+                            task_types = ["coding", "debugging"]
+                        elif "决策记录" in stem:
+                            task_types = ["design"]
+                        else:
+                            task_types = [""]
+                    keywords = frontmatter.get("关键词", [])
+                    triggers = frontmatter.get("触发器", [])
+                    if isinstance(keywords, str):
+                        keywords = [keywords]
+                    if isinstance(triggers, str):
+                        triggers = [triggers]
+                    source = frontmatter.get("source", "wiki")
+                    created_at = datetime.now().isoformat()
+                    cursor.execute("DELETE FROM checklist_cache WHERE page_path = ?", (page_path,))
+                    for tt in task_types:
+                        for kw in keywords + triggers:
+                            if not isinstance(kw, str):
+                                continue
+                            cursor.execute(
+                                "INSERT INTO checklist_cache (task_type, keyword, title, page_path, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                (tt, kw, title, page_path, source, created_at)
+                            )
+                except Exception:
+                    continue
+        cursor.execute("SELECT DISTINCT page_path FROM checklist_cache")
+        existing_paths = {row[0] for row in cursor.fetchall()}
+        for path in existing_paths - current_paths:
+            cursor.execute("DELETE FROM checklist_cache WHERE page_path = ?", (path,))
+        conn.commit()
+        conn.close()
+
+    def _get_checklist_for_type(self, task_type: str) -> List[ChecklistItem]:
+        """优先从 SQLite 缓存获取 checklist，无命中则回退到文件搜索"""
+        items = []
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(self._cache_db_path))
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT keyword, title, page_path, source FROM checklist_cache WHERE task_type = ? OR task_type = ''",
+                (task_type,)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            for row in rows:
+                keyword, title, page_path, source = row
+                items.append(ChecklistItem(
+                    item=keyword,
+                    source=source or page_path or "wiki",
+                    severity="medium",
+                    trigger_keywords=[keyword],
+                ))
+        except Exception as e:
+            logger.warning(f"读取 checklist 缓存失败: {e}")
+            items = []
+        if items:
+            return items
+        return self._get_checklist_from_files(task_type)
+
+    def _get_checklist_from_files(self, task_type: str) -> List[ChecklistItem]:
+        """回退：从 Wiki 文件搜索匹配的 checklist"""
+        latest = self._find_wiki_fallback(task_type)
+        if not latest:
+            return []
+        frontmatter, body = self._parse_retrospective(latest)
+        raw_checklist = frontmatter.get("checklist", [])
+        if not raw_checklist:
+            raw_checklist = self._generate_checklist_from_page(frontmatter, body)
+        return [self._parse_checklist_item(item) for item in raw_checklist]
 
     def _find_latest_version(self, task_type: str, subtype: str) -> Optional[Path]:
         """查找最新版本的复盘文件"""
