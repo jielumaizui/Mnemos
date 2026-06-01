@@ -744,7 +744,11 @@ class EventProcessor:
         """处理单个事件（兼容旧接口）"""
         handler = self._handlers.get(event.event_type)
         if not handler:
-            logger.warning(f"[EventProcessor] 未找到处理器: {event.event_type}")
+            # 无处理器的事件自动标记为 done，防止无限积压
+            # 这类事件通常是广播通知（distillation_progress/feedback_loop 等），
+            # 由发布方记录日志即可，无需消费方处理。
+            self.bus._mark_done(event.trace_id)
+            logger.debug(f"[EventProcessor] 无处理器，自动归档: {event.event_type}")
             return None
 
         try:
