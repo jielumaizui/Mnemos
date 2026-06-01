@@ -379,9 +379,17 @@ class KnowledgeScheduler:
             timeout=300,
         ))
 
-        # --- 事件触发步骤（注册但不参与 tick） ---
+        # --- 定时构图步骤（MOC + 实体页面全量更新） ---
         self.register(ScheduledStep(
             name="connect_worker",
+            func=lambda: self._run_connect_worker(wiki_base),
+            trigger=CronTrigger("0 9 * * *"),
+            timeout=600,
+        ))
+
+        # --- 事件触发步骤（注册但不参与 tick） ---
+        self.register(ScheduledStep(
+            name="connect_worker_event",
             func=lambda: {"status": "event_only"},
             trigger=EventTrigger("page.created"),
         ))
@@ -849,6 +857,23 @@ class KnowledgeScheduler:
 
         except Exception as e:
             logger.error(f"事件触发执行失败 {event_type}: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _run_connect_worker(self, wiki_base: str) -> Dict:
+        """连接Worker：全量构图，生成实体页面和MOC枢纽"""
+        try:
+            from core.kia.charon import run_connect_cycle
+            result = run_connect_cycle(dry_run=False)
+            return {
+                "status": "ok",
+                "people": result.get("people", 0),
+                "projects": result.get("projects", 0),
+                "tech": result.get("tech", 0),
+                "concepts": result.get("concepts", 0),
+                "mocs": result.get("mocs", 0),
+            }
+        except Exception as e:
+            logger.error(f"连接Worker失败: {e}")
             return {"status": "error", "error": str(e)}
 
     def _trigger_page_created(self, payload: Dict) -> Dict:
