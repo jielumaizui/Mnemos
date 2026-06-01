@@ -51,6 +51,28 @@ class RelationManager:
     def __init__(self, db_path: str = None):
         self._db_path = Path(db_path) if db_path else _get_db_path()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _init_db(self):
+        """确保 relations 表存在（RelationManager 独立使用时）"""
+        with sqlite3.connect(str(self._db_path), timeout=5) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS relations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    relation_type TEXT NOT NULL,
+                    strength REAL DEFAULT 0.5,
+                    confidence REAL DEFAULT 0.5,
+                    source_method TEXT DEFAULT 'auto',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source, target, relation_type)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rel_source ON relations(source)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rel_target ON relations(target)")
+            conn.commit()
 
     def add_from_distill(self, kg_input: Dict) -> List[Relation]:
         """从蒸馏输出提取关系并持久化到数据库

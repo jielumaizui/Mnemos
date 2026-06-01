@@ -132,8 +132,10 @@ class PreFlightInjector:
         if not frontmatter:
             return None
 
-        # 解析 checklist
+        # 解析 checklist（优先 frontmatter，无则从正文生成）
         raw_checklist = frontmatter.get("checklist", [])
+        if not raw_checklist:
+            raw_checklist = self._generate_checklist_from_page(frontmatter, body)
         checklist_items = [self._parse_checklist_item(item) for item in raw_checklist]
 
         # 1. 场景适配过滤
@@ -227,29 +229,38 @@ class PreFlightInjector:
         return frontmatter, body
 
     def _find_wiki_fallback(self, task_type: str) -> Optional[Path]:
-        """从 06-Retrospectives 搜索匹配 task_type 的页面"""
+        """从 06-Retrospectives 搜索匹配 task_type 的页面（frontmatter + 文件名双重匹配）"""
         retro_dir = self.WIKI_BASE / "06-Retrospectives"
         if not retro_dir.exists():
             return None
         candidates = []
         for md_file in retro_dir.glob("*.md"):
+            if md_file.name.startswith("_"):
+                continue
             try:
                 content = md_file.read_text(encoding="utf-8")
-                if not content.startswith("---"):
-                    continue
-                parts = content.split("---", 2)
-                if len(parts) < 3:
-                    continue
-                fm = yaml.safe_load(parts[1]) or {}
-                page_type = fm.get("类型", "")
-                # 匹配 task_type 的多种写法
+                page_type = ""
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        fm = yaml.safe_load(parts[1]) or {}
+                        page_type = fm.get("类型", "")
+
+                stem = md_file.stem
+                matched = False
+                # 1. frontmatter 类型匹配
                 if task_type.lower() in page_type.lower():
-                    candidates.append(md_file)
-                elif task_type == "coding" and page_type in ("反模式", "问题-解决"):
-                    candidates.append(md_file)
-                elif task_type == "debugging" and page_type in ("反模式", "问题-解决"):
-                    candidates.append(md_file)
-                elif task_type == "design" and page_type in ("决策记录",):
+                    matched = True
+                # 2. 文件名中的分类标记匹配（反模式/问题-解决/决策记录）
+                elif task_type in ("coding", "debugging") and ("反模式" in stem or "问题-解决" in stem):
+                    matched = True
+                elif task_type == "design" and "决策记录" in stem:
+                    matched = True
+                # 3. 通用 fallback：文件名含 task_type 关键词
+                elif task_type.lower() in stem.lower():
+                    matched = True
+
+                if matched:
                     candidates.append(md_file)
             except Exception:
                 continue
@@ -258,6 +269,51 @@ class PreFlightInjector:
             candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
             return candidates[0]
         return None
+
+    def _generate_checklist_from_page(self, frontmatter: Dict, body: str) -> List[Dict]:
+        """从 Wiki 页面内容生成 checklist（无专用 checklist 字段时 fallback）"""
+        items = []
+        # 1. 从关键词生成
+        keywords = frontmatter.get("关键词", [])
+        if isinstance(keywords, list):
+            for kw in keywords[:5]:
+                if isinstance(kw, str):
+                    items.append({
+                        "item": f"相关知识: {kw}",
+                        "severity": "medium",
+                        "trigger_keywords": [kw],
+                    })
+        # 2. 从触发器生成
+        triggers = frontmatter.get("触发器", [])
+        if isinstance(triggers, list):
+            for t in triggers[:3]:
+                if isinstance(t, str):
+                    items.append({
+                        "item": f"触发场景: {t}",
+                        "severity": "low",
+                        "trigger_keywords": [t],
+                    })
+        # 3. 从正文标题中提取反模式/缺陷/注意事项
+        import re
+        # 匹配 Markdown 标题中的缺陷/反模式/注意/警告
+        for line in body.split("\n"):
+            m = re.match(r'^#{2,4}\s+(.+)$', line.strip())
+            if m:
+                title = m.group(1).strip()
+                # 过滤掉通用标题，保留具体项
+                if any(k in title for k in ("缺陷", "反模式", "注意", "警告", "风险", "坑", "问题")):
+                    items.append({
+                        "item": title,
+                        "severity": "high",
+                        "trigger_keywords": [title],
+                    })
+                elif any(k in title for k in ("最佳实践", "建议", "原则", "方案")):
+                    items.append({
+                        "item": title,
+                        "severity": "medium",
+                        "trigger_keywords": [title],
+                    })
+        return items
 
     def _parse_checklist_item(self, raw: Dict) -> ChecklistItem:
         """解析 checklist 项"""
