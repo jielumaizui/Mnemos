@@ -300,7 +300,7 @@ class KnowledgeScheduler:
         ))
         self.register(ScheduledStep(
             name="knowledge_dna",
-            func=lambda: self._run_kia_module("genos", "DNAEngine", "compute_and_save_all", wiki_base=wiki_base),
+            func=lambda: self._run_kia_module("genos", "DNAEngine", "scan_all_pages", wiki_base=wiki_base),
             trigger=CronTrigger("0 3 * * *"),
             timeout=300,
         ))
@@ -364,7 +364,7 @@ class KnowledgeScheduler:
         # --- 条件触发步骤 ---
         self.register(ScheduledStep(
             name="skill_flywheel",
-            func=lambda: self._run_kia_module("ixion", "SkillFlywheel", "run_cycle", wiki_base=wiki_base),
+            func=lambda: self._run_kia_module("ixion", "SkillWikiFlywheel", "run_cycle", wiki_base=wiki_base),
             trigger=ConditionTrigger(
                 predicate=self._flywheel_predicate,
                 description="profile_signals>=50",
