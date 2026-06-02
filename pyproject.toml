@@ -4,19 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemos"
-version = "2.0.0"
-description = "AI-Agent Companion for Knowledge Management with User Persona"
+version = "2.0.0-beta.1"
+description = "Local AI Agent knowledge capture, distillation, search and action assistance system"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Mnemos Contributors"}]
+keywords = ["knowledge-management", "ai-agent", "second-brain", "llm", "wiki", "memos", "obsidian"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Utilities",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -39,6 +43,7 @@ mcp = ["mcp>=1.0.0"]
 kimi = ["tomli_w>=1.0.0"]
 ml = ["scikit-learn>=1.3.0", "hnswlib>=0.8.0"]
 dev = ["pytest>=7.0.0", "black>=23.0.0", "flake8>=6.0.0", "mypy>=1.0.0"]
+all = ["mcp>=1.0.0", "tomli_w>=1.0.0", "scikit-learn>=1.3.0", "hnswlib>=0.8.0"]
 
 [project.scripts]
 mnemos = "mnemos_cli:main"

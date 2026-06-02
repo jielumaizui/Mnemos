@@ -396,25 +396,37 @@ def _deep_merge(base: dict, override: dict) -> None:
             base[key] = val
 
 
-def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False) -> Path:
+def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False, preserve: bool = False) -> Path:
     config_file = _runtime_config_path()
     config_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if config_file.exists() and not yes_mode:
+    if config_file.exists() and not yes_mode and not preserve:
         if not ask_yes_no(f"配置已存在: {config_file}，是否覆盖？", default=False, yes_mode=yes_mode):
             print_warn("保留现有配置")
             return config_file
 
     from core.config import DEFAULT_CONFIG
 
-    data = copy.deepcopy(DEFAULT_CONFIG)
-    if config_file.exists():
+    if preserve and config_file.exists():
+        # 重装模式：以现有配置为基，仅更新必要字段
         try:
-            existing = json.loads(config_file.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                _deep_merge(data, existing)
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = copy.deepcopy(DEFAULT_CONFIG)
+            else:
+                print_ok("保留现有配置，仅更新必要字段")
         except Exception as e:
-            print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
+            print_warn(f"现有配置读取失败，将重新生成: {e}")
+            data = copy.deepcopy(DEFAULT_CONFIG)
+    else:
+        data = copy.deepcopy(DEFAULT_CONFIG)
+        if config_file.exists():
+            try:
+                existing = json.loads(config_file.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    _deep_merge(data, existing)
+            except Exception as e:
+                print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
 
     data["mnemos_dir"] = str(_runtime_config_path().parent.parent)
     data.setdefault("wiki", {})["vault_path"] = str(wiki_dir)
@@ -819,6 +831,7 @@ def main():
     parser.add_argument("--skip-scheduler", action="store_true", help="跳过配置系统定时任务")
     parser.add_argument("--skip-hooks", action="store_true", help="跳过安装 Agent Hooks")
     parser.add_argument("--dry-run", action="store_true", help="只检查环境，不执行任何安装/启动操作")
+    parser.add_argument("--preserve-config", action="store_true", help="保留现有配置，仅更新必要字段（适合重装）")
     args = parser.parse_args()
 
     # 非交互式终端：不自动启用 --yes，避免在 CI/后台自动修改系统状态
@@ -876,7 +889,7 @@ def main():
 
     # 步骤 5
     print_step(5, total_steps, "生成配置")
-    generate_config(wiki_dir, memos_url, yes_mode=yes_mode)
+    generate_config(wiki_dir, memos_url, yes_mode=yes_mode, preserve=args.preserve_config)
 
     # 步骤 6
     print_step(6, total_steps, "初始化 Wiki 目录")
