@@ -34,7 +34,7 @@ def main():
     for idx, page in enumerate(md_files, 1):
         try:
             discovered = kg.discover_relations(page, existing_pages=all_pages)
-            added = kg.apply_discovered(discovered, min_confidence=0.3)
+            added = kg.apply_discovered(discovered, min_confidence=0.7)
             relation_count += added
 
             entities = em.ingest_from_wiki(page)

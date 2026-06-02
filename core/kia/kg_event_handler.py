@@ -91,7 +91,7 @@ class KGEventHandler:
             # 将关系写入知识图谱
             from .knowledge_graph import KnowledgeGraph
             kg = KnowledgeGraph()
-            added = kg.apply_discovered(relations, min_confidence=0.3)
+            added = kg.apply_discovered(relations, min_confidence=0.7)
             result["relations_added"] = added
 
         # 3. 自动发现 Wiki 页面之间的关系
@@ -102,7 +102,7 @@ class KGEventHandler:
             if not page.exists():
                 continue
             discovered = kg.discover_relations(page)
-            added = kg.apply_discovered(discovered, min_confidence=0.4)
+            added = kg.apply_discovered(discovered, min_confidence=0.7)
             result["relations_added"] += added
 
         logger.info(
