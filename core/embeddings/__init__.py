@@ -11,15 +11,17 @@ Mnemos Embedding 模块 — 语义搜索与向量索引
 
 from __future__ import annotations
 
-try:
-    from core.embeddings.siliconflow_client import SiliconFlowEmbeddingClient, get_embedding_client
-    from core.embeddings.index_manager import EmbeddingIndexManager
-except ImportError:
-    from siliconflow_client import SiliconFlowEmbeddingClient, get_embedding_client
-    from index_manager import EmbeddingIndexManager
+from .siliconflow_client import SiliconFlowEmbeddingClient, get_embedding_client
+from .index_manager import EmbeddingIndexManager
+from .cache import EmbeddingCache
+from .rate_limiter import SiliconFlowRateLimiter
+from .relation_manager import RelationEmbeddingManager
 
 __all__ = [
     "SiliconFlowEmbeddingClient",
     "get_embedding_client",
     "EmbeddingIndexManager",
+    "EmbeddingCache",
+    "SiliconFlowRateLimiter",
+    "RelationEmbeddingManager",
 ]

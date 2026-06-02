@@ -60,6 +60,8 @@ class KnowledgeFragment:
     boundaries: Dict[str, str]
     anti_patterns: List[str]
     related_concepts: List[str]
+    # 结构化关联（ADR-019：关联上下文用于语义桥接）
+    relations: List[Dict[str, str]]
     # 七层流水线扩展字段
     self_check_passed: bool = True
     self_check_issues: List[str] = field(default_factory=list)
@@ -71,6 +73,7 @@ class KnowledgeFragment:
     def __init__(self, form: str, title: str, frontmatter: Dict[str, Any],
                  background: str, core_content: str, boundaries: Dict[str, str],
                  anti_patterns: List[str], related_concepts: List[str],
+                 relations: List[Dict[str, str]] = None,
                  self_check_passed: bool = True,
                  self_check_issues: List[str] = None,
                  cross_agent_links: List[str] = None,
@@ -84,6 +87,7 @@ class KnowledgeFragment:
         self.boundaries = boundaries
         self.anti_patterns = anti_patterns
         self.related_concepts = related_concepts
+        self.relations = relations or []
         self.self_check_passed = self_check_passed
         self.self_check_issues = self_check_issues or []
         self.cross_agent_links = cross_agent_links or []
@@ -685,6 +689,7 @@ class KnowledgeExtractor:
                     boundaries=frag_data.get("boundaries", {}),
                     anti_patterns=frag_data.get("anti_patterns", []),
                     related_concepts=frag_data.get("related_concepts", []),
+                    relations=frag_data.get("relations", []),
                     keywords=keywords,
                 )
                 fragments.append(fragment)
@@ -772,6 +777,7 @@ class KnowledgeExtractor:
                 boundaries={"applies": best.boundary_hint} if best.boundary_hint else {},
                 anti_patterns=[a.claim for a in form_assertions if a.is_negated],
                 related_concepts=[],
+                relations=[],
                 keywords=keywords,
             ))
         return fragments
@@ -1358,6 +1364,10 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     if not fragment.self_check_passed:
         lines.append(f"验证状态: pending-verification")
 
+    # 结构化关联上下文（ADR-019）
+    if fragment.relations:
+        lines.append(f"关联: {json.dumps(fragment.relations, ensure_ascii=False)}")
+
     lines.append("---")
 
     body = [f"# {fragment.title}", ""]
@@ -1407,6 +1417,16 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         body.extend(["## 相关链接", ""])
         for concept in all_related:
             body.append(f"- [[{concept}]]")
+        body.append("")
+
+    # 结构化关联说明（ADR-019：含关联上下文，便于人类阅读）
+    if fragment.relations:
+        body.extend(["## 关联说明", ""])
+        for rel in fragment.relations:
+            target = rel.get("target", "")
+            rel_type = rel.get("type", "related_to")
+            context = rel.get("context", "")
+            body.append(f"- **{target}**（`{rel_type}`）: {context}")
         body.append("")
 
     # AI 关联扩充（与原始内容严格区分）
@@ -1898,12 +1918,22 @@ def _emit_knowledge_distilled(session_id: str, result: DistillationResult, writt
         for frag in result.fragments:
             entities.extend(frag.keywords or [])
             entities.extend(frag.related_concepts or [])
+            # cross_agent_links（传统反向链接）
             for link in frag.cross_agent_links or []:
                 relations.append({
                     "source": frag.title,
                     "target": link,
                     "type": "related_to",
                     "confidence": 0.5,
+                })
+            # 结构化关联上下文（ADR-019）
+            for rel in frag.relations or []:
+                relations.append({
+                    "source": frag.title,
+                    "target": rel.get("target", "").strip("[]"),
+                    "type": rel.get("type", "related_to"),
+                    "context": rel.get("context", ""),
+                    "confidence": 0.7,  # LLM 推断的关联，置信度高于规则提取
                 })
         publish_event("knowledge_distilled", "distill", {
             "session_id": session_id,

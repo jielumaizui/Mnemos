@@ -80,11 +80,21 @@ class ContextAwareSearch:
         context = context or {}
         limit = limit or self.MAX_RESULTS
 
-        # 1. 知识图谱召回
-        candidates = self._recall_from_kg(query)
-        if not candidates:
-            # 回退到文件系统搜索
-            candidates = self._recall_from_files(query)
+        # 0. 语义召回（embedding 优先，现有功能 fallback）
+        semantic_candidates = self._recall_from_embedding(query)
+
+        # 1. 知识图谱召回（如果语义召回不足，补充传统召回）
+        if semantic_candidates:
+            candidates = semantic_candidates
+            # 如果语义结果少，补充 KG 召回做融合
+            if len(candidates) < limit:
+                kg_candidates = self._recall_from_kg(query)
+                candidates = self._merge_candidates(candidates, kg_candidates)
+        else:
+            candidates = self._recall_from_kg(query)
+            if not candidates:
+                # 回退到文件系统搜索
+                candidates = self._recall_from_files(query)
 
         if not candidates:
             return []
@@ -138,6 +148,61 @@ class ContextAwareSearch:
         # 4. 排序并截取
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
+
+    def _recall_from_embedding(self, query: str) -> List[Dict]:
+        """语义召回：双索引融合检索（页面向量 + 关联上下文向量）"""
+        try:
+            from core.config import get_config
+            cfg = get_config()
+            if not cfg.get("embedding.enabled", False):
+                return []
+
+            from core.embeddings.dual_index import DualIndexRetriever
+            retriever = DualIndexRetriever(wiki_base=self.wiki_base)
+            semantic_results = retriever.search(query, top_k=15)
+            if not semantic_results:
+                return []
+
+            candidates = []
+            for rel_path, sim in semantic_results:
+                page_path = self.wiki_base / rel_path
+                if not page_path.exists():
+                    continue
+                try:
+                    content = page_path.read_text(encoding="utf-8", errors="ignore")
+                    fm = self._extract_frontmatter(content)
+                    title = (fm.get("名称") or fm.get("title") or page_path.stem) if fm else page_path.stem
+                    candidates.append({
+                        "path": str(rel_path),
+                        "title": title,
+                        "content": content[:2000],
+                        "entity": title,
+                        "frontmatter": fm or {},
+                        "semantic_score": sim,
+                        "match_type": "semantic",
+                    })
+                except Exception:
+                    continue
+            return candidates
+        except Exception as e:
+            logger.debug(f"语义召回失败: {e}")
+            return []
+
+    def _merge_candidates(self, semantic: List[Dict], traditional: List[Dict]) -> List[Dict]:
+        """融合语义召回和传统召回结果，去重"""
+        seen = set()
+        merged = []
+        for c in semantic:
+            path = c.get("path", "")
+            if path and path not in seen:
+                seen.add(path)
+                merged.append(c)
+        for c in traditional:
+            path = c.get("path", "")
+            if path and path not in seen:
+                seen.add(path)
+                merged.append(c)
+        return merged
 
     def _recall_from_kg(self, query: str) -> List[Dict]:
         """从知识图谱召回候选页面"""
@@ -213,6 +278,10 @@ class ContextAwareSearch:
 
     def _compute_relevance(self, query: str, candidate: Dict) -> float:
         """计算查询与候选内容的相关性（纳入 frontmatter 中文字段）"""
+        # 语义召回的结果直接使用语义相似度作为 relevance
+        if candidate.get("match_type") == "semantic":
+            return candidate.get("semantic_score", 0.0)
+
         keywords = self._query_terms(query)
         content = candidate.get("content", "").lower()
         title = candidate.get("title", "").lower()

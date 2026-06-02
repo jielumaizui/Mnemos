@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS relations (
     strength REAL DEFAULT 0.5,
     confidence REAL DEFAULT 0.5,
     source_method TEXT DEFAULT 'auto',
+    context TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source, target, relation_type)
@@ -230,10 +231,11 @@ class KnowledgeGraph:
                 # 插入主关系
                 cursor = conn.execute(
                     """INSERT OR REPLACE INTO relations
-                       (source, target, relation_type, strength, confidence, source_method, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (source, target, relation_type, strength, confidence, source_method, context, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (relation.source, relation.target, relation.relation_type.value,
                      relation.strength, relation.confidence, relation.source_method,
+                     relation.context,
                      datetime.now(timezone.utc).isoformat()[:19])
                 )
                 rel_id = cursor.lastrowid
@@ -257,10 +259,11 @@ class KnowledgeGraph:
                 if relation.is_symmetric and relation.source != relation.target:
                     cursor = conn.execute(
                         """INSERT OR REPLACE INTO relations
-                           (source, target, relation_type, strength, confidence, source_method, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           (source, target, relation_type, strength, confidence, source_method, context, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (relation.target, relation.source, relation.relation_type.value,
                          relation.strength, relation.confidence, relation.source_method,
+                         relation.context,
                          datetime.now(timezone.utc).isoformat()[:19])
                     )
                     # 同步 FTS5 索引
@@ -911,18 +914,46 @@ WHERE file.path = "{page}"
 
     def search(self, query: str, limit: int = 20) -> List[Dict]:
         """
-        知识图谱关键词召回。
+        知识图谱关键词召回（语义搜索增强）。
 
         在关系数据库和 Wiki 页面中搜索与查询相关的页面。
+        若 embedding 开启，优先尝试语义召回，再补充关键词召回。
 
         Returns:
             [{"page_path": str, "title": str, "content": str, "entity_name": str}, ...]
         """
+        results_map: Dict[str, Dict] = {}
+
+        # 0. 语义召回（embedding 优先）
+        try:
+            from core.config import get_config
+            cfg = get_config()
+            if cfg.get("embedding.enabled", False):
+                from core.embeddings import EmbeddingIndexManager
+                idx = EmbeddingIndexManager(wiki_base=self.wiki_base)
+                semantic_results = idx.search(query, top_k=limit)
+                for rel_path, sim in semantic_results:
+                    page_path = self.wiki_base / rel_path
+                    if page_path.exists():
+                        try:
+                            content = page_path.read_text(encoding="utf-8", errors="ignore")
+                            title = page_path.stem
+                            results_map[rel_path] = {
+                                "page_path": rel_path,
+                                "title": title,
+                                "content": content[:2000],
+                                "entity_name": title,
+                                "_score": sim * 2,  # 语义结果加权
+                                "_semantic": True,
+                            }
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         keywords = [kw.strip().lower() for kw in query.split() if len(kw.strip()) > 1]
         if not keywords:
             keywords = [query.lower().strip()]
-
-        results_map: Dict[str, Dict] = {}
 
         # 1. 从关系数据库召回（优先 FTS5，回退 LIKE）
         try:
