@@ -71,7 +71,7 @@ def _daemon_processes():
                 )
                 if ps_result.returncode == 0:
                     cmd = ps_result.stdout.strip()
-                    if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
+                    if ("mnemos_daemon" in cmd or "mnemos_daemon.py" in cmd) and "pgrep" not in cmd:
                         lines.append(f"{pid} {cmd}")
             return lines
         else:
@@ -85,7 +85,7 @@ def _daemon_processes():
             for line in result.stdout.splitlines():
                 if "pgrep" in line:
                     continue
-                if "mnemos_daemon.py" in line:
+                if "mnemos_daemon" in line or "mnemos_daemon.py" in line:
                     lines.append(line)
             return lines
     except Exception:
