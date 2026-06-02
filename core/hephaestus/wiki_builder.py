@@ -189,6 +189,31 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
         pass
 
 
+def _link_session_memos_to_wiki(memos: List[Dict], wiki_page_paths: List[str]) -> None:
+    """将 session 的所有 Memos UID 与生成的 Wiki 页面路径建立映射"""
+    from core.config import get_config
+    db_path = get_config().data_dir / "sync_log.db"
+    if not db_path.exists() or not memos or not wiki_page_paths:
+        return
+    try:
+        uids = [m.get("uid", "") for m in memos if m.get("uid")]
+        if not uids:
+            return
+        conn = sqlite3.connect(str(db_path), timeout=10)
+        for uid in uids:
+            for wpath in wiki_page_paths:
+                conn.execute(
+                    """INSERT OR IGNORE INTO memos_wiki_link
+                       (memos_uid, wiki_page_path, link_type, created_at)
+                       VALUES (?, ?, 'wiki_builder', ?)""",
+                    (uid, wpath, datetime.now().isoformat()),
+                )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.warning("memos_wiki_link 记录失败", exc_info=True)
+
+
 # ========== Memos 查询与会话重建 ==========
 
 def fetch_l1_sessions(client: MemosClient) -> Dict[str, List[Dict]]:
@@ -771,6 +796,7 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                                        len(messages), avg_score, path_str,
                                        method="pipeline")
                         created_pages += 1
+                    _link_session_memos_to_wiki(memos, written)
                     stats["pipeline_used"] += 1
 
                     # 记录流水线层结果
@@ -817,6 +843,10 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                 except Exception as e:
                     _log(session_id, "error", f"{page_id}: {e}")
                     stats["failed"] += 1
+            _link_session_memos_to_wiki(
+                memos,
+                [str(_get_wiki_dir() / "00-Inbox" / f"{pid}.md") for pid, _ in pages]
+            )
             stats["rule_used"] += 1
 
         stats["processed"] += created_pages

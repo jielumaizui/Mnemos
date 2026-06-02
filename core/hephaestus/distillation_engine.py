@@ -1840,6 +1840,51 @@ def distill_session(session_id: str, messages: List[Dict],
     return engine.process(session_id, messages)
 
 
+def _record_memos_wiki_links(session_id: str, wiki_page_paths: List[str]) -> None:
+    """将 Memos UID 与 Wiki 页面路径建立映射，写入 sync_log.db 的 memos_wiki_link 表"""
+    from core.config import get_config
+    db_path = get_config().data_dir / "sync_log.db"
+    if not db_path.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=10)
+        # 1. 更新 sync_log 的 wiki_page_paths 和 distill_status
+        conn.execute(
+            """UPDATE sync_log
+               SET wiki_page_paths = ?, distill_status = 'distilled', distilled_at = ?
+               WHERE session_id = ?""",
+            (json.dumps(wiki_page_paths), datetime.now().isoformat(), session_id),
+        )
+        # 2. 查询该 session 的所有 memos_uids
+        cursor = conn.execute(
+            "SELECT memos_uids FROM sync_log WHERE session_id = ?",
+            (session_id,),
+        )
+        all_uids = set()
+        for row in cursor.fetchall():
+            if row[0]:
+                try:
+                    uids = json.loads(row[0])
+                    if isinstance(uids, list):
+                        all_uids.update(uids)
+                except Exception:
+                    pass
+        # 3. 写入 memos_wiki_link
+        if all_uids and wiki_page_paths:
+            for uid in all_uids:
+                for wpath in wiki_page_paths:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO memos_wiki_link
+                           (memos_uid, wiki_page_path, link_type, created_at)
+                           VALUES (?, ?, 'distilled', ?)""",
+                        (uid, wpath, datetime.now().isoformat()),
+                    )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logging.getLogger(__name__).warning(f"memos_wiki_link 记录失败", exc_info=True)
+
+
 def distill_and_write(session_id: str, messages: List[Dict],
                       wiki_base: str = None) -> Tuple[DistillationResult, List[str]]:
     """便捷函数：蒸馏并写入 Wiki"""
@@ -1873,5 +1918,8 @@ def distill_and_write(session_id: str, messages: List[Dict],
             })
         except Exception:
             logging.getLogger(__name__).warning(f"knowledge_distilled event emit failed", exc_info=True)
+
+        # 建立 Memos UID ↔ Wiki 页面映射
+        _record_memos_wiki_links(session_id, written)
 
     return result, written

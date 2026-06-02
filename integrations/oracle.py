@@ -170,6 +170,10 @@ class WikiReader:
 
         info = self.index[page_id]
         file_path = info["path"]
+        try:
+            last_modified = datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+        except Exception:
+            last_modified = ""
 
         try:
             content = file_path.read_text(encoding='utf-8')
@@ -193,6 +197,7 @@ class WikiReader:
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
                 "source": fm_get(frontmatter, "source") or "",
+                "last_modified": last_modified,
                 "note": "沉睡知识，低活跃度，可唤醒",
                 "depth": "metadata_only"
             }
@@ -211,6 +216,7 @@ class WikiReader:
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
                 "source": fm_get(frontmatter, "source") or "",
+                "last_modified": last_modified,
                 "depth": f"summary_{max_chars}"
             }
 
@@ -229,6 +235,7 @@ class WikiReader:
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
                 "source": fm_get(frontmatter, "source") or "",
+                "last_modified": last_modified,
                 "depth": f"paragraph_{max_chars}"
             }
 
@@ -250,6 +257,7 @@ class WikiReader:
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
                 "source": fm_get(frontmatter, "source") or "",
+                "last_modified": last_modified,
                 "depth": "full",
                 "related": self._get_related_pages(page_id, limit=5) if config["related"] else []
             }
@@ -267,6 +275,7 @@ class WikiReader:
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
                 "source": fm_get(frontmatter, "source") or "",
+                "last_modified": last_modified,
                 "depth": "full_plus",
                 "related": self._get_related_pages(page_id, limit=5),
                 "deep_traced": True,

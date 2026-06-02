@@ -1120,6 +1120,35 @@ class MemosClient:
             agent=self.agent
         )
 
+    def get_session_by_uid(self, memo_uid: str) -> Optional[str]:
+        """根据 Memos UID 反查对应的 session_id
+
+        1. 先调用 get_by_uid 获取 memo 的 tags，解析 session=xxx
+        2. 若 tags 中没有 session，查 sync_log 兜底
+        """
+        memo = self.get_by_uid(memo_uid)
+        if memo and memo.tags:
+            for tag in memo.tags:
+                if tag.startswith("session="):
+                    return tag.split("=", 1)[1]
+        # 兜底：查 sync_log
+        try:
+            from core.config import get_config
+            db_path = get_config().data_dir / "sync_log.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path), timeout=5)
+                cursor = conn.execute(
+                    "SELECT session_id FROM sync_log WHERE memos_uids LIKE ?",
+                    (f'%"{memo_uid}"%',),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    return row[0]
+        except Exception:
+            pass
+        return None
+
     # ==================== 批量 Ingest 接口（Clean/Expand模式）====================
 
     def batch_save(

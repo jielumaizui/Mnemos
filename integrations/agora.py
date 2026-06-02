@@ -134,19 +134,19 @@ class MCPServer:
         }
 
     def _tool_session_search(self, query: str = "", session_id: str = "",
-                             limit: int = 10) -> Dict:
+                             memos_uid: str = "", limit: int = 10) -> Dict:
         """
         搜索历史会话记录，自动合并分片内容
 
         使用场景：
         - 用户说"我们之前聊过什么"
         - 需要查找某次 session 的完整对话
-        - 查询按 hash/range/segment 分片存储的聊天记录
+        - 通过 memos_uid 反查原始对话
 
         特性：
         - 自动检测分段记录（segment=xxx, type=chunk）
         - 按 hash/session 标识合并所有分段为完整对话
-        - 返回合并后的记忆列表
+        - 支持 memos_uid 反查
         """
         from core.config import get_config
         from integrations.styx import MemosClient
@@ -163,6 +163,10 @@ class MCPServer:
                 base_url=config.memos_api_url,
                 token=config.memos_token,
             )
+
+            # 如果提供了 memos_uid，反查 session_id
+            if memos_uid and not session_id:
+                session_id = client.get_session_by_uid(memos_uid)
 
             # 如果提供了 session_id，构造精确查询
             if session_id:

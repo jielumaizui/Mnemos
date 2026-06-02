@@ -568,6 +568,8 @@ def cmd_doctor(args):
         ("tomli_w", "TOML 写入", "Kimi hooks 配置", "pip install mnemos[kimi]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
+        ("sklearn", "scikit-learn", "ML 评分器训练（standard 后端）", "pip install mnemos[ml]"),
+        ("hnswlib", "hnswlib", "向量索引与跨 Agent 关联检索", "pip install mnemos[ml]"),
     ]
     has_optional_gap = False
     for module, name, feature, install_cmd in optional_deps:
@@ -963,13 +965,53 @@ def cmd_search(args):
 
         print(f"搜索结果 ({len(results)} 条):")
         for i, r in enumerate(results, 1):
-            print(f"  {i}. [{r.score:.2f}] {r.title}")
+            badges = []
+            if getattr(r, 'verification', ''):
+                badges.append(r.verification)
+            if getattr(r, 'source', ''):
+                badges.append(f"来源:{r.source}")
+            badge_str = f" ({', '.join(badges)})" if badges else ""
+            print(f"  {i}. [{r.score:.2f}] {r.title}{badge_str}")
             if r.snippet:
                 snippet = r.snippet[:80].replace("\n", " ")
                 print(f"     {snippet}...")
             print(f"     路径: {r.page_path}")
     except Exception as e:
         print(f"搜索失败: {e}")
+
+
+def cmd_wiki(args):
+    """Wiki 知识库操作"""
+    if args.wiki_cmd == "read":
+        try:
+            from integrations.oracle import WikiReader
+            reader = WikiReader()
+            result = reader.read_page(args.page_path, depth=args.depth)
+            if not result:
+                print(f"未找到页面: {args.page_path}")
+                return
+            print(f"📄 {result.get('title', args.page_path)}")
+            print(f"   深度: {result.get('depth', 'unknown')}")
+            if result.get('confidence'):
+                print(f"   可信度: {result['confidence']}")
+            if result.get('verification'):
+                print(f"   验证状态: {result['verification']}")
+            if result.get('source'):
+                print(f"   来源: {result['source']}")
+            if result.get('last_modified'):
+                print(f"   最后更新: {result['last_modified']}")
+            print("-" * 40)
+            content = result.get('content') or result.get('summary') or result.get('summary', '')
+            if content:
+                print(content[:2000])
+            if result.get('related'):
+                print(f"\n🔗 关联页面 ({len(result['related'])} 个):")
+                for rel in result['related'][:5]:
+                    print(f"   - {rel.get('title', rel.get('path', 'unknown'))}")
+        except Exception as e:
+            print(f"读取 Wiki 失败: {e}")
+    else:
+        print("用法: mnemos wiki read <page_path> [--depth metadata|summary|full]")
 
 
 def cmd_report(args):
@@ -1144,6 +1186,14 @@ def main():
     search_parser.add_argument("query", help="搜索查询")
     search_parser.add_argument("--limit", type=int, default=10, help="最大结果数")
 
+    # wiki
+    wiki_parser = subparsers.add_parser("wiki", help="Wiki 知识库操作")
+    wiki_sub = wiki_parser.add_subparsers(dest="wiki_cmd")
+    wiki_read_parser = wiki_sub.add_parser("read", help="读取指定 Wiki 页面")
+    wiki_read_parser.add_argument("page_path", help="Wiki 页面路径（如 03-Tech/codex-cli.md）")
+    wiki_read_parser.add_argument("--depth", choices=["metadata", "summary", "full"],
+                                   default="full", help="读取深度")
+
     # report
     report_parser = subparsers.add_parser("report", help="报告生成")
     report_sub = report_parser.add_subparsers(dest="report_cmd")
@@ -1182,6 +1232,8 @@ def main():
         cmd_sync(args)
     elif args.command == "search":
         cmd_search(args)
+    elif args.command == "wiki":
+        cmd_wiki(args)
     elif args.command == "report":
         cmd_report(args)
     elif args.command == "events":
