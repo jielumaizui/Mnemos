@@ -675,8 +675,9 @@ class SyncEngine:
             matched = []
             for r in results:
                 # content_hash 二次校验：防止不同 session 的相同 turn 号被误判
+                # 必须与 compute_content_hash() 使用同一算法（MD5）
                 body = (r.content or "").strip()
-                body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+                body_hash = hashlib.md5(body.encode("utf-8")).hexdigest()[:16]
                 if body_hash == content_hash:
                     matched.append(r.uid)
             return matched

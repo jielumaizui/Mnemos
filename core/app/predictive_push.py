@@ -51,6 +51,7 @@ class PredictivePush:
             "patterns": [
                 r"怎么(解决|处理|办)", r"为什么.{0,5}(不|报错|失败)",
                 r"如何(实现|配置|安装|部署)", r"有没有(办法|方案|替代)",
+                r"(修复|解决|配置|设置|调试|报错|错误|问题|冲突)",
             ],
             "confidence": 0.8,
         },
@@ -75,6 +76,7 @@ class PredictivePush:
             "patterns": [
                 r"(Docker|docker|K8s|k8s|Kubernetes)", r"(Redis|redis|MySQL|mysql|PostgreSQL)",
                 r"(React|Vue|Angular|Next)", r"(Nginx|nginx|Terraform|Ansible)",
+                r"(codex-cli|codex|claude|kimi|openclaw)",
             ],
             "confidence": 0.6,
         },
@@ -173,7 +175,7 @@ class PredictivePush:
 
             decisions.append(PushDecision(
                 should_push=should_push,
-                page_path=page.get("path", ""),
+                page_path=page.get("path") or page.get("page_path", ""),
                 title=page.get("title", ""),
                 reason=f"检测到 {signal.signal_type} 信号：{signal.matched_text[:30]}",
                 confidence=confidence,
@@ -292,8 +294,8 @@ class PredictivePush:
         # 过滤 pending-verification
         if page.get("verification") == "pending-verification":
             return False
-        # 过滤低置信度
-        if page.get("confidence", 0.5) < 0.5:
+        # 过滤低置信度（系统默认 0.4，阈值不宜过高）
+        if page.get("confidence", 0.5) < 0.3:
             return False
         return True
 

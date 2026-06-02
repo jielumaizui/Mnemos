@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Callable
 
 from core.config import get_config
 from core.prometheus_fire import AgentDelegate, DistillTask
+from core.helios import AgentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ class HephaestusWorker:
         """
         session_id = task.get("session_id")
         if not session_id:
-            logger.warning("任务缺少 session_id")
+            logger.warning(f"任务缺少 session_id")
             return False
         self._emit_progress(session_id, "started", "正在提炼知识...")
 
@@ -292,87 +293,67 @@ class HephaestusWorker:
         return True
 
     def _sync_distill_and_complete(self, session_id: str, distill_task: DistillTask) -> bool:
-        """同步执行蒸馏（AgentDistillAdapter 回退模式），不依赖外部 Agent 异步处理。
+        """同步执行蒸馏（API 回退模式），不依赖外部 Agent 异步处理。
 
         当宿主 Agent 无法自动执行蒸馏时（如 Claude 适配器仅写占位符），
-        通过 AgentDistillAdapter 自动选择最佳方案完成蒸馏：
-        1. 优先使用配置的 API（SiliconFlow/OpenAI/DeepSeek）
-        2. 次优先利用现有 Agent CLI（kimi --print 等）
-        3. 保底写占位符，提醒用户手动执行
+        直接调用 distillation_engine 通过 OpenAI 兼容 API 完成蒸馏。
         """
-        self._emit_progress(session_id, "extracting", "同步蒸馏中（自动选择最佳方案）...")
+        self._emit_progress(session_id, "extracting", "同步蒸馏中（API 模式）...")
         try:
-            from core.agent_distill_adapter import AgentDistillAdapter
+            from core.hephaestus.distillation_engine import (
+                DistillationEngine, HostAgentCaller
+            )
 
-            adapter = AgentDistillAdapter()
-            result_text, adapter_name = adapter.auto_distill(
+            caller = HostAgentCaller(force_provider="api")
+            engine = DistillationEngine(caller=caller)
+            result = engine.process(
                 session_id=session_id,
                 messages=distill_task.messages,
                 meta=distill_task.meta,
             )
 
-            if result_text is None:
-                logger.error(f"[Hephaestus] 所有蒸馏适配器均失败: {session_id}")
-                self._emit_progress(session_id, "failed", "所有蒸馏方案均失败")
-                return False
-
-            # 处理占位符结果（Claude/Generic 适配器）
-            if adapter_name in ("claude", "generic"):
+            if result.judgment == "knowledge" and result.fragments:
+                written = engine.write_pages(result)
                 logger.info(
-                    f"[Hephaestus] {adapter_name} 仅写入占位符/提醒，"
-                    f"等待用户下次开 Agent 时执行: {session_id}"
+                    f"[Hephaestus] 同步蒸馏完成 {session_id}: "
+                    f"判定={result.judgment}, 写入 {len(written)} 页"
                 )
                 self._emit_progress(
-                    session_id, "judged",
-                    f"已生成 {adapter_name} 占位符，等待手动执行"
+                    session_id, "done",
+                    f"同步蒸馏完成，写入 {len(written)} 页到 Inbox"
                 )
-                # 占位符模式下不 mark_done，让用户下次手动触发
-                return True
+            else:
+                logger.info(
+                    f"[Hephaestus] 同步蒸馏完成 {session_id}: "
+                    f"判定={result.judgment}，无需写入"
+                )
+                self._emit_progress(
+                    session_id, "done",
+                    f"同步蒸馏完成，判定={result.judgment}"
+                )
 
-            # 处理 Kimi/API 适配器的实际结果
-            if adapter_name in ("api", "kimi"):
-                # 将结果写入 output_path，复用现有的 _process_completed_file 逻辑
-                output_path = self.output_dir / f"{session_id}.md"
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(result_text, encoding="utf-8")
+            # 标记 amphora 任务完成
+            try:
+                from core.kia import amphora
+                amphora.mark_done(session_id)
+            except Exception:
+                pass
 
-                # 解析结果并写入 Inbox
-                task_data = {
-                    "session_id": session_id,
-                    "messages": distill_task.messages,
-                    "meta": distill_task.meta,
-                }
-                ok = self._process_completed_file(output_path, session_id, task_data, True)
-                if ok:
-                    logger.info(
-                        f"[Hephaestus] {adapter_name} 蒸馏完成 {session_id}"
-                    )
-                    self._emit_progress(
-                        session_id, "done",
-                        f"{adapter_name} 蒸馏完成，已写入 Inbox"
-                    )
-                else:
-                    logger.warning(
-                        f"[Hephaestus] {adapter_name} 蒸馏结果处理失败: {session_id}"
-                    )
-                return ok
-
-            logger.warning(f"[Hephaestus] 未知适配器结果: {adapter_name}")
-            return False
-
-        except Exception as e:
-            logger.error(f"[Hephaestus] 同步蒸馏失败 {session_id}: {e}")
-            self._emit_progress(session_id, "failed", f"同步蒸馏失败: {e}")
-            return False
-        finally:
             # 清理 output_dir 中的占位符文件，避免 collect_completed 误报
             output_path = self.output_dir / f"{session_id}.md"
             if output_path.exists():
                 try:
                     output_path.unlink()
-                    logger.debug(f"[Hephaestus] 已清理占位符: {output_path}")
+                    logger.debug(f"[Hephaestus] 已清理占位符文件: {output_path}")
                 except Exception:
                     pass
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[Hephaestus] 同步蒸馏失败 {session_id}: {e}")
+            self._emit_progress(session_id, "failed", f"同步蒸馏失败: {e}")
+            return False
 
     def collect_completed(self, max_files: int = None) -> int:
         """收集已完成的蒸馏结果并移入 Inbox。
@@ -456,10 +437,7 @@ class HephaestusWorker:
                 pass
         return {}
 
-    def _process_completed_file(
-        self, output_file: Path, session_id: str, task_data: dict,
-        amphora_available: bool
-    ) -> bool:
+    def _process_completed_file(self, output_file: Path, session_id: str, task_data: dict, amphora_available: bool) -> bool:
         """处理单个已完成文件：验证、移入 Inbox、标记完成/归档。
 
         Returns:
@@ -572,7 +550,7 @@ class HephaestusWorker:
             if amphora_step:
                 amphora.update_progress(session_id, amphora_step, message)
         except Exception:
-            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
             pass
 
     def _parse_distill_output(self, content: str) -> Optional[dict]:
@@ -581,7 +559,7 @@ class HephaestusWorker:
             parsed = extract_json(content)
             return parsed if isinstance(parsed, dict) else None
         except Exception:
-            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
             return None
 
     def _validate_distill_output(self, content: str) -> dict:
@@ -622,7 +600,7 @@ class HephaestusWorker:
         if not fragments or not isinstance(fragments, list):
             return {
                 "valid": False,
-                "reason": "judgment=knowledge 但 fragments 缺失或不是数组"
+                "reason": f"judgment=knowledge 但 fragments 缺失或不是数组"
             }
 
         # 6. 检查每个 fragment 的必要字段
@@ -701,7 +679,7 @@ tags: [distill-failed]
                 output_path.unlink()
                 return
         except Exception:
-            logger.warning("Unexpected error in hephaestus_worker.py", exc_info=True)
+            logger.warning(f"Unexpected error in hephaestus_worker.py", exc_info=True)
             pass
 
         # 构建 Inbox 文件名

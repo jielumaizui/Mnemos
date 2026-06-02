@@ -332,6 +332,15 @@ class InProcessGuard:
 
         return level
 
+    # 通用高风险关键词（不依赖 checklist，作为兜底规则）
+    _DEFAULT_CRITICAL_KEYWORDS = [
+        "删除生产", "删除数据库", "drop database", "drop table",
+        "rm -rf", "rm -rf /", "覆盖生产", "truncate", "delete from",
+        "git push --force", "terraform apply", "kubectl delete",
+        "密钥", "password", "token", "api key", "secret",
+        "不可逆", "无法回滚", "未测试", "直接上线",
+    ]
+
     def check(self, user_message: str, ai_response: str = "",
               context: Optional[Dict] = None) -> Optional[GuardAlert]:
         """
@@ -345,6 +354,27 @@ class InProcessGuard:
         Returns:
             GuardAlert 或 None
         """
+        # 0. 默认高风险规则检查（不依赖 checklist/session）
+        combined = (user_message + " " + ai_response).lower()
+        for kw in self._DEFAULT_CRITICAL_KEYWORDS:
+            if kw.lower() in combined:
+                return GuardAlert(
+                    level=GuardLevel.INTERRUPT,
+                    checklist_item=ChecklistItem(
+                        item="高风险操作检测",
+                        source="system",
+                        severity="critical"
+                    ),
+                    triggered_by="system",
+                    trigger_text=kw,
+                    suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？"
+                )
+
+        # 1.5 上下文语义风险检查（不依赖 checklist）
+        ctx_alert = self._check_context_risk(context, user_message)
+        if ctx_alert:
+            return ctx_alert
+
         if not self.session or not self.session.checklist:
             return None
 
@@ -359,11 +389,6 @@ class InProcessGuard:
         if critical:
             # 严重偏差不受情境模式影响，始终告警
             return critical
-
-        # 1.5 上下文语义风险检查
-        ctx_alert = self._check_context_risk(context, user_message)
-        if ctx_alert:
-            return ctx_alert
 
         # 2. 重复工作检测（SmartMatcher Layer 3 语义匹配）
         is_dup, dup_score, dup_reason = self.duplicate_detector.is_duplicate(user_message)

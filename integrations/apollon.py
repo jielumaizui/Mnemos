@@ -29,7 +29,7 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, timezone
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -897,7 +897,7 @@ def _should_analyze_persona() -> bool:
         if latest and latest.get("generated_at"):
             try:
                 last = datetime.fromisoformat(latest["generated_at"].replace("Z", "+00:00"))
-                days_since = (datetime.now() - last).days
+                days_since = (datetime.now(timezone.utc) - last).days
                 if days_since < PERSONA_MIN_DAYS:
                     return False
             except Exception as e:

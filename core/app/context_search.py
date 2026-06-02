@@ -162,14 +162,25 @@ class ContextAwareSearch:
                     continue
                 content = md_file.read_text(encoding="utf-8", errors="ignore")
                 content_lower = content.lower()
-                if any(kw in content_lower for kw in keywords):
-                    title = md_file.stem
+                fm = self._extract_frontmatter(content)
+                # 优先使用 frontmatter 中文名称，其次文件名 stem
+                title = (fm.get("名称") or fm.get("title") or md_file.stem) if fm else md_file.stem
+                # 搜索范围：正文 + 中文名称 + 摘要 + 关键词
+                search_text = content_lower
+                if fm:
+                    for field in ["名称", "title", "摘要", "description", "关键词", "keywords"]:
+                        val = fm.get(field)
+                        if isinstance(val, str):
+                            search_text += " " + val.lower()
+                        elif isinstance(val, list):
+                            search_text += " " + " ".join(str(v).lower() for v in val)
+                if any(kw in search_text for kw in keywords):
                     rel_path = str(md_file.relative_to(self.wiki_base))
                     candidates.append({
                         "path": rel_path,
                         "title": title,
                         "content": content[:2000],
-                        "frontmatter": self._extract_frontmatter(content),
+                        "frontmatter": fm,
                     })
                     if len(candidates) >= 20:
                         break
@@ -180,18 +191,29 @@ class ContextAwareSearch:
         return candidates
 
     def _compute_relevance(self, query: str, candidate: Dict) -> float:
-        """计算查询与候选内容的相关性"""
+        """计算查询与候选内容的相关性（纳入 frontmatter 中文字段）"""
         keywords = self._query_terms(query)
         content = candidate.get("content", "").lower()
         title = candidate.get("title", "").lower()
 
-        title_matches = sum(1 for kw in keywords if kw in title)
-        content_matches = sum(1 for kw in keywords if kw in content)
+        # 收集 frontmatter 中的中文搜索字段
+        fm_text = ""
+        fm = candidate.get("frontmatter", {})
+        if fm:
+            for field in ["名称", "title", "摘要", "description", "关键词", "keywords", "aliases"]:
+                val = fm.get(field)
+                if isinstance(val, str):
+                    fm_text += " " + val.lower()
+                elif isinstance(val, list):
+                    fm_text += " " + " ".join(str(v).lower() for v in val)
+
+        title_matches = sum(1 for kw in keywords if kw in title or kw in fm_text)
+        content_matches = sum(1 for kw in keywords if kw in content or kw in fm_text)
 
         if not keywords:
             return 0.0
 
-        # 标题匹配权重更高
+        # 标题/frontmatter 匹配权重更高
         raw = (title_matches * 2 + content_matches) / (len(keywords) * 3)
         return min(raw, 1.0)
 

@@ -85,9 +85,15 @@ def _get_conn():
             message_count INTEGER,
             quality_score REAL,
             processed_at TEXT,
-            distill_method TEXT
+            distill_method TEXT,
+            status TEXT DEFAULT 'pipeline'
         )
     """)
+    # 兼容旧表结构：补加 status 字段
+    try:
+        conn.execute("ALTER TABLE processed_sessions ADD COLUMN status TEXT DEFAULT 'pipeline'")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wiki_pages (
             page_id TEXT PRIMARY KEY,
@@ -147,10 +153,10 @@ def _mark_processed(session_id: str, source: str, message_count: int,
             conn.execute(
                 """INSERT OR REPLACE INTO processed_sessions
                    (session_id, source, message_count, quality_score,
-                    processed_at, distill_method)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                    processed_at, distill_method, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, source, message_count, quality_score,
-                 datetime.now().isoformat(), method),
+                 datetime.now().isoformat(), method, "pipeline"),
             )
             if wiki_path:
                 conn.execute(

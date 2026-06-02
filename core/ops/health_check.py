@@ -166,7 +166,8 @@ def run_health_check() -> Dict:
         "timestamp": datetime.now().isoformat(),
         "processes": [
             check_process("mnemos_daemon", "mnemos_daemon.py"),
-            check_process("memos", "memos"),
+            # Memos 是外部 API 服务（可能跑在 Docker/远程），进程检查不可靠。
+            # 用 API 可达性代替进程检查（check_memos_api 已覆盖）。
         ],
         "memos_api": check_memos_api(),
         "amphora": check_amphora(),
