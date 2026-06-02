@@ -175,7 +175,7 @@ Session End Hook 自动触发蒸馏。对话内容全自动经过七层流水线
 
 一周后你开始写高并发爬虫。IntentRouter 自动识别任务意图，ContextAwareSearch 检索到之前的排障经验，画像决策中枢判断你应该会关心内存问题——主动在对话开头提醒你注意 asyncio.gather 的坑。
 
-**全程你只做了一件事：正常对话。其余步骤全自动运行，零手动操作。**
+**全程你只需正常对话，系统自动完成后续步骤。** beta 阶段核心链路（采集→蒸馏→入库）已可用，部分高级能力（自适应评分优化、主动推送精准度）仍在持续完善中。
 
 ### 验证系统在工作
 
@@ -499,20 +499,26 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 
 ## 项目状态
 
-Mnemos v2.0.0 正式版。
+**Mnemos v2 beta** — 核心链路可用，高级能力持续完善中。
 
-### v2.0.0 重大更新
+### beta 已可用（经过代码复查，生产可用）
 
-- [x] **自适应评分引擎**：COLD/WARM/HOT 三阶段 + 6 子系统评分器 + 反馈闭环
+- [x] **同步框架**：SyncEngine 8 步流水线 + 5 Agent Source + L1 兜底去重 + Memos→Wiki 追溯
 - [x] **七层蒸馏流水线**：噪音过滤 → 价值预判 → LLM 判断 → 知识提取 → 自检 → 跨 Agent 关联 → 反馈循环
-- [x] **知识图谱扩展**：EntityManager + RelationManager + 贝叶斯置信度更新 + 上下文感知查询
-- [x] **画像决策中枢**：三层雷达 + 交叉验证 + 对话策略 + 情境隔离 + 14 维演化时间线
-- [x] **应用层**：IntentRouter + ApplicationHub + ContextAwareSearch + 预测推送 + 争议仲裁 + 知识新鲜度预警
-- [x] **同步框架完善**：SyncEngine 8 步流水线 + 5 Agent Source + 触发系统 + 文件摄入
-- [x] **KIA 调度器重构**：16 步拓扑排序并行调度 + 事件驱动 + 自动禁用故障模块
-- [x] **增量与延迟蒸馏**：长对话增量生成草稿 + 低置信度内容延迟队列 + 碎片合并
-- [x] **PromptBuilder**：Token 预算管理 + 模板系统 + 相关上下文组装
-- [x] **配置系统升级**：三层优先级（代码默认 < JSON 配置 < 环境变量）
+- [x] **知识图谱**：EntityManager + RelationManager + 置信度治理（source_method 上限）+ 上下文感知查询
+- [x] **评分闭环**：COLD/WARM/HOT 三阶段 + 6 子系统评分器 + 训练样本收集 + 漂移检测
+- [x] **质量保障**：Freshness 四态检测、Blindspot 降级暴露、Predictive Push relevance gate、搜索弱相关过滤
+- [x] **数据治理**：历史截断扫描标记、来源分布统一、KG 关系置信度上限
+- [x] **热插拔架构**：14+ 子系统独立启停，故障自动隔离
+- [x] **MCP 服务器**：多工具覆盖知识库/摄入/会话/KIA/画像/决策/系统
+- [x] **五 Agent 全适配**：Claude Code / Hermes / OpenClaw / OpenCode / Codex
+
+### 持续完善中
+
+- [ ] **评分器冷启动**：需 ≥20 训练样本才能进入 WARM 模式，自然积累中
+- [ ] **向量索引**：hnswlib + Embedding API（依赖可选）
+- [ ] **Web Dashboard**：可视化知识图谱与画像趋势
+- [ ] **Obsidian 插件**：双向同步与内联查询
 
 ### 长期能力
 
