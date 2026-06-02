@@ -492,6 +492,16 @@ def cmd_doctor(args):
                 logger.debug("知识来源分布统计失败", exc_info=True)
                 pass
 
+            # 截断记录统计
+            try:
+                from scripts.mark_truncated import get_truncated_count
+                trunc_count = get_truncated_count()
+                if trunc_count > 0:
+                    print(f"  历史截断记录: {trunc_count} 条")
+                    warnings.append(f"存在 {trunc_count} 条历史截断的 Memos 记录，建议运行 `python scripts/mark_truncated.py` 查看详情")
+            except Exception:
+                pass
+
         # 最近修改时间
         if md_files:
             try:
