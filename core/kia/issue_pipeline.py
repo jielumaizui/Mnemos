@@ -525,7 +525,7 @@ class AutoFixExecutor:
             if len(pages) >= 2:
                 # 自动发现关系并应用
                 rels = kg.discover_relations(Path(pages[0]), [Path(pages[1])])
-                added = kg.apply_discovered(rels, min_confidence=0.3)
+                added = kg.apply_discovered(rels, min_confidence=0.7)
                 return f"add_relation:{added}"
             return "add_relation:0"
         except Exception as e:

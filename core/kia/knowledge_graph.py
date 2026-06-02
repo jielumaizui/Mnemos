@@ -457,7 +457,7 @@ class KnowledgeGraph:
             overlap = set(new_keywords) & set(existing_keywords)
             if overlap:
                 overlap_ratio = len(overlap) / max(len(new_keywords), len(existing_keywords), 1)
-                if overlap_ratio >= 0.3:
+                if overlap_ratio >= 0.7:
                     discovered.append(Relation(
                         source=rel_source,
                         target=str(existing_path.relative_to(self.wiki_base)) if str(existing_path).startswith(str(self.wiki_base)) else str(existing_path),
