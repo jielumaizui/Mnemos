@@ -444,6 +444,30 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
     services["l1_sync"] = False
     services["event_bus"] = True
 
+    # Embedding / 语义搜索配置引导
+    embed = data.setdefault("embedding", {})
+    if not embed.get("api_key") and not yes_mode:
+        print("\n  [可选] 语义搜索（Embedding）配置")
+        print("  语义搜索可显著提升未知查询的召回质量，推荐开启。")
+        print("  需要硅基流动 API Key（支持 BAAI/bge-m3 免费模型）。")
+        if ask_yes_no("是否配置语义搜索？", default=False, yes_mode=yes_mode):
+            api_key = ask("硅基流动 API Key:", default="", yes_mode=yes_mode)
+            if api_key:
+                embed["enabled"] = True
+                embed["api_key"] = api_key
+                embed["base_url"] = "https://api.siliconflow.cn/v1"
+                embed["embedding_model"] = "BAAI/bge-m3"
+                print_ok("语义搜索已启用（部署后运行 `python3 scripts/build_embedding_index.py` 建立索引）")
+            else:
+                print_warn("未提供 API Key，语义搜索保持关闭")
+        else:
+            print_warn("语义搜索保持关闭（后续可通过 `mnemos config` 开启）")
+    elif yes_mode and os.environ.get("SILICONFLOW_API_KEY"):
+        embed["enabled"] = True
+        embed["api_key"] = os.environ.get("SILICONFLOW_API_KEY")
+        embed["base_url"] = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        print_ok("语义搜索已自动启用（从环境变量读取 SILICONFLOW_API_KEY）")
+
     config_file.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
