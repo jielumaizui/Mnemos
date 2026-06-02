@@ -177,6 +177,21 @@ class BlindspotDiscovery:
         degraded_notes: List[str] = []
 
         # 1. 检查知识空白 — 查询在图谱中无对应实体
+        # 1a. 先尝试语义搜索（embedding），检测"语义相关但无显式记录"的知识空白
+        semantic_hits: set[str] = set()
+        try:
+            from core.config import get_config
+            cfg = get_config()
+            if cfg.get("embedding.enabled", False):
+                from core.embeddings import EmbeddingIndexManager
+                idx = EmbeddingIndexManager(wiki_base=self.wiki_base)
+                semantic_results = idx.search(query, top_k=5, similarity_threshold=0.65)
+                for rel_path, sim in semantic_results:
+                    semantic_hits.add(rel_path)
+        except Exception as e:
+            degraded_notes.append(f"语义搜索不可用: {e}")
+
+        # 1b. 关键词级别的知识空白检测
         try:
             from core.kia.knowledge_graph import KnowledgeGraph
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
@@ -187,13 +202,16 @@ class BlindspotDiscovery:
                     continue
                 search_results = kg.search(kw, limit=1)
                 if not search_results:
-                    results.append(BlindSpotReminder(
-                        topic=kw,
-                        description=f"知识库中缺少关于「{kw}」的记录",
-                        confidence=0.4,
-                        status="detected",
-                        detected_at=datetime.now().isoformat(),
-                    ))
+                    # KG 无结果，但语义搜索可能命中了相关内容
+                    # 如果语义搜索也无命中，才判定为知识空白
+                    if not semantic_hits:
+                        results.append(BlindSpotReminder(
+                            topic=kw,
+                            description=f"知识库中缺少关于「{kw}」的记录",
+                            confidence=0.4,
+                            status="detected",
+                            detected_at=datetime.now().isoformat(),
+                        ))
         except Exception as e:
             degraded_notes.append(f"知识图谱检测不可用: {e}")
 

@@ -291,6 +291,13 @@ class PredictivePush:
 
         def _relevance_gate(result) -> bool:
             """检查搜索结果是否与主题真正相关"""
+            # 语义召回的结果：用 semantic_score 直接判断，放宽 token 匹配
+            semantic_score = getattr(result, "relevance", 0.0) or result.get("relevance", 0.0)
+            if getattr(result, "match_type", "") == "semantic" or result.get("match_type") == "semantic":
+                if semantic_score >= 0.72:  # bge-m3 语义阈值
+                    return True
+                return False
+
             # score 阈值
             score = getattr(result, "score", 0.0) or result.get("score", 0.0)
             if score < 0.55:

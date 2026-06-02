@@ -437,6 +437,8 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 | `MEMOS_API_URL` | `memos.api_url` | Memos 实例地址 |
 | `MNEMOS_WIKI_DIR` / `WIKI_DIR` | `wiki.vault_path` | Wiki 知识库目录 |
 | `MNEMOS_DIR` | — | Mnemos 数据根目录（默认 `~/.mnemos`） |
+| `SILICONFLOW_API_KEY` | `embedding.api_key` | 硅基流动 API Key（语义搜索） |
+| `SILICONFLOW_BASE_URL` | `embedding.base_url` | 硅基流动 API 地址 |
 | `CLAUDE_SETTINGS_JSON` | — | Claude Code settings.json 路径 |
 
 关键配置项：
@@ -467,9 +469,47 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
       "l1_sync": false,
       "event_bus": true
     }
+  },
+  "embedding": {
+    "enabled": false,
+    "provider": "siliconflow",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key": "",
+    "embedding_model": "BAAI/bge-m3",
+    "rerank_model": "BAAI/bge-reranker-v2-m3",
+    "use_rerank": false,
+    "similarity_threshold": 0.72
   }
 }
 ```
+
+### 启用语义搜索（可选）
+
+语义搜索通过 Embedding 模型（硅基流动 BAAI/bge-m3）提升未知查询的召回质量：
+
+```bash
+# 1. 安装可选依赖
+pip install openai hnswlib
+
+# 2. 配置 API Key（三种方式任选）
+# 方式 A：环境变量
+export SILICONFLOW_API_KEY=your_key
+
+# 方式 B：修改配置文件
+python3 mnemos_cli.py config set embedding.enabled true
+python3 mnemos_cli.py config set embedding.api_key your_key
+
+# 方式 C：重新运行 setup
+python3 scripts/auto_setup.py
+
+# 3. 构建索引
+python3 scripts/build_embedding_index.py
+
+# 4. 验证
+python3 scripts/verify_installation.py --full
+```
+
+> 语义搜索关闭时不影响任何现有功能，所有搜索自动 fallback 到关键词匹配。
 
 ## 数据源与隐私
 
@@ -516,7 +556,7 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 ### 持续完善中
 
 - [ ] **评分器冷启动**：需 ≥20 训练样本才能进入 WARM 模式，自然积累中
-- [ ] **向量索引**：hnswlib + Embedding API（依赖可选）
+- [x] **语义搜索（Embedding）**：硅基流动 BAAI/bge-m3，支持向量索引 + 语义召回，现有搜索自动 fallback
 - [ ] **Web Dashboard**：可视化知识图谱与画像趋势
 - [ ] **Obsidian 插件**：双向同步与内联查询
 
@@ -527,7 +567,7 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 - [x] MCP 服务器（多工具覆盖知识库/摄入/会话/KIA/画像/决策/系统）
 - [x] 文档处理（PDF/PPT/Excel/Word/HTML/EBOOK 解析入库）
 - [x] 热插拔模块化架构（14+ 子系统独立启停）
-- [ ] 向量索引（hnswlib + Embedding API）
+- [x] 语义搜索（硅基流动 BAAI/bge-m3，可选启用）
 - [ ] Web Dashboard
 - [ ] Obsidian 插件
 

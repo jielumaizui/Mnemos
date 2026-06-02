@@ -195,10 +195,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cleanup_days": 90,
         "grace_period_days": 14,
     },
-    # === Embedding 缓存 ===
+    # === Embedding / 语义搜索 ===
     "embedding": {
+        "enabled": False,              # 默认关闭，用户手动开启
+        "provider": "siliconflow",     # 当前仅支持 siliconflow
+        "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": "",                 # 用户填写
+        "embedding_model": "BAAI/bge-m3",
+        "rerank_model": "BAAI/bge-reranker-v2-m3",
+        "use_rerank": False,           # 是否启用重排（额外消耗）
         "ttl_days": 7,
-        "similarity_threshold": 0.75,
+        "similarity_threshold": 0.72,  # 语义相似度阈值（bge-m3 建议 0.72）
+        "index_interval_hours": 24,    # 自动重建索引间隔
     },
     # === 增量批处理 ===
     "incremental": {
