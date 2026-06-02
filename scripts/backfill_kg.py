@@ -29,16 +29,18 @@ def main():
     relation_count = 0
     entity_count = 0
 
+    # 传递全部页面列表，启用关键词重叠/反模式/标题包含等策略
+    all_pages = md_files
     for idx, page in enumerate(md_files, 1):
         try:
-            discovered = kg.discover_relations(page)
-            added = kg.apply_discovered(discovered, min_confidence=0.4)
+            discovered = kg.discover_relations(page, existing_pages=all_pages)
+            added = kg.apply_discovered(discovered, min_confidence=0.3)
             relation_count += added
 
             entities = em.ingest_from_wiki(page)
             entity_count += len(entities)
 
-            if idx % 10 == 0 or idx == total:
+            if idx % 20 == 0 or idx == total:
                 print(f"  进度: {idx}/{total} 页面, 关系+{relation_count}, 实体+{entity_count}")
         except Exception as e:
             print(f"  跳过 {page}: {e}")

@@ -420,14 +420,18 @@ class KnowledgeGraph:
             inbox = self.wiki_base / "00-Inbox"
             existing_pages = list(inbox.glob("*.md")) if inbox.exists() else []
 
-        # 1. [[链接]] 解析 → REFERENCES
+        # 使用相对路径作为 source（避免绝对路径污染）
+        rel_source = str(new_page_path.relative_to(self.wiki_base)) if str(new_page_path).startswith(str(self.wiki_base)) else str(new_page_path)
+
+        # 1. [[链接]] 解析 → REFERENCES（清洗链接目标：去掉路径前缀）
         for link_target in new_links:
+            clean_target = link_target.split("/")[-1] if "/" in link_target else link_target
             discovered.append(Relation(
-                source=str(new_page_path),
-                target=link_target,
+                source=rel_source,
+                target=clean_target,
                 relation_type=RelationType.REFERENCES,
-                strength=0.9,
-                confidence=0.95,
+                strength=0.85,
+                confidence=0.9,
                 source_method="link_parse",
                 evidence=[RelationEvidence(
                     evidence_type="wiki_link",
@@ -455,8 +459,8 @@ class KnowledgeGraph:
                 overlap_ratio = len(overlap) / max(len(new_keywords), len(existing_keywords), 1)
                 if overlap_ratio >= 0.3:
                     discovered.append(Relation(
-                        source=str(new_page_path),
-                        target=str(existing_path),
+                        source=rel_source,
+                        target=str(existing_path.relative_to(self.wiki_base)) if str(existing_path).startswith(str(self.wiki_base)) else str(existing_path),
                         relation_type=RelationType.SIMILAR_TO,
                         strength=min(overlap_ratio + 0.3, 0.9),
                         confidence=overlap_ratio,
@@ -474,8 +478,8 @@ class KnowledgeGraph:
                 anti_lower = anti.lower()
                 if any(part in anti_lower for part in existing_title_parts if len(part) > 2):
                     discovered.append(Relation(
-                        source=str(new_page_path),
-                        target=str(existing_path),
+                        source=rel_source,
+                        target=str(existing_path.relative_to(self.wiki_base)) if str(existing_path).startswith(str(self.wiki_base)) else str(existing_path),
                         relation_type=RelationType.CONTRADICTS,
                         strength=0.7,
                         confidence=0.6,
