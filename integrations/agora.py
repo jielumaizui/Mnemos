@@ -84,13 +84,43 @@ class MCPServer:
     # ---- Tool 实现 ----
 
     def _tool_wiki_search(self, query: str, limit: int = 5) -> Dict:
-        """搜索知识库"""
+        """搜索知识库
+
+        统一搜索入口：优先 ContextAwareSearch（KG 召回 + 正文搜索 + 画像加权），
+        无结果时回退到 WikiReader（标题/实体/概念/路径索引）。
+        """
         from core.config import get_config
+        from core.app.context_search import ContextAwareSearch
         from integrations.oracle import WikiReader
+
         wiki_dir = get_config().wiki_dir
-        reader = WikiReader(wiki_dir)
-        results = reader.search(query, limit=limit)
-        # 记录训练样本：用户搜索 → 正样本（kg 维度）
+        results = []
+
+        # 1. 优先使用 ContextAwareSearch（更完善的搜索：正文 + frontmatter + KG + 画像加权）
+        try:
+            searcher = ContextAwareSearch(wiki_base=str(wiki_dir))
+            ca_results = searcher.search(query, limit=limit)
+            for r in ca_results:
+                results.append({
+                    "page_id": r.page_path.replace(".md", ""),
+                    "title": r.title,
+                    "type": self._infer_type_from_path(r.page_path),
+                    "heat_level": "warm",
+                    "heat_score": round(r.score * 100, 1),
+                    "relevance_score": round(r.relevance, 2),
+                    "reasons": [r.match_reason or "context_search"],
+                    "verification": getattr(r, "verification", ""),
+                    "confidence": getattr(r, "confidence", 0.5),
+                })
+        except Exception:
+            logger.debug("ContextAwareSearch 失败，回退到 WikiReader", exc_info=True)
+
+        # 2. 回退到 WikiReader（如果 ContextAwareSearch 无结果）
+        if not results:
+            reader = WikiReader(wiki_dir)
+            results = reader.search(query, limit=limit)
+
+        # 记录训练样本
         try:
             from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
             AdaptiveScorerV2.enqueue_training_sample(
@@ -102,11 +132,18 @@ class MCPServer:
             )
         except Exception:
             pass
+
         return {
             "success": True,
             "results": results,
             "query": query,
         }
+
+    def _infer_type_from_path(self, page_path: str) -> str:
+        """从路径推断知识类型"""
+        if "/" in page_path:
+            return page_path.split("/")[0]
+        return "00-Inbox"
 
     def _tool_wiki_read(self, page_path: str) -> Dict:
         """读取指定 wiki 页面"""
