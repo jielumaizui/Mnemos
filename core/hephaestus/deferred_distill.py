@@ -26,6 +26,7 @@ from core.config import get_config
 from core.hephaestus.distillation_engine import (
     DistillationEngine, DistillationResult, KnowledgeFragment,
     HostAgentCaller, build_session_text,
+    _emit_knowledge_distilled,
 )
 
 
@@ -399,7 +400,8 @@ class DeferredDistillationQueue:
             messages = [{"role": "assistant", "content": record.content}]
             result = engine.process(record.session_id, messages)
             if result.judgment == "knowledge" and result.fragments:
-                engine.write_pages(result)
+                written = engine.write_pages(result)
+                _emit_knowledge_distilled(record.session_id, result, written)
             self._update_status(record.id, "done")
         except Exception as e:
             logger.warning(f"延迟蒸馏失败 {record.session_id}: {e}")
