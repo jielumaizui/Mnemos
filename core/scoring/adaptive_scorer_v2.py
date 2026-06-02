@@ -304,23 +304,32 @@ class AdaptiveScorerV2:
                     int(max(0.0, min(1.0, expected_score)) * 10),
                     (datetime.now() + timedelta(hours=0)).isoformat(),
                 ))
-                # 同时写入弱 ground_truth，确保训练时能匹配到标签
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"[ScorerV2] enqueue_training_sample (queue) failed: {e}")
+            return
+
+        # 同时写入弱 ground_truth，确保训练时能匹配到标签
+        # 与 queue 分开事务，避免 ground_truth schema 约束导致 queue 回滚
+        try:
+            with sqlite3.connect(str(db)) as conn:
                 label = 1 if expected_score >= 0.5 else 0
                 conn.execute("""
                     INSERT OR REPLACE INTO ground_truth_signals
-                        (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                        (profile_id, session_id, signal_type, signal_value, confidence, latency_hours, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    session_id, dimension, str(label), max(0.1, min(1.0, expected_score)), 0,
+                    session_id, session_id, dimension, str(label), max(0.1, min(1.0, expected_score)), 0,
                     datetime.now().isoformat(),
                 ))
                 conn.commit()
-                logger.debug(
-                    f"[ScorerV2] Training sample enqueued: "
-                    f"session={session_id}, dim={dimension}, source={source}"
-                )
         except Exception as e:
-            logger.warning(f"[ScorerV2] enqueue_training_sample failed: {e}")
+            logger.warning(f"[ScorerV2] enqueue_training_sample (ground_truth) failed: {e}")
+
+        logger.debug(
+            f"[ScorerV2] Training sample enqueued: "
+            f"session={session_id}, dim={dimension}, source={source}"
+        )
 
     # ── 批量训练接口 ──
 
