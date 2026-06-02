@@ -831,6 +831,7 @@ def main():
     parser.add_argument("--skip-scheduler", action="store_true", help="跳过配置系统定时任务")
     parser.add_argument("--skip-hooks", action="store_true", help="跳过安装 Agent Hooks")
     parser.add_argument("--dry-run", action="store_true", help="只检查环境，不执行任何安装/启动操作")
+    parser.add_argument("--skip-verify", action="store_true", help="跳过部署后验证")
     parser.add_argument("--preserve-config", action="store_true", help="保留现有配置，仅更新必要字段（适合重装）")
     args = parser.parse_args()
 
@@ -923,6 +924,25 @@ def main():
         print_step(10, total_steps, "配置定时任务")
         print_warn("已跳过 (--skip-scheduler)")
 
+    # 步骤 11: 部署验证
+    if not args.skip_verify:
+        print_step(11, total_steps, "验证部署")
+        try:
+            import subprocess
+            r = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / "scripts" / "verify_installation.py")],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode == 0:
+                print_ok("部署验证通过")
+            else:
+                print_warn("部署验证未完全通过，请检查上方输出")
+        except Exception as e:
+            print_warn(f"部署验证运行失败: {e}")
+    else:
+        print_step(11, total_steps, "验证部署")
+        print_warn("已跳过 (--skip-verify)")
+
     # 完成
     print("\n" + "=" * 60)
     print("部署完成！")
@@ -934,11 +954,12 @@ def main():
     print(f"  蒸馏策略: {distill_strategy}")
     print()
     print("后续操作:")
-    print("  python3 mnemos_cli.py doctor    # 系统诊断")
-    print("  python3 mnemos_cli.py status    # 查看状态")
-    print("  python3 mnemos_cli.py init      # 交互式调整配置")
+    print("  python3 mnemos_cli.py doctor         # 系统诊断")
+    print("  python3 mnemos_cli.py status         # 查看状态")
+    print("  python3 scripts/verify_installation.py --full  # 完整验证（含集成测试）")
+    print("  python3 mnemos_cli.py init           # 交互式调整配置")
     if distill_strategy == "generic":
-        print("  python3 mnemos_cli.py distill   # 手动触发蒸馏")
+        print("  python3 mnemos_cli.py distill        # 手动触发蒸馏")
     print()
     print("Claude Code / Kimi 重启后 hooks 生效。")
     print("=" * 60)
