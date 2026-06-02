@@ -124,6 +124,16 @@ class EmbeddingIndexManager:
             return []
         return list(self.wiki_base.rglob("*.md"))
 
+    def _client_available(self) -> bool:
+        """检查当前客户端是否可用"""
+        if self.client is None:
+            return False
+        try:
+            hc = self.client.health_check()
+            return hc.get("available", False)
+        except Exception:
+            return False
+
     def build_index(self, force_full: bool = False) -> Dict[str, any]:
         """
         构建或增量更新索引
@@ -134,7 +144,7 @@ class EmbeddingIndexManager:
         Returns:
             {"added": int, "updated": int, "removed": int, "total": int}
         """
-        if self.client is None or not embedding_available():
+        if not self._client_available():
             logger.warning("[Embedding] 客户端不可用，跳过索引构建")
             return {"added": 0, "updated": 0, "removed": 0, "total": 0, "status": "no_client"}
 
@@ -312,9 +322,16 @@ class EmbeddingIndexManager:
         query: str,
         top_k: int = 10,
         similarity_threshold: float = None,
+        use_rerank: bool = True,
     ) -> List[Tuple[str, float]]:
         """
-        语义搜索
+        语义搜索（两阶段：ANN 召回 + Rerank 精排）
+
+        Args:
+            query: 搜索查询
+            top_k: 返回结果数
+            similarity_threshold: 相似度阈值
+            use_rerank: 是否启用 Rerank 精排（默认 True）
 
         Returns:
             [(页面相对路径, 相似度分数), ...] 按分数降序
@@ -340,7 +357,8 @@ class EmbeddingIndexManager:
         results = []
 
         if HNSWLIB_AVAILABLE and self._index is not None:
-            # hnswlib 搜索
+            # hnswlib 搜索：召回更多给 rerank
+            recall_k = min(top_k * 3, self._index.get_current_count()) if use_rerank else min(top_k * 2, self._index.get_current_count())
             import math
             norm = math.sqrt(sum(x * x for x in query_vec))
             if norm > 0:
@@ -348,12 +366,10 @@ class EmbeddingIndexManager:
             else:
                 q = query_vec
 
-            labels, distances = self._index.knn_query([q], k=min(top_k * 2, self._index.get_current_count()))
+            labels, distances = self._index.knn_query([q], k=recall_k)
             for label, dist in zip(labels[0], distances[0]):
-                # cosine 距离 = 1 - cosine_similarity
                 sim = 1.0 - float(dist)
                 if sim >= threshold:
-                    # 反向查找路径
                     for rel_path, meta in self._meta.items():
                         if meta.get("id") == int(label):
                             results.append((rel_path, sim))
@@ -372,7 +388,42 @@ class EmbeddingIndexManager:
                     results.append((rel_path, sim))
 
         results.sort(key=lambda x: x[1], reverse=True)
+
+        # --- Rerank 精排 ---
+        if use_rerank and results and self.client:
+            try:
+                results = self._rerank_results(query, results, top_k)
+            except Exception as e:
+                logger.warning(f"[Embedding] Rerank 失败，回退到 ANN 排序: {e}")
+
         return results[:top_k]
+
+    def _rerank_results(
+        self,
+        query: str,
+        candidates: List[Tuple[str, float]],
+        top_k: int,
+    ) -> List[Tuple[str, float]]:
+        """对候选结果调用 Rerank API 精排"""
+        # 读取候选页面内容
+        documents = []
+        valid_candidates = []
+        for rel_path, _ in candidates:
+            page_path = self.wiki_base / rel_path
+            try:
+                text = self._extract_page_text(page_path)
+                if text.strip():
+                    documents.append(text[:2000])  # 控制长度
+                    valid_candidates.append(rel_path)
+            except Exception:
+                continue
+
+        if not documents:
+            return candidates[:top_k]
+
+        reranked = self.client.rerank(query=query, documents=documents, top_n=top_k)
+        # reranked: [(原始索引, 分数), ...]
+        return [(valid_candidates[idx], score) for idx, score in reranked if idx < len(valid_candidates)]
 
     def get_stats(self) -> Dict[str, any]:
         """返回索引统计信息"""

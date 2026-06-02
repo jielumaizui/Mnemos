@@ -296,6 +296,7 @@ class Relation:
     confidence_history: List[float] = None  # 可信度历史（贝叶斯更新记录）
     evidence: List[RelationEvidence] = None   # 支持证据列表
     source_method: str = "auto"       # auto / manual / dark_knowledge
+    context: str = ""                 # 关联上下文（ADR-019：语义桥接文本）
     created_at: str = ""
     updated_at: str = ""
     last_validated: str = ""          # 上次验证时间

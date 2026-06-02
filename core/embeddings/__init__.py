@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from .siliconflow_client import SiliconFlowEmbeddingClient, get_embedding_client
 from .index_manager import EmbeddingIndexManager
+from .cache import EmbeddingCache
+from .rate_limiter import SiliconFlowRateLimiter
+from .relation_manager import RelationEmbeddingManager
 
 __all__ = [
     "SiliconFlowEmbeddingClient",
     "get_embedding_client",
     "EmbeddingIndexManager",
+    "EmbeddingCache",
+    "SiliconFlowRateLimiter",
+    "RelationEmbeddingManager",
 ]

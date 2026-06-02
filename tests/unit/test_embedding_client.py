@@ -105,12 +105,16 @@ def test_embedding_index_manager_memory_fallback():
 def test_embedding_disabled_returns_empty():
     """embedding 未启用时返回空"""
     from core.embeddings.index_manager import EmbeddingIndexManager
+    from unittest.mock import MagicMock
 
     with tempfile.TemporaryDirectory() as tmp:
+        # 传入一个明确不可用的 mock client
+        mock_client = MagicMock()
+        mock_client.health_check.return_value = {"available": False}
         idx = EmbeddingIndexManager(
             wiki_base=Path(tmp) / "wiki",
             index_dir=Path(tmp) / "index",
-            client=None,
+            client=mock_client,
         )
         result = idx.build_index()
         assert result["status"] == "no_client"

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -29,7 +30,12 @@ DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
 
 
 class SiliconFlowEmbeddingClient:
-    """硅基流动 Embedding 客户端（OpenAI 兼容格式）"""
+    """硅基流动 Embedding 客户端（OpenAI 兼容格式）
+
+    新增能力：
+    - Embedding 缓存（SQLite 持久化）
+    - RPM/TPM 限流（滑动窗口）
+    """
 
     def __init__(
         self,
@@ -37,12 +43,18 @@ class SiliconFlowEmbeddingClient:
         base_url: Optional[str] = None,
         embedding_model: Optional[str] = None,
         rerank_model: Optional[str] = None,
+        cache=None,
+        limiter=None,
     ):
         self.api_key = api_key or self._resolve_api_key()
         self.base_url = base_url or self._resolve_base_url()
         self.embedding_model = embedding_model or DEFAULT_EMBEDDING_MODEL
         self.rerank_model = rerank_model or DEFAULT_RERANK_MODEL
         self._client = None
+
+        # 缓存与限流（可选注入）
+        self._cache = cache
+        self._limiter = limiter
 
     @staticmethod
     def _resolve_api_key() -> Optional[str]:
@@ -107,7 +119,7 @@ class SiliconFlowEmbeddingClient:
 
     def embed(self, texts: List[str], model: Optional[str] = None) -> List[List[float]]:
         """
-        批量获取文本 embedding
+        批量获取文本 embedding（带缓存 + 限流）
 
         Args:
             texts: 文本列表（自动过滤空字符串）
@@ -130,25 +142,65 @@ class SiliconFlowEmbeddingClient:
         if not valid_texts:
             return [[0.0] * 1024 for _ in texts]  # bge-m3 是 1024 维
 
-        client = self._get_client()
         model_name = model or self.embedding_model
+        dim = 1024  # bge-m3 默认维度
+        result = [[0.0] * dim for _ in texts]
 
+        # --- 缓存检查 ---
+        uncached_texts = []
+        uncached_indices = []
+        if self._cache:
+            cached_results, missing = self._cache.get_batch(valid_texts, model_name)
+            for local_idx, global_idx in enumerate(valid_indices):
+                if cached_results[local_idx] is not None:
+                    result[global_idx] = cached_results[local_idx]
+                    dim = len(cached_results[local_idx])
+                else:
+                    uncached_texts.append(valid_texts[local_idx])
+                    uncached_indices.append(global_idx)
+        else:
+            uncached_texts = valid_texts
+            uncached_indices = valid_indices
+
+        if not uncached_texts:
+            return result
+
+        # --- 限流等待 ---
+        estimated_tokens = sum(len(t) for t in uncached_texts)
+        if self._limiter:
+            wait = self._limiter.acquire(estimated_tokens=estimated_tokens)
+            if wait > 0:
+                logger.debug(f"[Embedding] 限流等待 {wait:.2f}s")
+                time.sleep(wait)
+
+        # --- API 调用 ---
+        client = self._get_client()
         try:
             resp = client.embeddings.create(
                 model=model_name,
-                input=valid_texts,
+                input=uncached_texts,
                 encoding_format="float",
             )
             valid_embeddings = [item.embedding for item in resp.data]
+            total_tokens = getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0
         except Exception as e:
             logger.warning(f"[Embedding] API 调用失败: {e}")
             raise
 
-        # 还原原始顺序
-        dim = len(valid_embeddings[0]) if valid_embeddings else 1024
-        result = [[0.0] * dim for _ in texts]
-        for idx, emb in zip(valid_indices, valid_embeddings):
-            result[idx] = emb
+        # --- 回填结果 + 写入缓存 ---
+        for global_idx, emb in zip(uncached_indices, valid_embeddings):
+            result[global_idx] = emb
+            dim = len(emb)
+
+        if self._cache:
+            try:
+                self._cache.set_batch(uncached_texts, valid_embeddings, model_name)
+            except Exception as e:
+                logger.warning(f"[Embedding] 缓存写入失败: {e}")
+
+        if self._limiter:
+            self._limiter.record(actual_tokens=total_tokens or estimated_tokens)
+
         return result
 
     def embed_single(self, text: str, model: Optional[str] = None) -> List[float]:
@@ -164,13 +216,21 @@ class SiliconFlowEmbeddingClient:
         top_n: Optional[int] = None,
     ) -> List[Tuple[int, float]]:
         """
-        重排序（如需）
+        重排序（带限流）
 
         Returns:
             [(原始索引, 重排分数), ...] 按分数降序
         """
         if not documents or not query:
             return []
+
+        # --- 限流等待 ---
+        estimated_tokens = len(query) + sum(len(d) for d in documents)
+        if self._limiter:
+            wait = self._limiter.acquire(estimated_tokens=estimated_tokens)
+            if wait > 0:
+                logger.debug(f"[Rerank] 限流等待 {wait:.2f}s")
+                time.sleep(wait)
 
         try:
             import requests
@@ -195,6 +255,9 @@ class SiliconFlowEmbeddingClient:
             resp.raise_for_status()
             data = resp.json()
             results = data.get("results", [])
+            total_tokens = data.get("usage", {}).get("total_tokens", 0)
+            if self._limiter:
+                self._limiter.record(actual_tokens=total_tokens or estimated_tokens)
             return [(r["index"], r["score"]) for r in results]
         except Exception as e:
             logger.warning(f"[Rerank] API 调用失败: {e}")
@@ -226,9 +289,13 @@ class SiliconFlowEmbeddingClient:
 
 @lru_cache(maxsize=1)
 def get_embedding_client() -> Optional[SiliconFlowEmbeddingClient]:
-    """获取全局 Embedding 客户端（单例，懒加载）"""
+    """获取全局 Embedding 客户端（单例，懒加载，带缓存 + 限流）"""
     try:
-        return SiliconFlowEmbeddingClient()
+        from .cache import EmbeddingCache
+        from .rate_limiter import SiliconFlowRateLimiter
+        cache = EmbeddingCache()
+        limiter = SiliconFlowRateLimiter()
+        return SiliconFlowEmbeddingClient(cache=cache, limiter=limiter)
     except Exception as e:
         logger.debug(f"[Embedding] 客户端初始化失败: {e}")
         return None

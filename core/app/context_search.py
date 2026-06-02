@@ -150,16 +150,16 @@ class ContextAwareSearch:
         return results[:limit]
 
     def _recall_from_embedding(self, query: str) -> List[Dict]:
-        """语义召回：通过 embedding 相似度搜索 Wiki 页面"""
+        """语义召回：双索引融合检索（页面向量 + 关联上下文向量）"""
         try:
             from core.config import get_config
             cfg = get_config()
             if not cfg.get("embedding.enabled", False):
                 return []
 
-            from core.embeddings import EmbeddingIndexManager
-            idx = EmbeddingIndexManager(wiki_base=self.wiki_base)
-            semantic_results = idx.search(query, top_k=15)
+            from core.embeddings.dual_index import DualIndexRetriever
+            retriever = DualIndexRetriever(wiki_base=self.wiki_base)
+            semantic_results = retriever.search(query, top_k=15)
             if not semantic_results:
                 return []
 

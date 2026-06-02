@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS relations (
     strength REAL DEFAULT 0.5,
     confidence REAL DEFAULT 0.5,
     source_method TEXT DEFAULT 'auto',
+    context TEXT DEFAULT '',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source, target, relation_type)
@@ -230,10 +231,11 @@ class KnowledgeGraph:
                 # 插入主关系
                 cursor = conn.execute(
                     """INSERT OR REPLACE INTO relations
-                       (source, target, relation_type, strength, confidence, source_method, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (source, target, relation_type, strength, confidence, source_method, context, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (relation.source, relation.target, relation.relation_type.value,
                      relation.strength, relation.confidence, relation.source_method,
+                     relation.context,
                      datetime.now(timezone.utc).isoformat()[:19])
                 )
                 rel_id = cursor.lastrowid
@@ -257,10 +259,11 @@ class KnowledgeGraph:
                 if relation.is_symmetric and relation.source != relation.target:
                     cursor = conn.execute(
                         """INSERT OR REPLACE INTO relations
-                           (source, target, relation_type, strength, confidence, source_method, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                           (source, target, relation_type, strength, confidence, source_method, context, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (relation.target, relation.source, relation.relation_type.value,
                          relation.strength, relation.confidence, relation.source_method,
+                         relation.context,
                          datetime.now(timezone.utc).isoformat()[:19])
                     )
                     # 同步 FTS5 索引

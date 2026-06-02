@@ -51,6 +51,29 @@
             "type": "array",
             "items": {"type": "string"},
             "description": "相关概念列表"
+          },
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["target", "type", "context"],
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "description": "关联目标页面标题，使用 [[标题]] 格式"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["prerequisite", "related_to", "contradicts", "derives_from", "supercedes"],
+                  "description": "关系类型"
+                },
+                "context": {
+                  "type": "string",
+                  "description": "30-100字说明，解释为什么这两个知识关联、在什么场景下关联"
+                }
+              }
+            },
+            "description": "与已有知识的结构化关联（含关联上下文，用于语义桥接）"
           }
         }
       }
