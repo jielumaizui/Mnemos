@@ -415,10 +415,12 @@ class KnowledgeGraph:
         new_keywords = self._extract_all_keywords(new_meta)
         new_links = self._extract_wiki_links(new_content)
 
-        # 获取现有页面列表
+        # 获取现有页面列表（扫描全 Wiki，不只 00-Inbox）
         if existing_pages is None:
-            inbox = self.wiki_base / "00-Inbox"
-            existing_pages = list(inbox.glob("*.md")) if inbox.exists() else []
+            existing_pages = [
+                p for p in self.wiki_base.rglob("*.md")
+                if not any(part.startswith(".") or part in {"99-Archive", "99-Reports"} for part in p.relative_to(self.wiki_base).parts)
+            ]
 
         # 使用相对路径作为 source（避免绝对路径污染）
         rel_source = str(new_page_path.relative_to(self.wiki_base)) if str(new_page_path).startswith(str(self.wiki_base)) else str(new_page_path)
@@ -555,6 +557,40 @@ class KnowledgeGraph:
                         evidence=[RelationEvidence(
                             evidence_type="title_match",
                             content=f"标题被包含: '{new_title}' in '{existing_title}'",
+                        )],
+                    ))
+
+            # 领域层级包含 → SPECIALIZES / GENERALIZES
+            # 如 "技术/产品/运营" 包含 "技术"
+            new_domain = new_meta.get("领域", "")
+            existing_domain = existing_meta.get("领域", "")
+            if new_domain and existing_domain and isinstance(new_domain, str) and isinstance(existing_domain, str):
+                new_parts = [p.strip() for p in new_domain.split("/")]
+                existing_parts = [p.strip() for p in existing_domain.split("/")]
+                if len(new_parts) > len(existing_parts) and existing_parts == new_parts[:len(existing_parts)]:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.SPECIALIZES,
+                        strength=0.6,
+                        confidence=0.7,
+                        source_method="domain_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="domain_match",
+                            content=f"领域包含: '{new_domain}' ⊃ '{existing_domain}'",
+                        )],
+                    ))
+                elif len(existing_parts) > len(new_parts) and new_parts == existing_parts[:len(new_parts)]:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.GENERALIZES,
+                        strength=0.6,
+                        confidence=0.7,
+                        source_method="domain_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="domain_match",
+                            content=f"领域包含: '{existing_domain}' ⊃ '{new_domain}'",
                         )],
                     ))
 

@@ -1294,6 +1294,29 @@ def _inject_synthetic_ground_truth() -> int:
                     injected += 1
                 except Exception:
                     continue
+
+            # 同步写入 scorer_training_queue，确保训练样本充足
+            try:
+                from core.scoring.adaptive_scorer_v2 import FeedbackV2
+                scorer = AdaptiveScorerV2()
+                features = {
+                    "msg_count": msg_count or 0,
+                    "avg_len": avg_len or 0,
+                    "corrections": corrections or 0,
+                    "follow_up": follow_up or 0,
+                }
+                for signal_type, label in signals:
+                    fb = FeedbackV2(
+                        session_id=session_id,
+                        dimension=signal_type,
+                        expected=float(label),
+                        actual=float(label),
+                        features=features,
+                        source="synthetic",
+                    )
+                    scorer._insert_training_queue(fb)
+            except Exception:
+                pass
     except Exception:
         return 0
 

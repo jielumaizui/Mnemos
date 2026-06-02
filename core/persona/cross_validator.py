@@ -61,10 +61,20 @@ class ProfileCrossValidator:
         """执行交叉验证，返回发现的矛盾列表"""
         contradictions = []
 
+        # 过滤 behavior_profile，只保留可比较的数值类型
+        safe_behavior = {
+            k: v for k, v in behavior_profile.items()
+            if isinstance(v, (int, float))
+        }
+        safe_knowledge = {
+            k: v for k, v in knowledge_profile.items()
+            if isinstance(v, (int, float, str))
+        }
+
         for rule in self.CONTRADICTION_RULES:
             try:
-                b_match = rule["behavior_check"](behavior_profile)
-                k_match = rule["knowledge_check"](knowledge_profile)
+                b_match = rule["behavior_check"](safe_behavior)
+                k_match = rule["knowledge_check"](safe_knowledge)
                 if b_match and k_match:
                     contradictions.append(Contradiction(
                         type=rule["type"],
@@ -73,7 +83,7 @@ class ProfileCrossValidator:
                         severity="medium",
                     ))
             except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_validator.py", exc_info=True)
+                logger.debug(f"CrossValidator 规则 '{rule.get('type', 'unknown')}' 跳过", exc_info=True)
                 continue
 
         return contradictions

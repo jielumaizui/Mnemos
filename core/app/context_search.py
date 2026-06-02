@@ -37,6 +37,9 @@ class SearchResult:
     final_score: float = 0.0
     match_reason: str = ""
     freshness_alert: Optional[Any] = None
+    verification: str = ""
+    source: str = ""
+    last_modified: str = ""
 
     @property
     def page_title(self) -> str:
@@ -123,6 +126,9 @@ class ContextAwareSearch:
                 final_score=score,
                 match_reason=self._explain_match(relevance, confidence, continuity, freshness, context_boost),
                 freshness_alert=freshness_alert,
+                verification=candidate.get("verification", ""),
+                source=candidate.get("source", ""),
+                last_modified=candidate.get("last_modified", ""),
             ))
 
         # 3. 过滤低质量内容
@@ -175,12 +181,26 @@ class ContextAwareSearch:
                         elif isinstance(val, list):
                             search_text += " " + " ".join(str(v).lower() for v in val)
                 if any(kw in search_text for kw in keywords):
+                    # 过滤 pending-verification 页面（未验证的知识不进入搜索主库）
+                    verification = ""
+                    confidence = 0.5
+                    source = ""
+                    if fm:
+                        verification = fm.get("验证状态", fm.get("verification", ""))
+                        confidence = float(fm.get("置信度", fm.get("confidence", 0.5)) or 0.5)
+                        source = fm.get("来源", fm.get("source", ""))
+                    if verification == "pending-verification":
+                        continue
                     rel_path = str(md_file.relative_to(self.wiki_base))
                     candidates.append({
                         "path": rel_path,
                         "title": title,
                         "content": content[:2000],
                         "frontmatter": fm,
+                        "verification": verification,
+                        "source": source,
+                        "confidence": confidence,
+                        "last_modified": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat() if md_file.exists() else "",
                     })
                     if len(candidates) >= 20:
                         break
