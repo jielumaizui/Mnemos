@@ -138,14 +138,21 @@ def check_blindspot():
 
 def check_scorer_training():
     """P3: 评分闭环"""
-    db = Path.home() / ".mnemos" / "bayesian_scorer.db"
+    db = Path.home() / ".mnemos" / "mnemos.db"
     if not db.exists():
-        return ["bayesian_scorer.db 不存在"]
+        return ["mnemos.db 不存在"]
     conn = sqlite3.connect(str(db))
+    issues = []
     try:
-        state = conn.execute("SELECT COUNT(*) FROM bayesian_scorer_state").fetchone()[0]
-        feedback = conn.execute("SELECT COUNT(*) FROM bayesian_feedback").fetchone()[0]
-        return [f"scorer_state={state}, feedback={feedback}"]
+        models = conn.execute("SELECT COUNT(*) FROM scorer_models WHERE is_active = 1").fetchone()[0]
+        queue = conn.execute("SELECT COUNT(*) FROM scorer_training_queue WHERE status = 'pending'").fetchone()[0]
+        gt = conn.execute("SELECT COUNT(*) FROM ground_truth_signals").fetchone()[0]
+
+        if models == 0:
+            issues.append(f"无活跃评分模型（scorer_models=0, queue={queue}, ground_truth={gt}）")
+        if queue == 0 and gt == 0:
+            issues.append("训练队列为空且无 ground_truth，评分闭环无法启动")
+        return issues if issues else [f"models={models}, queue={queue}, ground_truth={gt}"]
     except Exception as e:
         return [str(e)]
     finally:

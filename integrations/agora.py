@@ -1385,23 +1385,30 @@ tags: [{', '.join(tags or ['file_import'])}]
         from core.app.blindspot_discovery import BlindspotDiscovery
 
         bd = BlindspotDiscovery()
-        reminder = bd.check_blind_spot(query)
+        result = bd.check_blind_spot(query)
 
-        if not reminder:
-            return {
-                "success": True,
+        base = {
+            "success": True,
+            "degraded": result.degraded,
+        }
+        if result.degraded:
+            base["degraded_reasons"] = result.degraded_reasons
+
+        if not result.reminder:
+            base.update({
                 "blindspot_found": False,
                 "message": "未发现盲点",
-            }
+            })
+            return base
 
-        return {
-            "success": True,
+        base.update({
             "blindspot_found": True,
-            "topic": reminder.topic,
-            "description": reminder.description,
-            "confidence": round(reminder.confidence, 2),
-            "status": reminder.status,
-        }
+            "topic": result.reminder.topic,
+            "description": result.reminder.description,
+            "confidence": round(result.reminder.confidence, 2),
+            "status": result.reminder.status,
+        })
+        return base
 
     def _tool_predictive_push(self, user_input: str,
                                working_dir: str = "") -> Dict:
@@ -1454,24 +1461,44 @@ tags: [{', '.join(tags or ['file_import'])}]
         from core.app.freshness_alert import FreshnessAlertChecker
 
         checker = FreshnessAlertChecker()
-        alert = checker.check_knowledge_freshness(entity_name)
+        result = checker.check_knowledge_freshness(entity_name)
 
-        if not alert:
+        if not result:
             return {
                 "success": True,
+                "status": "fresh",
                 "fresh": True,
                 "message": f"「{entity_name}」知识新鲜",
             }
 
+        # not_found / error 时 fresh=False，明确告知用户原因
+        if result.status in ("not_found", "error"):
+            return {
+                "success": True,
+                "status": result.status,
+                "fresh": False,
+                "message": result.message,
+            }
+
+        if result.status == "fresh":
+            return {
+                "success": True,
+                "status": "fresh",
+                "fresh": True,
+                "message": result.message,
+            }
+
+        # stale
         return {
             "success": True,
+            "status": "stale",
             "fresh": False,
-            "entity_name": alert.entity_name,
-            "alert_type": alert.alert_type,
-            "message": alert.message,
-            "confidence": round(alert.confidence, 2),
-            "current_version": alert.current_version,
-            "latest_version": alert.latest_version,
+            "entity_name": result.entity_name,
+            "alert_type": result.alert_type,
+            "message": result.message,
+            "confidence": round(result.confidence, 2),
+            "current_version": result.current_version,
+            "latest_version": result.latest_version,
         }
 
     def _tool_health_check(self) -> Dict:

@@ -132,7 +132,8 @@ class ContextAwareSearch:
             ))
 
         # 3. 过滤低质量内容
-        results = [r for r in results if r.confidence >= 0.5]
+        # relevance < 0.15 表示 query token 几乎没有命中 title/content，属于弱相关
+        results = [r for r in results if r.confidence >= 0.5 and r.relevance >= 0.15]
 
         # 4. 排序并截取
         results.sort(key=lambda r: r.score, reverse=True)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -31,6 +31,14 @@ class BlindSpotReminder:
     @property
     def is_actionable(self) -> bool:
         return self.status in ("detected", "reminded")
+
+
+@dataclass
+class BlindSpotCheckResult:
+    """盲点检查结果（含降级信息）"""
+    reminder: Optional[BlindSpotReminder]
+    degraded: bool = False
+    degraded_reasons: List[str] = field(default_factory=list)
 
 
 class BlindspotDiscovery:
@@ -69,16 +77,20 @@ class BlindspotDiscovery:
                 )
             """)
 
-    def check_blind_spot(self, query: str) -> Optional[BlindSpotReminder]:
+    def check_blind_spot(self, query: str) -> BlindSpotCheckResult:
         """
         搜索时检查盲点。
 
         Returns:
-            盲点提醒（如果在冷却期内则返回 None）
+            BlindSpotCheckResult（含降级信息）
         """
-        blindspots = self._detect_blindspots(query)
+        blindspots, degraded_notes = self._detect_blindspots(query)
         if not blindspots:
-            return None
+            return BlindSpotCheckResult(
+                reminder=None,
+                degraded=bool(degraded_notes),
+                degraded_reasons=degraded_notes,
+            )
 
         now = datetime.now()
 
@@ -94,9 +106,17 @@ class BlindspotDiscovery:
             # 更新状态
             self._update_status(bs.topic, "reminded", now)
 
-            return bs
+            return BlindSpotCheckResult(
+                reminder=bs,
+                degraded=bool(degraded_notes),
+                degraded_reasons=degraded_notes,
+            )
 
-        return None
+        return BlindSpotCheckResult(
+            reminder=None,
+            degraded=bool(degraded_notes),
+            degraded_reasons=degraded_notes,
+        )
 
     def get_weekly_summary(self) -> List[Dict]:
         """获取本周盲点汇总（供周报使用）"""
@@ -147,8 +167,12 @@ class BlindspotDiscovery:
             logger.warning(f"盲区信用恢复失败: {e}")
             return {"status": "error", "event_type": event_type, "error": str(e)}
 
-    def _detect_blindspots(self, query: str) -> List[BlindSpotReminder]:
-        """从知识图谱和画像检测盲点（降级策略：组件缺失时不静默失败）"""
+    def _detect_blindspots(self, query: str) -> tuple[List[BlindSpotReminder], List[str]]:
+        """从知识图谱和画像检测盲点（降级策略：组件缺失时不静默失败）
+
+        Returns:
+            (reminders, degraded_notes)
+        """
         results = []
         degraded_notes: List[str] = []
 
@@ -161,10 +185,8 @@ class BlindspotDiscovery:
             for kw in keywords:
                 if len(kw) < 2:
                     continue
-                # 使用 search 替代不存在的 search_entities
                 search_results = kg.search(kw, limit=1)
                 if not search_results:
-                    # 可能是盲点
                     results.append(BlindSpotReminder(
                         topic=kw,
                         description=f"知识库中缺少关于「{kw}」的记录",
@@ -175,21 +197,23 @@ class BlindspotDiscovery:
         except Exception as e:
             degraded_notes.append(f"知识图谱检测不可用: {e}")
 
-        # 2. 检查画像盲区（组件缺失时降级，不阻断）
+        # 2. 检查画像盲区（使用 dataclass 属性读取，非 dict.get）
         try:
             from core.persona.hamartia import BlindSpotProfileManager
             mgr = BlindSpotProfileManager()
             profile = mgr._load_profile()
             if profile:
-                framing_rigidity = profile.get("framing_rigidity", 0)
-                if framing_rigidity > 0.6:
-                    results.append(BlindSpotReminder(
-                        topic="framing_rigidity",
-                        description="可能受问题框架限制，建议多角度审视",
-                        confidence=framing_rigidity,
-                        status="detected",
-                        detected_at=datetime.now().isoformat(),
-                    ))
+                # 从 suspected/confirmed 中查找 framing 类型盲点
+                all_blindspots = profile.suspected + profile.confirmed
+                for bs in all_blindspots:
+                    if bs.type == "framing" and bs.confidence > 0.6:
+                        results.append(BlindSpotReminder(
+                            topic="framing_rigidity",
+                            description=bs.description or "可能受问题框架限制，建议多角度审视",
+                            confidence=bs.confidence,
+                            status="detected",
+                            detected_at=datetime.now().isoformat(),
+                        ))
         except Exception as e:
             degraded_notes.append(f"画像盲区检测不可用: {e}")
 
@@ -200,7 +224,7 @@ class BlindspotDiscovery:
         for bs in results:
             self._upsert_blindspot(bs)
 
-        return results
+        return results, degraded_notes
 
     def _upsert_blindspot(self, bs: BlindSpotReminder) -> None:
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:

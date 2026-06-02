@@ -1330,13 +1330,15 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         "temporal_scope": (fragment.frontmatter or {}).get("时效性", "contextual"),
         "created_at": datetime.now().strftime("%Y-%m-%d"),
         "source": source or "unknown",
+        "source_session": session_id,
+        "distilled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     fm = to_chinese_frontmatter(cleaned_fm, defaults)
     lines = ["---"]
     ordered_keys = [
         "类型", "名称", "领域", "摘要", "状态", "知识阶段",
         "来源数量", "证据级别", "置信度", "时效性", "创建日期",
-        "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
+        "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
         "跨Agent关联",
     ]
     for key in ordered_keys:
@@ -1885,6 +1887,36 @@ def _record_memos_wiki_links(session_id: str, wiki_page_paths: List[str]) -> Non
         logging.getLogger(__name__).warning(f"memos_wiki_link 记录失败", exc_info=True)
 
 
+def _emit_knowledge_distilled(session_id: str, result: DistillationResult, written: List[str]) -> None:
+    """发射 knowledge_distilled 事件（公共函数，供所有写页入口复用）"""
+    if not written or not result.fragments:
+        return
+    try:
+        from core.mnemos_bus import publish_event
+        entities = []
+        relations = []
+        for frag in result.fragments:
+            entities.extend(frag.keywords or [])
+            entities.extend(frag.related_concepts or [])
+            for link in frag.cross_agent_links or []:
+                relations.append({
+                    "source": frag.title,
+                    "target": link,
+                    "type": "related_to",
+                    "confidence": 0.5,
+                })
+        publish_event("knowledge_distilled", "distill", {
+            "session_id": session_id,
+            "wiki_pages": written,
+            "kg_input": {
+                "entities": list(set(entities)),
+                "relations": relations,
+            },
+        })
+    except Exception:
+        logging.getLogger(__name__).warning(f"knowledge_distilled event emit failed", exc_info=True)
+
+
 def distill_and_write(session_id: str, messages: List[Dict],
                       wiki_base: str = None) -> Tuple[DistillationResult, List[str]]:
     """便捷函数：蒸馏并写入 Wiki"""
@@ -1892,34 +1924,8 @@ def distill_and_write(session_id: str, messages: List[Dict],
     result = engine.process(session_id, messages)
     written = engine.write_pages(result)
 
-    # 发射 knowledge_distilled 事件（带上完整 wiki_pages 和 kg_input）
     if written and result.fragments:
-        try:
-            from core.mnemos_bus import publish_event
-            entities = []
-            relations = []
-            for frag in result.fragments:
-                entities.extend(frag.keywords or [])
-                entities.extend(frag.related_concepts or [])
-                for link in frag.cross_agent_links or []:
-                    relations.append({
-                        "source": frag.title,
-                        "target": link,
-                        "type": "related_to",
-                        "confidence": 0.5,
-                    })
-            publish_event("knowledge_distilled", "distill", {
-                "session_id": session_id,
-                "wiki_pages": written,
-                "kg_input": {
-                    "entities": list(set(entities)),
-                    "relations": relations,
-                },
-            })
-        except Exception:
-            logging.getLogger(__name__).warning(f"knowledge_distilled event emit failed", exc_info=True)
-
-        # 建立 Memos UID ↔ Wiki 页面映射
+        _emit_knowledge_distilled(session_id, result, written)
         _record_memos_wiki_links(session_id, written)
 
     return result, written

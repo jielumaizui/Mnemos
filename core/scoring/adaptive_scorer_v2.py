@@ -280,7 +280,7 @@ class AdaptiveScorerV2:
         source: str,
         db_path: Optional[str] = None,
     ) -> None:
-        """将真实用户行为样本写入 scorer_training_queue。
+        """将真实用户行为样本写入 scorer_training_queue，同时写入弱 ground_truth。
 
         Args:
             session_id: 会话/行为标识
@@ -303,6 +303,16 @@ class AdaptiveScorerV2:
                     json.dumps(features, ensure_ascii=False, default=str),
                     int(max(0.0, min(1.0, expected_score)) * 10),
                     (datetime.now() + timedelta(hours=0)).isoformat(),
+                ))
+                # 同时写入弱 ground_truth，确保训练时能匹配到标签
+                label = 1 if expected_score >= 0.5 else 0
+                conn.execute("""
+                    INSERT OR REPLACE INTO ground_truth_signals
+                        (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    session_id, dimension, str(label), max(0.1, min(1.0, expected_score)), 0,
+                    datetime.now().isoformat(),
                 ))
                 conn.commit()
                 logger.debug(
@@ -810,11 +820,18 @@ class AdaptiveScorerV2:
                 """, (dim,)).fetchall()
 
                 for session_id, feat_json in rows:
-                    # 查询 ground_truth 标签
+                    # 查询 ground_truth 标签（优先匹配同 dimension）
                     gt = conn.execute("""
                         SELECT signal_value, confidence FROM ground_truth_signals
-                        WHERE session_id = ?
-                    """, (session_id,)).fetchone()
+                        WHERE session_id = ? AND signal_type = ?
+                    """, (session_id, dim)).fetchone()
+
+                    # 回退：同 session 任意 ground_truth（兼容旧数据）
+                    if not gt:
+                        gt = conn.execute("""
+                            SELECT signal_value, confidence FROM ground_truth_signals
+                            WHERE session_id = ?
+                        """, (session_id,)).fetchone()
 
                     if gt:
                         features = json.loads(feat_json) if feat_json else {}

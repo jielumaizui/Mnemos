@@ -640,11 +640,26 @@ class KnowledgeGraph:
 
         return unique
 
+    # source_method 置信度上限（防止弱规则被高估）
+    _CONFIDENCE_CEILING: Dict[str, float] = {
+        "same_directory": 0.45,
+        "hash_prefix_series": 0.55,
+        "keyword_overlap": 0.65,
+        "link_parse": 0.8,
+        "anti_pattern_match": 0.75,
+        "body_anti_pattern": 0.65,
+        "title_containment": 0.7,
+        "domain_containment": 0.7,
+    }
+
     def apply_discovered(self, relations: List[Relation],
                          min_confidence: float = 0.5) -> int:
-        """将发现的关系写入数据库（过滤低置信度）"""
+        """将发现的关系写入数据库（过滤低置信度，应用 source_method 上限）"""
         count = 0
         for rel in relations:
+            # 应用 source_method 置信度上限
+            ceiling = self._CONFIDENCE_CEILING.get(rel.source_method, 1.0)
+            rel.confidence = min(rel.confidence, ceiling)
             if rel.confidence >= min_confidence:
                 if self.add_relation(rel):
                     count += 1

@@ -447,9 +447,17 @@ def cmd_doctor(args):
         if md_count > 0:
             try:
                 import yaml
+                from core.frontmatter import fm_get
+
+                # 系统页面不计入知识来源统计
+                _SYSTEM_PAGES = {"log.md", "index.md", "graph-index.md", "readme.md"}
+
                 sources = {"人工写入": 0, "Memos同步": 0, "蒸馏提取": 0, "复盘经验": 0, "Git历史": 0, "其他": 0}
                 for md_file in md_files:
                     try:
+                        # 跳过系统页
+                        if md_file.name.lower() in _SYSTEM_PAGES:
+                            continue
                         content = md_file.read_text(encoding="utf-8", errors="ignore")
                         src = "人工写入"
                         if content.startswith("---"):
@@ -457,17 +465,22 @@ def cmd_doctor(args):
                             if len(parts) >= 3:
                                 fm = yaml.safe_load(parts[1]) or {}
                                 tags = fm.get("tags", [])
-                                if "memos" in tags or "memos-sync" in tags or fm.get("source") == "memos":
+                                explicit = fm_get(fm, "source", "")
+                                if "memos" in tags or "memos-sync" in tags or explicit in ("memos", "memos-sync"):
                                     src = "Memos同步"
-                                elif "distilled" in tags or fm.get("source") == "distill":
+                                elif "distilled" in tags or explicit in ("distill", "distilled"):
                                     src = "蒸馏提取"
-                                elif "retrospective" in tags or fm.get("source") == "retrospective":
+                                elif "retrospective" in tags or explicit == "retrospective":
                                     src = "复盘经验"
-                                elif "git" in tags or fm.get("source") == "git":
+                                elif "git" in tags or explicit == "git":
                                     src = "Git历史"
+                                elif explicit in ("claude", "kimi", "codex", "openclaw", "hermes"):
+                                    src = "蒸馏提取"
+                                elif explicit:
+                                    # 有明确 source 但不是已知来源，算其他
+                                    src = "其他"
                         sources[src] = sources.get(src, 0) + 1
                     except Exception:
-                        # 单个页面 frontmatter 不合法时跳过，不污染 doctor 输出。
                         logger.debug("跳过无法解析 frontmatter 的页面", exc_info=True)
                         continue
                 print("  知识来源分布:")

@@ -45,7 +45,7 @@ from core.kia.assertion_extractor import (
 )
 from core.kia.conflict_resolver import detect_conflicts
 from core.hephaestus.distillation_engine import (
-    DistillationEngine, DistillationResult, KnowledgeFragment,
+    DistillationEngine, DistillationResult, KnowledgeFragment, _emit_knowledge_distilled,
     generate_wiki_page, build_session_text,
 )
 from core.hephaestus.evolution_tracker import RecirculationGuard
@@ -148,6 +148,11 @@ def _mark_processed(session_id: str, source: str, message_count: int,
                     quality_score: float, wiki_path: str = "",
                     method: str = "pipeline") -> None:
     """标记 session 已处理"""
+    # status 与 distill_method 对齐，避免展示层误判
+    status = method if method in (
+        "distilled", "skipped_low_quality", "skipped_distill",
+        "recirculation_blocked", "skill_suggestion", "skipped_by_pipeline",
+    ) else "distilled"
     try:
         with _get_conn() as conn:
             conn.execute(
@@ -156,7 +161,7 @@ def _mark_processed(session_id: str, source: str, message_count: int,
                     processed_at, distill_method, status)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, source, message_count, quality_score,
-                 datetime.now().isoformat(), method, "pipeline"),
+                 datetime.now().isoformat(), method, status),
             )
             if wiki_path:
                 conn.execute(
@@ -190,8 +195,9 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
 
 
 def _link_session_memos_to_wiki(memos: List[Dict], wiki_page_paths: List[str]) -> None:
-    """将 session 的所有 Memos UID 与生成的 Wiki 页面路径建立映射"""
+    """将 session 的所有 Memos UID 与生成的 Wiki 页面路径建立映射，同时更新 sync_log"""
     from core.config import get_config
+    import json
     db_path = get_config().data_dir / "sync_log.db"
     if not db_path.exists() or not memos or not wiki_page_paths:
         return
@@ -199,7 +205,18 @@ def _link_session_memos_to_wiki(memos: List[Dict], wiki_page_paths: List[str]) -
         uids = [m.get("uid", "") for m in memos if m.get("uid")]
         if not uids:
             return
+        # 解析 session_id
+        session_id = ""
+        for m in memos:
+            for tag in m.get("tags", []):
+                if tag.startswith("session="):
+                    session_id = tag.split("=", 1)[1]
+                    break
+            if session_id:
+                break
+
         conn = sqlite3.connect(str(db_path), timeout=10)
+        # 1. 写入 memos_wiki_link
         for uid in uids:
             for wpath in wiki_page_paths:
                 conn.execute(
@@ -208,6 +225,14 @@ def _link_session_memos_to_wiki(memos: List[Dict], wiki_page_paths: List[str]) -
                        VALUES (?, ?, 'wiki_builder', ?)""",
                     (uid, wpath, datetime.now().isoformat()),
                 )
+        # 2. 更新 sync_log（如果存在该 session 的记录）
+        if session_id:
+            conn.execute(
+                """UPDATE sync_log
+                   SET wiki_page_paths = ?, distill_status = 'distilled', distilled_at = ?
+                   WHERE session_id = ?""",
+                (json.dumps(wiki_page_paths), datetime.now().isoformat(), session_id),
+            )
         conn.commit()
         conn.close()
     except Exception:
@@ -587,6 +612,7 @@ def _generate_form_page(session_id: str, form: KnowledgeForm,
     lines.append(f'type: {form.value}')
     lines.append(f'source_session: {session_id}')
     lines.append(f'source_agent: {source}')
+    lines.append(f'distilled_at: {datetime.now().isoformat()}')
     lines.append(f'status: active')
     lines.append(f'stage: captured')
     lines.append(f'evidence: single-source')
@@ -835,6 +861,8 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                                        method="pipeline")
                         created_pages += 1
                         stats["new_knowledge"].append({"session": session_id[:8], "path": path_str, "method": "pipeline", "score": avg_score})
+                    # 发射 knowledge_distilled 事件（KG 实时更新）
+                    _emit_knowledge_distilled(session_id, result, written)
                     _link_session_memos_to_wiki(memos, written)
                     stats["pipeline_used"] += 1
 

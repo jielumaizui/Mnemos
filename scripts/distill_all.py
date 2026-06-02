@@ -147,8 +147,7 @@ def main():
                         help='LLM 提供商: auto=自动选择(默认), api=强制API, cli=强制本地CLI')
     args = parser.parse_args()
 
-    from core.config import get_config
-    inbox = get_config().wiki_dir / "00-Inbox"
+    inbox = Path('/Users/zhuwei/Documents/Obsidian Vault/wiki/00-Inbox')
     inbox.mkdir(parents=True, exist_ok=True)
 
     force_provider = None if args.provider == 'auto' else args.provider

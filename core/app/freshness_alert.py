@@ -20,11 +20,23 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 @dataclass
 class FreshnessAlert:
-    """知识过时提醒"""
+    """知识过时提醒（向后兼容）"""
     entity_name: str
     alert_type: str  # version_outdated / context_expired / rarely_accessed
     message: str
     confidence: float
+    current_version: str = ""
+    latest_version: str = ""
+
+
+@dataclass
+class FreshnessResult:
+    """知识新鲜度检查结果（含 not_found / error 状态）"""
+    status: str  # fresh | stale | not_found | error
+    message: str
+    entity_name: str = ""
+    alert_type: str = ""  # version_outdated | context_expired | rarely_accessed
+    confidence: float = 0.0
     current_version: str = ""
     latest_version: str = ""
 
@@ -42,9 +54,15 @@ class FreshnessAlertChecker:
             from core.config import get_config
             self.wiki_base = get_config().wiki_dir
 
-    def check_knowledge_freshness(self, entity_name: str) -> Optional[FreshnessAlert]:
+    def check_knowledge_freshness(self, entity_name: str) -> Optional[FreshnessResult]:
         """
         检查特定实体的知识新鲜度。
+
+        返回 FreshnessResult，status 取值：
+        - fresh: 知识新鲜
+        - stale: 知识过期（含 version_outdated / context_expired / rarely_accessed）
+        - not_found: 实体不存在
+        - error: 检查过程异常
 
         搜索附加型：只在用户搜索时展示，不主动弹出。
         """
@@ -54,30 +72,63 @@ class FreshnessAlertChecker:
 
             entity = em.get_entity(entity_name)
             if not entity:
-                return None
+                return FreshnessResult(
+                    status="not_found",
+                    entity_name=entity_name,
+                    message=f"知识库中未找到「{entity_name}」，无法判断新鲜度",
+                )
 
             # 版本绑定检查
             if entity.entity_type in ("technology", "tool", "framework"):
                 alert = self._check_version_bound(entity)
                 if alert:
-                    return alert
+                    return FreshnessResult(
+                        status="stale",
+                        entity_name=alert.entity_name,
+                        alert_type=alert.alert_type,
+                        message=alert.message,
+                        confidence=alert.confidence,
+                        current_version=alert.current_version,
+                        latest_version=alert.latest_version,
+                    )
 
             # 上下文知识过期检查
             alert = self._check_context_expiry(entity)
             if alert:
-                return alert
+                return FreshnessResult(
+                    status="stale",
+                    entity_name=alert.entity_name,
+                    alert_type=alert.alert_type,
+                    message=alert.message,
+                    confidence=alert.confidence,
+                )
 
             # 罕见访问检查
             alert = self._check_rarely_accessed(entity)
             if alert:
-                return alert
+                return FreshnessResult(
+                    status="stale",
+                    entity_name=alert.entity_name,
+                    alert_type=alert.alert_type,
+                    message=alert.message,
+                    confidence=alert.confidence,
+                )
 
         except Exception as e:
             logger.debug(f"新鲜度检查失败 {entity_name}: {e}")
+            return FreshnessResult(
+                status="error",
+                entity_name=entity_name,
+                message=f"新鲜度检查异常: {e}",
+            )
 
-        return None
+        return FreshnessResult(
+            status="fresh",
+            entity_name=entity_name,
+            message=f"「{entity_name}」知识新鲜",
+        )
 
-    def scan_all_freshness(self) -> List[FreshnessAlert]:
+    def scan_all_freshness(self) -> List[FreshnessResult]:
         """扫描所有实体的新鲜度（每日批处理用）"""
         alerts = []
         try:
@@ -86,9 +137,9 @@ class FreshnessAlertChecker:
             entities = em.get_all_entities()
 
             for entity in entities[:100]:  # 限制扫描量
-                alert = self.check_knowledge_freshness(entity.name)
-                if alert:
-                    alerts.append(alert)
+                result = self.check_knowledge_freshness(entity.name)
+                if result and result.status == "stale":
+                    alerts.append(result)
         except Exception as e:
             logger.warning(f"批量新鲜度扫描失败: {e}")
 
@@ -142,10 +193,8 @@ class FreshnessAlertChecker:
     def _check_context_expiry(self, entity) -> Optional[FreshnessAlert]:
         """检查上下文知识是否过期"""
         try:
-            # NOTE: TemporalEvolutionTracker 未实现，使用 EntityManager 的更新时间来判断
-            from core.kia.entity_manager import EntityManager
-            em = EntityManager()
-            updated = entity.meta.get("updated_at", "")
+            # 使用 entity.last_updated（Entity dataclass 正确字段）
+            updated = getattr(entity, "last_updated", "")
             if updated:
                 from datetime import datetime
                 try:
