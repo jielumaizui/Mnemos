@@ -74,9 +74,8 @@ class FileIngestor:
             logger.warning(f"[FileIngestor] 无法提取文本: {file_path}")
             return None
 
-        # 截断过长内容
-        if len(text) > _MAX_TRUNCATE_CHARS:
-            text = text[:_MAX_TRUNCATE_CHARS] + "\n\n[... 文件内容已截断 ...]"
+        # 不再截断内容 — save_long_content() 会自动分片保存
+        # 原始截断逻辑已移除，确保 PDF/大文件完整保留
 
         # 构建 Markdown 内容
         content = self._build_file_markdown(file_path, text)

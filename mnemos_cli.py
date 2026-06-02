@@ -71,7 +71,7 @@ def _daemon_processes():
                 )
                 if ps_result.returncode == 0:
                     cmd = ps_result.stdout.strip()
-                    if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
+                    if ("mnemos_daemon" in cmd or "mnemos_daemon.py" in cmd) and "pgrep" not in cmd:
                         lines.append(f"{pid} {cmd}")
             return lines
         else:
@@ -85,7 +85,7 @@ def _daemon_processes():
             for line in result.stdout.splitlines():
                 if "pgrep" in line:
                     continue
-                if "mnemos_daemon.py" in line:
+                if "mnemos_daemon" in line or "mnemos_daemon.py" in line:
                     lines.append(line)
             return lines
     except Exception:
@@ -447,9 +447,17 @@ def cmd_doctor(args):
         if md_count > 0:
             try:
                 import yaml
+                from core.frontmatter import fm_get
+
+                # 系统页面不计入知识来源统计
+                _SYSTEM_PAGES = {"log.md", "index.md", "graph-index.md", "readme.md"}
+
                 sources = {"人工写入": 0, "Memos同步": 0, "蒸馏提取": 0, "复盘经验": 0, "Git历史": 0, "其他": 0}
                 for md_file in md_files:
                     try:
+                        # 跳过系统页
+                        if md_file.name.lower() in _SYSTEM_PAGES:
+                            continue
                         content = md_file.read_text(encoding="utf-8", errors="ignore")
                         src = "人工写入"
                         if content.startswith("---"):
@@ -457,17 +465,22 @@ def cmd_doctor(args):
                             if len(parts) >= 3:
                                 fm = yaml.safe_load(parts[1]) or {}
                                 tags = fm.get("tags", [])
-                                if "memos" in tags or "memos-sync" in tags or fm.get("source") == "memos":
+                                explicit = fm_get(fm, "source", "")
+                                if "memos" in tags or "memos-sync" in tags or explicit in ("memos", "memos-sync"):
                                     src = "Memos同步"
-                                elif "distilled" in tags or fm.get("source") == "distill":
+                                elif "distilled" in tags or explicit in ("distill", "distilled"):
                                     src = "蒸馏提取"
-                                elif "retrospective" in tags or fm.get("source") == "retrospective":
+                                elif "retrospective" in tags or explicit == "retrospective":
                                     src = "复盘经验"
-                                elif "git" in tags or fm.get("source") == "git":
+                                elif "git" in tags or explicit == "git":
                                     src = "Git历史"
+                                elif explicit in ("claude", "kimi", "codex", "openclaw", "hermes"):
+                                    src = "蒸馏提取"
+                                elif explicit:
+                                    # 有明确 source 但不是已知来源，算其他
+                                    src = "其他"
                         sources[src] = sources.get(src, 0) + 1
                     except Exception:
-                        # 单个页面 frontmatter 不合法时跳过，不污染 doctor 输出。
                         logger.debug("跳过无法解析 frontmatter 的页面", exc_info=True)
                         continue
                 print("  知识来源分布:")
@@ -568,6 +581,8 @@ def cmd_doctor(args):
         ("tomli_w", "TOML 写入", "Kimi hooks 配置", "pip install mnemos[kimi]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
+        ("sklearn", "scikit-learn", "ML 评分器训练（standard 后端）", "pip install mnemos[ml]"),
+        ("hnswlib", "hnswlib", "向量索引与跨 Agent 关联检索", "pip install mnemos[ml]"),
     ]
     has_optional_gap = False
     for module, name, feature, install_cmd in optional_deps:
@@ -963,13 +978,53 @@ def cmd_search(args):
 
         print(f"搜索结果 ({len(results)} 条):")
         for i, r in enumerate(results, 1):
-            print(f"  {i}. [{r.score:.2f}] {r.title}")
+            badges = []
+            if getattr(r, 'verification', ''):
+                badges.append(r.verification)
+            if getattr(r, 'source', ''):
+                badges.append(f"来源:{r.source}")
+            badge_str = f" ({', '.join(badges)})" if badges else ""
+            print(f"  {i}. [{r.score:.2f}] {r.title}{badge_str}")
             if r.snippet:
                 snippet = r.snippet[:80].replace("\n", " ")
                 print(f"     {snippet}...")
             print(f"     路径: {r.page_path}")
     except Exception as e:
         print(f"搜索失败: {e}")
+
+
+def cmd_wiki(args):
+    """Wiki 知识库操作"""
+    if args.wiki_cmd == "read":
+        try:
+            from integrations.oracle import WikiReader
+            reader = WikiReader()
+            result = reader.read_page(args.page_path, depth=args.depth)
+            if not result:
+                print(f"未找到页面: {args.page_path}")
+                return
+            print(f"📄 {result.get('title', args.page_path)}")
+            print(f"   深度: {result.get('depth', 'unknown')}")
+            if result.get('confidence'):
+                print(f"   可信度: {result['confidence']}")
+            if result.get('verification'):
+                print(f"   验证状态: {result['verification']}")
+            if result.get('source'):
+                print(f"   来源: {result['source']}")
+            if result.get('last_modified'):
+                print(f"   最后更新: {result['last_modified']}")
+            print("-" * 40)
+            content = result.get('content') or result.get('summary') or result.get('summary', '')
+            if content:
+                print(content[:2000])
+            if result.get('related'):
+                print(f"\n🔗 关联页面 ({len(result['related'])} 个):")
+                for rel in result['related'][:5]:
+                    print(f"   - {rel.get('title', rel.get('path', 'unknown'))}")
+        except Exception as e:
+            print(f"读取 Wiki 失败: {e}")
+    else:
+        print("用法: mnemos wiki read <page_path> [--depth metadata|summary|full]")
 
 
 def cmd_report(args):
@@ -1144,6 +1199,14 @@ def main():
     search_parser.add_argument("query", help="搜索查询")
     search_parser.add_argument("--limit", type=int, default=10, help="最大结果数")
 
+    # wiki
+    wiki_parser = subparsers.add_parser("wiki", help="Wiki 知识库操作")
+    wiki_sub = wiki_parser.add_subparsers(dest="wiki_cmd")
+    wiki_read_parser = wiki_sub.add_parser("read", help="读取指定 Wiki 页面")
+    wiki_read_parser.add_argument("page_path", help="Wiki 页面路径（如 03-Tech/codex-cli.md）")
+    wiki_read_parser.add_argument("--depth", choices=["metadata", "summary", "full"],
+                                   default="full", help="读取深度")
+
     # report
     report_parser = subparsers.add_parser("report", help="报告生成")
     report_sub = report_parser.add_subparsers(dest="report_cmd")
@@ -1182,6 +1245,8 @@ def main():
         cmd_sync(args)
     elif args.command == "search":
         cmd_search(args)
+    elif args.command == "wiki":
+        cmd_wiki(args)
     elif args.command == "report":
         cmd_report(args)
     elif args.command == "events":

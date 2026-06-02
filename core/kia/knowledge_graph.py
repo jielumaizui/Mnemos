@@ -415,10 +415,12 @@ class KnowledgeGraph:
         new_keywords = self._extract_all_keywords(new_meta)
         new_links = self._extract_wiki_links(new_content)
 
-        # 获取现有页面列表
+        # 获取现有页面列表（扫描全 Wiki，不只 00-Inbox）
         if existing_pages is None:
-            inbox = self.wiki_base / "00-Inbox"
-            existing_pages = list(inbox.glob("*.md")) if inbox.exists() else []
+            existing_pages = [
+                p for p in self.wiki_base.rglob("*.md")
+                if not any(part.startswith(".") or part in {"99-Archive", "99-Reports"} for part in p.relative_to(self.wiki_base).parts)
+            ]
 
         # 使用相对路径作为 source（避免绝对路径污染）
         rel_source = str(new_page_path.relative_to(self.wiki_base)) if str(new_page_path).startswith(str(self.wiki_base)) else str(new_page_path)
@@ -443,6 +445,8 @@ class KnowledgeGraph:
         for existing_path in existing_pages:
             if existing_path == new_page_path:
                 continue
+
+            rel_target = str(existing_path.relative_to(self.wiki_base)) if str(existing_path).startswith(str(self.wiki_base)) else str(existing_path)
 
             try:
                 existing_content = existing_path.read_text(encoding="utf-8")
@@ -472,6 +476,7 @@ class KnowledgeGraph:
                     ))
 
             # 反模式文本匹配 → CONTRADICTS
+            # 策略 A: frontmatter 显式反模式（用户手动标注，置信度高）
             new_anti = new_meta.get("反模式", []) or []
             existing_title_parts = existing_title.lower().split()
             for anti in new_anti:
@@ -479,10 +484,10 @@ class KnowledgeGraph:
                 if any(part in anti_lower for part in existing_title_parts if len(part) > 2):
                     discovered.append(Relation(
                         source=rel_source,
-                        target=str(existing_path.relative_to(self.wiki_base)) if str(existing_path).startswith(str(self.wiki_base)) else str(existing_path),
+                        target=rel_target,
                         relation_type=RelationType.CONTRADICTS,
-                        strength=0.7,
-                        confidence=0.6,
+                        strength=0.75,
+                        confidence=0.85,
                         source_method="anti_pattern_match",
                         evidence=[RelationEvidence(
                             evidence_type="anti_pattern_quote",
@@ -490,33 +495,139 @@ class KnowledgeGraph:
                         )],
                     ))
 
-            # 标题包含关系
-            if existing_title.lower() in new_title.lower() and len(existing_title) > 5:
+            # 策略 B: 正文反模式句式提取（不依赖 frontmatter）
+            body_text = new_content.split("---", 2)[-1] if "---" in new_content else new_content
+            anti_patterns = self._extract_anti_patterns_from_body(body_text)
+            for anti in anti_patterns:
+                anti_lower = anti.lower()
+                # 与现有页面的关键词或标题匹配
+                matched = False
+                for kw in existing_keywords:
+                    if len(kw) > 2 and kw.lower() in anti_lower:
+                        matched = True
+                        break
+                if not matched:
+                    for part in existing_title_parts:
+                        if len(part) > 2 and part in anti_lower:
+                            matched = True
+                            break
+                if matched:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.CONTRADICTS,
+                        strength=0.65,
+                        confidence=0.75,
+                        source_method="body_anti_pattern",
+                        evidence=[RelationEvidence(
+                            evidence_type="anti_pattern_quote",
+                            content=f"正文反模式: {anti[:100]}",
+                        )],
+                    ))
+
+            # 标题包含关系 → SPECIALIZES / GENERALIZES
+            # 加强条件：被包含标题至少占长标题的 40%，避免弱匹配
+            _et = existing_title.lower()
+            _nt = new_title.lower()
+            if _et in _nt and len(existing_title) > 5:
+                ratio = len(existing_title) / max(len(new_title), 1)
+                if ratio >= 0.4:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.SPECIALIZES,
+                        strength=0.7,
+                        confidence=0.75,
+                        source_method="title_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="title_match",
+                            content=f"标题包含: '{existing_title}' in '{new_title}'",
+                        )],
+                    ))
+            elif _nt in _et and len(new_title) > 5:
+                ratio = len(new_title) / max(len(existing_title), 1)
+                if ratio >= 0.4:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.GENERALIZES,
+                        strength=0.7,
+                        confidence=0.75,
+                        source_method="title_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="title_match",
+                            content=f"标题被包含: '{new_title}' in '{existing_title}'",
+                        )],
+                    ))
+
+            # 领域层级包含 → SPECIALIZES / GENERALIZES
+            # 如 "技术/产品/运营" 包含 "技术"
+            new_domain = new_meta.get("领域", "")
+            existing_domain = existing_meta.get("领域", "")
+            if new_domain and existing_domain and isinstance(new_domain, str) and isinstance(existing_domain, str):
+                new_parts = [p.strip() for p in new_domain.split("/")]
+                existing_parts = [p.strip() for p in existing_domain.split("/")]
+                if len(new_parts) > len(existing_parts) and existing_parts == new_parts[:len(existing_parts)]:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.SPECIALIZES,
+                        strength=0.6,
+                        confidence=0.7,
+                        source_method="domain_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="domain_match",
+                            content=f"领域包含: '{new_domain}' ⊃ '{existing_domain}'",
+                        )],
+                    ))
+                elif len(existing_parts) > len(new_parts) and new_parts == existing_parts[:len(new_parts)]:
+                    discovered.append(Relation(
+                        source=rel_source,
+                        target=rel_target,
+                        relation_type=RelationType.GENERALIZES,
+                        strength=0.6,
+                        confidence=0.7,
+                        source_method="domain_containment",
+                        evidence=[RelationEvidence(
+                            evidence_type="domain_match",
+                            content=f"领域包含: '{existing_domain}' ⊃ '{new_domain}'",
+                        )],
+                    ))
+
+            # 策略 C: 相同哈希前缀 → 主题系列 PART_OF
+            new_prefix = self._extract_hash_prefix(new_page_path.stem)
+            existing_prefix = self._extract_hash_prefix(existing_path.stem)
+            if new_prefix and existing_prefix and new_prefix == existing_prefix and new_page_path.stem != existing_path.stem:
                 discovered.append(Relation(
-                    source=str(new_page_path),
-                    target=str(existing_path),
-                    relation_type=RelationType.SPECIALIZES,
-                    strength=0.6,
-                    confidence=0.5,
-                    source_method="title_containment",
+                    source=rel_source,
+                    target=rel_target,
+                    relation_type=RelationType.PART_OF,
+                    strength=0.75,
+                    confidence=0.8,
+                    source_method="hash_prefix_series",
                     evidence=[RelationEvidence(
-                        evidence_type="title_match",
-                        content=f"标题包含: '{existing_title}' in '{new_title}'",
+                        evidence_type="series_match",
+                        content=f"同一主题系列: {new_prefix}",
                     )],
                 ))
-            elif new_title.lower() in existing_title.lower() and len(new_title) > 5:
-                discovered.append(Relation(
-                    source=str(new_page_path),
-                    target=str(existing_path),
-                    relation_type=RelationType.GENERALIZES,
-                    strength=0.6,
-                    confidence=0.5,
-                    source_method="title_containment",
-                    evidence=[RelationEvidence(
-                        evidence_type="title_match",
-                        content=f"标题被包含: '{new_title}' in '{existing_title}'",
-                    )],
-                ))
+
+        # 策略 D: 同目录结构 → PART_OF（页面 → 目录，避免 O(N²)）
+        if new_page_path.parent != self.wiki_base:
+            dir_name = new_page_path.parent.name
+            # 目录名作为虚拟实体（用相对路径表示）
+            dir_rel_path = str(new_page_path.parent.relative_to(self.wiki_base))
+            discovered.append(Relation(
+                source=rel_source,
+                target=dir_rel_path,
+                relation_type=RelationType.PART_OF,
+                strength=0.6,
+                confidence=0.75,
+                source_method="same_directory",
+                evidence=[RelationEvidence(
+                    evidence_type="directory_proximity",
+                    content=f"所在目录: {dir_name}",
+                )],
+            ))
 
         # 去重（按 source+target+type）
         seen = set()
@@ -529,11 +640,26 @@ class KnowledgeGraph:
 
         return unique
 
+    # source_method 置信度上限（防止弱规则被高估）
+    _CONFIDENCE_CEILING: Dict[str, float] = {
+        "same_directory": 0.45,
+        "hash_prefix_series": 0.55,
+        "keyword_overlap": 0.65,
+        "link_parse": 0.8,
+        "anti_pattern_match": 0.75,
+        "body_anti_pattern": 0.65,
+        "title_containment": 0.7,
+        "domain_containment": 0.7,
+    }
+
     def apply_discovered(self, relations: List[Relation],
                          min_confidence: float = 0.5) -> int:
-        """将发现的关系写入数据库（过滤低置信度）"""
+        """将发现的关系写入数据库（过滤低置信度，应用 source_method 上限）"""
         count = 0
         for rel in relations:
+            # 应用 source_method 置信度上限
+            ceiling = self._CONFIDENCE_CEILING.get(rel.source_method, 1.0)
+            rel.confidence = min(rel.confidence, ceiling)
             if rel.confidence >= min_confidence:
                 if self.add_relation(rel):
                     count += 1
@@ -944,9 +1070,15 @@ WHERE file.path = "{page}"
         # 处理别名：[[目标|显示名]]
         return [link.split("|")[0].strip() for link in links]
 
+    # 通用关键词黑名单（会导致过度连接的宽泛标签）
+    _GENERIC_KEYWORDS: frozenset = frozenset({
+        "technology", "技术", "tech", "concept", "概念",
+        "未分类", "wiki", "obsidian", "methodology", "方法论",
+    })
+
     @staticmethod
     def _extract_all_keywords(frontmatter: Dict) -> List[str]:
-        """提取所有关键词"""
+        """提取所有关键词，自动过滤通用宽泛标签"""
         keywords = []
 
         # 分层关键词
@@ -967,7 +1099,61 @@ WHERE file.path = "{page}"
         if isinstance(scenes, list):
             keywords.extend(scenes)
 
-        return [k.lower() for k in keywords if isinstance(k, str)]
+        # 过滤通用词 + 去重
+        filtered = []
+        seen = set()
+        for k in keywords:
+            if not isinstance(k, str):
+                continue
+            kl = k.lower().strip()
+            if kl and kl not in seen and kl not in KnowledgeGraph._GENERIC_KEYWORDS:
+                seen.add(kl)
+                filtered.append(kl)
+        return filtered
+
+    @staticmethod
+    def _extract_anti_patterns_from_body(body_text: str) -> List[str]:
+        """从正文提取反模式/警示句式（不依赖 frontmatter）"""
+        # 先清洗：移除 markdown 链接和 HTML 注释
+        clean = re.sub(r'\[\[[^\]]+\]\]', '', body_text)
+        clean = re.sub(r'<!--.*?-->', '', clean, flags=re.DOTALL)
+        patterns = []
+        # 匹配常见反模式句式（允许换行或中文标点结尾）
+        anti_regex = re.compile(
+            r'(?:不应该|避免|禁止|不要|切勿|千万别|错误的|反模式|误区|陷阱|坑点)'
+            r'[^。\n]{3,80}[。\n]',
+            re.UNICODE
+        )
+        for m in anti_regex.finditer(clean):
+            sentence = m.group(0).strip()
+            if len(sentence) < 10 or len(sentence) > 120:
+                continue
+            # 严格过滤：排除含路径/残留标记/纯列表项的内容
+            if '/' in sentence or ']]' in sentence or '-->' in sentence or '###' in sentence:
+                continue
+            # 排除包含文件名片段（如 反模式_1）的内容
+            if re.search(r'[a-f0-9]{8}_', sentence) or re.search(r'_[0-9]+', sentence):
+                continue
+            # 排除编号列表项（含 1) 2. 等）或 markdown 标题
+            if re.search(r'\d+[\.\)]', sentence) or sentence.startswith('#'):
+                continue
+            # 排除分号分隔的列表（通常含多个分号或过多逗号）
+            if sentence.count('；') >= 1 or sentence.count('，') >= 3:
+                continue
+            patterns.append(sentence)
+        return patterns[:5]  # 每页最多取 5 条
+
+    @staticmethod
+    def _extract_hash_prefix(stem: str) -> Optional[str]:
+        """从文件名提取哈希前缀（如 74f412fa_方法论_3 → 74f412fa）"""
+        # 匹配 8位十六进制 或 日期格式前缀
+        m = re.match(r'^([0-9a-f]{8})_', stem)
+        if m:
+            return m.group(1)
+        m = re.match(r'^(\d{2}-\d{2}-\d{2})_', stem)
+        if m:
+            return m.group(1)
+        return None
 
 
 # ========== 便捷函数 ==========

@@ -45,7 +45,7 @@ from core.kia.assertion_extractor import (
 )
 from core.kia.conflict_resolver import detect_conflicts
 from core.hephaestus.distillation_engine import (
-    DistillationEngine, DistillationResult, KnowledgeFragment,
+    DistillationEngine, DistillationResult, KnowledgeFragment, _emit_knowledge_distilled,
     generate_wiki_page, build_session_text,
 )
 from core.hephaestus.evolution_tracker import RecirculationGuard
@@ -85,9 +85,15 @@ def _get_conn():
             message_count INTEGER,
             quality_score REAL,
             processed_at TEXT,
-            distill_method TEXT
+            distill_method TEXT,
+            status TEXT DEFAULT 'pipeline'
         )
     """)
+    # 兼容旧表结构：补加 status 字段
+    try:
+        conn.execute("ALTER TABLE processed_sessions ADD COLUMN status TEXT DEFAULT 'pipeline'")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS wiki_pages (
             page_id TEXT PRIMARY KEY,
@@ -142,15 +148,20 @@ def _mark_processed(session_id: str, source: str, message_count: int,
                     quality_score: float, wiki_path: str = "",
                     method: str = "pipeline") -> None:
     """标记 session 已处理"""
+    # status 与 distill_method 对齐，避免展示层误判
+    status = method if method in (
+        "distilled", "skipped_low_quality", "skipped_distill",
+        "recirculation_blocked", "skill_suggestion", "skipped_by_pipeline",
+    ) else "distilled"
     try:
         with _get_conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO processed_sessions
                    (session_id, source, message_count, quality_score,
-                    processed_at, distill_method)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                    processed_at, distill_method, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, source, message_count, quality_score,
-                 datetime.now().isoformat(), method),
+                 datetime.now().isoformat(), method, status),
             )
             if wiki_path:
                 conn.execute(
@@ -181,6 +192,51 @@ def _log(session_id: str, action: str, detail: str = "") -> None:
     except Exception:
         logging.getLogger(__name__).warning(f"Caught unexpected error at wiki_builder.py", exc_info=True)
         pass
+
+
+def _link_session_memos_to_wiki(memos: List[Dict], wiki_page_paths: List[str]) -> None:
+    """将 session 的所有 Memos UID 与生成的 Wiki 页面路径建立映射，同时更新 sync_log"""
+    from core.config import get_config
+    import json
+    db_path = get_config().data_dir / "sync_log.db"
+    if not db_path.exists() or not memos or not wiki_page_paths:
+        return
+    try:
+        uids = [m.get("uid", "") for m in memos if m.get("uid")]
+        if not uids:
+            return
+        # 解析 session_id
+        session_id = ""
+        for m in memos:
+            for tag in m.get("tags", []):
+                if tag.startswith("session="):
+                    session_id = tag.split("=", 1)[1]
+                    break
+            if session_id:
+                break
+
+        conn = sqlite3.connect(str(db_path), timeout=10)
+        # 1. 写入 memos_wiki_link
+        for uid in uids:
+            for wpath in wiki_page_paths:
+                conn.execute(
+                    """INSERT OR IGNORE INTO memos_wiki_link
+                       (memos_uid, wiki_page_path, link_type, created_at)
+                       VALUES (?, ?, 'wiki_builder', ?)""",
+                    (uid, wpath, datetime.now().isoformat()),
+                )
+        # 2. 更新 sync_log（如果存在该 session 的记录）
+        if session_id:
+            conn.execute(
+                """UPDATE sync_log
+                   SET wiki_page_paths = ?, distill_status = 'distilled', distilled_at = ?
+                   WHERE session_id = ?""",
+                (json.dumps(wiki_page_paths), datetime.now().isoformat(), session_id),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.warning("memos_wiki_link 记录失败", exc_info=True)
 
 
 # ========== Memos 查询与会话重建 ==========
@@ -511,24 +567,62 @@ def _extract_one_liner(assertions: List[Assertion]) -> str:
     return best.claim
 
 
+def _check_generic_template(assertions: List[Assertion]) -> str:
+    """去模板化检查：检测内容是否过于泛泛（缺少具体项目/错误/决策/结果）"""
+    all_text = " ".join(a.claim for a in assertions).lower()
+    # 具体信号
+    concrete_signals = [
+        "错误", "bug", "崩溃", "失败", "异常", "超时", "死锁", "泄漏",
+        "项目", "产品", "系统", "模块", "服务", "接口", "组件",
+        "决定", "选择", "采用", "放弃", "切换", "迁移", "重构",
+        "结果", "提升", "下降", "增长", "减少", "节省", "耗时",
+        "git", "commit", "pr", "merge", "deploy", "rollback",
+        "python", "javascript", "typescript", "java", "go", "rust",
+        "docker", "kubernetes", "aws", "gcp", "azure",
+    ]
+    matched = sum(1 for s in concrete_signals if s in all_text)
+    # 泛泛信号
+    generic_signals = [
+        "很重要", "非常有价值", "值得注意", "不可忽视", "至关重要",
+        "非常有意义", "极具参考价值", "值得深思", "发人深省",
+    ]
+    generic_matched = sum(1 for s in generic_signals if s in all_text)
+    if generic_matched > 0 and matched < 2:
+        return "generic"
+    if matched < 1:
+        return "weak_concrete"
+    return "concrete"
+
+
 def _generate_form_page(session_id: str, form: KnowledgeForm,
-                        assertions: List[Assertion], meta: Dict) -> str:
+                        assertions: List[Assertion], meta: Dict,
+                        quality_score: float = 0.0) -> str:
     """为特定知识形态生成 Markdown 页面（断言级生成，兼容旧路径）"""
     lines = []
     source = meta.get("source", "unknown")
     one_liner = _extract_one_liner(assertions)
     temporal_scope = _infer_temporal_scope(assertions)
+    template_check = _check_generic_template(assertions)
+    # quality_tier: candidate = 低质量/泛泛, main = 正常
+    quality_tier = "candidate" if (quality_score < 6.0 or template_check == "generic") else "main"
+    # verification 基于质量
+    verification = "pending-verification" if quality_tier == "candidate" else "verified"
 
     lines.append("---")
     lines.append(f'type: {form.value}')
     lines.append(f'source_session: {session_id}')
     lines.append(f'source_agent: {source}')
+    lines.append(f'distilled_at: {datetime.now().isoformat()}')
     lines.append(f'status: active')
     lines.append(f'stage: captured')
     lines.append(f'evidence: single-source')
     lines.append(f'temporal: {temporal_scope}')
     lines.append(f'level: L3')
     lines.append(f'created: {datetime.now().strftime("%Y-%m-%d")}')
+    lines.append(f'quality_score: {quality_score:.1f}')
+    lines.append(f'quality_tier: {quality_tier}')
+    lines.append(f'template_check: {template_check}')
+    lines.append(f'verification: {verification}')
     lines.append("---")
     lines.append("")
 
@@ -600,13 +694,13 @@ def generate_wiki_pages(session_id: str, messages: List[Dict], meta: Dict,
         if len(form_assertions) < 1:
             continue
         page_id = f"{session_id[:8]}_{form.value}"
-        md_content = _generate_form_page(session_id, form, form_assertions, meta)
+        md_content = _generate_form_page(session_id, form, form_assertions, meta, quality_score)
         pages.append((page_id, md_content))
 
     if not pages and assertions:
         a = assertions[0]
         page_id = f"{session_id[:8]}_{a.form.value}"
-        md_content = _generate_form_page(session_id, a.form, [a], meta)
+        md_content = _generate_form_page(session_id, a.form, [a], meta, quality_score)
         pages.append((page_id, md_content))
 
     return pages
@@ -691,6 +785,7 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
         "processed": 0, "skipped_low_quality": 0, "skipped_incomplete": 0,
         "skipped_similar": 0, "skipped_distill": 0, "skipped_recirculation": 0,
         "failed": 0, "pipeline_used": 0, "rule_used": 0,
+        "new_knowledge": [], "skip_reasons": [], "candidates": [],
     }
 
     # 回流防护
@@ -765,6 +860,10 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                                        len(messages), avg_score, path_str,
                                        method="pipeline")
                         created_pages += 1
+                        stats["new_knowledge"].append({"session": session_id[:8], "path": path_str, "method": "pipeline", "score": avg_score})
+                    # 发射 knowledge_distilled 事件（KG 实时更新）
+                    _emit_knowledge_distilled(session_id, result, written)
+                    _link_session_memos_to_wiki(memos, written)
                     stats["pipeline_used"] += 1
 
                     # 记录流水线层结果
@@ -778,11 +877,13 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                                    len(messages), avg_score, method="skill_suggestion")
                     _log(session_id, "skill", result.skill_suggestion)
                     stats["processed"] += 1
+                    stats["skip_reasons"].append({"session": session_id[:8], "reason": f"skill_suggestion: {result.skill_suggestion}"})
                 else:
                     _mark_processed(session_id, meta.get("source", "unknown"),
                                    len(messages), avg_score, method="skipped_by_pipeline")
                     _log(session_id, "skip_pipeline", result.judgment_reason)
                     stats["skipped_low_quality"] += 1
+                    stats["skip_reasons"].append({"session": session_id[:8], "reason": f"pipeline_skip: {result.judgment_reason}"})
             except Exception as e:
                 logger.warning(f"  [WikiBuilder] 流水线处理失败: {e}")
                 _log(session_id, "error", str(e))
@@ -808,18 +909,78 @@ def run_build_cycle(client: MemosClient, dry_run: bool = False,
                                    method="rule")
                     _log(session_id, "created", f"00-Inbox/{page_id}.md, Q:{avg_score:.1f}")
                     created_pages += 1
+                    # 检测 candidate 级别页面
+                    if "quality_tier: candidate" in md_content:
+                        stats["candidates"].append({"session": session_id[:8], "path": str(source_path), "score": avg_score})
+                    else:
+                        stats["new_knowledge"].append({"session": session_id[:8], "path": str(source_path), "method": "rule", "score": avg_score})
                 except Exception as e:
                     _log(session_id, "error", f"{page_id}: {e}")
                     stats["failed"] += 1
+            _link_session_memos_to_wiki(
+                memos,
+                [str(_get_wiki_dir() / "00-Inbox" / f"{pid}.md") for pid, _ in pages]
+            )
             stats["rule_used"] += 1
 
         stats["processed"] += created_pages
+
+    # 生成复盘摘要
+    _write_retrospective(stats)
 
     if stats["processed"] > 0:
         update_index_md()
         _git_auto_commit()
 
     return stats
+
+
+def _write_retrospective(stats: Dict) -> None:
+    """生成并写入本次 build 的复盘摘要"""
+    if stats.get("processed", 0) == 0 and not stats.get("skip_reasons"):
+        return
+    retro_dir = _get_wiki_dir() / "06-Retrospectives"
+    retro_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    retro_path = retro_dir / f"retro_{ts}.md"
+    lines = [
+        f"# 知识蒸馏复盘 — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        "## 新增知识",
+    ]
+    if stats.get("new_knowledge"):
+        for item in stats["new_knowledge"][:20]:
+            lines.append(f"- `{item['session']}` {item['path']} (score={item['score']:.1f}, method={item['method']})")
+    else:
+        lines.append("- 无")
+    lines.extend(["", "## 跳过原因"])
+    if stats.get("skip_reasons"):
+        for item in stats["skip_reasons"][:20]:
+            lines.append(f"- `{item['session']}` {item['reason']}")
+    else:
+        lines.append("- 无")
+    lines.extend(["", "## 待验证（candidate 级别）"])
+    if stats.get("candidates"):
+        for item in stats["candidates"][:20]:
+            lines.append(f"- `{item['session']}` {item['path']} (score={item['score']:.1f})")
+    else:
+        lines.append("- 无")
+    lines.extend(["", "## 可行动提醒"])
+    tips = []
+    if stats.get("skipped_similar", 0) > 0:
+        tips.append(f"- 有 {stats['skipped_similar']} 条因相似度过高被跳过，建议检查是否有重复记录")
+    if stats.get("skipped_low_quality", 0) > 0:
+        tips.append(f"- 有 {stats['skipped_low_quality']} 条因质量不足被跳过，建议提升对话信息量")
+    if stats.get("candidates"):
+        tips.append(f"- 有 {len(stats['candidates'])} 个 candidate 级别页面待验证，建议人工复核后提升为 main")
+    if not tips:
+        tips.append("- 本次处理正常，无需特别行动")
+    lines.extend(tips)
+    lines.append("")
+    try:
+        retro_path.write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def update_index_md():

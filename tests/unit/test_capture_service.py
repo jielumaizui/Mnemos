@@ -366,7 +366,7 @@ class TestCaptureWorker(unittest.TestCase):
         """Codex 失败不影响 Claude"""
         worker = self._make_worker()
         # 让 codex 的 save 抛异常
-        def side_effect(content, tags, visibility):
+        def side_effect(content, tags, visibility, **kwargs):
             if "agent=codex" in str(tags):
                 raise RuntimeError("codex boom")
             return Mock(uid="uid-ok")
@@ -392,7 +392,7 @@ class TestCaptureWorker(unittest.TestCase):
         processed = []
         original_save = self.mock_client.save
 
-        def tracking_save(content, tags, visibility):
+        def tracking_save(content, tags, visibility, **kwargs):
             # 从 content 中提取 turn 信息
             processed.append(content)
             return Mock(uid="uid")

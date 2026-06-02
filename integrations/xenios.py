@@ -22,7 +22,7 @@ import os
 import sys
 import re
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -210,7 +210,7 @@ class AIContextReader:
 
         # 过滤和排序
         results = []
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         for mem in memories:
             # 检查时间

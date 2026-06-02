@@ -51,6 +51,7 @@ class PredictivePush:
             "patterns": [
                 r"怎么(解决|处理|办)", r"为什么.{0,5}(不|报错|失败)",
                 r"如何(实现|配置|安装|部署)", r"有没有(办法|方案|替代)",
+                r"(修复|解决|配置|设置|调试|报错|错误|问题|冲突)",
             ],
             "confidence": 0.8,
         },
@@ -75,6 +76,7 @@ class PredictivePush:
             "patterns": [
                 r"(Docker|docker|K8s|k8s|Kubernetes)", r"(Redis|redis|MySQL|mysql|PostgreSQL)",
                 r"(React|Vue|Angular|Next)", r"(Nginx|nginx|Terraform|Ansible)",
+                r"(codex-cli|codex|claude|kimi|openclaw)",
             ],
             "confidence": 0.6,
         },
@@ -173,7 +175,7 @@ class PredictivePush:
 
             decisions.append(PushDecision(
                 should_push=should_push,
-                page_path=page.get("path", ""),
+                page_path=page.get("path") or page.get("page_path", ""),
                 title=page.get("title", ""),
                 reason=f"检测到 {signal.signal_type} 信号：{signal.matched_text[:30]}",
                 confidence=confidence,
@@ -241,48 +243,105 @@ class PredictivePush:
         return signals
 
     def _extract_topic(self, text: str, match: re.Match) -> str:
-        """从匹配上下文提取主题词"""
-        # 取匹配位置前后 20 字符
-        start = max(0, match.start() - 20)
-        end = min(len(text), match.end() + 20)
+        """从匹配上下文提取主题词
+
+        优先级：
+        1. code/tool token（含连字符，如 codex-cli）
+        2. 大写环境变量（如 OPENAI_BASE_URL）
+        3. 英文技术词（>=3 字符）
+        4. 中文名词短语（>=2 字符）
+        5. 回退到匹配文本本身
+        """
+        start = max(0, match.start() - 30)
+        end = min(len(text), match.end() + 30)
         context = text[start:end].strip()
-        # 简单提取：取中文词或英文词
-        words = re.findall(r'[一-鿿]+|[A-Za-z][A-Za-z0-9_-]*', context)
-        return words[0] if words else match.group(0)
+
+        # 1. code/tool token（连字符/下划线/点号）
+        code_tokens = re.findall(r'[A-Za-z][A-Za-z0-9_\-\.]*-[A-Za-z0-9_\-\.]+', context)
+        if code_tokens:
+            return max(code_tokens, key=len)
+
+        # 2. 大写环境变量（全大写 + 下划线）
+        env_vars = re.findall(r'[A-Z][A-Z0-9_]+', context)
+        if env_vars:
+            return max(env_vars, key=len)
+
+        # 3. 英文技术词（>=3 字符，排除常见介词）
+        stopwords = {"the", "and", "for", "how", "can", "you", "use", "with", "what", "why", "when", "where", "which", "this", "that", "have", "has", "had", "not", "but", "from", "they", "she", "him", "her", "his", "are", "was", "were", "been", "being", "did", "does", "doing", "will", "would", "could", "should", "may", "might", "must", "shall"}
+        eng_words = re.findall(r'[A-Za-z][A-Za-z0-9_]*', context)
+        eng_words = [w for w in eng_words if len(w) >= 3 and w.lower() not in stopwords]
+        if eng_words:
+            return max(eng_words, key=len)
+
+        # 4. 中文词（>=2 字符）
+        cn_words = re.findall(r'[一-鿿]{2,}', context)
+        if cn_words:
+            return cn_words[0]
+
+        return match.group(0)
 
     def _find_related_page(self, signal: PushSignal) -> Optional[Dict]:
-        """查找与信号相关的 Wiki 页面（优先 KG，回退 context_aware_search，再回退文件名）
-        
-        过滤：pending-verification 和低置信度(<0.5)页面不进入主动推送。
-        """
-        # 1. 优先 KnowledgeGraph
-        try:
-            from core.kia.knowledge_graph import KnowledgeGraph
-            kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
-            results = kg.search(signal.topic, limit=5)
-            for r in results:
-                if self._is_pushable(r):
-                    return r
-        except Exception:
-            pass
+        """查找与信号相关的 Wiki 页面（优先 context_aware_search，KG 辅助，再回退文件名）
 
-        # 2. 回退：context_aware_search（搜索正文和 frontmatter）
+        过滤：pending-verification 和低置信度(<0.5)页面不进入主动推送。
+        Relevance Gate：top result score >= 0.55，且 title/snippet 必须包含主题 token。
+        """
+        topic_lower = signal.topic.lower()
+        topic_tokens = set(re.findall(r'[a-z0-9]+', topic_lower))
+
+        def _relevance_gate(result) -> bool:
+            """检查搜索结果是否与主题真正相关"""
+            # score 阈值
+            score = getattr(result, "score", 0.0) or result.get("score", 0.0)
+            if score < 0.55:
+                return False
+            # title/snippet 必须包含至少一个主题 token
+            title = (getattr(result, "title", "") or result.get("title", "")).lower()
+            snippet = (getattr(result, "snippet", "") or result.get("content", "")).lower()
+            combined = title + " " + snippet
+            matched_tokens = [t for t in topic_tokens if t in combined and len(t) >= 2]
+            if not matched_tokens:
+                return False
+            return True
+
+        # 1. 优先 ContextAwareSearch（相关性更可靠）
         try:
             from core.app.context_search import ContextAwareSearch
             searcher = ContextAwareSearch(wiki_base=str(self.wiki_base))
             results = searcher.search(signal.topic, limit=5)
             for r in results:
-                page = {"path": r.page_path, "title": r.title, "confidence": r.confidence}
-                if self._is_pushable(page):
-                    return page
+                if _relevance_gate(r) and self._is_pushable({"verification": getattr(r, "verification", ""), "confidence": getattr(r, "confidence", 0.5)}):
+                    return {
+                        "path": r.page_path,
+                        "title": r.title,
+                        "confidence": r.confidence,
+                        "score": r.score,
+                    }
         except Exception:
             pass
 
-        # 3. 回退：文件名搜索
+        # 2. KG 辅助召回（作为补充，但不单独决定推送）
+        try:
+            from core.kia.knowledge_graph import KnowledgeGraph
+            kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
+            results = kg.search(signal.topic, limit=5)
+            for r in results:
+                # KG 结果需要额外验证：文件名或标题包含主题 token
+                title = (r.get("title", "") or r.get("entity_name", "")).lower()
+                if not any(t in title for t in topic_tokens if len(t) >= 2):
+                    continue
+                if self._is_pushable(r):
+                    return r
+        except Exception:
+            pass
+
+        # 3. 回退：文件名搜索（保守策略）
         for md_file in self.wiki_base.rglob("*.md"):
             if os.path.islink(md_file):
                 continue
-            if signal.topic.lower() in md_file.stem.lower():
+            stem_lower = md_file.stem.lower()
+            # 文件名必须精确包含主题词（不是子串匹配）
+            if signal.topic.lower() in stem_lower:
                 return {"path": str(md_file.relative_to(self.wiki_base)), "title": md_file.stem}
 
         return None
@@ -292,8 +351,8 @@ class PredictivePush:
         # 过滤 pending-verification
         if page.get("verification") == "pending-verification":
             return False
-        # 过滤低置信度
-        if page.get("confidence", 0.5) < 0.5:
+        # 过滤低置信度（系统默认 0.4，阈值不宜过高）
+        if page.get("confidence", 0.5) < 0.3:
             return False
         return True
 

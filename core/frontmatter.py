@@ -40,6 +40,8 @@ CANONICAL_TO_DISPLAY: Dict[str, str] = {
     "merged_from": "合并来源",
     "cross_agent_refs": "跨Agent关联",
     "source": "来源",
+    "source_session": "来源会话",
+    "distilled_at": "蒸馏时间",
     "broken_links": "失效链接",
 }
 

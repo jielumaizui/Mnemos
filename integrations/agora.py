@@ -84,13 +84,43 @@ class MCPServer:
     # ---- Tool 实现 ----
 
     def _tool_wiki_search(self, query: str, limit: int = 5) -> Dict:
-        """搜索知识库"""
+        """搜索知识库
+
+        统一搜索入口：优先 ContextAwareSearch（KG 召回 + 正文搜索 + 画像加权），
+        无结果时回退到 WikiReader（标题/实体/概念/路径索引）。
+        """
         from core.config import get_config
+        from core.app.context_search import ContextAwareSearch
         from integrations.oracle import WikiReader
+
         wiki_dir = get_config().wiki_dir
-        reader = WikiReader(wiki_dir)
-        results = reader.search(query, limit=limit)
-        # 记录训练样本：用户搜索 → 正样本（kg 维度）
+        results = []
+
+        # 1. 优先使用 ContextAwareSearch（更完善的搜索：正文 + frontmatter + KG + 画像加权）
+        try:
+            searcher = ContextAwareSearch(wiki_base=str(wiki_dir))
+            ca_results = searcher.search(query, limit=limit)
+            for r in ca_results:
+                results.append({
+                    "page_id": r.page_path.replace(".md", ""),
+                    "title": r.title,
+                    "type": self._infer_type_from_path(r.page_path),
+                    "heat_level": "warm",
+                    "heat_score": round(r.score * 100, 1),
+                    "relevance_score": round(r.relevance, 2),
+                    "reasons": [r.match_reason or "context_search"],
+                    "verification": getattr(r, "verification", ""),
+                    "confidence": getattr(r, "confidence", 0.5),
+                })
+        except Exception:
+            logger.debug("ContextAwareSearch 失败，回退到 WikiReader", exc_info=True)
+
+        # 2. 回退到 WikiReader（如果 ContextAwareSearch 无结果）
+        if not results:
+            reader = WikiReader(wiki_dir)
+            results = reader.search(query, limit=limit)
+
+        # 记录训练样本
         try:
             from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
             AdaptiveScorerV2.enqueue_training_sample(
@@ -102,11 +132,18 @@ class MCPServer:
             )
         except Exception:
             pass
+
         return {
             "success": True,
             "results": results,
             "query": query,
         }
+
+    def _infer_type_from_path(self, page_path: str) -> str:
+        """从路径推断知识类型"""
+        if "/" in page_path:
+            return page_path.split("/")[0]
+        return "00-Inbox"
 
     def _tool_wiki_read(self, page_path: str) -> Dict:
         """读取指定 wiki 页面"""
@@ -134,19 +171,19 @@ class MCPServer:
         }
 
     def _tool_session_search(self, query: str = "", session_id: str = "",
-                             limit: int = 10) -> Dict:
+                             memos_uid: str = "", limit: int = 10) -> Dict:
         """
         搜索历史会话记录，自动合并分片内容
 
         使用场景：
         - 用户说"我们之前聊过什么"
         - 需要查找某次 session 的完整对话
-        - 查询按 hash/range/segment 分片存储的聊天记录
+        - 通过 memos_uid 反查原始对话
 
         特性：
         - 自动检测分段记录（segment=xxx, type=chunk）
         - 按 hash/session 标识合并所有分段为完整对话
-        - 返回合并后的记忆列表
+        - 支持 memos_uid 反查
         """
         from core.config import get_config
         from integrations.styx import MemosClient
@@ -163,6 +200,10 @@ class MCPServer:
                 base_url=config.memos_api_url,
                 token=config.memos_token,
             )
+
+            # 如果提供了 memos_uid，反查 session_id
+            if memos_uid and not session_id:
+                session_id = client.get_session_by_uid(memos_uid)
 
             # 如果提供了 session_id，构造精确查询
             if session_id:
@@ -1344,23 +1385,30 @@ tags: [{', '.join(tags or ['file_import'])}]
         from core.app.blindspot_discovery import BlindspotDiscovery
 
         bd = BlindspotDiscovery()
-        reminder = bd.check_blind_spot(query)
+        result = bd.check_blind_spot(query)
 
-        if not reminder:
-            return {
-                "success": True,
+        base = {
+            "success": True,
+            "degraded": result.degraded,
+        }
+        if result.degraded:
+            base["degraded_reasons"] = result.degraded_reasons
+
+        if not result.reminder:
+            base.update({
                 "blindspot_found": False,
                 "message": "未发现盲点",
-            }
+            })
+            return base
 
-        return {
-            "success": True,
+        base.update({
             "blindspot_found": True,
-            "topic": reminder.topic,
-            "description": reminder.description,
-            "confidence": round(reminder.confidence, 2),
-            "status": reminder.status,
-        }
+            "topic": result.reminder.topic,
+            "description": result.reminder.description,
+            "confidence": round(result.reminder.confidence, 2),
+            "status": result.reminder.status,
+        })
+        return base
 
     def _tool_predictive_push(self, user_input: str,
                                working_dir: str = "") -> Dict:
@@ -1413,24 +1461,44 @@ tags: [{', '.join(tags or ['file_import'])}]
         from core.app.freshness_alert import FreshnessAlertChecker
 
         checker = FreshnessAlertChecker()
-        alert = checker.check_knowledge_freshness(entity_name)
+        result = checker.check_knowledge_freshness(entity_name)
 
-        if not alert:
+        if not result:
             return {
                 "success": True,
+                "status": "fresh",
                 "fresh": True,
                 "message": f"「{entity_name}」知识新鲜",
             }
 
+        # not_found / error 时 fresh=False，明确告知用户原因
+        if result.status in ("not_found", "error"):
+            return {
+                "success": True,
+                "status": result.status,
+                "fresh": False,
+                "message": result.message,
+            }
+
+        if result.status == "fresh":
+            return {
+                "success": True,
+                "status": "fresh",
+                "fresh": True,
+                "message": result.message,
+            }
+
+        # stale
         return {
             "success": True,
+            "status": "stale",
             "fresh": False,
-            "entity_name": alert.entity_name,
-            "alert_type": alert.alert_type,
-            "message": alert.message,
-            "confidence": round(alert.confidence, 2),
-            "current_version": alert.current_version,
-            "latest_version": alert.latest_version,
+            "entity_name": result.entity_name,
+            "alert_type": result.alert_type,
+            "message": result.message,
+            "confidence": round(result.confidence, 2),
+            "current_version": result.current_version,
+            "latest_version": result.latest_version,
         }
 
     def _tool_health_check(self) -> Dict:

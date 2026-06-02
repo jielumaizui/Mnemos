@@ -308,7 +308,12 @@ class MemosClient:
         return tags
 
     def _trace_sync_log(self, content, tags, memos_uids, status="ingested"):
-        """自动 sync_log 追踪，直接写 ~/.mnemos/sync_log.db"""
+        """自动 sync_log 追踪，直接写 ~/.mnemos/sync_log.db
+
+        注意：此方法是 standalone ingest 的兜底追踪，SyncEngine 已自行管理 sync_log。
+        为避免冲突，SyncEngine 调用 save/save_long_content 时会传 _trace_sync_log=False。
+        """
+        import json
         try:
             agent_name = self.agent or "unknown"
             session_id = "auto"
@@ -319,10 +324,20 @@ class MemosClient:
                         session_id = tag.split("=", 1)[1]
                     elif tag.startswith("turn="):
                         try:
-                            turn_number = int(tag.split("=", 1)[1])
+                            turn_number = int(tag.split("=", 1)[1]) - 1  # 1-based → 0-based
                         except (ValueError, TypeError):
                             turn_number = 0
             content_hash = hashlib.md5(content.strip().encode()).hexdigest()[:16]
+            # memos_uids 统一为 JSON list 格式
+            if isinstance(memos_uids, str):
+                if "," in memos_uids:
+                    uid_list = [u.strip() for u in memos_uids.split(",") if u.strip()]
+                else:
+                    uid_list = [memos_uids.strip()] if memos_uids.strip() else []
+            elif isinstance(memos_uids, list):
+                uid_list = memos_uids
+            else:
+                uid_list = []
             db_path = Path.home() / ".mnemos" / "sync_log.db"
             with sqlite3.connect(str(db_path), timeout=5) as conn:
                 conn.execute("""
@@ -331,7 +346,8 @@ class MemosClient:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     agent_name, session_id, turn_number, content_hash,
-                    memos_uids, status,
+                    json.dumps(uid_list),
+                    status,
                     datetime.now().isoformat(),
                     "pending", None
                 ))
@@ -1119,6 +1135,35 @@ class MemosClient:
             updated_at=m.get("updateAt") or m.get("updateTime"),
             agent=self.agent
         )
+
+    def get_session_by_uid(self, memo_uid: str) -> Optional[str]:
+        """根据 Memos UID 反查对应的 session_id
+
+        1. 先调用 get_by_uid 获取 memo 的 tags，解析 session=xxx
+        2. 若 tags 中没有 session，查 sync_log 兜底
+        """
+        memo = self.get_by_uid(memo_uid)
+        if memo and memo.tags:
+            for tag in memo.tags:
+                if tag.startswith("session="):
+                    return tag.split("=", 1)[1]
+        # 兜底：查 sync_log
+        try:
+            from core.config import get_config
+            db_path = get_config().data_dir / "sync_log.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path), timeout=5)
+                cursor = conn.execute(
+                    "SELECT session_id FROM sync_log WHERE memos_uids LIKE ?",
+                    (f'%"{memo_uid}"%',),
+                )
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    return row[0]
+        except Exception:
+            pass
+        return None
 
     # ==================== 批量 Ingest 接口（Clean/Expand模式）====================
 

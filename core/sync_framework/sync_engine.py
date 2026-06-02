@@ -309,12 +309,15 @@ class SyncEngine:
                 session_id=session_info.session_id,
                 turn_number=turn.turn_number,
                 action="skipped",
+                memos_uids=memos_dupe,
                 content_hash=content_hash,
             )
 
         # 6. 标签组装
         tags = self._build_tags(source, turn, session_info)
         tags.extend(source.build_extra_tags(turn))
+        # 6b. content_hash 标签：Memos 端兜底去重用
+        tags.append(f"content_hash={content_hash}")
 
         # 7. 存储 + 分片
         title = f"{source.name}-{session_info.session_id[:8]}-turn{turn.turn_number + 1}"
@@ -597,9 +600,10 @@ class SyncEngine:
                 tags=tags,
                 visibility="PUBLIC",
                 title=title,
+                _trace_sync_log=False,
             )
         else:
-            return [self.client.save(content, tags, "PUBLIC")]
+            return [self.client.save(content, tags, "PUBLIC", _trace_sync_log=False)]
 
     def _collect_persona_signal(self, source: AgentSource, turn: Turn, session_id: str):
         """采集用户行为信号，供画像系统分析"""
@@ -664,7 +668,6 @@ class SyncEngine:
         self, agent_name: str, session_id: str, turn_number: int, content_hash: str
     ) -> List[str]:
         """查询 Memos 是否已有相同 session+turn+content 的记录 — 兜底防重"""
-        import hashlib
         try:
             tags = [
                 f"source={agent_name}",
@@ -674,9 +677,13 @@ class SyncEngine:
             results = self.client.list_by_tags(tags, limit=5)
             matched = []
             for r in results:
-                # content_hash 二次校验：防止不同 session 的相同 turn 号被误判
+                # 优先检查 content_hash 标签（精确匹配，不受标签解析差异影响）
+                if f"content_hash={content_hash}" in r.tags:
+                    matched.append(r.uid)
+                    continue
+                # 兼容旧数据：没有 content_hash 标签时回退到 MD5 比较
                 body = (r.content or "").strip()
-                body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+                body_hash = hashlib.md5(body.encode("utf-8")).hexdigest()[:16]
                 if body_hash == content_hash:
                     matched.append(r.uid)
             return matched
