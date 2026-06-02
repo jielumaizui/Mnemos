@@ -603,6 +603,31 @@ def service_distill_and_merge(stop_event: threading.Event):
     except Exception as e:
         logger.warning(f"[蒸馏合并] KnowledgeScheduler 初始化失败: {e}，回退到 Orchestrator")
 
+    # 初始化 JobScheduler（KG 维护任务：每周自动清洗）
+    job_scheduler = None
+    try:
+        from core.job_scheduler import JobScheduler
+        job_scheduler = JobScheduler()
+        job_scheduler.register_job(
+            name="kg_clean_entities",
+            script="clean_kg.py",
+            cron="0 3 * * 0",  # 每周日 03:00
+            description="清洗知识图谱噪声实体（哈希前缀/MOC/片段等）",
+            timeout_seconds=300,
+            max_retries=1,
+        )
+        job_scheduler.register_job(
+            name="kg_clean_relations",
+            script="clean_relations.py",
+            cron="30 3 * * 0",  # 每周日 03:30
+            description="清洗知识图谱低质量关系（悬空引用/通用关键词相似/高密度溢出）",
+            timeout_seconds=300,
+            max_retries=1,
+        )
+        logger.info("[蒸馏合并] JobScheduler 已注册 KG 维护任务（每周日 03:00/03:30）")
+    except Exception as e:
+        logger.warning(f"[蒸馏合并] JobScheduler 初始化失败: {e}")
+
     # 在循环外初始化 worker，避免每次循环新建连接/资源
     from core.hephaestus_worker import HephaestusWorker
     worker = HephaestusWorker()
@@ -698,6 +723,21 @@ def service_distill_and_merge(stop_event: threading.Event):
                     push_res = report.get("push", {})
                     if push_res.get("triggered"):
                         logger.info(f"[推送] Teiresias 触发推送: {push_res.get('reason', '')}")
+
+                # 同 tick 内运行 JobScheduler（KG 维护任务等）
+                if job_scheduler:
+                    try:
+                        job_results = job_scheduler.run_due_jobs()
+                        if job_results:
+                            for jr in job_results:
+                                if jr.status == "success":
+                                    logger.info(f"[JobScheduler] {jr.job_name} 成功 ({jr.duration_ms}ms)")
+                                elif jr.status == "failed":
+                                    logger.warning(f"[JobScheduler] {jr.job_name} 失败: {jr.error_message}")
+                                elif jr.status == "skipped":
+                                    logger.info(f"[JobScheduler] {jr.job_name} 跳过")
+                    except Exception as e:
+                        logger.warning(f"[JobScheduler] 运行失败: {e}")
 
         except Exception as e:
             logger.error(f"[蒸馏合并] 运行失败: {e}")

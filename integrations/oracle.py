@@ -192,7 +192,7 @@ class WikiReader:
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
-                "source": fm_get(fm, "source") or "",
+                "source": fm_get(frontmatter, "source") or "",
                 "note": "沉睡知识，低活跃度，可唤醒",
                 "depth": "metadata_only"
             }
@@ -210,7 +210,7 @@ class WikiReader:
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
-                "source": fm_get(fm, "source") or "",
+                "source": fm_get(frontmatter, "source") or "",
                 "depth": f"summary_{max_chars}"
             }
 
@@ -228,7 +228,7 @@ class WikiReader:
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
-                "source": fm_get(fm, "source") or "",
+                "source": fm_get(frontmatter, "source") or "",
                 "depth": f"paragraph_{max_chars}"
             }
 
@@ -249,7 +249,7 @@ class WikiReader:
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
-                "source": fm_get(fm, "source") or "",
+                "source": fm_get(frontmatter, "source") or "",
                 "depth": "full",
                 "related": self._get_related_pages(page_id, limit=5) if config["related"] else []
             }
@@ -266,7 +266,7 @@ class WikiReader:
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
                 "confidence": info.get("confidence", 0.5),
-                "source": fm_get(fm, "source") or "",
+                "source": fm_get(frontmatter, "source") or "",
                 "depth": "full_plus",
                 "related": self._get_related_pages(page_id, limit=5),
                 "deep_traced": True,
