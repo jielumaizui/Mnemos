@@ -172,27 +172,33 @@ class EntityManager:
         fm = self._parse_frontmatter(content)
         entities = []
 
-        # 从 frontmatter 提取
+        # 从 frontmatter 提取（支持 dict 层级和 list 两种格式）
         kw = fm.get("关键词", {})
+        keyword_words = []
         if isinstance(kw, dict):
             for layer in ("核心概念", "工具实体"):
                 words = kw.get(layer, [])
                 if isinstance(words, list):
-                    for word in words:
-                        if self._is_valid_entity_name(word):
-                            entity_type = "tool" if layer == "工具实体" else "concept"
-                            entities.append(self._upsert_entity(
-                                name=word, entity_type=entity_type,
-                                wiki_page=str(wiki_page),
-                            ))
+                    keyword_words.extend(words)
+        elif isinstance(kw, list):
+            keyword_words = kw
 
-        # 从 [[链接]] 提取
+        for word in keyword_words:
+            if self._is_valid_entity_name(word):
+                entities.append(self._upsert_entity(
+                    name=word, entity_type="concept",
+                    wiki_page=str(wiki_page),
+                ))
+
+        # 从 [[链接]] 提取（清洗路径前缀）
         links = re.findall(r'\[\[([^\]]+)\]\]', content)
         for link in links:
             link = link.split("|")[0].strip()
-            if self._is_valid_entity_name(link):
+            # 去掉路径前缀如 00-Inbox/、03-Tech/ 等
+            clean_link = link.split("/")[-1] if "/" in link else link
+            if self._is_valid_entity_name(clean_link):
                 entities.append(self._upsert_entity(
-                    name=link, entity_type="concept",
+                    name=clean_link, entity_type="concept",
                     wiki_page=str(wiki_page),
                 ))
 
