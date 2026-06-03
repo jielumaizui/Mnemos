@@ -9,7 +9,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.embeddings.relation_manager import RelationEmbeddingManager
+from core.embeddings.relation_manager import RelationEmbeddingManager, HNSWLIB_AVAILABLE
+
+pytestmark = pytest.mark.skipif(not HNSWLIB_AVAILABLE, reason="hnswlib not installed")
 
 
 class TestRelationEmbeddingManager:
