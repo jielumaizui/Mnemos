@@ -239,7 +239,10 @@ def cmd_init(args):
     # 6. 创建目录
     wiki_dir = config.wiki_dir
     wiki_dir.mkdir(parents=True, exist_ok=True)
-    (wiki_dir / "retrospectives").mkdir(exist_ok=True)
+    (wiki_dir / "06-Retrospectives").mkdir(exist_ok=True)
+    # 兼容旧目录
+    if (wiki_dir / "retrospectives").exists():
+        (wiki_dir / "06-Retrospectives").mkdir(exist_ok=True)
     print(f"      ✓ 创建 Wiki 目录: {wiki_dir}")
 
     # 7. 安装 Claude Code hook（可选）
@@ -298,6 +301,22 @@ def cmd_doctor(args):
     warnings = []
 
     _print_config_contract(config, warnings)
+    print()
+
+    # 0. 性能档位
+    tier = config.get("performance_tier", "default")
+    print(f"性能档位: {tier}")
+    tier_desc = {
+        "eco": "节能模式 (embedding关闭, rerank关闭, 低并发)",
+        "default": "默认模式 (embedding开启, rerank关闭, 标准并发)",
+        "performance": "性能模式 (embedding开启, rerank开启, 高并发)",
+        "dev": "开发模式 (全部开启, 最大并发, 调试用)",
+    }
+    print(f"  {tier_desc.get(tier, '未知档位')}")
+    print(f"  embedding: {'开启' if config.get('embedding.enabled') else '关闭'}")
+    print(f"  rerank: {'开启' if config.get('embedding.use_rerank') else '关闭'}")
+    print(f"  max_workers: {config.get('capture.max_workers')}")
+    print(f"  max_payload: {config.get('capture.max_payload_bytes')} bytes")
     print()
 
     # 1. Python 版本
@@ -418,10 +437,18 @@ def cmd_doctor(args):
     # 8. KIA 闭环状态
     print()
     print("KIA 闭环状态:")
-    retro_dir = wiki_dir / "retrospectives"
-    if retro_dir.exists():
-        retro_count = len(list(retro_dir.rglob("*.md")))
-        print(f"  ✓ Retrospectives: {retro_count} 条经验")
+    # 优先 06-Retrospectives，兼容 retrospectives
+    retro_dirs = [wiki_dir / "06-Retrospectives", wiki_dir / "retrospectives"]
+    retro_dir = None
+    retro_count = 0
+    for d in retro_dirs:
+        if d.exists():
+            cnt = len(list(d.rglob("*.md")))
+            if cnt > retro_count:
+                retro_count = cnt
+                retro_dir = d
+    if retro_dir:
+        print(f"  ✓ Retrospectives ({retro_dir.name}): {retro_count} 条经验")
         if retro_count == 0:
             warnings.append("retrospectives 目录为空，KIA 预加载暂无数据可用")
     else:
@@ -435,13 +462,50 @@ def cmd_doctor(args):
     else:
         print(f"  ☐ 蒸馏队列未初始化")
 
-    # 9. 知识库健康度
+    # 9. 双索引状态 (ADR-019)
+    print()
+    print("双索引状态 (ADR-019):")
+    embedding_enabled = config.get("embedding.enabled", False)
+    if embedding_enabled:
+        print(f"  ✓ Embedding 已启用")
+        try:
+            from core.embeddings import EmbeddingIndexManager
+            from core.embeddings.relation_manager import RelationEmbeddingManager
+            idx = EmbeddingIndexManager(wiki_base=wiki_dir)
+            page_count = idx._index.get_current_count() if idx._index else 0
+            print(f"  ✓ 页面索引: {page_count} 个 embedding")
+
+            rel_mgr = RelationEmbeddingManager()
+            rel_stats = rel_mgr.get_stats()
+            print(f"  ✓ 关联索引: {rel_stats['total_relations']} 个 embedding")
+            if rel_stats['total_relations'] == 0:
+                warnings.append("关联上下文索引为空，运行 `mnemos build-relation-index` 构建")
+        except Exception as e:
+            warnings.append(f"双索引检测失败: {e}")
+    else:
+        warnings.append("Embedding 未启用，当前为降级检索（关键词+图谱召回）")
+        print(f"  ⚠ Embedding 已禁用 → 降级检索模式")
+
+    # 10. 知识库健康度
     print()
     print("知识库健康度:")
     if wiki_dir.exists():
         md_files = list(wiki_dir.rglob("*.md"))
         md_count = len(md_files)
         print(f"  Wiki 页面: {md_count}")
+
+        # Wiki metrics 覆盖率
+        try:
+            from core.wiki_metrics import WikiMetrics
+            wm = WikiMetrics(wiki_dir=str(wiki_dir))
+            scan = wm.scan_all_pages()
+            metrics_count = wm._get_conn().execute("SELECT COUNT(*) FROM page_metrics").fetchone()[0]
+            coverage = (metrics_count / md_count * 100) if md_count > 0 else 0
+            print(f"  Wiki metrics: {metrics_count}/{md_count} 页面 ({coverage:.0f}%)")
+            if coverage < 50:
+                warnings.append(f"Wiki metrics 覆盖率仅 {coverage:.0f}%，已自动扫描补充")
+        except Exception as e:
+            warnings.append(f"Wiki metrics 检查失败: {e}")
 
         # 知识来源分布
         if md_count > 0:
@@ -560,6 +624,35 @@ def cmd_doctor(args):
     except Exception as e:
         warnings.append(f"MCP 服务器加载失败: {e}")
 
+    # 11.5 Capture 队列健康
+    print()
+    print("Capture 队列健康:")
+    try:
+        import sqlite3
+        from pathlib import Path
+        cq_db = Path.home() / ".mnemos" / "capture_queue.db"
+        if cq_db.exists():
+            conn = sqlite3.connect(str(cq_db))
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, COUNT(*) FROM capture_events GROUP BY status")
+            status_counts = dict(cursor.fetchall())
+            done = status_counts.get("done", 0)
+            pending = status_counts.get("pending", 0)
+            failed = status_counts.get("failed", 0) + status_counts.get("error", 0)
+            print(f"  done: {done}, pending: {pending}, failed/error: {failed}")
+            cursor.execute(
+                "SELECT COUNT(*) FROM capture_events WHERE status IN ('failed','error') AND created_at > datetime('now', '-1 day')"
+            )
+            recent_failed = cursor.fetchone()[0]
+            if recent_failed > 0:
+                warnings.append(f"最近 24 小时有 {recent_failed} 条 capture 失败/错误记录")
+            conn.close()
+        else:
+            print(f"  ☐ capture_queue.db 不存在")
+    except Exception:
+        logger.debug("Capture 队列统计失败", exc_info=True)
+        print(f"  ☐ Capture 队列状态未知")
+
     # 12. 链路完整性检查
     print()
     print("链路完整性:")
@@ -601,7 +694,10 @@ def cmd_doctor(args):
             print(f"  ✓ {name}: {feature} 可用")
         except ImportError:
             has_optional_gap = True
-            print(f"  ✗ {name}: {feature} 不可用 → {install_cmd}")
+            if module == "sklearn":
+                print(f"  ☐ {name}: {feature} 未安装 → 已自动回退到 lightweight scorer（{install_cmd}）")
+            else:
+                print(f"  ✗ {name}: {feature} 不可用 → {install_cmd}")
 
     print()
     _print_runtime_health(config, warnings)

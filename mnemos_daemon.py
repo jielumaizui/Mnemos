@@ -831,6 +831,17 @@ def service_heartbeat(stop_event: threading.Event):
                 except Exception:
                     pass
 
+            # 每 60 次心跳（1 小时）清理 stale events
+            if heartbeat_count % 60 == 0:
+                try:
+                    from core.mnemos_bus import _get_bus
+                    bus = _get_bus()
+                    archived = bus.cleanup_stale(max_age_hours=24)
+                    if archived > 0:
+                        logger.info(f"[事件总线] 清理 {archived} 个 stale 事件为 archived")
+                except Exception:
+                    pass
+
             # 每 24 小时运行知识新鲜度检查
             if heartbeat_count % 1440 == 0:
                 try:
@@ -1619,7 +1630,7 @@ def service_event_bus(stop_event: threading.Event):
             payload = event.payload
             user_message = payload.get("user_message", "")
             working_dir = payload.get("working_dir", "")
-            agent = event.agent
+            agent = event.source
 
             # 统一 KIA 预加载入口（Agent-agnostic）
             context = run_preflight(agent, user_message, working_dir)
@@ -1665,7 +1676,7 @@ def service_event_bus(stop_event: threading.Event):
                         termination_type="unknown",
                         output_type="discussion",
                         working_dir=meta.get("working_dir", ""),
-                        agent=event.agent,
+                        agent=event.source,
                     )
                     store.insert_session_signal(signal)
 

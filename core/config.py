@@ -16,8 +16,39 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# === 性能档位预设 ===
+PERFORMANCE_TIERS: Dict[str, Dict[str, Any]] = {
+    "eco": {
+        "embedding": {"enabled": False, "use_rerank": False},
+        "capture": {"max_payload_bytes": 100000, "max_workers": 2},
+        "distill": {"max_tasks_per_cycle": 2, "token_budget_total": 8000},
+        "scheduler": {"worker_threads": 2},
+        "daemon": {"services": {"distill_merge": False, "persona_analyzer": False}},
+    },
+    "default": {
+        "embedding": {"enabled": True, "use_rerank": False},
+        "capture": {"max_payload_bytes": 200000, "max_workers": 4},
+        "distill": {"max_tasks_per_cycle": 5, "token_budget_total": 16000},
+        "scheduler": {"worker_threads": 4},
+    },
+    "performance": {
+        "embedding": {"enabled": True, "use_rerank": True},
+        "capture": {"max_payload_bytes": 500000, "max_workers": 8},
+        "distill": {"max_tasks_per_cycle": 10, "token_budget_total": 32000},
+        "scheduler": {"worker_threads": 8},
+    },
+    "dev": {
+        "embedding": {"enabled": True, "use_rerank": True},
+        "capture": {"max_payload_bytes": 1048576, "max_workers": 8},
+        "distill": {"max_tasks_per_cycle": 20, "token_budget_total": 64000},
+        "scheduler": {"worker_threads": 8},
+    },
+}
+
+
 # === 代码默认值 ===
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "performance_tier": "default",
     "wiki": {
         "vault_path": None,  # 自动检测
         "subdirs": [
@@ -195,10 +226,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cleanup_days": 90,
         "grace_period_days": 14,
     },
-    # === Embedding 缓存 ===
+    # === Embedding / 语义搜索 ===
     "embedding": {
+        "enabled": False,              # 默认关闭，用户手动开启
+        "provider": "siliconflow",     # 当前仅支持 siliconflow
+        "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": "",                 # 用户填写
+        "embedding_model": "BAAI/bge-m3",
+        "rerank_model": "BAAI/bge-reranker-v2-m3",
+        "use_rerank": False,           # 是否启用重排（额外消耗）
         "ttl_days": 7,
-        "similarity_threshold": 0.75,
+        "similarity_threshold": 0.72,  # 语义相似度阈值（bge-m3 建议 0.72）
+        "index_interval_hours": 24,    # 自动重建索引间隔
     },
     # === 增量批处理 ===
     "incremental": {
@@ -228,11 +267,16 @@ class Config:
         return Path.home() / ".mnemos"
 
     def _load(self) -> Dict:
-        """加载配置：代码默认值 < JSON 文件 < 环境变量"""
+        """加载配置：代码默认值 < 档位预设 < JSON 文件 < 环境变量"""
         import copy
         data = copy.deepcopy(DEFAULT_CONFIG)
 
-        # 1. 从 JSON 文件加载；如果没有 JSON，再尝试旧 YAML 作为迁移来源。
+        # 1. 应用性能档位预设（覆盖代码默认值中的性能相关参数）
+        tier = data.get("performance_tier", "default")
+        if tier in PERFORMANCE_TIERS:
+            self._deep_merge(data, PERFORMANCE_TIERS[tier])
+
+        # 2. 从 JSON 文件加载；如果没有 JSON，再尝试旧 YAML 作为迁移来源。
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
@@ -246,10 +290,10 @@ class Config:
                 self._deep_merge(data, legacy_data)
                 self._migrated_from_legacy = True
 
-        # 2. 环境变量覆盖 (MNEMOS_* 前缀)
+        # 3. 环境变量覆盖 (MNEMOS_* 前缀)
         self._apply_env_overrides(data)
 
-        # 3. 解析自动检测值
+        # 4. 解析自动检测值
         self._resolve_auto_values(data)
 
         return data

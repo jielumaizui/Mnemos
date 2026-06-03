@@ -67,6 +67,68 @@
 
 ## [Unreleased] — 持续集成
 
+### P0-P3 代码复查与修复（2026-06-01 ~ 2026-06-02）
+> 全链路代码复查，修复 12 处生产隐患，新增 12 个测试文件、25 个测试用例，702 passed。
+
+#### Fixed — P0 核心链路
+- **L1 兜底去重** (`sync_engine.py`)
+  - `_trace_sync_log` 改为 opt-in，`_save_content()` 显式传 `_trace_sync_log=False`
+  - 统一 `content_hash=<16位>` 标签，Memos 端二次查重兜底
+  - 修复 turn_number/memouids JSON 格式
+- **Memos→Wiki 追溯** (`wiki_builder.py`)
+  - `_link_session_memos_to_wiki()` 同时更新 `sync_log.wiki_page_paths/distill_status/distilled_at`
+  - frontmatter 添加 `source_session` / `蒸馏时间`
+  - `_mark_processed()` status 对齐实际 method（distilled/skipped_low_quality 等）
+- **KG 事件主路径** (`distillation_engine.py`)
+  - 提取 `_emit_knowledge_distilled()` 公共函数
+  - `wiki_builder` 流水线成功后接入事件发射
+
+#### Fixed — P1 质量与感知
+- **Freshness 假绿** (`freshness_alert.py`)
+  - `FreshnessResult` 区分 `fresh/stale/not_found/error` 四态
+  - 修复 `entity.meta` → `last_updated` 字段错配
+  - MCP 不再把异常包装为 fresh
+- **Predictive Push 错推** (`predictive_push.py`)
+  - 主题抽取优先 code token / env var / 英文词
+  - 增加 relevance gate（ContextAwareSearch score ≥ 0.55）
+  - 结果 title 必须包含 query token
+- **Blindspot 降级** (`blindspot_discovery.py`)
+  - 修复 `BlindSpotProfile` dataclass `.get()` 错配
+  - `_detect_blindspots()` 返回 `degraded/degraded_reasons`
+  - MCP `_tool_blindspot_check` 暴露降级状态
+- **搜索 false positive** (`context_search.py`)
+  - 过滤 `relevance < 0.15` 的弱相关结果
+- **来源分布一致** (`mnemos_cli.py doctor`)
+  - 复用 `fm_get()` 兼容中英文 source
+  - claude/kimi/codex/openclaw/hermes 归为 distilled
+  - 排除系统页
+
+#### Fixed — P2 评分与数据质量
+- **评分闭环** (`adaptive_scorer_v2.py`)
+  - `enqueue_training_sample()` 同时写入弱 ground_truth
+  - `_get_training_samples()` 按 dimension 匹配
+  - `audit_check.py` P3 判定修正（检查 scorer_models/training_queue）
+- **KG 置信度治理** (`knowledge_graph.py`)
+  - `apply_discovered()` 应用 source_method 上限：same_directory ≤ 0.45, hash_prefix ≤ 0.55, keyword_overlap ≤ 0.65, link_parse ≤ 0.8
+- **历史截断数据** (`mark_truncated.py`)
+  - 扫描 Memos 中历史截断标记（10+ 种正则），写入 `truncated_memos` 表
+  - doctor 报告 `raw_incomplete_count`
+  - 新 `save_long_content()` 已移除截断，自动分片
+
+#### Fixed — P3 宣传与工程
+- **README 降调**：标题改为 "Mnemos v2 beta"，移除"零手动""全自动闭环"等过度宣传，标注核心链路可用 / 高级能力完善中
+- **测试隔离**：`tests/conftest.py` autouse fixture 全局 mock `publish_event`，根治测试污染 `~/.mnemos/events.db`
+
+#### Added — 测试
+- `test_l1_memos_duplicate_fallback.py` — 4 tests（去重兜底）
+- `test_memos_wiki_traceability.py` — 2 tests（追溯链路）
+- `test_distill_to_kg_event_path.py` — 3 tests（KG 事件）
+- `test_freshness_alert.py` — 4 tests（新鲜度）
+- `test_blindspot_discovery.py` — 3 tests（盲点降级）
+- `test_mark_truncated.py` — 12 tests（截断扫描，含数据库读取）
+
+---
+
 ### Knowledge-in-Action 闭环系统（2026-05-07）
 > 从"知识沉淀"到"知识驱动行动"的完整闭环。不仅存储知识，更在实际工作中主动应用、复盘、迭代。
 

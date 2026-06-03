@@ -25,6 +25,9 @@ from .siliconflow_client import SiliconFlowEmbeddingClient
 logger = logging.getLogger(__name__)
 
 
+_UNSET = object()
+
+
 class DualIndexRetriever:
     """
     双索引融合检索器。
@@ -37,21 +40,21 @@ class DualIndexRetriever:
 
     def __init__(
         self,
-        page_index: Optional[EmbeddingIndexManager] = None,
-        relation_manager: Optional[RelationEmbeddingManager] = None,
+        page_index: Optional[EmbeddingIndexManager] = _UNSET,
+        relation_manager: Optional[RelationEmbeddingManager] = _UNSET,
         wiki_base: Optional[Path] = None,
         content_weight: float = 0.7,
         relation_weight: float = 0.3,
     ):
-        self.page_index = page_index
-        self.relation_manager = relation_manager
+        self.page_index = None if page_index is _UNSET else page_index
+        self.relation_manager = None if relation_manager is _UNSET else relation_manager
         self.wiki_base = wiki_base
         self.content_weight = content_weight
         self.relation_weight = relation_weight
 
-        # 懒加载：如果未传入则自动创建
-        self._page_index_lazy = page_index is None
-        self._relation_manager_lazy = relation_manager is None
+        # 懒加载：只有未传入参数时才自动创建；显式传入 None 表示禁用
+        self._page_index_lazy = page_index is _UNSET
+        self._relation_manager_lazy = relation_manager is _UNSET
 
     def _ensure_page_index(self):
         if self.page_index is None and self._page_index_lazy:

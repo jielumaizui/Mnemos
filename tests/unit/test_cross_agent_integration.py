@@ -107,7 +107,7 @@ class TestWritePagesIntegration:
         mock_linker = MagicMock()
         mock_linker.link_after_distill.return_value = [
             MagicMock(
-                from_page=tmp_path / "00-Inbox" / "sess-abc_decision_1.md",
+                from_page=tmp_path / "00-Inbox" / "test.md",
                 to_page=Path("/wiki/other.md"),
                 reason="similar topic",
                 similarity=0.82,

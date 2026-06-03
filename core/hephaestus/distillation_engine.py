@@ -145,8 +145,15 @@ def clean_message_content(content: str) -> str:
     return content.strip()
 
 
-def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
-    """从消息列表构建对话文本"""
+def build_session_text(messages: List[Dict], max_chars: int = 24000) -> str:
+    """从消息列表构建对话文本。
+
+    长会话处理策略（head-tail 截断）：
+    - 保留开头 30% 的上下文（背景、问题设定）
+    - 保留结尾 70% 的最新对话（关键决策、结论）
+    - 中间用省略标记标注被跳过的 turn 数量
+    - 单条消息仍限制 1000 字符，避免极端长消息撑爆上下文
+    """
     lines = []
     for msg in messages:
         role = msg.get("role", "unknown")
@@ -161,9 +168,36 @@ def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
         lines.append(f"[{role}] {content}")
 
     full_text = "\n\n".join(lines)
-    if len(full_text) > max_chars:
-        full_text = full_text[:max_chars] + "\n\n...(session truncated)"
-    return full_text
+    if len(full_text) <= max_chars:
+        return full_text
+
+    # head-tail 智能截断：保留会话两端，标注省略范围
+    omission_marker_len = 80  # 预留省略标记长度
+    usable = max_chars - omission_marker_len
+    head_limit = int(usable * 0.3)
+    tail_limit = usable - head_limit
+
+    head_text = full_text[:head_limit]
+    # 截断到完整的 turn 边界（最近的一个 \n\n）
+    last_boundary = head_text.rfind("\n\n")
+    if last_boundary > 0:
+        head_text = head_text[:last_boundary]
+
+    tail_text = full_text[-tail_limit:]
+    first_boundary = tail_text.find("\n\n")
+    if first_boundary >= 0:
+        tail_text = tail_text[first_boundary + 2:]
+
+    # 计算被省略的 turn 数（基于原始 lines）
+    head_turns = head_text.count("\n\n") + 1 if head_text else 0
+    tail_turns = tail_text.count("\n\n") + 1 if tail_text else 0
+    omitted_turns = max(0, len(lines) - head_turns - tail_turns)
+
+    return (
+        f"{head_text}\n\n"
+        f"[... {omitted_turns} turns omitted; showing head + tail ...]\n\n"
+        f"{tail_text}"
+    )
 
 
 # ========== JSON 解析容错 ==========
@@ -960,7 +994,7 @@ class CrossAgentLinker:
     自动注入 [[反向链接]]，连接不同 Agent 产出的相关知识。
     """
 
-    JACCARD_THRESHOLD = 0.3
+    JACCARD_THRESHOLD = 0.45
 
     def __init__(self):
         self._db_path = _get_wiki_db()
@@ -1016,16 +1050,95 @@ class CrossAgentLinker:
         kw = set(frag.keywords) if frag.keywords else set()
         title_words = re.findall(r'[a-zA-Z_]{3,}', frag.title)
         kw.update(w.lower() for w in title_words)
-        content_words = re.findall(r'[一-龥]{2,4}', frag.core_content[:500])
-        kw.update(content_words)
+        # 中文只取 3-6 字词组，避免 2 字碎片噪音；同时过滤纯虚词组合
+        content_words = re.findall(r'[一-龥]{3,6}', frag.core_content[:500])
+        kw.update(w for w in content_words if not self._is_stop_phrase(w))
         return kw
 
     def _text_to_keywords(self, text: str) -> set:
         """从文本提取关键词集合"""
         kw = set()
         kw.update(w.lower() for w in re.findall(r'[a-zA-Z_]{3,}', text))
-        kw.update(re.findall(r'[一-龥]{2,4}', text))
+        content_words = re.findall(r'[一-龥]{3,6}', text)
+        kw.update(w for w in content_words if not self._is_stop_phrase(w))
         return kw
+
+    _STOP_PHRASES = {
+        "在系统", "系统中", "系统里", "在进程", "进程中", "过程里", "在实现",
+        "实现中", "在运行", "运行时", "在代码", "代码中", "在配置", "配置中",
+        "在部署", "部署中", "在服务", "服务中", "在应用", "应用中", "在模块",
+        "模块中", "在函数", "函数中", "在方法", "方法中", "在类中", "在文件",
+        "文件中", "在目录", "目录中", "在路径", "路径中", "在环境", "环境中",
+        "在容器", "容器中", "在集群", "集群中", "在节点", "节点中", "在数据库",
+        "数据库", "在缓存", "缓存中", "在网络", "网络中", "在协议", "协议中",
+        "在接口", "接口中", "在框架", "框架中", "在工具", "工具中", "在平台",
+        "平台中", "在版本", "版本中", "在分支", "分支中", "在主线", "主线中",
+        "在开发", "开发中", "在测试", "测试中", "在生产", "生产中", "在线上",
+        "线上下", "在本地", "本地中", "在远程", "远程中", "在客户端", "客户端",
+        "在服务", "服务端", "在前后", "前后端", "在业务", "业务中", "在逻辑",
+        "逻辑中", "在数据", "数据中", "在状态", "状态中", "在事件", "事件中",
+        "在消息", "消息中", "在队列", "队列中", "在任务", "任务中", "在作业",
+        "作业中", "在流程", "流程中", "在步骤", "步骤中", "在阶段", "阶段中",
+        "在周期", "周期中", "在迭代", "迭代中", "在循环", "循环中", "在条件",
+        "条件下", "在异常", "异常中", "在错误", "错误中", "在日志", "日志中",
+        "在监控", "监控中", "在告警", "告警中", "在指标", "指标中", "在报表",
+        "报表中", "在统计", "统计中", "在分析", "分析中", "在查询", "查询中",
+        "在搜索", "搜索中", "在索引", "索引中", "在存储", "存储中", "在备份",
+        "备份中", "在恢复", "恢复中", "在迁移", "迁移中", "在升级", "升级中",
+        "在降级", "降级中", "在回滚", "回滚中", "在发布", "发布中", "在构建",
+        "构建中", "在编译", "编译中", "在打包", "打包中", "在分发", "分发中",
+        "在安装", "安装中", "在卸载", "卸载中", "在启动", "启动中", "在停止",
+        "停止中", "在重启", "重启中", "在加载", "加载中", "在卸载", "保存中",
+        "在读取", "读取中", "在写入", "写入中", "在删除", "删除中", "在更新",
+        "更新中", "在创建", "创建中", "在销毁", "销毁中", "在初始化", "初始化",
+        "在注册", "注册中", "在注销", "注销中", "在订阅", "订阅中", "在取消",
+        "取消中", "在确认", "确认中", "在验证", "验证中", "在授权", "授权中",
+        "在认证", "认证中", "在审计", "审计中", "在加密", "加密中", "在解密",
+        "解密中", "在压缩", "压缩中", "在解压", "解压中", "在编码", "编码中",
+        "在解码", "解码中", "在序列", "序列化", "在反序", "反序列", "在并发",
+        "并发中", "在并行", "并行中", "在同步", "同步中", "在异步", "异步中",
+        "在阻塞", "阻塞中", "在非阻", "非阻塞", "在缓冲", "缓冲中", "在缓存",
+        "缓存中", "在池化", "池化中", "在复用", "复用中", "在共享", "共享中",
+        "在隔离", "隔离中", "在限流", "限流中", "在降级", "降级中", "在熔断",
+        "熔断中", "在重试", "重试中", "在超时", "超时中", "在负载", "负载中",
+        "在均衡", "均衡中", "在路由", "路由中", "在代理", "代理中", "在转发",
+        "转发中", "在网关", "网关中", "在防火墙", "防火墙", "在安", "安全中",
+        "在防护", "防护中", "在攻击", "攻击中", "在漏洞", "漏洞中", "在风险",
+        "风险中", "在问题", "问题中", "在解决", "解决中", "在方案", "方案中",
+        "在计划", "计划中", "在策略", "策略中", "在规则", "规则中", "在规范",
+        "规范中", "在标准", "标准中", "在指南", "指南中", "在手册", "手册中",
+        "在文档", "文档中", "在注释", "注释中", "在说明", "说明中", "在描述",
+        "描述中", "在定义", "定义中", "在命名", "命名中", "在约定", "约定中",
+        "在最佳", "最佳实", "最佳实践", "在实践", "实践中", "在模式", "模式中",
+        "在架构", "架构中", "在设计", "设计中", "在模型", "模型中", "在结构",
+        "结构中", "在层次", "层次中", "在组件", "组件中", "在依赖", "依赖中",
+        "在耦合", "耦合中", "在内聚", "内聚中", "在封装", "封装中", "在抽象",
+        "抽象中", "在继承", "继承中", "在多态", "多态中", "在组合", "组合中",
+        "在聚合", "聚合中", "在关联", "关联中", "在泛化", "泛化中", "在实现",
+        "实现中", "在接口", "接口中", "在契约", "契约中", "在协议", "协议中",
+        "在规范", "规范中", "在标准", "标准中", "在要求", "要求中", "在需求",
+        "需求中", "在功能", "功能中", "在特性", "特性中", "在性能", "性能中",
+        "在效率", "效率中", "在优化", "优化中", "在调优", "调优中", "在配置",
+        "配置中", "在参数", "参数中", "在选项", "选项中", "在设置", "设置中",
+        "在变量", "变量中", "在常量", "常量中", "在枚举", "枚举中", "在结构",
+        "结构中", "在联合", "联合中", "在元组", "元组中", "在列表", "列表中",
+        "在字典", "字典中", "在集合", "集合中", "在队列", "队列中", "在栈中",
+        "栈中", "在堆中", "堆中", "在树中", "树中", "在图中", "图中", "在网",
+        "网络中",
+    }
+
+    @classmethod
+    def _is_stop_phrase(cls, phrase: str) -> bool:
+        """判断是否为无意义的停用短语（中文切片噪音）"""
+        if phrase in cls._STOP_PHRASES:
+            return True
+        # 以介词/虚词开头或结尾的 3-4 字短语大概率是切片
+        if len(phrase) <= 4:
+            prefix_stop = {"在", "的", "了", "和", "与", "或", "是", "有", "为", "以", "及", "对", "从", "到", "向", "把", "被", "让", "给", "比", "跟", "同", "当", "因", "于", "就", "都", "也", "还", "但", "而", "却", "若", "虽", "既", "即", "则", "乃", "且", "并", "又", "亦", "之", "其", "所", "这", "那", "哪", "什", "怎", "谁", "何", "如", "若", "倘", "假如", "假使", "若是", "若是", "即使", "即便", "尽管", "不管", "不论", "无论", "只要", "只有", "除非", "因为", "由于", "因此", "因而", "所以", "于是", "从而", "但是", "可是", "然而", "不过", "只是", "不料", "岂知", "虽然", "虽说", "尽管", "固然", "固然", "诚然", "纵然", "即使", "哪怕", "不管", "无论", "不论", "不要", "不能", "不会", "不可", "不得", "不必", "不用", "应该", "应当", "应", "该", "须", "需", "必须", "必需", "必要", "需要", "须要", "得", "须得", "定", "一定", "必定", "必然", "势必", "当然", "自然", "固然", "本来", "原来", "原本", "原先", "最初", "起先", "开始", "起初", "先", "首先", "其次", "再次", "最后", "最终", "终于", "结果", "后果", "成果", "然后", "而后", "之后", "后来", "随即", "随手", "随手", "立刻", "立即", "马上", "赶紧", "赶快", "连忙", "急忙", "匆忙", "仓促", "临时", "暂且", "暂时", "暂", "且", "姑且", "权且", "暂且", "慢说", "别说", "不但", "不仅", "不只", "不光", "不单", "不独", "而且", "并且", "况且", "何况", "再说", "再者", "否则", "不然", "要不", "要不然", "要么", "因为", "由于", "因此", "因而", "所以", "于是", "从而", "如果", "若是", "要是", "假如", "假使", "假若", "倘若", "倘使", "设若", "若是", "若", "即使", "即便", "纵然", "纵使", "纵然", "哪怕", "尽管", "虽然", "虽说", "固然", "诚然", "固然", "尽管", "不管", "无论", "不论", "不要", "别", "毋", "勿", "莫", "不", "没", "没有", "未", "无", "非", "勿", "别", "甭", "不必", "未必", "也许", "或许", "大概", "大约", "约", "差不多", "几乎", "简直", "根本", "决", "绝对", "完全", "全然", "统统", "通共", "通通", "一律", "一般", "一样", "同样", "也", "又", "还", "再", "更", "最", "太", "极", "非常", "十分", "相当", "比较", "稍微", "略", "较", "挺", "怪", "老", "好", "真", "实在", "确实", "的确", "确乎", "确然", "果然", "居然", "竟然", "竟", "偏偏", "偏", "岂", "难道", "莫非", "别是", "可是", "但是", "然而", "不过", "只是", "不料", "岂知", "固然", "虽然", "尽管", "纵然", "即使", "哪怕", "不管", "无论", "不论", "与其", "不如", "宁可", "宁愿", "宁肯", "情愿", "甘愿", "甘心", "宁愿", "最好", "不如", "何不", "干吗不", "为什么不", "为什么", "怎么", "怎样", "如何", "何以", "为何", "为什么", "干什么", "做什么", "怎么办", "怎么样", "好不好", "行不行", "能不能", "可不可以", "可不可以", "可以", "能", "能够", "会", "可能", "也许", "或许", "大概", "大约", "约莫", "约", "差不多", "几乎", "简直", "差点儿", "险些", "险些儿", "根本", "决", "绝对", "完全", "全然", "统统", "一律", "一般", "一样", "同样", "也", "又", "还", "再", "更", "最", "太", "极", "很", "非常", "十分", "相当", "比较", "较", "更", "最", "越", "越发", "越加", "愈加", "愈发", "尤其", "特别", "格外", "分外", "更加", "更为", "越", "越是", "愈", "愈发", "愈加", "越来越", "愈来愈", "一天比一天", "一年比一年", "越来越", "愈来愈", "格外", "分外", "特别", "尤其", "尤其", "尤为", "格外", "分外", "更加", "更为", "越", "越发", "越加", "愈加", "愈发", "尤其", "特别", "格外", "分外", "更加", "更为"}
+            suffix_stop = {"的", "了", "和", "与", "或", "是", "有", "为", "以", "及", "对", "从", "到", "向", "把", "被", "让", "给", "比", "跟", "同", "当", "因", "于", "就", "都", "也", "还", "但", "而", "却", "若", "虽", "既", "即", "则", "乃", "且", "并", "又", "亦", "之", "其", "所", "中", "里", "上", "下", "内", "外", "间", "旁", "边", "面", "头", "底", "前", "后", "左", "右", "东", "西", "南", "北", "里", "内", "中", "间", "处", "方", "面", "头", "部", "边", "缘", "侧", "端", "顶", "底", "根", "源", "本", "末", "初", "始", "终", "结", "果", "尾", "后", "余", "剩", "残", "余", "剩", "余下", "剩下", "残余", "残留", "遗存", "遗迹", "式", "型", "类", "种", "样", "般", "等", "之类", "之流", "之辈", "之徒", "之属", "之俦", "之伦", "之曹", "之亚", "之群", "之类", "之属", "之俦", "之伦", "之曹", "之亚", "之群"}
+            if phrase[:1] in prefix_stop or phrase[-1:] in suffix_stop:
+                return True
+        return False
 
     @staticmethod
     def _jaccard(a: set, b: set) -> float:
@@ -1344,7 +1457,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     ordered_keys = [
         "类型", "名称", "领域", "摘要", "状态", "知识阶段",
         "来源数量", "证据级别", "置信度", "时效性", "创建日期",
-        "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
+        "来源", "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
         "跨Agent关联",
     ]
     for key in ordered_keys:
@@ -1409,10 +1522,26 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body.extend(["## 演化历史", "",
                  f"- v1: 初始记录（{datetime.now().strftime('%Y-%m-%d')}）", ""])
 
-    all_related = list(fragment.related_concepts)
-    for link in fragment.cross_agent_links:
-        if link not in all_related:
-            all_related.append(link)
+    # 合并 related_concepts 与 cross_agent_links，过滤无效/噪音链接
+    all_related = []
+    seen = set()
+    for concept in list(fragment.related_concepts) + list(fragment.cross_agent_links):
+        if not concept or concept in seen:
+            continue
+        seen.add(concept)
+        # 过滤明显的中文切片噪音和无效链接
+        if len(concept) < 2 or concept.startswith("待"):
+            continue
+        # 过滤停用短语（避免 [[在系统演进过]] 这类切片）
+        if CrossAgentLinker._is_stop_phrase(concept):
+            continue
+        # 如果链接包含路径分隔符，检查目标文件是否存在；纯概念名则保留
+        if "/" in concept or "\\" in concept:
+            target_path = _get_wiki_dir() / f"{concept}.md"
+            if not target_path.exists():
+                continue
+        all_related.append(concept)
+
     if all_related:
         body.extend(["## 相关链接", ""])
         for concept in all_related:
@@ -1437,6 +1566,22 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         body.append("")
         body.append(fragment.ai_expansion)
         body.append("")
+
+    # 来源追踪区（L1→L2 可追溯性）
+    body.extend(["## 来源追踪", ""])
+    body.append(f"- 来源会话: `{session_id}`")
+    if source:
+        body.append(f"- 来源 Agent: {source}")
+    # 从 frontmatter 中读取原始 Memos 来源（如果存在）
+    original_source = (fragment.frontmatter or {}).get("来源", (fragment.frontmatter or {}).get("source", ""))
+    if original_source and original_source != source:
+        body.append(f"- 原始来源: {original_source}")
+    body.append(f"- 蒸馏时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    # 若存在 memos_wiki_link 可追加 memos_id（由调用方在 frontmatter 中注入）
+    memos_id = (fragment.frontmatter or {}).get("memos_id", "")
+    if memos_id:
+        body.append(f"- 原始 Memos ID: `{memos_id}`")
+    body.append("")
 
     return "\n".join(lines + [""] + body)
 
@@ -1558,6 +1703,16 @@ class DistillationEngine:
                 logger.debug("KiaCrossAgentLinker not available", exc_info=True)
                 self._kia_linker = False  # 标记为已尝试但失败
         return self._kia_linker if self._kia_linker is not False else None
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """将名称转为 URL/文件安全的 slug"""
+        import re
+        slug = name.lower().strip()
+        # 保留中英文、数字、横线；其他字符替换为横线
+        slug = re.sub(r"[^\w\u4e00-\u9fa5-]", "-", slug)
+        slug = re.sub(r"-+", "-", slug).strip("-")
+        return slug[:64] if slug else "untitled"
 
     def process(self, session_id: str, messages: List[Dict],
                 meta: Dict = None) -> DistillationResult:
@@ -1686,8 +1841,19 @@ class DistillationEngine:
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
 
         file_fragments = []
+        seen_slugs = set()
         for i, fragment in enumerate(result.fragments):
-            page_id = f"{result.session_id[:8]}_{fragment.form}_{i + 1}"
+            # 用知识标题生成人类可读的文件名
+            title = fragment.title or fragment.frontmatter.get("名称", "untitled")
+            slug = self._slugify(title)
+            # 去重：同名加序号
+            original_slug = slug
+            counter = 1
+            while slug in seen_slugs:
+                slug = f"{original_slug}-{counter}"
+                counter += 1
+            seen_slugs.add(slug)
+            page_id = slug
             page_content = generate_wiki_page(fragment, result.session_id)
             file_path = self.inbox_dir / f"{page_id}.md"
             try:

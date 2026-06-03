@@ -44,7 +44,7 @@ class RelationEmbeddingManager:
         index_dir: Optional[Path] = None,
         client: Optional[SiliconFlowEmbeddingClient] = None,
     ):
-        self.db_path = db_path or (Path.home() / ".mnemos" / "sync_log.db")
+        self.db_path = db_path or (Path.home() / ".mnemos" / "knowledge_graph.db")
         self.index_dir = Path(index_dir).expanduser() if index_dir else (
             Path.home() / ".mnemos" / "embedding_index"
         )

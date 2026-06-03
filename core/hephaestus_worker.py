@@ -301,7 +301,8 @@ class HephaestusWorker:
         self._emit_progress(session_id, "extracting", "同步蒸馏中（API 模式）...")
         try:
             from core.hephaestus.distillation_engine import (
-                DistillationEngine, HostAgentCaller
+                DistillationEngine, HostAgentCaller,
+                _emit_knowledge_distilled, _record_memos_wiki_links,
             )
 
             caller = HostAgentCaller(force_provider="api")
@@ -314,6 +315,9 @@ class HephaestusWorker:
 
             if result.judgment == "knowledge" and result.fragments:
                 written = engine.write_pages(result)
+                # KG 实时更新 + Memos→Wiki 追溯
+                _emit_knowledge_distilled(session_id, result, written)
+                _record_memos_wiki_links(session_id, written)
                 logger.info(
                     f"[Hephaestus] 同步蒸馏完成 {session_id}: "
                     f"判定={result.judgment}, 写入 {len(written)} 页"

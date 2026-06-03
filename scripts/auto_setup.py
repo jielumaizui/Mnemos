@@ -396,25 +396,37 @@ def _deep_merge(base: dict, override: dict) -> None:
             base[key] = val
 
 
-def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False) -> Path:
+def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = False, preserve: bool = False) -> Path:
     config_file = _runtime_config_path()
     config_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if config_file.exists() and not yes_mode:
+    if config_file.exists() and not yes_mode and not preserve:
         if not ask_yes_no(f"配置已存在: {config_file}，是否覆盖？", default=False, yes_mode=yes_mode):
             print_warn("保留现有配置")
             return config_file
 
     from core.config import DEFAULT_CONFIG
 
-    data = copy.deepcopy(DEFAULT_CONFIG)
-    if config_file.exists():
+    if preserve and config_file.exists():
+        # 重装模式：以现有配置为基，仅更新必要字段
         try:
-            existing = json.loads(config_file.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                _deep_merge(data, existing)
+            data = json.loads(config_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = copy.deepcopy(DEFAULT_CONFIG)
+            else:
+                print_ok("保留现有配置，仅更新必要字段")
         except Exception as e:
-            print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
+            print_warn(f"现有配置读取失败，将重新生成: {e}")
+            data = copy.deepcopy(DEFAULT_CONFIG)
+    else:
+        data = copy.deepcopy(DEFAULT_CONFIG)
+        if config_file.exists():
+            try:
+                existing = json.loads(config_file.read_text(encoding="utf-8"))
+                if isinstance(existing, dict):
+                    _deep_merge(data, existing)
+            except Exception as e:
+                print_warn(f"现有 JSON 配置读取失败，将重新生成: {e}")
 
     data["mnemos_dir"] = str(_runtime_config_path().parent.parent)
     data.setdefault("wiki", {})["vault_path"] = str(wiki_dir)
@@ -431,6 +443,30 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
     services["capture_worker"] = True
     services["l1_sync"] = False
     services["event_bus"] = True
+
+    # Embedding / 语义搜索配置引导
+    embed = data.setdefault("embedding", {})
+    if not embed.get("api_key") and not yes_mode:
+        print("\n  [可选] 语义搜索（Embedding）配置")
+        print("  语义搜索可显著提升未知查询的召回质量，推荐开启。")
+        print("  需要硅基流动 API Key（支持 BAAI/bge-m3 免费模型）。")
+        if ask_yes_no("是否配置语义搜索？", default=False, yes_mode=yes_mode):
+            api_key = ask("硅基流动 API Key:", default="", yes_mode=yes_mode)
+            if api_key:
+                embed["enabled"] = True
+                embed["api_key"] = api_key
+                embed["base_url"] = "https://api.siliconflow.cn/v1"
+                embed["embedding_model"] = "BAAI/bge-m3"
+                print_ok("语义搜索已启用（部署后运行 `python3 scripts/build_embedding_index.py` 建立索引）")
+            else:
+                print_warn("未提供 API Key，语义搜索保持关闭")
+        else:
+            print_warn("语义搜索保持关闭（后续可通过 `mnemos config` 开启）")
+    elif yes_mode and os.environ.get("SILICONFLOW_API_KEY"):
+        embed["enabled"] = True
+        embed["api_key"] = os.environ.get("SILICONFLOW_API_KEY")
+        embed["base_url"] = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        print_ok("语义搜索已自动启用（从环境变量读取 SILICONFLOW_API_KEY）")
 
     config_file.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",
@@ -819,6 +855,8 @@ def main():
     parser.add_argument("--skip-scheduler", action="store_true", help="跳过配置系统定时任务")
     parser.add_argument("--skip-hooks", action="store_true", help="跳过安装 Agent Hooks")
     parser.add_argument("--dry-run", action="store_true", help="只检查环境，不执行任何安装/启动操作")
+    parser.add_argument("--skip-verify", action="store_true", help="跳过部署后验证")
+    parser.add_argument("--preserve-config", action="store_true", help="保留现有配置，仅更新必要字段（适合重装）")
     args = parser.parse_args()
 
     # 非交互式终端：不自动启用 --yes，避免在 CI/后台自动修改系统状态
@@ -876,7 +914,7 @@ def main():
 
     # 步骤 5
     print_step(5, total_steps, "生成配置")
-    generate_config(wiki_dir, memos_url, yes_mode=yes_mode)
+    generate_config(wiki_dir, memos_url, yes_mode=yes_mode, preserve=args.preserve_config)
 
     # 步骤 6
     print_step(6, total_steps, "初始化 Wiki 目录")
@@ -910,6 +948,25 @@ def main():
         print_step(10, total_steps, "配置定时任务")
         print_warn("已跳过 (--skip-scheduler)")
 
+    # 步骤 11: 部署验证
+    if not args.skip_verify:
+        print_step(11, total_steps, "验证部署")
+        try:
+            import subprocess
+            r = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / "scripts" / "verify_installation.py")],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode == 0:
+                print_ok("部署验证通过")
+            else:
+                print_warn("部署验证未完全通过，请检查上方输出")
+        except Exception as e:
+            print_warn(f"部署验证运行失败: {e}")
+    else:
+        print_step(11, total_steps, "验证部署")
+        print_warn("已跳过 (--skip-verify)")
+
     # 完成
     print("\n" + "=" * 60)
     print("部署完成！")
@@ -921,11 +978,12 @@ def main():
     print(f"  蒸馏策略: {distill_strategy}")
     print()
     print("后续操作:")
-    print("  python3 mnemos_cli.py doctor    # 系统诊断")
-    print("  python3 mnemos_cli.py status    # 查看状态")
-    print("  python3 mnemos_cli.py init      # 交互式调整配置")
+    print("  python3 mnemos_cli.py doctor         # 系统诊断")
+    print("  python3 mnemos_cli.py status         # 查看状态")
+    print("  python3 scripts/verify_installation.py --full  # 完整验证（含集成测试）")
+    print("  python3 mnemos_cli.py init           # 交互式调整配置")
     if distill_strategy == "generic":
-        print("  python3 mnemos_cli.py distill   # 手动触发蒸馏")
+        print("  python3 mnemos_cli.py distill        # 手动触发蒸馏")
     print()
     print("Claude Code / Kimi 重启后 hooks 生效。")
     print("=" * 60)

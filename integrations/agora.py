@@ -759,8 +759,14 @@ tags: [{', '.join(tags or ['file_import'])}]
     def _tool_retrospective_list(self, task_type: str = None, limit: int = 10) -> Dict:
         """列出可用的 retrospective 经验"""
         from core.config import get_config
-        retro_dir = get_config().wiki_dir / "retrospectives"
-        if not retro_dir.exists():
+        wiki_dir = get_config().wiki_dir
+        # 优先 06-Retrospectives，兼容 retrospectives
+        retro_dir = None
+        for d in [wiki_dir / "06-Retrospectives", wiki_dir / "retrospectives"]:
+            if d.exists():
+                retro_dir = d
+                break
+        if not retro_dir:
             return {"success": True, "retrospectives": []}
 
         items = []
@@ -1198,21 +1204,55 @@ tags: [{', '.join(tags or ['file_import'])}]
                     "message": "文档解析失败，无法提取内容",
                 }
 
+            # 从 metadata 读取页数/章节等结构信息
+            meta = doc.metadata or {}
+            page_count = meta.get("pages", meta.get("slides", meta.get("chapters", 0)))
+
+            # 从 Markdown 内容提取 TOC
+            toc = []
+            if doc.content:
+                for line in doc.content.split("\n"):
+                    if line.strip().startswith("#"):
+                        toc.append(line.strip().lstrip("# "))
+
             result = {
                 "success": True,
                 "title": doc.title,
                 "doc_type": doc.doc_type.value if hasattr(doc.doc_type, "value") else str(doc.doc_type),
-                "pages": doc.pages,
+                "pages": page_count,
                 "word_count": len(doc.content.split()) if doc.content else 0,
-                "has_toc": doc.toc is not None and len(doc.toc) > 0,
-                "toc": doc.toc[:20] if doc.toc else [],
+                "has_toc": len(toc) > 0,
+                "toc": toc[:20],
                 "content_preview": doc.content[:2000] if doc.content else "",
+                "metadata": meta,
+                "summary": doc.summary,
+                "validation_status": doc.validation_status,
             }
 
             if save_to_memos:
-                memo_id = processor.save_to_memos(doc)
-                result["memo_id"] = memo_id
-                result["pipeline"] = "文档 → Memos → Wiki 00-Inbox → Charon 解析"
+                # 直接走文档蒸馏管道 → Wiki，不走 Memos 中转
+                from core.hephaestus.document_pipeline import DocumentDistillationPipeline
+                from core.hephaestus.distillation_engine import HostAgentCaller
+                import hashlib
+
+                session_id = f"doc-mcp-{hashlib.md5(str(src_path).encode()).hexdigest()[:8]}"
+                caller = HostAgentCaller(force_provider="api")
+                pipeline = DocumentDistillationPipeline(caller=caller)
+
+                messages = [{"role": "system", "content": doc.content}]
+                meta_pipe = {
+                    "source": "mcp",
+                    "filename": doc.filename,
+                    "file_path": str(src_path),
+                    "doc_type": doc.doc_type.value,
+                    "pages": page_count,
+                }
+                distill_result = pipeline.process(session_id, messages, meta_pipe)
+                wiki_paths = pipeline.write_to_wiki(distill_result, source="mcp")
+
+                result["wiki_paths"] = [str(p) for p in wiki_paths]
+                result["pipeline"] = "文档 → Wiki 蒸馏 → 00-Inbox"
+                result["session_id"] = session_id
 
             return result
         except Exception as e:

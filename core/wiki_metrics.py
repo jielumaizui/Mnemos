@@ -398,6 +398,52 @@ class WikiMetrics:
             ))
             conn.commit()
 
+    def scan_all_pages(self) -> Dict[str, int]:
+        """全量扫描 Wiki 目录，为所有页面创建/更新 metrics"""
+        import yaml
+        wiki = self.wiki_dir
+        if not wiki.exists():
+            return {"total": 0, "inserted": 0, "updated": 0}
+
+        inserted = 0
+        updated = 0
+        for md_file in wiki.rglob("*.md"):
+            try:
+                rel_path = str(md_file.relative_to(wiki))
+                content = md_file.read_text(encoding="utf-8", errors="ignore")
+                title = md_file.stem
+                status = "draft"
+                tags = []
+                knowledge_stage = "P3"
+
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        try:
+                            fm = yaml.safe_load(parts[1]) or {}
+                            title = fm.get("名称", fm.get("title", fm.get("Name", title)))
+                            status_map = {"草稿": "draft", "已验证": "verified", "待审": "review", "废弃": "archived"}
+                            status = status_map.get(fm.get("状态", ""), "draft")
+                            tags = fm.get("tags", [])
+                            stage_map = {"原始": "P1", "初筛": "P2", "已验证": "P3", "成熟": "P4"}
+                            knowledge_stage = stage_map.get(fm.get("知识阶段", ""), "P3")
+                        except Exception:
+                            pass
+
+                row = self._get_conn().execute(
+                    "SELECT 1 FROM page_metrics WHERE wiki_path = ?", (rel_path,)
+                ).fetchone()
+                if row:
+                    self.upsert_page(rel_path, title=title, status=status, tags=tags, knowledge_stage=knowledge_stage)
+                    updated += 1
+                else:
+                    self.upsert_page(rel_path, title=title, status=status, tags=tags, knowledge_stage=knowledge_stage)
+                    inserted += 1
+            except Exception:
+                continue
+
+        return {"total": inserted + updated, "inserted": inserted, "updated": updated}
+
     def get_page(self, path: str) -> Optional[PageMetrics]:
         """获取页面指标"""
         conn = self._get_conn()

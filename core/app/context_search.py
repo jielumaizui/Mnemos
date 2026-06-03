@@ -40,6 +40,7 @@ class SearchResult:
     verification: str = ""
     source: str = ""
     last_modified: str = ""
+    match_source: str = ""  # keyword / semantic / relation / graph / hybrid / fallback
 
     @property
     def page_title(self) -> str:
@@ -83,6 +84,14 @@ class ContextAwareSearch:
         # 0. 语义召回（embedding 优先，现有功能 fallback）
         semantic_candidates = self._recall_from_embedding(query)
 
+        # 检测是否处于降级检索模式
+        from core.config import get_config
+        cfg = get_config()
+        embedding_enabled = cfg.get("embedding.enabled", False)
+        fallback_mode = not semantic_candidates and not embedding_enabled
+        if fallback_mode:
+            logger.debug("[ContextAwareSearch] 当前为降级检索（embedding 未启用），仅使用关键词/图谱召回")
+
         # 1. 知识图谱召回（如果语义召回不足，补充传统召回）
         if semantic_candidates:
             candidates = semantic_candidates
@@ -122,6 +131,11 @@ class ContextAwareSearch:
             score = min(score * context_boost, 1.0)
             freshness_alert = freshness_checker.check(candidate) if freshness_checker else None
 
+            # 命中来源：语义召回的 candidate 带有 match_type；
+            # 融合时若同时被语义和 KG/文件召回，标记为 hybrid
+            match_src = candidate.get("match_type", "keyword")
+            if match_src == "semantic" and candidate.get("_has_kg_match"):
+                match_src = "hybrid"
             results.append(SearchResult(
                 page_path=candidate.get("path", ""),
                 title=candidate.get("title", ""),
@@ -139,6 +153,7 @@ class ContextAwareSearch:
                 verification=candidate.get("verification", ""),
                 source=candidate.get("source", ""),
                 last_modified=candidate.get("last_modified", ""),
+                match_source=match_src,
             ))
 
         # 3. 过滤低质量内容
@@ -165,6 +180,9 @@ class ContextAwareSearch:
 
             candidates = []
             for rel_path, sim in semantic_results:
+                rel_parts = Path(rel_path).parts
+                if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
+                    continue
                 page_path = self.wiki_base / rel_path
                 if not page_path.exists():
                     continue
@@ -189,18 +207,23 @@ class ContextAwareSearch:
             return []
 
     def _merge_candidates(self, semantic: List[Dict], traditional: List[Dict]) -> List[Dict]:
-        """融合语义召回和传统召回结果，去重"""
-        seen = set()
+        """融合语义召回和传统召回结果，去重；同时标记 hybrid 来源"""
+        seen = {}
         merged = []
         for c in semantic:
             path = c.get("path", "")
-            if path and path not in seen:
-                seen.add(path)
+            if path:
+                seen[path] = c
                 merged.append(c)
         for c in traditional:
             path = c.get("path", "")
-            if path and path not in seen:
-                seen.add(path)
+            if not path:
+                continue
+            if path in seen:
+                # 同时被语义和传统召回命中，标记为 hybrid
+                seen[path]["match_type"] = "hybrid"
+            else:
+                seen[path] = c
                 merged.append(c)
         return merged
 
@@ -210,12 +233,17 @@ class ContextAwareSearch:
             from core.kia.knowledge_graph import KnowledgeGraph
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
             results = kg.search(query, limit=20)
-            return [
-                {"path": r.get("page_path", ""), "title": r.get("title", ""),
-                 "content": r.get("content", ""), "entity": r.get("entity_name", ""),
-                 "frontmatter": r.get("frontmatter", {})}
-                for r in results
-            ]
+            filtered = []
+            for r in results:
+                path = r.get("page_path", "")
+                if path:
+                    rel_parts = Path(path).parts
+                    if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
+                        continue
+                filtered.append({"path": path, "title": r.get("title", ""),
+                                 "content": r.get("content", ""), "entity": r.get("entity_name", ""),
+                                 "frontmatter": r.get("frontmatter", {}), "match_type": "graph"})
+            return filtered
         except Exception as e:
             logger.debug(f"KG 召回失败: {e}")
             return []
@@ -267,6 +295,7 @@ class ContextAwareSearch:
                         "source": source,
                         "confidence": confidence,
                         "last_modified": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat() if md_file.exists() else "",
+                        "match_type": "keyword",
                     })
                     if len(candidates) >= 20:
                         break

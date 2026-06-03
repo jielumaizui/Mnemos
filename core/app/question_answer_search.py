@@ -70,11 +70,11 @@ class QuestionAnswerSearch:
     def _results_to_context(results: List[SearchResult]) -> str:
         lines = []
         for result in results:
-            lines.append(f"### {result.page_title}")
+            lines.append(f"### {result.title}")
             lines.append(f"> 来源: {result.page_path}")
             if result.freshness_alert:
                 lines.append(f"> 新鲜度提醒: {result.freshness_alert.message}")
-            lines.append(result.excerpt or result.snippet)
+            lines.append(result.snippet)
             lines.append("")
         return "\n".join(lines)
 
@@ -142,11 +142,52 @@ class QuestionAnswerSearch:
 
         return paragraphs
 
+    # 中文问题停用词：这些词不应参与关键词匹配，避免稀释关键实体
+    _QUESTION_STOP_WORDS = {
+        "如何", "怎么", "怎样", "什么", "为什么", "为啥", "为何",
+        "哪里", "哪个", "哪些", "谁", "多少", "几", "是否", "能不能",
+        "可以", "应该", "需要", "必须", "一定", "可能", "也许",
+        "解决", "处理", "应对", "处理", "办", "做", "用", "使用",
+        "关于", "对于", "有关", "涉及", "针对", "按照", "根据",
+        "时候", "时间", "时候", "情况", "场景", "问题", "冲突",
+        "错误", "异常", "故障", "报错", "失败", "无法", "不能",
+        "没有", "缺失", "缺少", "丢失", "遗漏", "忽略", "忘记",
+        "知道", "了解", "明白", "理解", "清楚", "熟悉", "掌握",
+        "建议", "推荐", "提示", "注意", "小心", "谨慎", "避免",
+        "最好", "最优", "最佳", "合适", "适合", "适用", "恰当",
+        "一般", "通常", "普遍", "常见", "经常", "往往", "大多",
+        "请问", "请教", "咨询", "求助", "帮助", "帮忙", "协助",
+        "一下", "一些", "一点", "一次", "一种", "一个", "一条",
+        "给我", "给我", "帮我", "给我", "让我", "让我", "帮我",
+        "详细", "具体", "详细", "深入", "全面", "完整", "系统",
+        "简单", "容易", "方便", "快捷", "快速", "高效", "有效",
+        "正确", "准确", "精确", "标准", "规范", "统一", "一致",
+        "不同", "差异", "区别", "对比", "比较", "相比", "相对",
+        "之前", "之后", "以前", "以后", "当时", "现在", "目前",
+        "首先", "然后", "接着", "最后", "最终", "总之", "综上所述",
+        "另外", "此外", "而且", "并且", "同时", "同样", "也一样",
+        "虽然", "尽管", "但是", "可是", "然而", "不过", "只是",
+        "因为", "由于", "因此", "所以", "因而", "从而", "于是",
+        "如果", "假如", "假设", "要是", "若是", "倘若", "除非",
+        "即使", "即便", "哪怕", "尽管", "不管", "无论", "不论",
+        "不仅", "不只", "不但", "不光", "不单", "而且", "并且",
+        "要么", "或者", "还是", "要么", "否则", "不然", "要不",
+        "与其", "不如", "宁可", "宁愿", "宁肯", "情愿", "甘愿",
+    }
+
+    def _normalize_question(self, question: str) -> str:
+        """中文问题归一化：过滤停用词，保留关键实体"""
+        q = question.lower().strip()
+        # 移除常见疑问前缀和停用词
+        for w in sorted(self._QUESTION_STOP_WORDS, key=len, reverse=True):
+            q = q.replace(w, " ")
+        return q.strip()
+
     def _score_paragraph(self, para: Dict, question: str, qtype: str) -> float:
         """根据问题类型对段落评分"""
         text = para["text"].lower()
-        question_lower = question.lower()
-        q_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', question_lower))
+        question_normalized = self._normalize_question(question)
+        q_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', question_normalized))
         p_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', text))
 
         if not q_keywords:

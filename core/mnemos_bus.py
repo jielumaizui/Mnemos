@@ -24,7 +24,7 @@ import time
 import uuid
 import warnings
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Union
 
@@ -621,6 +621,29 @@ class EventBus:
         result["queue_depth"] = self._queue.qsize()
 
         return result
+
+    def stats_by_type(self) -> Dict[str, Dict[str, int]]:
+        """返回各状态按事件类型分布的统计"""
+        conn = self._get_conn()
+        result: Dict[str, Dict[str, int]] = {}
+        for status in ("pending", "processing", "done"):
+            rows = conn.execute(
+                "SELECT event_type, COUNT(*) as cnt FROM events WHERE status = ? GROUP BY event_type",
+                (status,),
+            ).fetchall()
+            result[status] = {r["event_type"]: r["cnt"] for r in rows}
+        return result
+
+    def cleanup_stale(self, max_age_hours: int = 24) -> int:
+        """将长期 pending/processing 且无消费者的事件标记为 archived"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE events SET status = 'archived' WHERE status IN ('pending', 'processing') AND timestamp < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cursor.rowcount
 
     # ========== 旧文件系统接口（deprecated） ==========
 
