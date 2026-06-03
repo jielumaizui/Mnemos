@@ -438,11 +438,37 @@ def generate_config(wiki_dir: Path, memos_url: Optional[str], yes_mode: bool = F
         data["memos"]["enabled"] = False
         data["memos"]["api_url"] = ""
 
-    # 安装期安全默认值：允许消费 MCP/Hook 入队，但不主动扫描历史聊天文件。
+    # 默认功能全开：L1 使用受限增量扫描，性能由 sync.l1_scan_* 预算控制。
     services = data.setdefault("daemon", {}).setdefault("services", {})
     services["capture_worker"] = True
-    services["l1_sync"] = False
+    services["l1_sync"] = True
     services["event_bus"] = True
+    data.setdefault("integrations", {}).setdefault("mcp", {})["enabled"] = True
+    data.setdefault("distill", {})["provider"] = "api"
+    data.setdefault("distill", {})["allow_host_agent_delegate"] = False
+
+    llm = data.setdefault("llm", {})
+    providers = llm.setdefault("providers", {})
+    sf_provider = providers.setdefault("siliconflow", {})
+    openai_provider = providers.setdefault("openai", {})
+    if os.environ.get("SILICONFLOW_API_KEY"):
+        llm["provider"] = "siliconflow"
+        llm["api_key"] = os.environ.get("SILICONFLOW_API_KEY")
+        llm["base_url"] = os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
+        llm["model"] = os.environ.get("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V3")
+        sf_provider["api_key"] = llm["api_key"]
+        sf_provider["base_url"] = llm["base_url"]
+        sf_provider["model"] = llm["model"]
+        print_ok("LLM API 蒸馏已自动启用（从 SILICONFLOW_API_KEY 读取）")
+    elif os.environ.get("OPENAI_API_KEY"):
+        llm["provider"] = "openai"
+        llm["api_key"] = os.environ.get("OPENAI_API_KEY")
+        llm["base_url"] = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        llm["model"] = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        openai_provider["api_key"] = llm["api_key"]
+        openai_provider["base_url"] = llm["base_url"]
+        openai_provider["model"] = llm["model"]
+        print_ok("LLM API 蒸馏已自动启用（从 OPENAI_API_KEY 读取）")
 
     # Embedding / 语义搜索配置引导
     embed = data.setdefault("embedding", {})

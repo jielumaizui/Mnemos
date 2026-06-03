@@ -109,6 +109,20 @@ class _L1ScanState:
     def _key(self, source_name: str, session_info: Any) -> str:
         return f"{source_name}:{session_info.session_id}:{session_info.source_path}"
 
+    def _source_key(self, source_name: str) -> str:
+        return f"__source__:{source_name}"
+
+    def source_scanned_at(self, source_name: str) -> str:
+        record = self._data.get(self._source_key(source_name), {})
+        return str(record.get("scanned_at", ""))
+
+    def mark_source_scanned(self, source_name: str) -> None:
+        self._data[self._source_key(source_name)] = {
+            "source": source_name,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._dirty = True
+
     def is_unchanged(
         self,
         source_name: str,
@@ -226,6 +240,16 @@ def _select_l1_sessions(
     stats["selected"] = len(selected)
     stats["skipped_over_limit"] = max(0, len(candidates) - len(selected))
     return [(session_info, file_state) for _, session_info, file_state in selected], stats
+
+
+def _select_l1_sources(agents: List[Any], state: _L1ScanState, max_sources: int) -> List[Any]:
+    """Select sources by round-robin age instead of stable registry order."""
+    if not max_sources or len(agents) <= max_sources:
+        return agents
+    return sorted(
+        agents,
+        key=lambda source: (state.source_scanned_at(source.name), source.name),
+    )[:max_sources]
 
 
 def _is_process_running(pid: int) -> bool:
@@ -372,15 +396,17 @@ def service_l1_sync(stop_event: threading.Event):
                 max_sources = limits["max_sources_per_cycle"]
                 if max_sources and len(agents) > max_sources:
                     logger.info(
-                        f"[L1同步] 本轮发现 {len(agents)} 个 Agent，仅扫描前 {max_sources} 个"
+                        f"[L1同步] 本轮发现 {len(agents)} 个 Agent，轮转扫描 {max_sources} 个"
                     )
-                    agents = agents[:max_sources]
+                    agents = _select_l1_sources(agents, state, max_sources)
                 logger.debug(f"[L1同步] 发现 {len(agents)} 个活跃 Agent 源")
 
                 for source in agents:
                     try:
                         sessions = source.discover_sessions()
                         if not sessions:
+                            state.mark_source_scanned(source.name)
+                            state.save()
                             continue
 
                         selected_sessions, scan_stats = _select_l1_sessions(
@@ -389,6 +415,8 @@ def service_l1_sync(stop_event: threading.Event):
                         if not selected_sessions:
                             if any(v for k, v in scan_stats.items() if k.startswith("skipped_")):
                                 logger.debug(f"[L1同步] {source.name}: {scan_stats}")
+                            state.mark_source_scanned(source.name)
+                            state.save()
                             continue
 
                         queued_count = 0
@@ -412,22 +440,8 @@ def service_l1_sync(stop_event: threading.Event):
                                     turns = turns[-max_turns:]
                                 parsed_turns += len(turns)
 
-                                context = source.on_session_start(
-                                    session_info.session_id,
-                                    {"working_dir": session_info.working_dir, "agent": source.name},
-                                )
-
-                                # 发布 session.start 事件（供 task_classifier / kia_guard 消费）
-                                try:
-                                    from core.mnemos_bus import publish_event
-                                    publish_event("session.start", source.name, {
-                                        "session_id": session_info.session_id,
-                                        "user_message": turns[0].user_content if turns else "",
-                                        "working_dir": str(session_info.working_dir) if session_info.working_dir else "",
-                                    })
-                                except Exception:
-                                    pass
-
+                                session_new_turns = 0
+                                session_started = False
                                 try:
                                     for turn in turns:
                                         result = capture_service.capture_turn(
@@ -444,6 +458,7 @@ def service_l1_sync(stop_event: threading.Event):
                                         status = result.get("status")
                                         if status == "queued":
                                             queued_count += 1
+                                            session_new_turns += 1
                                         elif status == "duplicate":
                                             dup_count += 1
                                         elif status == "backpressure":
@@ -451,35 +466,45 @@ def service_l1_sync(stop_event: threading.Event):
                                         elif status == "error":
                                             error_count += 1
 
-                                        # 发布 message.exchanged 事件（供 kia_guard 消费）
-                                        try:
-                                            from core.mnemos_bus import publish_event
-                                            publish_event("message.exchanged", source.name, {
-                                                "session_id": session_info.session_id,
-                                                "turn_number": turn.turn_number,
-                                                "role": "user" if turn.user_content else "assistant",
-                                                "content_preview": (turn.user_content or turn.assistant_content or "")[:200],
-                                            })
-                                        except Exception:
-                                            pass
+                                        # 只对新入队 turn 发布事件；duplicate 不应重复驱动 KIA/EventBus。
+                                        if status == "queued":
+                                            try:
+                                                from core.mnemos_bus import publish_event
+                                                if not session_started:
+                                                    source.on_session_start(
+                                                        session_info.session_id,
+                                                        {"working_dir": session_info.working_dir, "agent": source.name},
+                                                    )
+                                                    publish_event("session.start", source.name, {
+                                                        "session_id": session_info.session_id,
+                                                        "user_message": turns[0].user_content if turns else "",
+                                                        "working_dir": str(session_info.working_dir) if session_info.working_dir else "",
+                                                    })
+                                                    session_started = True
+                                                publish_event("message.exchanged", source.name, {
+                                                    "session_id": session_info.session_id,
+                                                    "turn_number": turn.turn_number,
+                                                    "role": "user" if turn.user_content else "assistant",
+                                                    "content_preview": (turn.user_content or turn.assistant_content or "")[:200],
+                                                })
+                                            except Exception:
+                                                pass
 
                                     scanned_count += 1
                                     state.mark_scanned(source.name, session_info, file_state, "scanned")
                                 finally:
-                                    # 触发异步 end_session，让 Worker 优先 flush 该 session
-                                    # 放在 finally 中确保 capture_turn 异常时也会执行
-                                    try:
-                                        capture_service.end_session(source.name, session_info.session_id)
-                                    except Exception as e:
-                                        logger.warning(f"[L1同步] end_session 失败: {e}")
-                                    # KIA Hook: session_end（无论入队是否成功都执行，避免泄漏）
-                                    all_messages = []
-                                    for turn in turns:
-                                        if turn.user_content:
-                                            all_messages.append({"role": "user", "content": turn.user_content})
-                                        if turn.assistant_content:
-                                            all_messages.append({"role": "assistant", "content": turn.assistant_content})
-                                    source.on_session_end(session_info.session_id, all_messages)
+                                    if session_new_turns > 0:
+                                        try:
+                                            capture_service.end_session(source.name, session_info.session_id)
+                                        except Exception as e:
+                                            logger.warning(f"[L1同步] end_session 失败: {e}")
+                                        all_messages = []
+                                        for turn in turns:
+                                            if turn.user_content:
+                                                all_messages.append({"role": "user", "content": turn.user_content})
+                                            if turn.assistant_content:
+                                                all_messages.append({"role": "assistant", "content": turn.assistant_content})
+                                        source.on_session_end(session_info.session_id, all_messages)
 
                             except Exception as e:
                                 error_count += 1
@@ -489,6 +514,7 @@ def service_l1_sync(stop_event: threading.Event):
                                 )
 
                         try:
+                            state.mark_source_scanned(source.name)
                             state.save()
                         except Exception as e:
                             logger.warning(f"[L1同步] 扫描游标保存失败: {e}")
@@ -2076,6 +2102,16 @@ def run_daemon():
 
     # 启动补偿：检查关机期间过期的复盘预约
     _run_startup_compensation()
+
+    # 归档无消费者的历史 pending 事件（升级收尾）
+    try:
+        from core.mnemos_bus import _get_bus
+        bus = _get_bus()
+        archived = bus.archive_no_consumer_events()
+        if archived > 0:
+            logger.info(f"[EventBus] 启动归档: {archived} 个无消费者历史事件已归档")
+    except Exception as e:
+        logger.debug(f"[EventBus] 启动归档失败（非阻塞）: {e}")
 
     # 注册信号处理（优雅退出）
     def handle_signal(signum, frame):

@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 
 from core.sync_framework.agent_source import SessionInfo
-from mnemos_daemon import _L1ScanState, _select_l1_sessions
+from mnemos_daemon import _L1ScanState, _select_l1_sessions, _select_l1_sources
 
 
 def _session(path: Path, session_id: str) -> SessionInfo:
@@ -78,3 +78,22 @@ def test_l1_scan_state_prevents_repeated_unchanged_scan(tmp_path):
 
     assert selected_again == []
     assert stats_again["skipped_unchanged"] == 1
+
+
+class _Source:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_l1_source_selection_round_robins_by_last_scan(tmp_path):
+    state = _L1ScanState(tmp_path / "l1_state.json")
+    sources = [_Source("claude"), _Source("kimi"), _Source("codex"), _Source("hermes")]
+
+    state.mark_source_scanned("claude")
+    state.save()
+
+    selected = _select_l1_sources(sources, state, max_sources=2)
+
+    names = {s.name for s in selected}
+    assert "claude" not in names
+    assert len(names) == 2

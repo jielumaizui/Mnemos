@@ -91,9 +91,25 @@ class DualIndexRetriever:
         top_k: int = 10,
         similarity_threshold: float = None,
         use_rerank: bool = None,
+    ) -> List[Tuple[str, float]]:
+        """
+        双索引融合检索（兼容旧接口，返回二元组）。
+
+        Returns:
+            [(页面相对路径, 融合分数), ...] 按融合分数降序
+        """
+        detailed = self.search_detailed(query, top_k, similarity_threshold, use_rerank)
+        return [(path, score) for path, score, _, _ in detailed]
+
+    def search_detailed(
+        self,
+        query: str,
+        top_k: int = 10,
+        similarity_threshold: float = None,
+        use_rerank: bool = None,
     ) -> List[Tuple[str, float, float, float]]:
         """
-        双索引融合检索。
+        双索引融合检索（返回分解分数）。
 
         Returns:
             [(页面相对路径, 融合分数, 页面语义分, 关系boost分), ...] 按融合分数降序

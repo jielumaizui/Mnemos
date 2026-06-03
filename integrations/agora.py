@@ -68,6 +68,7 @@ class MCPServer:
             "persona_update": self._tool_persona_update,
             "signal_collect": self._tool_signal_collect,
             "retrospective_list": self._tool_retrospective_list,
+            "check_pending_recaps": self._tool_check_pending_recaps,
             "knowledge_source_list": self._tool_knowledge_source_list,
             "health_check": self._tool_health_check,
             "self_diagnose": self._tool_self_diagnose,
@@ -537,6 +538,39 @@ tags: [{', '.join(tags or ['file_import'])}]
         knowledge = injector.inject(task_type, subtype, time_window, context_text)
 
         if not knowledge:
+            fallback_query = " ".join(part for part in [task_type, subtype, context_text] if part).strip()
+            fallback_results = []
+            if fallback_query:
+                try:
+                    from core.config import get_config
+                    from core.app.context_search import ContextAwareSearch
+                    searcher = ContextAwareSearch(wiki_base=str(get_config().wiki_dir))
+                    fallback_results = searcher.search(fallback_query, limit=3)
+                except Exception as e:
+                    logger.debug(f"preflight fallback search failed: {e}", exc_info=True)
+
+            if fallback_results:
+                return {
+                    "success": True,
+                    "loaded": True,
+                    "source": "general_wiki_fallback",
+                    "message": f"未找到 {task_type}/{subtype} 的 retrospective，已回退装载通用知识",
+                    "task_type": task_type,
+                    "subtype": subtype,
+                    "checklist_count": 0,
+                    "checklist": [],
+                    "lessons_summary": "未命中专用复盘经验，以下为相关 Wiki 知识。",
+                    "knowledge_results": [
+                        {
+                            "page_path": r.page_path,
+                            "title": r.title,
+                            "snippet": r.snippet,
+                            "score": round(r.score, 3),
+                        }
+                        for r in fallback_results
+                    ],
+                }
+
             return {
                 "success": True,
                 "loaded": False,
@@ -560,6 +594,46 @@ tags: [{', '.join(tags or ['file_import'])}]
                 for c in knowledge.checklist
             ],
             "lessons_summary": knowledge.lessons_summary,
+        }
+
+    def _tool_check_pending_recaps(self, user_context: Dict = None, limit: int = 5) -> Dict:
+        """检查待复盘事项，供宿主 Agent 在回复前进行轻提醒或强提醒。"""
+        from core.app.forced_retrospective import ForcedRetrospective
+
+        user_context = user_context or {}
+        forced = ForcedRetrospective()
+        items = []
+
+        recaps = forced.get_pending_system_recaps()
+        try:
+            recaps.extend(forced.list_user_reminders())
+        except Exception:
+            logger.debug("读取用户复盘提醒失败", exc_info=True)
+
+        for recap in recaps[: max(1, int(limit or 5))]:
+            decision = forced.should_force_open(recap, user_context)
+            items.append({
+                "task_id": recap.task_id,
+                "topic": recap.topic,
+                "source": recap.source,
+                "severity": recap.severity,
+                "status": recap.status,
+                "target_page": recap.target_page,
+                "age_days": recap.age_days,
+                "same_type_count": recap.same_type_count,
+                "should_force_open": decision.get("force_open", False),
+                "score": decision.get("score", 0),
+                "reasons": decision.get("reasons", []),
+            })
+
+        return {
+            "success": True,
+            "pending_count": len(recaps),
+            "items": items,
+            "instruction": (
+                "宿主 Agent 应在会话开始或任务收尾前调用本工具；"
+                "should_force_open=true 时优先提醒用户处理复盘。"
+            ),
         }
 
     def _tool_guard_check(self, user_message: str, ai_response: str = "",
@@ -1175,9 +1249,13 @@ tags: [{', '.join(tags or ['file_import'])}]
 
     def _tool_document_process(self, file_path: str,
                                title: str = "",
-                               save_to_memos: bool = True) -> Dict:
+                               write_to_wiki: bool = False,
+                               save_to_memos: bool = False) -> Dict:
         """
-        处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）
+        处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。
+
+        - write_to_wiki=True: 调用 API 蒸馏并写入 Wiki（需要配置 API key）
+        - write_to_wiki=False: 仅解析文档，返回结构、摘要和预览，不写入 Wiki
 
         使用场景：
         - 用户说"解析这个 PDF"
@@ -1186,6 +1264,10 @@ tags: [{', '.join(tags or ['file_import'])}]
         """
         from core.hephaestus.document_processor import DocumentProcessor
         from pathlib import Path
+
+        # 兼容旧参数名 save_to_memos（已废弃，效果等同于 write_to_wiki）
+        if save_to_memos and not write_to_wiki:
+            write_to_wiki = True
 
         src_path = Path(file_path).expanduser().resolve()
         if not src_path.exists():
@@ -1227,14 +1309,31 @@ tags: [{', '.join(tags or ['file_import'])}]
                 "metadata": meta,
                 "summary": doc.summary,
                 "validation_status": doc.validation_status,
+                "requires_api_key": write_to_wiki,
+                "api_mode": "api_distillation" if write_to_wiki else "parse_only",
             }
 
-            if save_to_memos:
+            if write_to_wiki:
+                from core.llm_config import resolve_llm_api_config
+
+                llm_cfg = resolve_llm_api_config()
+                if not llm_cfg.configured:
+                    result["success"] = False
+                    result["message"] = (
+                        "API 蒸馏未配置：请设置环境变量 OPENAI_API_KEY 或 SILICONFLOW_API_KEY，"
+                        "或在 ~/.mnemos/configs/main.json 中配置 llm.api_key，"
+                        "然后重启 daemon。"
+                    )
+                    result["wiki_paths"] = []
+                    return result
+
                 # 直接走文档蒸馏管道 → Wiki，不走 Memos 中转
                 from core.hephaestus.document_pipeline import DocumentDistillationPipeline
                 from core.hephaestus.distillation_engine import HostAgentCaller
                 import hashlib
+                import time
 
+                start = time.time()
                 session_id = f"doc-mcp-{hashlib.md5(str(src_path).encode()).hexdigest()[:8]}"
                 caller = HostAgentCaller(force_provider="api")
                 pipeline = DocumentDistillationPipeline(caller=caller)
@@ -1249,10 +1348,16 @@ tags: [{', '.join(tags or ['file_import'])}]
                 }
                 distill_result = pipeline.process(session_id, messages, meta_pipe)
                 wiki_paths = pipeline.write_to_wiki(distill_result, source="mcp")
+                duration = round(time.time() - start, 2)
 
                 result["wiki_paths"] = [str(p) for p in wiki_paths]
-                result["pipeline"] = "文档 → Wiki 蒸馏 → 00-Inbox"
+                result["pipeline"] = "文档 → API 蒸馏 → Wiki"
                 result["session_id"] = session_id
+                result["provider"] = llm_cfg.provider
+                result["model"] = llm_cfg.model
+                result["api_config_source"] = llm_cfg.source
+                result["duration"] = duration
+                result["fragment_count"] = len(distill_result.fragments) if distill_result else 0
 
             return result
         except Exception as e:
@@ -1944,13 +2049,13 @@ tags: [{', '.join(tags or ['file_import'])}]
             },
             {
                 "name": "document_process",
-                "description": "处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。提取结构、大纲、关键内容，可选择存入 Memos。当用户说'解析这个PDF'、'把这份PPT存到知识库'时使用此工具。",
+                "description": "处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。默认仅解析并返回结构、摘要、预览；write_to_wiki=true 时通过 LLM API 蒸馏并写入 Obsidian Wiki。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "file_path": {"type": "string", "description": "文件绝对路径"},
                         "title": {"type": "string", "description": "文档标题（可选）", "default": ""},
-                        "save_to_memos": {"type": "boolean", "description": "是否保存到 Memos", "default": True},
+                        "write_to_wiki": {"type": "boolean", "description": "是否通过 LLM API 蒸馏并写入 Wiki", "default": False},
                     },
                     "required": ["file_path"],
                 },
@@ -1975,7 +2080,7 @@ tags: [{', '.join(tags or ['file_import'])}]
             },
             {
                 "name": "preflight_inject",
-                "description": "KIA闭环-任务前知识装载：根据任务类型从retrospective经验库装载历史教训和检查清单",
+                "description": "KIA闭环-任务前知识装载：优先根据任务类型装载retrospective经验；未命中时自动回退到通用Wiki知识搜索。宿主Agent应在任务开始时调用。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1984,6 +2089,17 @@ tags: [{', '.join(tags or ['file_import'])}]
                         "context_text": {"type": "string", "description": "当前会话上下文，用于场景适配", "default": ""},
                     },
                     "required": ["task_type"],
+                },
+            },
+            {
+                "name": "check_pending_recaps",
+                "description": "检查待复盘事项。宿主Agent应在会话开始、任务收尾或回复前调用，用于推动用户复盘。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "user_context": {"type": "object", "description": "当前用户上下文，如 current_file/task_type，可选", "default": {}},
+                        "limit": {"type": "integer", "description": "返回数量上限", "default": 5},
+                    },
                 },
             },
             {

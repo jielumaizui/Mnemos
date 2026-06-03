@@ -104,7 +104,7 @@ class CaptureService:
     def _store_artifact(self, session_id: str, turn_number: int,
                         user_content: str, assistant_content: str) -> Path:
         """将完整 payload 写入 artifact 文件，返回文件路径"""
-        artifact_dir = Path.home() / ".mnemos" / "capture_artifacts" / session_id
+        artifact_dir = self.config.data_dir / "capture_artifacts" / session_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
         path = artifact_dir / f"turn_{turn_number}.md"
         content = f"""# Capture Artifact
@@ -172,6 +172,10 @@ class CaptureService:
         user_content = user_content or ""
         assistant_content = assistant_content or ""
 
+        # 截断前保存原始内容，用于计算 full_content_hash
+        original_user = user_content
+        original_assistant = assistant_content
+
         # 大小限制与完整性策略
         total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))
         capture_mode = "full"
@@ -199,7 +203,7 @@ class CaptureService:
         if artifact_path:
             metadata["artifact_path"] = str(artifact_path)
 
-        # 计算 content_hash（统一使用 SyncEngine 的算法，确保 sync_log 去重兜底有效）
+        # 计算 content_hash（截断后，保持与现有 sync_log 兼容）
         model_tag = model or source_agent
         content_hash = compute_content_hash(
             user_content=user_content,
@@ -207,6 +211,14 @@ class CaptureService:
             turn_number=turn_number,
             model_tag=model_tag,
         )
+        # 计算 full_content_hash（原始完整内容，防止截断后去重误判）
+        full_content_hash = compute_content_hash(
+            user_content=original_user,
+            assistant_content=original_assistant,
+            turn_number=turn_number,
+            model_tag=model_tag,
+        )
+        metadata["full_content_hash"] = full_content_hash
 
         # 计算 dedupe_key
         dedupe_key = hashlib.sha256(

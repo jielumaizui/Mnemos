@@ -1359,6 +1359,17 @@ class DocumentDistillationPipeline:
 
         # 记录来源追踪（文档蒸馏路径）
         self._record_source_links(sid, source, written)
+        try:
+            from core.wiki_metrics import WikiMetrics, write_mnemos_home
+            metrics = WikiMetrics(wiki_dir=str(self.wiki_base))
+            for path in written:
+                rel_path = str(path.relative_to(self.wiki_base)) if self.wiki_base in path.parents else str(path)
+                content = path.read_text(encoding="utf-8", errors="ignore")
+                metrics.assess_quality(rel_path, content)
+                metrics.upsert_page(rel_path, title=path.stem, source_count=1, heat_score=1.0, heat_level="warm")
+            write_mnemos_home(str(self.wiki_base))
+        except Exception:
+            logger.debug("文档 Wiki metrics/dashboard 更新失败", exc_info=True)
         return written
 
     def _record_source_links(self, session_id: str, source: str, paths: List[Path]) -> None:

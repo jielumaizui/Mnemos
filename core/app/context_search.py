@@ -175,7 +175,7 @@ class ContextAwareSearch:
 
             from core.embeddings.dual_index import DualIndexRetriever
             retriever = DualIndexRetriever(wiki_base=self.wiki_base)
-            semantic_results = retriever.search(query, top_k=15)
+            semantic_results = retriever.search_detailed(query, top_k=15)
             if not semantic_results:
                 return []
 

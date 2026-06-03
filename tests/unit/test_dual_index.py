@@ -80,12 +80,15 @@ class TestDualIndexSearch:
         )
         results = retriever.search("test query", top_k=5)
         assert len(results) == 2
-        assert results[0][0] == "page_a.md"
-        assert results[0][1] == pytest.approx(0.95 * 0.7)
-        assert results[0][2] == pytest.approx(0.95)  # page_embedding_score
-        assert results[0][3] == pytest.approx(0.0)   # relation_score
-        assert results[1][0] == "page_b.md"
-        assert results[1][1] == pytest.approx(0.80 * 0.7)
+        assert results[0] == ("page_a.md", pytest.approx(0.95 * 0.7))
+        assert results[1] == ("page_b.md", pytest.approx(0.80 * 0.7))
+
+        # search_detailed 返回分解分数
+        detailed = retriever.search_detailed("test query", top_k=5)
+        assert detailed[0][0] == "page_a.md"
+        assert detailed[0][1] == pytest.approx(0.95 * 0.7)
+        assert detailed[0][2] == pytest.approx(0.95)  # page_embedding_score
+        assert detailed[0][3] == pytest.approx(0.0)   # relation_score
 
     def test_fusion_with_relation_boost(self, tmp_path, tmp_wiki):
         """双索引融合：页面得分 + 关联 boost"""
@@ -112,9 +115,10 @@ class TestDualIndexSearch:
         # page_a: 0.7*0.90 + 0.3*0.80 = 0.87
         # page_b: 0.7*0.70 + 0.3*0.60 = 0.67
         # page_c: 0 + 0.3*0.80 = 0.24
-        scores = {path: score for path, score, _, _ in results}
-        page_scores = {path: ps for path, _, ps, _ in results}
-        rel_scores = {path: rs for path, _, _, rs in results}
+        detailed = retriever.search_detailed("test query", top_k=5, use_rerank=False)
+        scores = {path: score for path, score, _, _ in detailed}
+        page_scores = {path: ps for path, _, ps, _ in detailed}
+        rel_scores = {path: rs for path, _, _, rs in detailed}
         assert scores["page_a.md"] == pytest.approx(0.87, abs=0.01)
         assert scores["page_b.md"] == pytest.approx(0.67, abs=0.01)
         assert scores["page_c.md"] == pytest.approx(0.24, abs=0.01)
@@ -163,12 +167,13 @@ class TestDualIndexSearch:
         )
         results = retriever.search("test", top_k=2, use_rerank=True)
         # rerank 返回 [(1, 0.99), (0, 0.88)] → valid_paths[1]=page_b, valid_paths[0]=page_a
-        assert results[0][0] == "page_b.md"
-        assert results[0][1] == pytest.approx(0.99)
-        assert results[0][2] == pytest.approx(0.85)  # page_embedding_score
-        assert results[1][0] == "page_a.md"
-        assert results[1][1] == pytest.approx(0.88)
-        assert results[1][2] == pytest.approx(0.95)  # page_embedding_score
+        detailed = retriever.search_detailed("test", top_k=2, use_rerank=True)
+        assert detailed[0][0] == "page_b.md"
+        assert detailed[0][1] == pytest.approx(0.99)
+        assert detailed[0][2] == pytest.approx(0.85)  # page_embedding_score
+        assert detailed[1][0] == "page_a.md"
+        assert detailed[1][1] == pytest.approx(0.88)
+        assert detailed[1][2] == pytest.approx(0.95)  # page_embedding_score
 
     def test_rerank_failure_fallback(self, tmp_wiki):
         """rerank 失败时回退到融合排序"""

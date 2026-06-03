@@ -354,8 +354,9 @@ class WikiMetrics:
                     updates.append(f"{k} = ?")
                     values.append(v)
             if updates:
-                updates.append("last_updated = ?")
-                values.append(_utcnow().isoformat())
+                if "last_updated" not in kwargs:
+                    updates.append("last_updated = ?")
+                    values.append(_utcnow().isoformat())
                 values.append(path)
                 conn.execute(
                     f"UPDATE page_metrics SET {', '.join(updates)} WHERE wiki_path = ?",
@@ -407,9 +408,11 @@ class WikiMetrics:
 
         inserted = 0
         updated = 0
+        seen_paths = set()
         for md_file in wiki.rglob("*.md"):
             try:
                 rel_path = str(md_file.relative_to(wiki))
+                seen_paths.add(rel_path)
                 content = md_file.read_text(encoding="utf-8", errors="ignore")
                 title = md_file.stem
                 status = "draft"
@@ -425,24 +428,80 @@ class WikiMetrics:
                             status_map = {"草稿": "draft", "已验证": "verified", "待审": "review", "废弃": "archived"}
                             status = status_map.get(fm.get("状态", ""), "draft")
                             tags = fm.get("tags", [])
-                            stage_map = {"原始": "P1", "初筛": "P2", "已验证": "P3", "成熟": "P4"}
+                            if isinstance(tags, str):
+                                tags = [tags]
+                            elif not isinstance(tags, list):
+                                tags = []
+                            stage_map = {"原始": "P3", "初筛": "P2", "已整理": "P2", "已验证": "P0", "成熟": "P0"}
                             knowledge_stage = stage_map.get(fm.get("知识阶段", ""), "P3")
                         except Exception:
                             pass
 
+                quality_score = quick_quality_score(content)
+                if quality_score >= 80:
+                    quality_level = "excellent"
+                elif quality_score >= 60:
+                    quality_level = "good"
+                elif quality_score >= 40:
+                    quality_level = "acceptable"
+                else:
+                    quality_level = "poor"
+
+                stat = md_file.stat()
+                last_updated = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+                freshness_days = max(0, (_utcnow() - datetime.fromtimestamp(stat.st_mtime, timezone.utc)).days)
+                heat_level = compute_heat_level(last_updated)
+                heat_score = {"hot": 3.0, "warm": 1.0, "cold": 0.0}.get(heat_level, 0.0)
+                completeness = min(1.0, quality_score / 100)
+                if status == "draft" and quality_score >= 60:
+                    status = "active"
+                if knowledge_stage == "P3":
+                    if quality_score >= 80:
+                        knowledge_stage = "P1"
+                    elif quality_score >= 60:
+                        knowledge_stage = "P2"
+
                 row = self._get_conn().execute(
                     "SELECT 1 FROM page_metrics WHERE wiki_path = ?", (rel_path,)
                 ).fetchone()
+                payload = {
+                    "title": title,
+                    "status": status,
+                    "tags": tags,
+                    "knowledge_stage": knowledge_stage,
+                    "quality_score": round(quality_score, 1),
+                    "quality_level": quality_level,
+                    "freshness_days": freshness_days,
+                    "heat_level": heat_level,
+                    "heat_score": heat_score,
+                    "completeness": round(completeness, 2),
+                    "last_updated": last_updated,
+                }
                 if row:
-                    self.upsert_page(rel_path, title=title, status=status, tags=tags, knowledge_stage=knowledge_stage)
+                    self.upsert_page(rel_path, **payload)
                     updated += 1
                 else:
-                    self.upsert_page(rel_path, title=title, status=status, tags=tags, knowledge_stage=knowledge_stage)
+                    self.upsert_page(rel_path, **payload)
                     inserted += 1
+                try:
+                    self.sync_heat_to_frontmatter(md_file)
+                except Exception:
+                    logger.debug("frontmatter sync failed for %s", md_file, exc_info=True)
             except Exception:
                 continue
 
-        return {"total": inserted + updated, "inserted": inserted, "updated": updated}
+        deleted = 0
+        if seen_paths:
+            conn = self._get_conn()
+            placeholders = ",".join("?" for _ in seen_paths)
+            cursor = conn.execute(
+                f"DELETE FROM page_metrics WHERE wiki_path NOT IN ({placeholders})",
+                tuple(seen_paths),
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+
+        return {"total": inserted + updated, "inserted": inserted, "updated": updated, "deleted": deleted}
 
     def get_page(self, path: str) -> Optional[PageMetrics]:
         """获取页面指标"""
@@ -482,13 +541,24 @@ class WikiMetrics:
         return [self._row_to_metrics(r) for r in rows]
 
     def _row_to_metrics(self, row) -> PageMetrics:
+        def _json_list(value):
+            if not value:
+                return []
+            if isinstance(value, list):
+                return value
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, list) else [str(parsed)]
+            except Exception:
+                return [str(value)]
+
         return PageMetrics(
             wiki_path=row[0],
             title=row[1] or "",
             knowledge_stage=row[2] or "P3",
             evidence_level=row[3] or 1,
             source_count=row[4] or 0,
-            source_memos=json.loads(row[5]) if row[5] else [],
+            source_memos=_json_list(row[5]),
             heat_level=row[6] or "cold",
             heat_score=row[7] or 0.0,
             quality_score=row[8] or 0.0,
@@ -499,7 +569,7 @@ class WikiMetrics:
             status=row[13] or "draft",
             last_updated=row[14] or "",
             created_at=row[15] or "",
-            tags=json.loads(row[16]) if row[16] else [],
+            tags=_json_list(row[16]),
         )
 
     # ---- 质量评估 ----
@@ -596,7 +666,11 @@ class WikiMetrics:
     def sync_heat_to_frontmatter(self, page_path: Path) -> bool:
         """将热力数据反写到页面 frontmatter，供 Obsidian Graph View 使用。"""
         page_path = Path(page_path)
-        metrics = self.get_page(str(page_path))
+        try:
+            rel_path = str(page_path.relative_to(self.wiki_dir))
+        except Exception:
+            rel_path = str(page_path)
+        metrics = self.get_page(rel_path) or self.get_page(str(page_path))
         if not metrics:
             return False
         if not page_path.exists():
@@ -607,6 +681,9 @@ class WikiMetrics:
             fm, body = self._split_frontmatter(content)
             fm["heat_level"] = metrics.heat_level
             fm["heat_score"] = round(metrics.heat_score, 1)
+            fm["quality_score"] = round(metrics.quality_score, 1)
+            fm["knowledge_stage_metric"] = metrics.knowledge_stage
+            fm["status_metric"] = metrics.status
             fm["stats_updated"] = _utcnow().isoformat()
             fm = to_chinese_frontmatter(fm)
             page_path.write_text(self._join_frontmatter(fm, body), encoding="utf-8")
@@ -887,6 +964,88 @@ def quick_assess(path: str, content: str, source_count: int = 1) -> Dict:
         freshness_days=0,
     )
     return {"quality_score": score, "stage": stage, "evidence_level": level}
+
+
+def write_mnemos_home(wiki_dir: Optional[str] = None, limit: int = 8) -> Optional[Path]:
+    """Write a user-facing Obsidian home page for Mnemos activity."""
+    wiki = Path(wiki_dir).expanduser() if wiki_dir else get_config().wiki_dir
+    wiki.mkdir(parents=True, exist_ok=True)
+    metrics = WikiMetrics(wiki_dir=str(wiki))
+    summary = metrics.get_summary()
+    recent = metrics.list_pages()[:limit]
+    hot = sorted(
+        metrics.list_pages(),
+        key=lambda p: (p.heat_score, p.quality_score),
+        reverse=True,
+    )[:limit]
+
+    pending_recaps = []
+    try:
+        from core.app.forced_retrospective import ForcedRetrospective
+        forced = ForcedRetrospective()
+        pending_recaps = forced.get_pending_system_recaps()[:limit]
+    except Exception:
+        logger.debug("dashboard recap load failed", exc_info=True)
+
+    lines = [
+        "---",
+        "mnemos_type: dashboard",
+        "auto_updated: true",
+        f"updated: {_utcnow().isoformat()}",
+        "---",
+        "",
+        "# Mnemos Home",
+        "",
+        "## 系统概览",
+        "",
+        f"- Wiki metrics 页面数: {summary.get('total_pages', 0)}",
+        f"- 平均质量分: {summary.get('avg_quality', 0)}",
+        f"- 阶段分布: {json.dumps(summary.get('by_stage', {}), ensure_ascii=False)}",
+        f"- 状态分布: {json.dumps(summary.get('by_status', {}), ensure_ascii=False)}",
+        "",
+        "## 最近更新",
+        "",
+    ]
+    if recent:
+        for page in recent:
+            lines.append(
+                f"- [[{page.wiki_path[:-3] if page.wiki_path.endswith('.md') else page.wiki_path}]]"
+                f" · {page.heat_level} · quality {round(page.quality_score, 1)}"
+            )
+    else:
+        lines.append("- 暂无页面 metrics，运行 `mnemos metrics scan`。")
+
+    lines.extend(["", "## 热点知识", ""])
+    if hot:
+        for page in hot:
+            lines.append(
+                f"- [[{page.wiki_path[:-3] if page.wiki_path.endswith('.md') else page.wiki_path}]]"
+                f" · heat {round(page.heat_score, 1)} · {page.status}"
+            )
+    else:
+        lines.append("- 暂无热点知识。")
+
+    lines.extend(["", "## 待复盘", ""])
+    if pending_recaps:
+        for recap in pending_recaps:
+            target = recap.target_page or "00-Mnemos-Home"
+            lines.append(f"- {recap.severity} · [[{target}]] · {recap.topic}")
+    else:
+        lines.append("- 暂无待复盘事项。")
+
+    lines.extend([
+        "",
+        "## 使用痕迹",
+        "",
+        "- Agent 每次任务开始应调用 `preflight_inject`。",
+        "- 任务执行中涉及高风险操作应调用 `guard_check`。",
+        "- 任务收尾或会话开始应调用 `check_pending_recaps`。",
+        "",
+    ])
+
+    path = wiki / "00-Mnemos-Home.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
 
 
 # ==================== CLI ====================

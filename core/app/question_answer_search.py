@@ -5,6 +5,7 @@ QuestionAnswerSearch — 问答式检索引擎
 支持自然语言问答形式的知识检索，接入 Vault 检索 + 答案片段抽取。
 """
 
+import math
 import re
 from typing import List, Dict, Optional
 from pathlib import Path
@@ -156,24 +157,32 @@ class QuestionAnswerSearch:
         return scored_snippets
 
     def _split_into_paragraphs(self, context: str) -> List[Dict]:
-        """将上下文分割为段落"""
+        """将上下文分割为段落，source 固定为页面路径，heading 单独记录"""
         paragraphs = []
         current_source = ""
+        current_heading = ""
 
         for line in context.split("\n"):
             line = line.strip()
             if not line:
                 continue
 
-            # 检测来源标记
-            if line.startswith("> 来源:") or line.startswith("### "):
-                current_source = line.replace("> 来源:", "").replace("### ", "").strip()
+            # 检测来源标记（页面路径）
+            if line.startswith("> 来源:"):
+                current_source = line.replace("> 来源:", "").strip()
+                continue
+
+            # 检测标题标记（章节标题，不是来源）
+            if line.startswith("### "):
+                current_heading = line.replace("### ", "").strip()
+                # 标题本身也作为一个短段落，但后面会加惩罚
                 continue
 
             if len(line) > 8:
                 paragraphs.append({
                     "text": line,
                     "source": current_source,
+                    "heading": current_heading,
                 })
 
         return paragraphs
@@ -224,22 +233,34 @@ class QuestionAnswerSearch:
         text = para["text"].lower()
         question_normalized = self._normalize_question(question)
         q_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', question_normalized))
-        p_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', text))
 
         if not q_keywords:
             return 0.0
 
-        # 基础匹配分：Jaccard
-        intersection = q_keywords & p_keywords
-        union = q_keywords | p_keywords
-        base_score = len(intersection) / len(union) if union else 0
+        # 基础匹配分：BM25-like（query token 命中次数 / 段落长度归一化）
+        # 比 Jaccard 更适合长段落
+        total_hits = 0
+        for kw in q_keywords:
+            total_hits += text.count(kw)
+        # 平均每个 query token 在段落中的命中次数，除以 log(段落长度) 做长度归一化
+        avg_len = max(1, len(text))
+        base_score = min(1.0, (total_hits / len(q_keywords)) / (math.log(avg_len + 10) / 3))
 
         # exact match 保护：关键 token 直接命中给予强 boost
         exact_bonus = 0.0
-        for kw in q_keywords:
+        core_terms = [kw for kw in q_keywords if len(kw) >= 3]
+        for kw in core_terms:
             if kw in text:
-                exact_bonus += 0.15
-        exact_bonus = min(0.5, exact_bonus)
+                exact_bonus += 0.2
+        exact_bonus = min(0.6, exact_bonus)
+
+        # 位置加分：段落中包含 query 核心词的句子更靠前时加分
+        position_bonus = 0.0
+        sentences = re.split(r'[。！？\n]', text)
+        for idx, sent in enumerate(sentences[:3]):
+            if any(kw in sent for kw in core_terms):
+                position_bonus += 0.05 * (3 - idx)
+        position_bonus = min(0.15, position_bonus)
 
         # 问题类型加分
         type_bonus = 0.0
@@ -267,7 +288,9 @@ class QuestionAnswerSearch:
 
         elif qtype == "comparison":
             # 对比类问题：寻找 "vs"、"区别"、"优势"、"劣势"
-            if any(p in text for p in ["区别", "差异", "优势", "劣势", "对比", "vs", "difference", "compared", "advantage", "disadvantage"]):
+            patterns = ["区别", "差异", "优势", "劣势", "对比", "vs",
+                        "difference", "compared", "advantage", "disadvantage"]
+            if any(p in text for p in patterns):
                 type_bonus = 0.3
 
         elif qtype == "temporal":
@@ -282,6 +305,22 @@ class QuestionAnswerSearch:
             if re.search(r'[A-Z][a-z]+\s+[A-Z][a-z]+', para["text"]):  # 英文人名
                 type_bonus = 0.2
 
+        # 标题段落惩罚：纯标题（如 "## 结论"、"### 方案一"）不应作为答案
+        heading_penalty = 0.0
+        text_stripped = para["text"].strip()
+        if text_stripped.startswith(("#", "**", "---")):
+            heading_penalty = 0.3
+        # 如果段落很短且看起来像列表标题或短句，也适当降权
+        if len(text_stripped) < 40 and not re.search(r'[。！？\.\!\?]', text_stripped):
+            heading_penalty = max(heading_penalty, 0.15)
+
+        # 命令/代码/步骤段落加权
+        code_bonus = 0.0
+        if re.search(r'`[^`]+`|\$\s+\w|python\s+|docker\s+|git\s+|pip\s+|curl\s+|unset\s+|export\s+', para["text"]):
+            code_bonus = 0.15
+        if qtype == "procedure" and re.search(r'^\s*[-*\d]\s+', para["text"]):
+            code_bonus += 0.1
+
         # 长度惩罚：过长或过短的段落降低分数
         length = len(para["text"])
         length_factor = 1.0
@@ -290,23 +329,126 @@ class QuestionAnswerSearch:
         elif length > 300:
             length_factor = 0.9
 
-        return min(1.0, (base_score * 0.5 + exact_bonus + type_bonus) * length_factor)
+        raw_score = (base_score * 0.4 + exact_bonus + position_bonus + type_bonus + code_bonus - heading_penalty) * length_factor
+        return max(0.0, min(1.0, raw_score))
+
+    def _extract_solution_blocks(self, source: str, question: str, max_blocks: int = 4) -> List[str]:
+        """从命中页面中优先抽取可执行方案、步骤和命令。"""
+        if not source or source == "unknown":
+            return []
+        page_path = self.wiki_dir / source
+        if not page_path.exists():
+            return []
+        try:
+            text = page_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return []
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                text = parts[2]
+
+        wanted_headings = (
+            "解决", "方案", "操作", "步骤", "命令", "修复", "处理",
+            "直接", "结论", "怎么做", "如何做",
+        )
+        blocks: List[str] = []
+        current_heading = ""
+        current_lines: List[str] = []
+
+        def flush():
+            if not current_lines:
+                return
+            block = "\n".join(current_lines).strip()
+            if not block:
+                return
+            if len(block) > 700:
+                block = block[:700].rstrip() + "..."
+            blocks.append(block)
+
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip()
+            heading_match = re.match(r"^#{2,4}\s+(.+)$", line)
+            if heading_match:
+                if current_heading and any(k in current_heading for k in wanted_headings):
+                    flush()
+                current_heading = heading_match.group(1)
+                current_lines = []
+                continue
+            if current_heading and any(k in current_heading for k in wanted_headings):
+                if line.strip():
+                    current_lines.append(line)
+        if current_heading and any(k in current_heading for k in wanted_headings):
+            flush()
+
+        command_lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if re.search(r"`[^`]+`|^(unset|export|git|python|pip|docker|curl|mnemos)\b", stripped):
+                command_lines.append(stripped)
+        if command_lines:
+            blocks.insert(0, "\n".join(command_lines[:6]))
+
+        # 去重并保序
+        deduped = []
+        seen = set()
+        for block in blocks:
+            key = re.sub(r"\s+", " ", block)[:120]
+            if key not in seen:
+                seen.add(key)
+                deduped.append(block)
+        return deduped[:max_blocks]
 
     def answer(self, question: str) -> Optional[Dict]:
         """
-        直接返回答案（取最高置信度结果）
+        直接返回答案。
+        对 procedure 类问题做轻量合成（合并 top 步骤段落），
+        其他类型取最高置信度结果。
 
         Returns:
-            {"answer": str, "source": str, "confidence": float} 或 None
+            {"answer": str, "source": str, "heading": str, "confidence": float} 或 None
         """
-        results = self.search(question, top_k=3)
+        results = self.search(question, top_k=5)
         if not results:
             return None
 
+        qtype = self.extract_question_type(question)
         best = max(results, key=lambda x: x["confidence"])
+        solution_blocks = self._extract_solution_blocks(best["source"], question)
+        if solution_blocks and qtype in ("procedure", "general", "causation"):
+            return {
+                "answer": "\n\n".join(solution_blocks),
+                "source": best["source"],
+                "heading": "可执行方案",
+                "confidence": round(min(0.95, best["confidence"] + 0.08), 3),
+                "question_type": qtype,
+            }
+
+        if qtype == "procedure" and len(results) >= 2:
+            # 轻量合成：合并 top 3 步骤段落，保留来源页面路径
+            parts = []
+            seen_sources = set()
+            for r in results[:3]:
+                snippet = r["answer_snippet"].strip()
+                if snippet and snippet not in parts:
+                    parts.append(snippet)
+                    seen_sources.add(r["source"])
+            if parts:
+                combined = "\n".join(parts)
+                # confidence 取加权平均，避免饱和到 1.0
+                avg_conf = sum(r["confidence"] for r in results[:3]) / len(results[:3])
+                return {
+                    "answer": combined,
+                    "source": ", ".join(seen_sources) if seen_sources else results[0]["source"],
+                    "heading": "",
+                    "confidence": round(avg_conf, 3),
+                    "question_type": qtype,
+                }
+
         return {
             "answer": best["answer_snippet"],
             "source": best["source"],
+            "heading": "",
             "confidence": best["confidence"],
             "question_type": best["question_type"],
         }

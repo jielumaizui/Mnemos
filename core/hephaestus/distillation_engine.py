@@ -7,13 +7,14 @@ DistillationEngine — 七层蒸馏流水线
 七层架构：
   L1 噪音过滤   — 规则级，<1ms，复用 ingest_helpers.is_noise_message()
   L2 价值预判   — 规则 + 贝叶斯，CERTAINLY_YES / CERTAINLY_NO / MAYBE
-  L3 LLM判断    — 宿主Agent调用，knowledge / skill / skip
+  L3 LLM判断    — LLM API 调用，knowledge / skill / skip
   L4 知识提取   — LLM + assertion_extractor 验证，6种知识形态
   L5 自检       — 断言验证 / 代码语法 / 链接有效性 / 时间范围
   L6 跨Agent关联 — Jaccard关键词重叠，自动注入 [[反向链接]]
   L7 反馈循环   — AdaptiveScorer + 用户画像信号驱动
 
-同源复用原则：Mnemos 不直接调用 LLM API，所有 LLM 工作委托给宿主 Agent。
+当前产品原则：宿主 Agent 负责调用 Mnemos 工具和使用知识；蒸馏本身默认走
+OpenAI 兼容 LLM API，避免“自己做自己查”和宿主上下文限制。
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.config import get_config
 from core.frontmatter import to_chinese_frontmatter, fm_get
 from core.kia.ingest_helpers import is_noise_message
+from core.llm_config import resolve_llm_api_config
 
 
 logger = logging.getLogger(__name__)
@@ -402,9 +404,10 @@ def extract_json(text: str) -> Optional[Dict]:
 # ========== HostAgentCaller — 宿主 Agent 调用器 ==========
 
 class HostAgentCaller:
-    """宿主 Agent 调用器 — 同源复用
+    """LLM 调用器。
 
-    优先级：claude -p → kimi --print → OpenAI 兼容 API → AgentDelegate 异步
+    默认使用 OpenAI 兼容 API。CLI / AgentDelegate 仅作为显式 legacy 模式，
+    防止后台蒸馏反向污染宿主 Agent 的工作上下文。
     """
 
     MAX_RETRIES = 2
@@ -412,7 +415,9 @@ class HostAgentCaller:
 
     def __init__(self, timeout: int = None, force_provider: str = None):
         self._timeout = timeout or self.TIMEOUT
-        self._force_provider = force_provider  # "api" | "cli" | None
+        cfg = get_config()
+        self._force_provider = (force_provider or cfg.get("distill.provider", "api") or "api").lower()
+        self._allow_delegate = bool(cfg.get("distill.allow_host_agent_delegate", False))
 
     def call(self, prompt: str, expect_json: bool = True,
              max_retries: int = None, timeout: int = None) -> Optional[Dict]:
@@ -446,10 +451,7 @@ class HostAgentCaller:
 
     def _invoke(self, prompt: str, timeout: int) -> Optional[str]:
         if self._force_provider == "api":
-            raw = self._try_openai_compatible_api(prompt, timeout)
-            if raw is not None:
-                return raw
-            return self._try_delegate(prompt, timeout)
+            return self._try_openai_compatible_api(prompt, timeout)
 
         if self._force_provider == "cli":
             raw = self._try_cli("claude", ["-p", prompt], timeout)
@@ -458,19 +460,24 @@ class HostAgentCaller:
             raw = self._try_cli("kimi", ["--print", prompt], timeout)
             if raw is not None:
                 return raw
-            return self._try_delegate(prompt, timeout)
+            return self._try_delegate(prompt, timeout) if self._allow_delegate else None
 
-        # 默认优先级：claude → kimi → api → delegate
+        if self._force_provider == "delegate":
+            return self._try_delegate(prompt, timeout) if self._allow_delegate else None
+
+        # Legacy auto mode: api first, then optional CLI/delegate if explicitly configured.
+        raw = self._try_openai_compatible_api(prompt, timeout)
+        if raw is not None:
+            return raw
+        if self._force_provider != "auto":
+            return None
         raw = self._try_cli("claude", ["-p", prompt], timeout)
         if raw is not None:
             return raw
         raw = self._try_cli("kimi", ["--print", prompt], timeout)
         if raw is not None:
             return raw
-        raw = self._try_openai_compatible_api(prompt, timeout)
-        if raw is not None:
-            return raw
-        return self._try_delegate(prompt, timeout)
+        return self._try_delegate(prompt, timeout) if self._allow_delegate else None
 
     def _try_openai_compatible_api(self, prompt: str, timeout: int) -> Optional[str]:
         """尝试通过 OpenAI 兼容 API 调用 LLM（如 SiliconFlow、OpenAI、Azure 等）
@@ -482,32 +489,19 @@ class HostAgentCaller:
         - OPENAI_MODEL: 模型名称（默认 gpt-4o-mini）
         """
         import urllib.request
-        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        # 根据提供商选择默认模型
-        if "siliconflow" in base_url.lower():
-            default_model = "deepseek-ai/DeepSeek-V3"
-        else:
-            default_model = "gpt-4o-mini"
-        model = os.environ.get("OPENAI_MODEL", default_model)
-
-        # 根据 base_url 智能选择对应的 API key
-        if "siliconflow" in base_url.lower():
-            api_key = os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        else:
-            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("SILICONFLOW_API_KEY")
-
-        if not api_key:
+        llm = resolve_llm_api_config()
+        if not llm.configured:
             return None
         data = json.dumps({
-            "model": model,
+            "model": llm.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 4000,
             "temperature": 0.2,
         }).encode()
         req = urllib.request.Request(
-            f"{base_url}/chat/completions",
+            f"{llm.base_url}/chat/completions",
             data=data,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {llm.api_key}"},
             method="POST",
         )
         try:
@@ -2093,6 +2087,11 @@ class DistillationEngine:
                         self._update_frontmatter_field(
                             file_path, "mnemos_last_scored", datetime.now().strftime("%Y-%m-%d")
                         )
+                try:
+                    from core.wiki_metrics import write_mnemos_home
+                    write_mnemos_home(str(self.wiki_base))
+                except Exception:
+                    logger.debug("Mnemos home update failed", exc_info=True)
             except Exception:
                 logger.debug("Frontmatter metrics writeback failed", exc_info=True)
 

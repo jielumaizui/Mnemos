@@ -49,6 +49,19 @@ def _sqlite_group_counts(db_path: Path, table: str, group_cols: str, where: str 
 
 
 def _daemon_processes():
+    def _looks_like_daemon_cmd(cmd: str) -> bool:
+        if "mnemos_daemon.py" not in cmd and "mnemos_daemon" not in cmd:
+            return False
+        noisy = ("pgrep", "grep", "mnemos_cli.py", "sed -n", "pytest")
+        if any(token in cmd for token in noisy):
+            return False
+        try:
+            import shlex
+            tokens = shlex.split(cmd)
+            return any(Path(t).name in ("mnemos_daemon.py", "mnemos_daemon") for t in tokens)
+        except Exception:
+            return "mnemos_daemon.py start" in cmd or "mnemos_daemon start" in cmd
+
     try:
         import subprocess
         import platform
@@ -71,7 +84,7 @@ def _daemon_processes():
                 )
                 if ps_result.returncode == 0:
                     cmd = ps_result.stdout.strip()
-                    if ("mnemos_daemon" in cmd or "mnemos_daemon.py" in cmd) and "pgrep" not in cmd:
+                    if _looks_like_daemon_cmd(cmd):
                         lines.append(f"{pid} {cmd}")
             return lines
         else:
@@ -83,9 +96,7 @@ def _daemon_processes():
                 return []
             lines = []
             for line in result.stdout.splitlines():
-                if "pgrep" in line:
-                    continue
-                if "mnemos_daemon" in line or "mnemos_daemon.py" in line:
+                if _looks_like_daemon_cmd(line):
                     lines.append(line)
             return lines
     except Exception:
@@ -163,7 +174,7 @@ def cmd_init(args):
 
     # 1. Wiki 路径
     default_wiki = config.wiki_dir
-    print(f"[1/6] 知识库路径")
+    print(f"[1/7] 知识库路径")
     print(f"      默认: {default_wiki}")
     user_wiki = input(f"      你的 Obsidian Vault wiki 目录 (回车=默认): ").strip()
     if user_wiki:
@@ -171,7 +182,7 @@ def cmd_init(args):
 
     # 2. Memos 配置
     print()
-    print(f"[2/6] Memos 集成")
+    print(f"[2/7] Memos 集成")
     memos_url = input("      Memos API 地址 (如 https://memos.example.com, 回车=跳过): ").strip()
     if memos_url:
         config.set("memos.enabled", True)
@@ -184,22 +195,40 @@ def cmd_init(args):
 
     # 3. 蒸馏 API 配置
     print()
-    print(f"[3/6] 蒸馏 API 配置（推荐配置，用于文档/会话蒸馏入 Wiki）")
-    sf_key = os.environ.get("SILICONFLOW_API_KEY", "")
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if sf_key or openai_key:
-        print(f"      ✓ 检测到环境变量中已配置 API key")
+    print(f"[3/7] 蒸馏 API 配置（推荐配置，用于文档/会话蒸馏入 Wiki）")
+    config.set("distill.provider", "api")
+    config.set("distill.allow_host_agent_delegate", False)
+    try:
+        from core.llm_config import resolve_llm_api_config
+        llm_cfg = resolve_llm_api_config(config)
+    except Exception:
+        llm_cfg = None
+    if llm_cfg and llm_cfg.configured:
+        print(f"      ✓ 检测到 API key: {llm_cfg.provider} ({llm_cfg.source})")
+        print(f"      ✓ 模型: {llm_cfg.model}")
     else:
         print(f"      ⚠ 未检测到 SILICONFLOW_API_KEY 或 OPENAI_API_KEY")
-        print(f"        └─ 影响: document_process / knowledge_distill 等工具将不可用")
-        print(f"        └─ 建议: export SILICONFLOW_API_KEY=your_key")
-        print(f"        └─ 或:   export OPENAI_API_KEY=your_key")
-        print(f"        └─ 模型: 默认 deepseek-ai/DeepSeek-V3 (SiliconFlow)")
-        print()
+        print(f"        └─ 不配置也可完成安装，但 API 蒸馏工具会提示待配置")
+        api_key = input("      蒸馏 API Key (回车=稍后配置): ").strip()
+        if api_key:
+            provider = input("      Provider [siliconflow/openai] (回车=siliconflow): ").strip().lower() or "siliconflow"
+            if provider not in ("siliconflow", "openai"):
+                provider = "siliconflow"
+            config.set("llm.provider", provider)
+            config.set("llm.api_key", api_key)
+            if provider == "siliconflow":
+                config.set("llm.base_url", "https://api.siliconflow.cn/v1")
+                config.set("llm.model", "deepseek-ai/DeepSeek-V3")
+                config.set("llm.providers.siliconflow.api_key", api_key)
+            else:
+                config.set("llm.base_url", "https://api.openai.com/v1")
+                config.set("llm.model", "gpt-4o-mini")
+                config.set("llm.providers.openai.api_key", api_key)
+            print(f"      ✓ 已写入 LLM API 配置: {provider}")
 
     # 4. 画像数据源
     print()
-    print(f"[4/6] 用户画像数据源")
+    print(f"[4/7] 用户画像数据源")
     print(f"      以下数据源用于构建你的用户画像。")
     print(f"      开启越多画像越精准，但隐私暴露也越多。")
     print()
@@ -217,17 +246,23 @@ def cmd_init(args):
 
     # 5. AI Agent 集成
     print()
-    print(f"[5/6] AI Agent 集成")
+    print(f"[5/7] AI Agent 集成")
     cc_path = input(f"      Claude Code settings.json 路径 (回车={config.claude_settings_path}): ").strip()
     if cc_path:
         config.set("integrations.claude_code.settings_json_path", cc_path)
 
-    mcp = input("      启用 MCP 协议? [y/N]: ").strip()
-    config.set("integrations.mcp.enabled", mcp.lower() == "y")
+    mcp = input("      启用 MCP 协议? [Y/n]: ").strip()
+    config.set("integrations.mcp.enabled", mcp.lower() not in ("n", "no"))
+
+    l1 = input("      启用受限 L1 自动扫描本机 Agent 会话? [Y/n]: ").strip()
+    config.set("daemon.services.l1_sync", l1.lower() not in ("n", "no"))
+
+    install_hooks = input("      为检测到的 Agent 安装 hooks? [Y/n]: ").strip()
+    should_install_hooks = install_hooks.lower() not in ("n", "no")
 
     # 6. 可选依赖推荐
     print()
-    print(f"[6/6] 可选依赖安装")
+    print(f"[6/7] 可选依赖安装")
     print(f"      以下依赖不装也能跑，但会影响部分功能：")
     print()
 
@@ -260,8 +295,10 @@ def cmd_init(args):
         (wiki_dir / "06-Retrospectives").mkdir(exist_ok=True)
     print(f"      ✓ 创建 Wiki 目录: {wiki_dir}")
 
-    # 7. 安装 Claude Code hook（可选）
-    if config.claude_code_enabled:
+    # 7. 安装 Agent hooks（可选，默认安装所有检测到的 Agent）
+    if should_install_hooks:
+        _install_detected_agent_hooks(config)
+    elif config.claude_code_enabled:
         _install_claude_hook(config)
 
     print()
@@ -302,6 +339,32 @@ def _install_claude_hook(config):
         print(f"      ✓ 已安装 Claude Code hooks 到: {settings_path}")
     except Exception as e:
         print(f"      ⚠ 安装 hooks 失败: {e}")
+
+
+def _install_detected_agent_hooks(config):
+    """安装所有可用 Agent 的 hooks，失败时给出明确状态但不中断 init。"""
+    try:
+        from integrations.olympus import AgentRegistry
+        agents = AgentRegistry.discover_all()
+    except Exception as e:
+        print(f"      ⚠ Agent 检测失败: {e}")
+        return
+
+    if not agents:
+        print("      ⚠ 未检测到可自动安装 hooks 的 Agent")
+        if config.claude_code_enabled:
+            _install_claude_hook(config)
+        return
+
+    installed = 0
+    for agent in agents:
+        try:
+            ok = agent.install_hooks()
+            installed += 1 if ok else 0
+            print(f"      {'✓' if ok else '✗'} {agent.name} hooks")
+        except Exception as e:
+            print(f"      ✗ {agent.name} hooks: {e}")
+    print(f"      Agent hooks 安装完成: {installed}/{len(agents)}")
 
 
 def cmd_doctor(args):
@@ -438,27 +501,26 @@ def cmd_doctor(args):
     # 6.6 API 蒸馏状态
     print()
     print("API 蒸馏状态:")
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("SILICONFLOW_API_KEY")
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
-    if "siliconflow" in base_url.lower():
-        provider = "siliconflow"
-        model = os.environ.get("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3")
-    else:
-        provider = "openai-compatible"
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    if api_key:
-        print(f"  ✓ Provider: {provider}")
-        print(f"  ✓ Model: {model}")
-        if base_url:
-            print(f"  ✓ Base URL: {base_url}")
+    try:
+        from core.llm_config import resolve_llm_api_config
+        llm_cfg = resolve_llm_api_config(config)
+    except Exception:
+        llm_cfg = None
+    if llm_cfg and llm_cfg.configured:
+        print(f"  ✓ Provider: {llm_cfg.provider}")
+        print(f"  ✓ Model: {llm_cfg.model}")
+        print(f"  ✓ Base URL: {llm_cfg.base_url}")
+        print(f"  ✓ 配置来源: {llm_cfg.source}")
     else:
         warnings.append(
             "未配置蒸馏 API key（OPENAI_API_KEY 或 SILICONFLOW_API_KEY），"
+            "或 main.json 的 llm.api_key / llm.providers.*.api_key，"
             "document_process / knowledge_distill 将返回配置缺失提示"
         )
         print(f"  ✗ API key 未配置")
-        print(f"  ☐ Provider: {provider}（未就绪）")
-        print(f"  ☐ Model: {model}（未就绪）")
+        if llm_cfg:
+            print(f"  ☐ Provider: {llm_cfg.provider}（未就绪）")
+            print(f"  ☐ Model: {llm_cfg.model}（未就绪）")
 
     # 6.6 跨平台兼容性
     print()
@@ -519,6 +581,8 @@ def cmd_doctor(args):
     print()
     print("双索引状态 (ADR-019):")
     embedding_enabled = config.get("embedding.enabled", False)
+    print(f"  KG 数据库: {config.data_dir / 'knowledge_graph.db'}")
+    print(f"  向量索引目录: {config.data_dir / 'embedding_index'}")
     if embedding_enabled:
         print(f"  ✓ Embedding 已启用")
         try:
@@ -622,8 +686,9 @@ def cmd_doctor(args):
                 from scripts.mark_truncated import get_truncated_count
                 trunc_count = get_truncated_count()
                 if trunc_count > 0:
-                    print(f"  历史截断记录: {trunc_count} 条")
-                    warnings.append(f"存在 {trunc_count} 条历史截断的 Memos 记录，建议运行 `python scripts/mark_truncated.py` 查看详情")
+                    print(f"  历史截断记录: {trunc_count} 条（已记录为历史遗留，不影响最近采集完整性）")
+                else:
+                    print(f"  历史截断记录: 0")
             except Exception:
                 pass
 
@@ -818,7 +883,13 @@ def cmd_status(args):
     print(f"Memos 集成:    {'✓' if config.memos_enabled else '✗'}")
     print(f"画像系统:      {'✓' if config.persona_enabled else '✗'}")
     print(f"Claude Code:   {'✓' if config.claude_code_enabled else '✗'}")
-    print(f"MCP 协议:      {'✓' if config.mcp_enabled else '✗'}")
+    print(f"MCP 配置:      {'✓' if config.mcp_enabled else '✗'}")
+    try:
+        from integrations.agora import MCPServer
+        server = MCPServer()
+        print(f"MCP Server:    ✓ 可启动 ({len(server.tools)} tools)")
+    except Exception as e:
+        print(f"MCP Server:    ✗ 不可启动 ({e})")
     services = config.get("daemon.services", {})
     if services:
         enabled = [k for k, v in services.items() if v]
@@ -831,6 +902,8 @@ def cmd_status(args):
     if wiki_dir.exists():
         md_count = len(list(wiki_dir.rglob("*.md")))
         print(f"Wiki 页面数:   {md_count}")
+    print(f"KG 数据库:     {config.data_dir / 'knowledge_graph.db'}")
+    print(f"向量索引目录:  {config.data_dir / 'embedding_index'}")
 
     # 画像统计
     try:
@@ -852,18 +925,25 @@ def cmd_config(args):
     config = get_config()
     if args.set:
         key, val = args.set.split("=", 1)
-        config.set(key, val)
+        config.set(key, Config._auto_type(val))
         config.save()
-        print(f"✓ 已设置 {key} = {val}")
+        print(f"✓ 已设置 {key} = {Config._auto_type(val)}")
     else:
         import yaml
         import copy
         safe_config = copy.deepcopy(config.to_dict())
         # 脱敏敏感字段
-        for section in ["memos"]:
+        for section in ["memos", "llm", "embedding"]:
             if section in safe_config and isinstance(safe_config[section], dict):
                 if safe_config[section].get("token"):
                     safe_config[section]["token"] = "***"
+                if safe_config[section].get("api_key"):
+                    safe_config[section]["api_key"] = "***"
+                providers = safe_config[section].get("providers")
+                if isinstance(providers, dict):
+                    for provider_cfg in providers.values():
+                        if isinstance(provider_cfg, dict) and provider_cfg.get("api_key"):
+                            provider_cfg["api_key"] = "***"
         print(yaml.dump(safe_config, allow_unicode=True, sort_keys=False))
 
 
@@ -1374,8 +1454,125 @@ def cmd_metrics_scan(args):
         result = wm.scan_all_pages()
         print(f"  扫描完成: {result['total']} 个页面")
         print(f"  新增: {result['inserted']}  更新: {result['updated']}")
+        if result.get("deleted", 0):
+            print(f"  清理失效 metrics: {result['deleted']}")
+        try:
+            from core.wiki_metrics import write_mnemos_home
+            home = write_mnemos_home(str(wiki_dir))
+            print(f"  已更新首页: {home}")
+        except Exception as e:
+            print(f"  首页更新失败: {e}")
     except Exception as e:
         print(f"扫描失败: {e}")
+
+
+def cmd_perf(args):
+    """查看后台性能与队列压力"""
+    config = get_config()
+    print("Mnemos 性能状态")
+    print("=" * 40)
+    print(f"性能档位:      {config.get('performance_tier', 'default')}")
+    print(f"L1 扫描周期:   {config.get('sync.l1_scan_poll_interval_seconds', 60)}s")
+    print(f"L1 每轮源数:   {config.get('sync.l1_scan_max_sources_per_cycle', 3)}")
+    print(f"L1 每源会话:   {config.get('sync.l1_scan_max_sessions_per_source', 20)}")
+    print(f"Capture workers: {config.get('capture.max_workers', 4)}")
+    print()
+
+    print("daemon 进程:")
+    processes = _daemon_processes()
+    if not processes:
+        print("  未检测到运行中的 daemon")
+    else:
+        import subprocess
+        for line in processes:
+            pid = line.split()[0]
+            if pid.isdigit():
+                try:
+                    ps = subprocess.run(
+                        ["ps", "-p", pid, "-o", "pid=,pcpu=,pmem=,rss=,etime="],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if ps.returncode == 0:
+                        print(f"  {ps.stdout.strip()}  rss(KB)")
+                        continue
+                except Exception:
+                    pass
+            print(f"  {line}")
+    print()
+
+    print("数据体积:")
+    for label, path in [
+        ("mnemos_dir", config.data_dir),
+        ("events.db", config.data_dir / "events.db"),
+        ("capture_queue.db", config.data_dir / "capture_queue.db"),
+        ("knowledge_graph.db", config.data_dir / "knowledge_graph.db"),
+        ("embedding_index", config.data_dir / "embedding_index"),
+        ("daemon.log", config.data_dir / "daemon.log"),
+    ]:
+        try:
+            if path.is_dir():
+                total = sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+            elif path.exists():
+                total = path.stat().st_size
+            else:
+                total = 0
+            print(f"  {label}: {_format_bytes(total)}")
+        except Exception as e:
+            print(f"  {label}: 统计失败 ({e})")
+    print()
+
+    print("队列压力:")
+    try:
+        import sqlite3
+        events_db = config.data_dir / "events.db"
+        if events_db.exists():
+            with sqlite3.connect(str(events_db), timeout=5) as conn:
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE status IN ('pending','processing')"
+                ).fetchone()[0]
+                dead = conn.execute("SELECT COUNT(*) FROM dead_letters").fetchone()[0]
+            print(f"  events pending/processing: {pending}")
+            print(f"  dead_letters: {dead}")
+        else:
+            print("  events.db: 不存在")
+    except Exception as e:
+        print(f"  events.db: 读取失败 ({e})")
+
+    try:
+        import sqlite3
+        cq_db = config.data_dir / "capture_queue.db"
+        if cq_db.exists():
+            with sqlite3.connect(str(cq_db), timeout=5) as conn:
+                rows = conn.execute(
+                    "SELECT status, COUNT(*) FROM capture_events GROUP BY status"
+                ).fetchall()
+            print("  capture_queue:")
+            for status, count in rows:
+                print(f"    - {status}: {count}")
+        else:
+            print("  capture_queue.db: 不存在")
+    except Exception as e:
+        print(f"  capture_queue.db: 读取失败 ({e})")
+
+    print()
+    print("L1 最近扫描:")
+    state_path = config.data_dir / "l1_scan_state.json"
+    if state_path.exists():
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            sources = [
+                v for k, v in data.items()
+                if k.startswith("__source__:") and isinstance(v, dict)
+            ]
+            if sources:
+                for item in sorted(sources, key=lambda x: x.get("source", "")):
+                    print(f"  {item.get('source')}: {item.get('scanned_at')}")
+            else:
+                print("  尚无 source 轮转记录")
+        except Exception as e:
+            print(f"  读取失败: {e}")
+    else:
+        print("  尚无扫描游标")
 
 
 def cmd_wiki(args):
@@ -1562,6 +1759,9 @@ def main():
     metrics_sub = metrics_parser.add_subparsers(dest="metrics_cmd")
     metrics_sub.add_parser("scan", help="全量扫描 Wiki 页面 metrics")
 
+    # perf
+    subparsers.add_parser("perf", help="查看后台性能、队列和数据体积")
+
     # config
     config_parser = subparsers.add_parser("config", help="查看/编辑配置")
     config_parser.add_argument("--set", help="设置配置项 (如 wiki.vault_path=~/wiki)")
@@ -1681,6 +1881,8 @@ def main():
         cmd_events(args)
     elif args.command == "metrics" and args.metrics_cmd == "scan":
         cmd_metrics_scan(args)
+    elif args.command == "perf":
+        cmd_perf(args)
     else:
         parser.print_help()
 

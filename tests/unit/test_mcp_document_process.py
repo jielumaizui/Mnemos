@@ -136,20 +136,41 @@ class TestMCPDocumentProcess:
         fake_doc = _make_fake_doc("html", "Wiki测试", "# Wiki测试\n\n内容。")
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls, \
+             patch("core.llm_config.resolve_llm_api_config") as mock_resolve_llm, \
              patch("core.hephaestus.document_pipeline.DocumentDistillationPipeline") as mock_pipe_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
+            mock_resolve_llm.return_value = MagicMock(
+                configured=True,
+                provider="siliconflow",
+                model="deepseek-ai/DeepSeek-V3",
+                source="config:llm.api_key",
+            )
             mock_pipe = MagicMock()
             mock_pipe.process.return_value = MagicMock(fragments=[])
             mock_pipe.write_to_wiki.return_value = [Path("00-Inbox/wiki_test.md")]
             mock_pipe_cls.return_value = mock_pipe
 
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=True)
+            result = mcp_server._tool_document_process(str(file_path), write_to_wiki=True)
 
         assert result["success"] is True
         assert "wiki_paths" in result
-        assert result["pipeline"] == "文档 → Wiki 蒸馏 → 00-Inbox"
+        assert result["pipeline"] == "文档 → API 蒸馏 → Wiki"
         assert "session_id" in result
+        assert "provider" in result
+        assert result["api_config_source"] == "config:llm.api_key"
+        assert "duration" in result
         mock_pipe.write_to_wiki.assert_called_once()
+
+    def test_schema_defaults_parse_only(self, mcp_server):
+        """MCP schema 必须与真实函数默认行为一致：默认只解析，不写 Wiki。"""
+        tools = mcp_server._list_tools()["tools"]
+        doc_tool = next(t for t in tools if t["name"] == "document_process")
+        props = doc_tool["inputSchema"]["properties"]
+
+        assert "write_to_wiki" in props
+        assert props["write_to_wiki"]["default"] is False
+        assert "save_to_memos" not in props
+        assert "Memos" not in doc_tool["description"]
 
     def test_file_not_found(self, mcp_server):
         """文件不存在时返回明确错误"""
