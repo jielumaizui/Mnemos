@@ -494,16 +494,18 @@ def cmd_doctor(args):
         md_count = len(md_files)
         print(f"  Wiki 页面: {md_count}")
 
-        # Wiki metrics 覆盖率
+        # Wiki metrics 覆盖率（只读统计，不自动扫描）
         try:
             from core.wiki_metrics import WikiMetrics
             wm = WikiMetrics(wiki_dir=str(wiki_dir))
-            scan = wm.scan_all_pages()
             metrics_count = wm._get_conn().execute("SELECT COUNT(*) FROM page_metrics").fetchone()[0]
             coverage = (metrics_count / md_count * 100) if md_count > 0 else 0
             print(f"  Wiki metrics: {metrics_count}/{md_count} 页面 ({coverage:.0f}%)")
             if coverage < 50:
-                warnings.append(f"Wiki metrics 覆盖率仅 {coverage:.0f}%，已自动扫描补充")
+                warnings.append(
+                    f"Wiki metrics 覆盖率仅 {coverage:.0f}%，"
+                    f"运行 `mnemos doctor --repair` 或 `mnemos metrics scan` 补齐"
+                )
         except Exception as e:
             warnings.append(f"Wiki metrics 检查失败: {e}")
 
@@ -629,7 +631,6 @@ def cmd_doctor(args):
     print("Capture 队列健康:")
     try:
         import sqlite3
-        from pathlib import Path
         cq_db = Path.home() / ".mnemos" / "capture_queue.db"
         if cq_db.exists():
             conn = sqlite3.connect(str(cq_db))
@@ -844,7 +845,6 @@ def cmd_scheduler(args):
 def cmd_calibrate(args):
     """画像校准"""
     from core.persona.calibration_cli import run_calibration
-    from pathlib import Path
     import json
 
     # 先展示待处理的挑战问题（如果有）

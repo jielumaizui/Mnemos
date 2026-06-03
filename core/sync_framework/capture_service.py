@@ -178,19 +178,18 @@ class CaptureService:
         artifact_path = None
 
         if total_bytes > self.max_payload_bytes:
-            # 超大 payload：截断 + artifact 文件引用，保证不丢失
-            # 优先截断 assistant_content（工具输出通常更大），保留 user_content
+            # 超大 payload：先写完整 artifact，再截断 payload 保留摘要
+            artifact_path = self._store_artifact(
+                session_id, turn_number, user_content, assistant_content
+            )
             max_assistant = self.max_payload_bytes - len(user_content.encode("utf-8")) - 1000
             if max_assistant < 5000:
-                # user_content 本身已占满配额，两端都截断
+                # user_content 本身已占满配额，两端都保留摘要
                 user_content = self._truncate_with_marker(user_content, self.max_payload_bytes // 4)
                 assistant_content = self._truncate_with_marker(assistant_content, self.max_payload_bytes // 2)
-                capture_mode = "truncated"
+                capture_mode = "artifact_summary"
             else:
-                # 将完整 assistant_content 写入 artifact，payload 保留头部摘要
-                artifact_path = self._store_artifact(
-                    session_id, turn_number, user_content, assistant_content
-                )
+                # payload 保留 assistant 头部摘要
                 assistant_content = self._truncate_with_marker(assistant_content, max_assistant)
                 capture_mode = "artifact"
             total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))

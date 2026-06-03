@@ -831,7 +831,7 @@ def service_heartbeat(stop_event: threading.Event):
                 except Exception:
                     pass
 
-            # 每 60 次心跳（1 小时）清理 stale events
+            # 每 60 次心跳（1 小时）清理 stale events + 无消费者事件
             if heartbeat_count % 60 == 0:
                 try:
                     from core.mnemos_bus import _get_bus
@@ -839,6 +839,9 @@ def service_heartbeat(stop_event: threading.Event):
                     archived = bus.cleanup_stale(max_age_hours=24)
                     if archived > 0:
                         logger.info(f"[事件总线] 清理 {archived} 个 stale 事件为 archived")
+                    no_consumer = bus.archive_no_consumer_events()
+                    if no_consumer > 0:
+                        logger.info(f"[事件总线] 归档 {no_consumer} 个无消费者事件")
                 except Exception:
                     pass
 

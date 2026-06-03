@@ -128,16 +128,33 @@ class DistillationResult:
     cross_agent_links: List[str] = field(default_factory=list)
     # 会话覆盖范围（用于 Wiki 来源追踪）
     session_coverage: str = ""
+    # 来源 Agent
+    source: str = ""
 
 
 # ========== 内容清洗 ==========
 
 def clean_message_content(content: str) -> str:
-    """清理消息内容"""
+    """清理消息内容，保留代码块结构"""
     if not content:
         return ""
+    # 移除 thinking 块
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
-    content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+
+    # 压缩代码块：保留语言标记+前后关键行，中间省略
+    def _compress_code_block(m):
+        block = m.group(0)
+        lines = block.split('\n')
+        if len(lines) <= 8:
+            return block
+        # 保留开头 ```lang 和前几行，结尾后几行和 ```
+        head = lines[:4]
+        tail = lines[-3:]
+        return '\n'.join(head + ['[... code omitted ...]'] + tail)
+
+    content = re.sub(r'```.*?```', _compress_code_block, content, flags=re.DOTALL)
+
+    # 移除纯命令行（无中文的 shell 命令）
     content = re.sub(
         r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
         '', content, flags=re.MULTILINE,
@@ -1758,6 +1775,7 @@ class DistillationEngine:
         """
         result = DistillationResult(session_id=session_id)
         meta = meta or {}
+        result.source = meta.get("source", "")
 
         # ===== L1: 噪音过滤 =====
         filtered, noise_stats = self._noise_filter.filter(messages)
@@ -1893,7 +1911,7 @@ class DistillationEngine:
                 counter += 1
             seen_slugs.add(slug)
             page_id = slug
-            page_content = generate_wiki_page(fragment, result.session_id, session_coverage=result.session_coverage)
+            page_content = generate_wiki_page(fragment, result.session_id, source=result.source, session_coverage=result.session_coverage)
             file_path = self.inbox_dir / f"{page_id}.md"
             try:
                 file_path.write_text(page_content, encoding="utf-8")

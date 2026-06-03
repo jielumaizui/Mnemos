@@ -645,6 +645,31 @@ class EventBus:
         conn.commit()
         return cursor.rowcount
 
+    def archive_no_consumer_events(self) -> int:
+        """归档当前无消费者的事件（减少 pending 堆积）"""
+        with self._handlers_lock:
+            consumer_types = set(self._handlers.keys())
+            has_wildcard = "*" in self._handlers
+        if has_wildcard:
+            return 0
+        conn = self._get_conn()
+        # 获取所有 pending 的事件类型
+        rows = conn.execute(
+            "SELECT DISTINCT event_type FROM events WHERE status = 'pending'"
+        ).fetchall()
+        archived = 0
+        for (event_type,) in rows:
+            if event_type not in consumer_types:
+                cursor = conn.execute(
+                    "UPDATE events SET status = 'archived' WHERE status = 'pending' AND event_type = ?",
+                    (event_type,),
+                )
+                archived += cursor.rowcount
+        conn.commit()
+        if archived > 0:
+            logger.info(f"[EventBus] 归档 {archived} 个无消费者事件")
+        return archived
+
     # ========== 旧文件系统接口（deprecated） ==========
 
     def poll(self, event_types: Optional[List[str]] = None, limit: int = 100) -> List[Event]:

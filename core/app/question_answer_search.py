@@ -41,6 +41,22 @@ class QuestionAnswerSearch:
         context = self._results_to_context(results)
         snippets = self._extract_answer_snippets(context, question, qtype)
 
+        # Fallback：如果搜索结果明显相关但 snippet 评分不够，至少返回 top result 摘要
+        if not snippets and results:
+            top = results[0]
+            # 检查标题是否包含 query 核心 token（强相关信号）
+            title_lower = (top.title or "").lower()
+            q_core = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', self._normalize_question(question)))
+            if q_core and any(kw in title_lower for kw in q_core):
+                fallback_text = top.snippet or top.title or ""
+                if len(fallback_text) > 500:
+                    fallback_text = fallback_text[:500] + "..."
+                snippets.append({
+                    "text": fallback_text,
+                    "source": str(top.page_path),
+                    "score": 0.55,
+                })
+
         # 4. 排序和格式化
         results = []
         for snippet in snippets[:top_k]:
@@ -66,15 +82,35 @@ class QuestionAnswerSearch:
             )
         ] if context else []
 
-    @staticmethod
-    def _results_to_context(results: List[SearchResult]) -> str:
+    def _results_to_context(self, results: List[SearchResult]) -> str:
+        """将搜索结果转换为 QA 上下文，回读页面正文（过滤 frontmatter）"""
         lines = []
         for result in results:
             lines.append(f"### {result.title}")
             lines.append(f"> 来源: {result.page_path}")
             if result.freshness_alert:
                 lines.append(f"> 新鲜度提醒: {result.freshness_alert.message}")
-            lines.append(result.snippet)
+            # 优先使用 snippet，但如果 snippet 过短或像是 frontmatter，尝试回读正文
+            snippet = result.snippet or ""
+            if len(snippet) < 100 or snippet.startswith("---"):
+                try:
+                    page_path = self.wiki_dir / result.page_path
+                    if page_path.exists():
+                        full = page_path.read_text(encoding="utf-8", errors="ignore")
+                        # 去掉 frontmatter
+                        if full.startswith("---"):
+                            parts = full.split("---", 2)
+                            if len(parts) >= 3:
+                                full = parts[2]
+                        # 去掉 ## 来源追踪 等尾部区域
+                        for marker in ["## 来源追踪", "## AI 关联扩充"]:
+                            idx = full.find(marker)
+                            if idx > 0:
+                                full = full[:idx]
+                        snippet = full.strip()
+                except Exception:
+                    pass
+            lines.append(snippet)
             lines.append("")
         return "\n".join(lines)
 
@@ -198,6 +234,13 @@ class QuestionAnswerSearch:
         union = q_keywords | p_keywords
         base_score = len(intersection) / len(union) if union else 0
 
+        # exact match 保护：关键 token 直接命中给予强 boost
+        exact_bonus = 0.0
+        for kw in q_keywords:
+            if kw in text:
+                exact_bonus += 0.15
+        exact_bonus = min(0.5, exact_bonus)
+
         # 问题类型加分
         type_bonus = 0.0
 
@@ -247,7 +290,7 @@ class QuestionAnswerSearch:
         elif length > 300:
             length_factor = 0.9
 
-        return min(1.0, (base_score * 0.5 + type_bonus) * length_factor)
+        return min(1.0, (base_score * 0.5 + exact_bonus + type_bonus) * length_factor)
 
     def answer(self, question: str) -> Optional[Dict]:
         """

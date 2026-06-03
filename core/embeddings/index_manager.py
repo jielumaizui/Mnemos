@@ -173,6 +173,20 @@ class EmbeddingIndexManager:
 
         total_changes = len(to_add) + len(to_update) + len(to_remove)
         if total_changes == 0:
+            # 无变更但需确保索引已加载（否则 search 会失败）
+            if self._index is None and HNSWLIB_AVAILABLE and self._index_path.exists():
+                try:
+                    n_total = len(current_paths)
+                    index = hnswlib.Index(space="cosine", dim=self.DIM)
+                    index.load_index(
+                        str(self._index_path),
+                        max_elements=max(n_total * 2, 100)
+                    )
+                    index.set_ef(self.EF_SEARCH)
+                    self._index = index
+                    logger.debug("[Embedding] 加载已有 hnswlib 索引")
+                except Exception as e:
+                    logger.warning(f"[Embedding] 加载已有索引失败，将重建: {e}")
             return {"added": 0, "updated": 0, "removed": 0, "total": len(current_paths), "status": "no_change"}
 
         logger.info(

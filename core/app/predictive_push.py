@@ -303,22 +303,28 @@ class PredictivePush:
         topic_lower = signal.topic.lower()
         topic_tokens = set(re.findall(r'[a-z0-9]+', topic_lower))
 
+        def _result_get(result, key, default=None):
+            """兼容 dataclass 和 dict 的字段读取"""
+            if isinstance(result, dict):
+                return result.get(key, default)
+            return getattr(result, key, default)
+
         def _relevance_gate(result) -> bool:
             """检查搜索结果是否与主题真正相关"""
             # 语义召回的结果：用 semantic_score 直接判断，放宽 token 匹配
-            semantic_score = getattr(result, "relevance", 0.0) or result.get("relevance", 0.0)
-            if getattr(result, "match_type", "") == "semantic" or result.get("match_type") == "semantic":
+            semantic_score = _result_get(result, "relevance", 0.0)
+            if _result_get(result, "match_type", "") == "semantic":
                 if semantic_score >= 0.72:  # bge-m3 语义阈值
                     return True
                 return False
 
             # score 阈值
-            score = getattr(result, "score", 0.0) or result.get("score", 0.0)
+            score = _result_get(result, "score", 0.0)
             if score < 0.55:
                 return False
             # title/snippet 必须包含至少一个主题 token
-            title = (getattr(result, "title", "") or result.get("title", "")).lower()
-            snippet = (getattr(result, "snippet", "") or result.get("content", "")).lower()
+            title = _result_get(result, "title", "").lower()
+            snippet = (_result_get(result, "snippet", "") or _result_get(result, "content", "")).lower()
             combined = title + " " + snippet
             matched_tokens = [t for t in topic_tokens if t in combined and len(t) >= 2]
             if not matched_tokens:
