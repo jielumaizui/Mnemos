@@ -41,6 +41,9 @@ class SearchResult:
     source: str = ""
     last_modified: str = ""
     match_source: str = ""  # keyword / semantic / relation / graph / hybrid / fallback
+    page_embedding_score: float = 0.0
+    relation_score: float = 0.0
+    keyword_score: float = 0.0
 
     @property
     def page_title(self) -> str:
@@ -81,8 +84,9 @@ class ContextAwareSearch:
         context = context or {}
         limit = limit or self.MAX_RESULTS
 
-        # 0. 语义召回（embedding 优先，现有功能 fallback）
+        # 0. 语义召回 + 关键词召回 并行执行，确保关键词命中不被关系 boost 淹没
         semantic_candidates = self._recall_from_embedding(query)
+        keyword_candidates = self._recall_from_files(query)
 
         # 检测是否处于降级检索模式
         from core.config import get_config
@@ -92,18 +96,12 @@ class ContextAwareSearch:
         if fallback_mode:
             logger.debug("[ContextAwareSearch] 当前为降级检索（embedding 未启用），仅使用关键词/图谱召回")
 
-        # 1. 知识图谱召回（如果语义召回不足，补充传统召回）
-        if semantic_candidates:
-            candidates = semantic_candidates
-            # 如果语义结果少，补充 KG 召回做融合
-            if len(candidates) < limit:
-                kg_candidates = self._recall_from_kg(query)
-                candidates = self._merge_candidates(candidates, kg_candidates)
-        else:
-            candidates = self._recall_from_kg(query)
-            if not candidates:
-                # 回退到文件系统搜索
-                candidates = self._recall_from_files(query)
+        # 1. 融合：语义 + 关键词 + KG
+        candidates = self._merge_candidates(semantic_candidates, keyword_candidates)
+        # 如果语义结果少，补充 KG 召回做融合
+        if len(candidates) < limit:
+            kg_candidates = self._recall_from_kg(query)
+            candidates = self._merge_candidates(candidates, kg_candidates)
 
         if not candidates:
             return []
@@ -154,6 +152,9 @@ class ContextAwareSearch:
                 source=candidate.get("source", ""),
                 last_modified=candidate.get("last_modified", ""),
                 match_source=match_src,
+                page_embedding_score=candidate.get("page_embedding_score", 0.0),
+                relation_score=candidate.get("relation_score", 0.0),
+                keyword_score=candidate.get("keyword_score", 0.0),
             ))
 
         # 3. 过滤低质量内容
@@ -179,7 +180,7 @@ class ContextAwareSearch:
                 return []
 
             candidates = []
-            for rel_path, sim in semantic_results:
+            for rel_path, sim, page_sc, rel_sc in semantic_results:
                 rel_parts = Path(rel_path).parts
                 if any(part in self.EXCLUDED_DIRS or part.startswith(".") for part in rel_parts):
                     continue
@@ -197,6 +198,8 @@ class ContextAwareSearch:
                         "entity": title,
                         "frontmatter": fm or {},
                         "semantic_score": sim,
+                        "page_embedding_score": page_sc,
+                        "relation_score": rel_sc,
                         "match_type": "semantic",
                     })
                 except Exception:
@@ -220,8 +223,20 @@ class ContextAwareSearch:
             if not path:
                 continue
             if path in seen:
-                # 同时被语义和传统召回命中，标记为 hybrid
-                seen[path]["match_type"] = "hybrid"
+                # 同时被语义和传统召回命中，标记为 hybrid，并保留关键词相关度
+                existing = seen[path]
+                existing["match_type"] = "hybrid"
+                existing["_has_keyword_match"] = True
+                # 保留关键词召回的 confidence / verification 等更丰富的字段
+                for key in ["confidence", "verification", "source", "last_modified", "keyword_score"]:
+                    if key in c and (key not in existing or not existing.get(key)):
+                        existing[key] = c[key]
+                # hybrid 时保留语义分解分数（如果语义侧有的话）
+                for key in ["page_embedding_score", "relation_score"]:
+                    if key in existing and existing.get(key, 0.0) > 0.0:
+                        pass  # 保留语义侧已有分数
+                    elif key in c:
+                        existing[key] = c[key]
             else:
                 seen[path] = c
                 merged.append(c)
@@ -274,7 +289,9 @@ class ContextAwareSearch:
                             search_text += " " + val.lower()
                         elif isinstance(val, list):
                             search_text += " " + " ".join(str(v).lower() for v in val)
-                if any(kw in search_text for kw in keywords):
+                matched = [kw for kw in keywords if kw in search_text]
+                if matched:
+                    keyword_score = len(matched) / len(keywords) if keywords else 0.0
                     # 过滤 pending-verification 页面（未验证的知识不进入搜索主库）
                     verification = ""
                     confidence = 0.5
@@ -295,6 +312,7 @@ class ContextAwareSearch:
                         "source": source,
                         "confidence": confidence,
                         "last_modified": datetime.fromtimestamp(md_file.stat().st_mtime).isoformat() if md_file.exists() else "",
+                        "keyword_score": keyword_score,
                         "match_type": "keyword",
                     })
                     if len(candidates) >= 20:
@@ -307,13 +325,10 @@ class ContextAwareSearch:
 
     def _compute_relevance(self, query: str, candidate: Dict) -> float:
         """计算查询与候选内容的相关性（纳入 frontmatter 中文字段）"""
-        # 语义召回的结果直接使用语义相似度作为 relevance
-        if candidate.get("match_type") == "semantic":
-            return candidate.get("semantic_score", 0.0)
-
         keywords = self._query_terms(query)
         content = candidate.get("content", "").lower()
         title = candidate.get("title", "").lower()
+        path_text = candidate.get("path", "").lower()
 
         # 收集 frontmatter 中的中文搜索字段
         fm_text = ""
@@ -328,13 +343,34 @@ class ContextAwareSearch:
 
         title_matches = sum(1 for kw in keywords if kw in title or kw in fm_text)
         content_matches = sum(1 for kw in keywords if kw in content or kw in fm_text)
+        path_matches = sum(1 for kw in keywords if kw in path_text)
 
         if not keywords:
             return 0.0
 
         # 标题/frontmatter 匹配权重更高
-        raw = (title_matches * 2 + content_matches) / (len(keywords) * 3)
-        return min(raw, 1.0)
+        raw = (title_matches * 2 + content_matches + path_matches) / (len(keywords) * 3)
+        keyword_relevance = min(raw, 1.0)
+
+        # 语义召回的结果：如果关键词完全不命中，大幅降级，避免关系 boost 淹没关键词
+        if candidate.get("match_type") == "semantic":
+            semantic_score = candidate.get("semantic_score", 0.0)
+            if keyword_relevance < 0.1:
+                # 纯语义结果但无关键词命中：relevance 最多给语义分的 30%
+                return semantic_score * 0.3
+            # 有少量关键词命中，语义分与关键词分加权
+            return max(semantic_score * 0.5, keyword_relevance)
+
+        # hybrid / keyword 结果：关键词相关性保底
+        if candidate.get("match_type") in ("hybrid", "keyword"):
+            # exact match 保护：如果核心 token 出现在标题或路径中，relevance 至少 0.8
+            core_terms = [kw for kw in keywords if len(kw) >= 3]
+            exact_hits = sum(1 for kw in core_terms if kw in title or kw in path_text or kw in fm_text)
+            if core_terms and exact_hits / len(core_terms) >= 0.5:
+                keyword_relevance = max(keyword_relevance, 0.8)
+            return keyword_relevance
+
+        return keyword_relevance
 
     def _compute_confidence(self, candidate: Dict) -> float:
         """计算候选页面的置信度"""

@@ -20,13 +20,22 @@ logger = logging.getLogger(__name__)
 PERFORMANCE_TIERS: Dict[str, Dict[str, Any]] = {
     "eco": {
         "embedding": {"enabled": False, "use_rerank": False},
-        "capture": {"max_payload_bytes": 100000, "max_workers": 2},
-        "distill": {"max_tasks_per_cycle": 2, "token_budget_total": 8000},
-        "scheduler": {"worker_threads": 2},
-        "daemon": {"services": {"distill_merge": False, "persona_analyzer": False}},
+        "capture": {"max_payload_bytes": 100000, "max_workers": 1},
+        "distill": {"max_tasks_per_cycle": 1, "token_budget_total": 4000},
+        "scheduler": {"worker_threads": 1},
+        "daemon": {
+            "services": {
+                "distill_merge": False,
+                "persona_analyzer": False,
+                "signal_collector": False,
+                "event_bus": False,
+                "inbox_scanner": False,
+                "capture_worker": False,
+            }
+        },
     },
     "default": {
-        "embedding": {"enabled": True, "use_rerank": False},
+        "embedding": {"enabled": True, "use_rerank": True},
         "capture": {"max_payload_bytes": 200000, "max_workers": 4},
         "distill": {"max_tasks_per_cycle": 5, "token_budget_total": 16000},
         "scheduler": {"worker_threads": 4},
@@ -114,6 +123,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_tasks_per_cycle": 5,
         "max_collect_per_cycle": 20,
         "min_task_interval_seconds": 1.0,
+        "poll_interval_seconds": 60,
+        "tick_interval_seconds": 300,
     },
     # === 知识图谱常量 ===
     "knowledge_graph": {
@@ -194,6 +205,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_latency_ms": 10,
         "queue_depth_alert": 1000,
         "max_queue_depth": 10000,
+        "poll_interval_seconds": 10,
         "max_recover_events": 1000,
         "dead_letter_alert": 10,
         "max_retries": 5,
@@ -234,7 +246,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "api_key": "",                 # 用户填写
         "embedding_model": "BAAI/bge-m3",
         "rerank_model": "BAAI/bge-reranker-v2-m3",
-        "use_rerank": False,           # 是否启用重排（额外消耗）
+        "use_rerank": False,            # 是否启用重排（通用版默认关闭）
         "ttl_days": 7,
         "similarity_threshold": 0.72,  # 语义相似度阈值（bge-m3 建议 0.72）
         "index_interval_hours": 24,    # 自动重建索引间隔

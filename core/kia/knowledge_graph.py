@@ -206,6 +206,14 @@ class KnowledgeGraph:
             self._event_handler = KGEventHandler()
         return self._event_handler
 
+    @property
+    def _rel_emb_mgr(self):
+        """RelationEmbeddingManager（延迟初始化）"""
+        if not hasattr(self, "_rel_emb_mgr_instance"):
+            from core.embeddings.relation_manager import RelationEmbeddingManager
+            self._rel_emb_mgr_instance = RelationEmbeddingManager(db_path=self.db_path)
+        return self._rel_emb_mgr_instance
+
     def _init_db(self):
         """初始化数据库"""
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
@@ -220,12 +228,47 @@ class KnowledgeGraph:
 
     # ========== CRUD ==========
 
+    def _build_relation_context(self, relation: Relation) -> str:
+        """为关系生成富文本上下文，用于 embedding"""
+        parts = []
+        rel_desc = RELATION_META.get(relation.relation_type, {}).get(
+            "description", relation.relation_type.value
+        )
+        # 用自然语言描述关系，避免模板句
+        parts.append(f"{relation.source} 与 {relation.target}: {rel_desc}")
+
+        # 融入证据片段
+        if relation.evidence:
+            for ev in relation.evidence[:2]:
+                if ev.content:
+                    snippet = ev.content[:200].replace("\n", " ")
+                    parts.append(f"证据: {snippet}")
+
+        # 融入置信度信息（低置信度关系会自然被区分）
+        if relation.confidence > 0:
+            parts.append(f"置信度 {relation.confidence:.0%}")
+
+        return "；".join(parts)
+
+    def _sync_relation_embedding(self, rel_id: int, context: str) -> bool:
+        """将关系上下文同步到向量索引（软失败：不阻断主流程）"""
+        try:
+            return self._rel_emb_mgr.add_relation_context(rel_id, context)
+        except Exception as e:
+            logger.debug(f"[KG] relation embedding 同步失败 rel_id={rel_id}: {e}")
+            return False
+
     def add_relation(self, relation: Relation) -> bool:
         """
         添加关系
 
-        自动处理对称关系：如果关系是对称的，同时添加反向关系
+        自动处理对称关系：如果关系是对称的，同时添加反向关系。
+        同时自动生成富文本 context 并同步到 relation embedding 索引。
         """
+        # 自动生成 context（若为空）
+        if not relation.context or not relation.context.strip():
+            relation.context = self._build_relation_context(relation)
+
         try:
             with self._conn() as conn:
                 # 插入主关系
@@ -256,6 +299,7 @@ class KnowledgeGraph:
                     )
 
                 # 对称关系：自动添加反向
+                reverse_rel_id = None
                 if relation.is_symmetric and relation.source != relation.target:
                     cursor = conn.execute(
                         """INSERT OR REPLACE INTO relations
@@ -266,15 +310,22 @@ class KnowledgeGraph:
                          relation.context,
                          datetime.now(timezone.utc).isoformat()[:19])
                     )
+                    reverse_rel_id = cursor.lastrowid
                     # 同步 FTS5 索引
                     fts_text = f"{relation.target} {relation.source} {relation.relation_type.value}"
                     conn.execute(
                         "INSERT INTO relations_fts(rowid, content) VALUES (?, ?)",
-                        (cursor.lastrowid, fts_text)
+                        (reverse_rel_id, fts_text)
                     )
 
                 conn.commit()
-                return True
+
+            # 事务外同步 embedding（软失败，不阻塞主流程）
+            self._sync_relation_embedding(rel_id, relation.context)
+            if reverse_rel_id:
+                self._sync_relation_embedding(reverse_rel_id, relation.context)
+
+            return True
         except sqlite3.Error:
             return False
 
@@ -324,6 +375,76 @@ class KnowledgeGraph:
                 return True
         except sqlite3.Error:
             return False
+
+    def rebuild_relation_index(self, batch_size: int = 50) -> dict:
+        """
+        批量重建所有关系的 embedding 索引。
+
+        对数据库中所有 relation：
+        1. 若 context 为空或模板句，自动生成富文本 context 并更新 DB
+        2. 调用 RelationEmbeddingManager.add_relation_context(force=True) 重建 embedding
+
+        Returns:
+            {"total": N, "updated": M, "failed": K, "skipped": S}
+        """
+        stats = {"total": 0, "updated": 0, "failed": 0, "skipped": 0}
+        try:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT id, source, target, relation_type, strength, confidence, source_method, context "
+                    "FROM relations ORDER BY id"
+                ).fetchall()
+        except Exception as e:
+            logger.warning(f"[KG] 读取关系失败: {e}")
+            return stats
+
+        stats["total"] = len(rows)
+        for row in rows:
+            rel_id, source, target, rel_type_str, strength, confidence, source_method, context = row
+            try:
+                rel_type = RelationType(rel_type_str)
+            except ValueError:
+                stats["skipped"] += 1
+                continue
+
+            relation = Relation(
+                source=source,
+                target=target,
+                relation_type=rel_type,
+                strength=strength or 0.5,
+                confidence=confidence or 0.5,
+                source_method=source_method or "auto",
+                context=context or "",
+            )
+
+            # 自动生成/更新 context（若为空或为旧模板句）
+            needs_update = False
+            if not relation.context or not relation.context.strip():
+                relation.context = self._build_relation_context(relation)
+                needs_update = True
+            elif "关联类型为" in relation.context or relation.context.startswith("页面"):
+                # 旧模板句检测，替换为富文本
+                relation.context = self._build_relation_context(relation)
+                needs_update = True
+
+            if needs_update:
+                try:
+                    with self._conn() as conn:
+                        conn.execute(
+                            "UPDATE relations SET context=? WHERE id=?",
+                            (relation.context, rel_id)
+                        )
+                        conn.commit()
+                except Exception as e:
+                    logger.debug(f"[KG] 更新 context 失败 rel_id={rel_id}: {e}")
+
+            # 强制重建 embedding
+            if self._sync_relation_embedding(rel_id, relation.context):
+                stats["updated"] += 1
+            else:
+                stats["failed"] += 1
+
+        return stats
 
     def get_relations(self, page: str,
                       relation_type: RelationType = None,

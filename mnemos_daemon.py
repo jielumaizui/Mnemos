@@ -589,17 +589,19 @@ def service_distill_and_merge(stop_event: threading.Event):
     logger.info("[蒸馏合并] 服务启动")
     from core.config import get_config
 
-    poll_interval = 60        # 60秒轮询一次
-    tick_interval = 5 * 60    # 5分钟运行一次 KIA 调度
+    config = get_config()
+    poll_interval = max(10, _config_int(config, "distill.poll_interval_seconds", 60))
+    tick_interval = max(60, _config_int(config, "distill.tick_interval_seconds", 300))
     tick_counter = 0
 
     # 初始化 KnowledgeScheduler
     scheduler = None
     try:
         from core.kia.chronos import KnowledgeScheduler
-        scheduler = KnowledgeScheduler(max_workers=4)
+        kia_max_workers = max(1, _config_int(config, "scheduler.worker_threads", 4))
+        scheduler = KnowledgeScheduler(max_workers=kia_max_workers)
         scheduler.register_all_default_steps()
-        logger.info("[蒸馏合并] KnowledgeScheduler 已初始化（16 步骤）")
+        logger.info(f"[蒸馏合并] KnowledgeScheduler 已初始化（max_workers={kia_max_workers}）")
     except Exception as e:
         logger.warning(f"[蒸馏合并] KnowledgeScheduler 初始化失败: {e}，回退到 Orchestrator")
 
@@ -704,6 +706,7 @@ def service_distill_and_merge(stop_event: threading.Event):
                         skip_count = sum(1 for r in results.values() if r.get("status") == "skipped")
                         logger.info(f"[蒸馏合并] KIA tick: {ok_count}成功, {err_count}失败, {skip_count}跳过")
                     # KIA tick 后额外运行 Teiresias 推送引擎
+                    orch = None
                     if push_context:
                         try:
                             from core.orchestrator import Orchestrator
@@ -715,6 +718,7 @@ def service_distill_and_merge(stop_event: threading.Event):
                             pass
                 else:
                     # 回退到 Orchestrator
+                    orch = None
                     from core.orchestrator import Orchestrator
                     orch = Orchestrator(wiki_dir=get_config().wiki_dir)
                     report = orch.run_full(push_context=push_context)
@@ -723,6 +727,12 @@ def service_distill_and_merge(stop_event: threading.Event):
                     push_res = report.get("push", {})
                     if push_res.get("triggered"):
                         logger.info(f"[推送] Teiresias 触发推送: {push_res.get('reason', '')}")
+
+                # tick 后释放 Orchestrator 等大对象，避免内存累积
+                if orch is not None:
+                    del orch
+                import gc
+                gc.collect()
 
                 # 同 tick 内运行 JobScheduler（KG 维护任务等）
                 if job_scheduler:
@@ -744,6 +754,17 @@ def service_distill_and_merge(stop_event: threading.Event):
 
         stop_event.wait(timeout=poll_interval)
 
+    # 服务停止时清理大对象
+    if scheduler is not None:
+        del scheduler
+    if job_scheduler is not None:
+        del job_scheduler
+    if worker is not None:
+        del worker
+    if memos_client is not None:
+        del memos_client
+    import gc
+    gc.collect()
     logger.info("[蒸馏合并] 服务已停止")
 
 
@@ -753,7 +774,9 @@ def service_heartbeat(stop_event: threading.Event):
     每60秒运行一次
     """
     logger.info("[心跳] 服务启动")
-    interval = 60
+    from core.config import get_config
+    config = get_config()
+    interval = max(10, _config_int(config, "ops.health_check_interval", 60))
 
     # 在循环外初始化评分器，避免每次循环新建
     scorer = None
@@ -911,13 +934,28 @@ def service_heartbeat(stop_event: threading.Event):
                     # 空查询验证模块可用
                     _ = qa.search("", limit=1)
                     logger.debug("[问答检索] 模块可用")
+                    del qa
                 except Exception:
                     pass
+
+            # 每小时强制垃圾回收，防止长期运行内存膨胀
+            if heartbeat_count % 60 == 0:
+                import gc
+                gc.collect()
         except Exception as e:
             logger.error(f"[心跳] 运行失败: {e}")
 
         stop_event.wait(timeout=interval)
 
+    # 服务停止时清理
+    if scorer is not None:
+        del scorer
+    if daemon is not None:
+        del daemon
+    if distill_scorer is not None:
+        del distill_scorer
+    import gc
+    gc.collect()
     logger.info("[心跳] 服务已停止")
 
 
@@ -929,7 +967,8 @@ def service_inbox_scanner(stop_event: threading.Event):
     logger.info("[收件箱] 服务启动")
     from core.config import get_config
 
-    interval = 10 * 60  # 10分钟
+    config = get_config()
+    interval = max(60, _config_int(config, "ops.inbox_scan_interval_seconds", 600))
 
     # 在循环外初始化处理器，避免每次循环新建
     try:
@@ -957,6 +996,11 @@ def service_inbox_scanner(stop_event: threading.Event):
 
         stop_event.wait(timeout=interval)
 
+    # 服务停止时清理
+    if inbox is not None:
+        del inbox
+    import gc
+    gc.collect()
     logger.info("[收件箱] 服务已停止")
 
 
@@ -968,7 +1012,8 @@ def service_signal_collector(stop_event: threading.Event):
     """
     logger.info("[画像] 服务启动")
 
-    interval = 60 * 60  # 1小时
+    config = get_config()
+    interval = max(60, _config_int(config, "ops.persona_analysis_interval_seconds", 3600))
     MIN_SIGNALS_FOR_ANALYSIS = 10  # 触发画像分析的最小信号数
 
     while not stop_event.is_set():
@@ -1015,11 +1060,21 @@ def service_signal_collector(stop_event: threading.Event):
                             )
                             store.insert_session_signal(session_signal)
                             total_signals += 1
+                    # 释放信号列表
+                    del signals
                 except Exception as e:
                     logger.warning(f"[画像] {agent.name} 信号采集失败: {e}")
 
             if total_signals > 0:
-                logger.info(f"[画像] 信号采集完成: {total_signals}条 (来自 {len(adapters)} 个 Agent)")
+                logger.info(f"[画像] 信号采集完成: {total_signals}条")
+
+            # 释放大对象引用
+            try:
+                del adapters
+            except NameError:
+                pass
+            import gc
+            gc.collect()
 
             # 采集后检查信号总数，达到阈值时自动触发画像分析
             stats = store.get_signal_stats(days=30)
@@ -1617,7 +1672,9 @@ def service_event_bus(stop_event: threading.Event):
     """
     logger.info("[事件总线] 服务启动")
 
-    interval = 10  # 10秒
+    from core.config import get_config
+    config = get_config()
+    interval = max(1, _config_int(config, "event_bus.poll_interval_seconds", 10))
 
     from core.mnemos_bus import EventProcessor, EventBus, _get_bus
 
@@ -1784,9 +1841,11 @@ def service_event_bus(stop_event: threading.Event):
     def _handle_message_exchanged(event):
         """消息交换 → 直接触发 KIA 守护"""
         try:
-            from core.kia.chronos import KnowledgeScheduler
-            scheduler = KnowledgeScheduler()
-            result = scheduler.trigger_event("message.exchanged", event.payload)
+            nonlocal _kia_scheduler
+            if _kia_scheduler is None:
+                from core.kia.chronos import KnowledgeScheduler
+                _kia_scheduler = KnowledgeScheduler()
+            result = _kia_scheduler.trigger_event("message.exchanged", event.payload)
             if result.get("status") == "error":
                 logger.warning(f"[事件总线] KIA guard: {result.get('error')}")
         except Exception as e:
@@ -1830,6 +1889,13 @@ def service_event_bus(stop_event: threading.Event):
 
         stop_event.wait(timeout=interval)
 
+    # 服务停止时清理
+    try:
+        bus.stop_dispatch()
+    except Exception:
+        pass
+    import gc
+    gc.collect()
     logger.info("[事件总线] 服务已停止")
 
 

@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .index_manager import EmbeddingIndexManager
 from .relation_manager import RelationEmbeddingManager
-from .siliconflow_client import SiliconFlowEmbeddingClient
+# SiliconFlowEmbeddingClient imported lazily where needed
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ class DualIndexRetriever:
         self.wiki_base = wiki_base
         self.content_weight = content_weight
         self.relation_weight = relation_weight
+
+        from core.config import get_config
+        self._use_rerank = get_config().get("embedding.use_rerank", False)
 
         # 懒加载：只有未传入参数时才自动创建；显式传入 None 表示禁用
         self._page_index_lazy = page_index is _UNSET
@@ -87,14 +90,16 @@ class DualIndexRetriever:
         query: str,
         top_k: int = 10,
         similarity_threshold: float = None,
-        use_rerank: bool = True,
-    ) -> List[Tuple[str, float]]:
+        use_rerank: bool = None,
+    ) -> List[Tuple[str, float, float, float]]:
         """
         双索引融合检索。
 
         Returns:
-            [(页面相对路径, 融合分数), ...] 按分数降序
+            [(页面相对路径, 融合分数, 页面语义分, 关系boost分), ...] 按融合分数降序
         """
+        if use_rerank is None:
+            use_rerank = self._use_rerank
         self._ensure_page_index()
         self._ensure_relation_manager()
 
@@ -132,19 +137,24 @@ class DualIndexRetriever:
             except Exception as e:
                 logger.debug(f"[DualIndex] 关联检索失败: {e}")
 
+        # relation boost 封顶：单页不超过 0.25，避免关系噪音压过内容命中
+        for page in relation_boost:
+            relation_boost[page] = min(relation_boost[page], 0.25)
+
         # --- Phase 3: 融合得分 ---
         all_pages = set(content_scores.keys()) | set(relation_boost.keys())
         if not all_pages:
             return []
 
-        fused_scores: Dict[str, float] = {}
+        fused_scores: Dict[str, Tuple[float, float, float]] = {}
         for page in all_pages:
             c_score = content_scores.get(page, 0.0)
             r_score = relation_boost.get(page, 0.0)
-            fused_scores[page] = self.content_weight * c_score + r_score
+            fused = self.content_weight * c_score + r_score
+            fused_scores[page] = (fused, c_score, r_score)
 
         # --- Phase 4: Rerank 精排 ---
-        top_candidates = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
+        top_candidates = sorted(fused_scores.items(), key=lambda x: x[1][0], reverse=True)
 
         if use_rerank and len(top_candidates) > top_k and self.page_index.client is not None:
             try:
@@ -152,20 +162,22 @@ class DualIndexRetriever:
             except Exception as e:
                 logger.debug(f"[DualIndex] Rerank 失败，回退到融合排序: {e}")
 
-        return top_candidates[:top_k]
+        return [(path, fused, page_sc, rel_sc) for path, (fused, page_sc, rel_sc) in top_candidates[:top_k]]
 
     def _rerank_candidates(
         self,
         query: str,
-        candidates: List[Tuple[str, float]],
+        candidates: List[Tuple[str, Tuple[float, float, float]]],
         top_k: int,
-    ) -> List[Tuple[str, float]]:
-        """对融合后的候选结果调用 Rerank API 精排"""
+    ) -> List[Tuple[str, float, float, float]]:
+        """对融合后的候选结果调用 Rerank API 精排，保留 page/rel 分解分数"""
         wiki_base = self.wiki_base or self.page_index.wiki_base
         documents = []
         valid_paths = []
+        score_map: Dict[str, Tuple[float, float]] = {}
 
-        for rel_path, _ in candidates[:top_k * 2]:
+        for rel_path, (_, page_sc, rel_sc) in candidates[:top_k * 2]:
+            score_map[rel_path] = (page_sc, rel_sc)
             page_path = wiki_base / rel_path
             try:
                 text = page_path.read_text(encoding="utf-8", errors="ignore")
@@ -182,14 +194,20 @@ class DualIndexRetriever:
                 continue
 
         if not documents:
-            return candidates[:top_k]
+            return [(path, fused, page_sc, rel_sc) for path, (fused, page_sc, rel_sc) in candidates[:top_k]]
 
         reranked = self.page_index.client.rerank(
             query=query,
             documents=documents,
             top_n=top_k,
         )
-        return [(valid_paths[idx], score) for idx, score in reranked if idx < len(valid_paths)]
+        results = []
+        for idx, score in reranked:
+            if idx < len(valid_paths):
+                path = valid_paths[idx]
+                page_sc, rel_sc = score_map.get(path, (0.0, 0.0))
+                results.append((path, score, page_sc, rel_sc))
+        return results
 
     def get_stats(self) -> dict:
         """返回双索引统计"""

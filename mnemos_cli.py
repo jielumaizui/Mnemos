@@ -308,7 +308,7 @@ def cmd_doctor(args):
     print(f"性能档位: {tier}")
     tier_desc = {
         "eco": "节能模式 (embedding关闭, rerank关闭, 低并发)",
-        "default": "默认模式 (embedding开启, rerank关闭, 标准并发)",
+        "default": "默认模式 (embedding开启, rerank开启, 标准并发)",
         "performance": "性能模式 (embedding开启, rerank开启, 高并发)",
         "dev": "开发模式 (全部开启, 最大并发, 调试用)",
     }
@@ -1098,6 +1098,40 @@ def cmd_sync(args):
         print("用法: mnemos sync {status|retry-failed}")
 
 
+def cmd_build_relation_index(args):
+    """重建关联上下文向量索引"""
+    try:
+        from core.kia.knowledge_graph import KnowledgeGraph
+        from core.embeddings.relation_manager import RelationEmbeddingManager
+        from core.config import get_config
+
+        config = get_config()
+        wiki_dir = config.wiki_dir
+        db_path = getattr(config, 'data_dir', Path.home() / '.mnemos') / 'knowledge_graph.db'
+
+        print("重建关联上下文向量索引...")
+        kg = KnowledgeGraph(db_path=str(db_path), wiki_base=str(wiki_dir))
+
+        # 先清理旧索引
+        rel_mgr = RelationEmbeddingManager(db_path=db_path)
+        stats_old = rel_mgr.get_stats()
+        print(f"  当前索引: {stats_old['total_relations']} 个 embedding")
+
+        # 批量重建
+        result = kg.rebuild_relation_index(batch_size=50)
+        print(f"  处理完成: {result['total']} 个关系")
+        print(f"  成功更新: {result['updated']} 个")
+        if result['failed'] > 0:
+            print(f"  失败: {result['failed']} 个")
+        if result['skipped'] > 0:
+            print(f"  跳过: {result['skipped']} 个")
+
+        stats_new = rel_mgr.get_stats()
+        print(f"  重建后索引: {stats_new['total_relations']} 个 embedding")
+    except Exception as e:
+        print(f"重建失败: {e}")
+
+
 def cmd_search(args):
     """上下文感知搜索"""
     try:
@@ -1117,7 +1151,10 @@ def cmd_search(args):
             if getattr(r, 'source', ''):
                 badges.append(f"来源:{r.source}")
             badge_str = f" ({', '.join(badges)})" if badges else ""
-            print(f"  {i}. [{r.score:.2f}] {r.title}{badge_str}")
+            score_detail = ""
+            if getattr(r, 'page_embedding_score', 0.0) > 0 or getattr(r, 'relation_score', 0.0) > 0:
+                score_detail = f" [p={r.page_embedding_score:.2f} r={r.relation_score:.2f} k={r.keyword_score:.2f}]"
+            print(f"  {i}. [{r.score:.2f}]{score_detail} {r.title}{badge_str}")
             if r.snippet:
                 snippet = r.snippet[:80].replace("\n", " ")
                 print(f"     {snippet}...")
@@ -1327,6 +1364,9 @@ def main():
     sync_sub.add_parser("status", help="查看同步状态")
     sync_sub.add_parser("retry-failed", help="重试失败的同步任务")
 
+    # build-relation-index
+    subparsers.add_parser("build-relation-index", help="重建关联上下文向量索引")
+
     # search
     search_parser = subparsers.add_parser("search", help="上下文感知搜索")
     search_parser.add_argument("query", help="搜索查询")
@@ -1378,6 +1418,8 @@ def main():
         cmd_sync(args)
     elif args.command == "search":
         cmd_search(args)
+    elif args.command == "build-relation-index":
+        cmd_build_relation_index(args)
     elif args.command == "wiki":
         cmd_wiki(args)
     elif args.command == "report":

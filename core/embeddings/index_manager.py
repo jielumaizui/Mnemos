@@ -58,7 +58,7 @@ class EmbeddingIndexManager:
     EF_CONSTRUCTION = 200
     EF_SEARCH = 50
     # 语义相似度阈值
-    SIMILARITY_THRESHOLD = 0.75
+    SIMILARITY_THRESHOLD = 0.5  # ANN 召回阈值：放宽以提升召回率，精排在融合/rerank 阶段完成
 
     def __init__(
         self,
@@ -68,9 +68,10 @@ class EmbeddingIndexManager:
     ):
         from core.config import get_config
 
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else get_config().wiki_dir
+        cfg = get_config()
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else cfg.wiki_dir
         self.index_dir = Path(index_dir).expanduser() if index_dir else (
-            get_config().data_dir / "embedding_index"
+            cfg.data_dir / "embedding_index"
         )
         self.index_dir.mkdir(parents=True, exist_ok=True)
 
@@ -78,6 +79,7 @@ class EmbeddingIndexManager:
         self._index = None
         self._meta: Dict[str, Dict] = {}  # path -> {"id": int, "mtime": float, "hash": str}
         self._memory_fallback: List[Tuple[str, List[float]]] = []  # hnswlib 不可用时使用
+        self._use_rerank = cfg.get("embedding.use_rerank", False)
 
         self._index_path = self.index_dir / "wiki_index.bin"
         self._meta_path = self.index_dir / "wiki_meta.json"
@@ -336,7 +338,7 @@ class EmbeddingIndexManager:
         query: str,
         top_k: int = 10,
         similarity_threshold: float = None,
-        use_rerank: bool = True,
+        use_rerank: bool = None,
     ) -> List[Tuple[str, float]]:
         """
         语义搜索（两阶段：ANN 召回 + Rerank 精排）
@@ -350,6 +352,8 @@ class EmbeddingIndexManager:
         Returns:
             [(页面相对路径, 相似度分数), ...] 按分数降序
         """
+        if use_rerank is None:
+            use_rerank = self._use_rerank
         threshold = similarity_threshold or self.SIMILARITY_THRESHOLD
 
         if self.client is None:
