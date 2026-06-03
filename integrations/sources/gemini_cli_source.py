@@ -85,8 +85,19 @@ class GeminiCliSource(AgentSource):
             ))
         return sessions
 
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": True,
+            "tool_results": True,
+            "reasoning": "unknown",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
+
     def parse_turns(self, session_path: Path) -> List[Turn]:
-        """解析 Gemini CLI JSONL 会话文件为 Turn 列表"""
+        """解析 Gemini CLI JSONL 会话文件为 Turn 列表 — P0-6 完整录入版"""
         turns = []
         messages = []
 
@@ -109,6 +120,10 @@ class GeminiCliSource(AgentSource):
         assistant_content = ""
         turn_number = 0
         turn_meta: Dict[str, Any] = {}
+        turn_tool_calls: List[Dict[str, Any]] = []
+        turn_tool_results: List[Dict[str, Any]] = []
+        turn_raw_events: List[Dict[str, Any]] = []
+        completeness_loss: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "").lower()
@@ -119,8 +134,25 @@ class GeminiCliSource(AgentSource):
             if parts and not content:
                 texts = []
                 for p in parts:
-                    if isinstance(p, dict) and "text" in p:
-                        texts.append(p["text"])
+                    if isinstance(p, dict):
+                        if "text" in p:
+                            texts.append(p["text"])
+                        elif "function_call" in p:
+                            fc = p["function_call"]
+                            turn_tool_calls.append({
+                                "name": fc.get("name", "unknown"),
+                                "input": fc.get("args", {}),
+                            })
+                        elif "function_response" in p:
+                            fr = p["function_response"]
+                            turn_tool_results.append({
+                                "tool_call_id": fr.get("id", ""),
+                                "content": str(fr.get("response", "")),
+                            })
+                        else:
+                            # 非 text 块入 raw_event_refs
+                            turn_raw_events.append({"role": role, "event_type": "part", "raw": p})
+                            completeness_loss.append(f"unknown_part:{list(p.keys())}")
                     elif isinstance(p, str):
                         texts.append(p)
                 content = "\n".join(texts)
@@ -132,11 +164,27 @@ class GeminiCliSource(AgentSource):
                         user_content=user_content,
                         assistant_content=assistant_content,
                         metadata=turn_meta,
+                        tool_calls=turn_tool_calls,
+                        tool_results=turn_tool_results,
+                        raw_event_refs=turn_raw_events,
+                        source_files=[str(session_path)],
+                        completeness={
+                            "visible_text": "full",
+                            "tool_results": "full" if turn_tool_results else "unavailable",
+                            "reasoning": "unavailable",
+                            "attachments": "unavailable",
+                            "truncated": False,
+                            "loss_reasons": completeness_loss,
+                        },
                     ))
                     turn_number += 1
                 user_content = str(content)
                 assistant_content = ""
                 turn_meta = {}
+                turn_tool_calls = []
+                turn_tool_results = []
+                turn_raw_events = []
+                completeness_loss = []
             elif role in ("assistant", "model"):
                 assistant_content = str(content)
                 turn_meta = {
@@ -150,6 +198,18 @@ class GeminiCliSource(AgentSource):
                 user_content=user_content,
                 assistant_content=assistant_content,
                 metadata=turn_meta,
+                tool_calls=turn_tool_calls,
+                tool_results=turn_tool_results,
+                raw_event_refs=turn_raw_events,
+                source_files=[str(session_path)],
+                completeness={
+                    "visible_text": "full",
+                    "tool_results": "full" if turn_tool_results else "unavailable",
+                    "reasoning": "unavailable",
+                    "attachments": "unavailable",
+                    "truncated": False,
+                    "loss_reasons": completeness_loss,
+                },
             ))
 
         return turns

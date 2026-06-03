@@ -85,13 +85,15 @@ class OpenClawSource(AgentSource):
         """
         解析 OpenClaw 语料文件为 Turn 列表。
         按行解析，将 User/Assistant 配对为 Turn。
+        修复：不同内部 session 的 turn_number 加偏移，避免 sync_log 冲突。
         """
         parsed_sessions = self._parse_corpus(session_path)
-        # 将所有 session 的 turn 合并返回（session_id 在 metadata 中保留）
         all_turns = []
-        for session_id, messages in parsed_sessions.items():
-            turns = self._pair_messages(messages, session_id)
+        session_idx = 0
+        for inner_session_id, messages in parsed_sessions.items():
+            turns = self._pair_messages(messages, inner_session_id, base_turn_number=session_idx * 1000)
             all_turns.extend(turns)
+            session_idx += 1
         return all_turns
 
     def _parse_corpus(self, corpus_path: Path) -> Dict[str, List[Dict[str, str]]]:
@@ -126,13 +128,13 @@ class OpenClawSource(AgentSource):
         return sessions
 
     def _pair_messages(
-        self, messages: List[Dict[str, str]], session_id: str
+        self, messages: List[Dict[str, str]], session_id: str, base_turn_number: int = 0
     ) -> List[Turn]:
         """将消息列表配对为 Turn 列表"""
         turns = []
         user_content = ""
         assistant_content = ""
-        turn_number = 0
+        turn_number = base_turn_number
 
         for msg in messages:
             role = msg.get("role", "")
@@ -164,9 +166,48 @@ class OpenClawSource(AgentSource):
 
         return turns
 
+    def get_session_state(self, session_info: SessionInfo) -> Optional[Dict[str, Any]]:
+        """OpenClaw 聚合状态：session-corpus 下所有日文件"""
+        corpus_dir = session_info.source_path.parent
+        files = list(corpus_dir.glob("*.txt"))
+        if not files:
+            return None
+        total_size = 0
+        max_mtime = 0
+        file_entries = []
+        for f in sorted(files):
+            try:
+                stat = f.stat()
+                total_size += stat.st_size
+                max_mtime = max(max_mtime, stat.st_mtime)
+                file_entries.append(f"{f.name}:{stat.st_size}:{stat.st_mtime}")
+            except OSError:
+                pass
+        import hashlib
+        fingerprint = hashlib.md5("|".join(file_entries).encode()).hexdigest()[:16]
+        return {
+            "mtime": max_mtime,
+            "size": total_size,
+            "file_count": len(files),
+            "fingerprint": fingerprint,
+        }
+
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "not_available",
+            "attachments": "not_available",
+            "raw_files": True,
+            "source_fidelity": "derived",
+        }
+
     def build_extra_tags(self, turn: Turn) -> List[str]:
         """OpenClaw 自定义标签"""
-        tags = []
+        tags = [
+            "source_fidelity=derived",
+        ]
         if turn.metadata.get("session_id"):
             tags.append(f"openclaw-session={turn.metadata['session_id'][:8]}")
         return tags

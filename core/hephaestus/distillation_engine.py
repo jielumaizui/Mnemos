@@ -34,6 +34,7 @@ from core.config import get_config
 from core.frontmatter import to_chinese_frontmatter, fm_get
 from core.kia.ingest_helpers import is_noise_message
 from core.llm_config import resolve_llm_api_config
+from core.hephaestus.distillation_prompts import PROMPT_VERSION
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,9 @@ class DistillationResult:
     session_coverage: str = ""
     # 来源 Agent
     source: str = ""
+    # 蒸馏输入模式（P0-5 覆盖率追踪）
+    distill_input_mode: str = ""
+    truncated: bool = False
 
 
 # ========== 内容清洗 ==========
@@ -213,22 +217,26 @@ def clean_message_content(content: str) -> str:
 
 def build_session_text(
     messages: List[Dict], max_chars: int = 24000,
+    per_message_limit: Optional[int] = None,
     out_meta: Optional[Dict] = None,
 ) -> str:
-    """从消息列表构建对话文本。
+    """从消息列表构建对话文本 — P0-5 三层蒸馏策略。
 
-    长会话处理策略（head-tail 截断）：
-    - 保留开头 30% 的上下文（背景、问题设定）
-    - 保留结尾 70% 的最新对话（关键决策、结论）
-    - 中间用省略标记标注被跳过的 turn 数量
-    - 单条消息仍限制 1000 字符，避免极端长消息撑爆上下文
+    策略选择（由 process() 根据总会话长度决定）：
+    1. 小会话（<=60000字符）: per_message_limit=None, max_chars=60000 — 完整输入
+    2. 中会长话（60000-500000字符）: per_message_limit=None, max_chars=100000 — 分块蒸馏
+    3. 超长会话（>500000字符）: per_message_limit=None, max_chars=24000 — head-tail + 结构摘要
 
     Args:
-        out_meta: 如果传入 dict，会将截断信息写入其中（total_turns, head_turns,
-                  tail_turns, omitted_turns, truncated）。
+        max_chars: 总会话长度上限
+        per_message_limit: 单条消息截断上限；None 表示不截断（默认），
+                          仅对极端长消息（>8000）自动截断以避免撑爆上下文
+        out_meta: 如果传入 dict，会将截断信息写入其中
     """
     lines = []
     message_truncations = []
+    # 默认不截断单条消息；只对极端长消息做保护性截断
+    auto_limit = per_message_limit if per_message_limit is not None else 8000
     for i, msg in enumerate(messages):
         role = msg.get("role", "unknown")
         content = msg.get("content", "").strip()
@@ -238,13 +246,13 @@ def build_session_text(
         if not content:
             continue
         original_len = len(content)
-        if len(content) > 1000:
-            content = content[:1000] + "...(truncated)"
+        if auto_limit and len(content) > auto_limit:
+            content = content[:auto_limit] + "...(truncated)"
             message_truncations.append({
                 "turn": i + 1,
                 "role": role,
                 "original_length": original_len,
-                "kept_length": 1000,
+                "kept_length": auto_limit,
                 "truncated": True,
             })
         else:
@@ -269,17 +277,17 @@ def build_session_text(
                 "omitted_turns": 0,
                 "truncated": False,
                 "message_truncations": message_truncations,
+                "distill_input_mode": "full",
             })
         return full_text
 
     # head-tail 智能截断：保留会话两端，标注省略范围
-    omission_marker_len = 80  # 预留省略标记长度
+    omission_marker_len = 80
     usable = max_chars - omission_marker_len
     head_limit = int(usable * 0.3)
     tail_limit = usable - head_limit
 
     head_text = full_text[:head_limit]
-    # 截断到完整的 turn 边界（最近的一个 \n\n）
     last_boundary = head_text.rfind("\n\n")
     if last_boundary > 0:
         head_text = head_text[:last_boundary]
@@ -289,7 +297,6 @@ def build_session_text(
     if first_boundary >= 0:
         tail_text = tail_text[first_boundary + 2:]
 
-    # 计算被省略的 turn 数（基于原始 lines）
     head_turns = head_text.count("\n\n") + 1 if head_text else 0
     tail_turns = tail_text.count("\n\n") + 1 if tail_text else 0
     omitted_turns = max(0, len(lines) - head_turns - tail_turns)
@@ -302,6 +309,7 @@ def build_session_text(
             "omitted_turns": omitted_turns,
             "truncated": True,
             "message_truncations": message_truncations,
+            "distill_input_mode": "head_tail",
         })
 
     return (
@@ -1519,7 +1527,9 @@ def _map_form_to_type(form: str) -> str:
 
 
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
-                       source: str = "", session_coverage: str = "") -> str:
+                       source: str = "", session_coverage: str = "",
+                       distill_input_mode: str = "", distill_prompt_version: str = "",
+                       covered_turn_range: str = "", truncated: bool = False) -> str:
     """生成 wiki 页面 Markdown — 对齐蓝图 32 字段规范"""
     # 实体类型优先从 LLM 输出获取，fallback 从知识形态映射
     entity_type = fm_get(fragment.frontmatter, "type", "")
@@ -1554,6 +1564,11 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         "source": source or "unknown",
         "source_session": session_id,
         "distilled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "distill_input_mode": distill_input_mode or "unknown",
+        "distill_prompt_version": distill_prompt_version or "",
+        "source_coverage": session_coverage or "unknown",
+        "covered_turn_range": covered_turn_range or "",
+        "truncated": truncated,
     }
     fm = to_chinese_frontmatter(cleaned_fm, defaults)
     lines = ["---"]
@@ -1562,6 +1577,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         "来源数量", "证据级别", "置信度", "时效性", "创建日期",
         "来源", "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
         "跨Agent关联",
+        "distill_input_mode", "distill_prompt_version", "source_coverage", "covered_turn_range", "truncated",
     ]
     for key in ordered_keys:
         if key not in fm:
@@ -1815,7 +1831,7 @@ def process_doc_session(sid: str, messages: list, meta: dict, inbox: Path) -> in
         related_concepts=[],
     )
 
-    md = generate_wiki_page(fragment, sid, source=meta.get("source", "unknown"))
+    md = generate_wiki_page(fragment, sid, source=meta.get("source", "unknown"), distill_prompt_version=PROMPT_VERSION)
     inbox_name = f"{sid[:8]}_{form}_1.md"
     (inbox / inbox_name).write_text(md, encoding="utf-8")
     return 1
@@ -1849,6 +1865,71 @@ class DistillationEngine:
                 logger.debug("KiaCrossAgentLinker not available", exc_info=True)
                 self._kia_linker = False  # 标记为已尝试但失败
         return self._kia_linker if self._kia_linker is not False else None
+
+    @staticmethod
+    def _jaccard_similarity(a: str, b: str) -> float:
+        """计算两个字符串的 Jaccard 相似度（基于字符二元组）"""
+        if not a or not b:
+            return 0.0
+        sa = set(a[i:i+2] for i in range(len(a) - 1))
+        sb = set(b[i:i+2] for i in range(len(b) - 1))
+        inter = len(sa & sb)
+        union = len(sa | sb)
+        return inter / union if union > 0 else 0.0
+
+    @staticmethod
+    def _dedup_fragments_semantic(fragments: List[KnowledgeFragment], threshold: float = 0.75) -> List[KnowledgeFragment]:
+        """按 title 精确去重 + Jaccard 语义去重"""
+        if not fragments:
+            return []
+        # 先精确去重
+        seen_titles = set()
+        unique = []
+        for frag in fragments:
+            if frag.title not in seen_titles:
+                seen_titles.add(frag.title)
+                unique.append(frag)
+        # 再语义去重：相似度 > threshold 的只保留第一个
+        deduped = []
+        for frag in unique:
+            is_dup = False
+            for kept in deduped:
+                sim = DistillationEngine._jaccard_similarity(frag.title, kept.title)
+                if sim >= threshold:
+                    is_dup = True
+                    break
+            if not is_dup:
+                deduped.append(frag)
+        return deduped
+
+    @staticmethod
+    def _chunk_messages(messages: List[Dict], max_chars_per_chunk: int = 30000) -> List[List[Dict]]:
+        """将消息列表按字符数切片，用于分块蒸馏（P0-5）"""
+        if not messages:
+            return []
+        chunks = []
+        current_chunk: List[Dict] = []
+        current_chars = 0
+        for msg in messages:
+            msg_chars = len(msg.get("content", ""))
+            # 如果单条消息就超过限制，单独成一个 chunk
+            if msg_chars > max_chars_per_chunk:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                    current_chars = 0
+                chunks.append([msg])
+                continue
+            # 如果当前 chunk 加上这条消息会超限，先保存当前 chunk
+            if current_chars + msg_chars > max_chars_per_chunk and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_chars = 0
+            current_chunk.append(msg)
+            current_chars += msg_chars
+        if current_chunk:
+            chunks.append(current_chunk)
+        return chunks
 
     @staticmethod
     def _slugify(name: str) -> str:
@@ -1906,7 +1987,14 @@ class DistillationEngine:
             judgment, judgment_reason = "knowledge", "预判高价值，跳过LLM判断"
             judgment_confidence = confidence
         else:
-            session_text = build_session_text(filtered)
+            # P0-5: 根据总会话长度选择蒸馏输入策略
+            raw_chars = sum(len(m.get("content", "")) for m in filtered)
+            if raw_chars <= 60000:
+                session_text = build_session_text(filtered, max_chars=60000)
+            elif raw_chars <= 500000:
+                session_text = build_session_text(filtered, max_chars=100000)
+            else:
+                session_text = build_session_text(filtered, max_chars=24000)
             judgment, judgment_reason, judgment_confidence = self._llm_judge.judge(
                 session_text, session_id,
             )
@@ -1926,21 +2014,70 @@ class DistillationEngine:
             return result
 
         # ===== L4: 知识提取 =====
+        # P0-5: 三层蒸馏策略
+        raw_chars = sum(len(m.get("content", "")) for m in filtered)
         _coverage_meta: Dict[str, Any] = {}
-        session_text = build_session_text(filtered, out_meta=_coverage_meta)
-        if _coverage_meta.get("truncated"):
+        all_fragments: List[KnowledgeFragment] = []
+        chunk_infos: List[Dict[str, Any]] = []
+
+        if raw_chars <= 60000:
+            session_text = build_session_text(filtered, max_chars=60000, out_meta=_coverage_meta)
+            result.analysis_type = "standard"
+            fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
+            all_fragments = fragments or []
+        elif raw_chars <= 500000:
+            # P0-5: 真正的分块蒸馏 — 按 ~30000 字符切片 → 逐块提取 → 合并
+            result.analysis_type = "chunked"
+            chunks = self._chunk_messages(filtered, max_chars_per_chunk=30000)
+            for i, chunk in enumerate(chunks):
+                chunk_meta: Dict[str, Any] = {}
+                chunk_text = build_session_text(chunk, max_chars=30000, out_meta=chunk_meta)
+                chunk_fragments = self._extractor.extract(chunk_text, session_id, "chunked")
+                covered_turns = [m.get("turn", i) for m in chunk]
+                turn_range = f"{min(covered_turns)}-{max(covered_turns)}" if covered_turns else ""
+                chunk_infos.append({
+                    "chunk_index": i,
+                    "covered_turn_range": turn_range,
+                    "fragment_count": len(chunk_fragments) if chunk_fragments else 0,
+                    "truncated": chunk_meta.get("truncated", False),
+                })
+                if chunk_fragments:
+                    all_fragments.extend(chunk_fragments)
+            # 去重：先精确去重，再语义去重
+            all_fragments = self._dedup_fragments_semantic(all_fragments)
+            # 记录分块信息到 result
             result.session_coverage = (
-                f"部分覆盖（共 {_coverage_meta['total_turns']} 轮，"
-                f"保留开头 {_coverage_meta['head_turns']} 轮 + 结尾 {_coverage_meta['tail_turns']} 轮，"
-                f"中间 {_coverage_meta['omitted_turns']} 轮省略）"
+                f"分块蒸馏（共 {len(chunks)} 个 chunk，"
+                f"提取 {len(all_fragments)} 个片段）"
             )
+            if chunk_infos:
+                result.session_coverage += "；" + "; ".join(
+                    f"chunk{c['chunk_index']}: turn{c['covered_turn_range']}"
+                    for c in chunk_infos
+                )
         else:
-            result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
+            session_text = build_session_text(filtered, max_chars=24000, out_meta=_coverage_meta)
+            result.analysis_type = "summarized"
+            fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
+            all_fragments = fragments or []
+
+        if raw_chars <= 60000 or raw_chars > 500000:
+            if _coverage_meta.get("truncated"):
+                result.session_coverage = (
+                    f"部分覆盖（共 {_coverage_meta['total_turns']} 轮，"
+                    f"保留开头 {_coverage_meta['head_turns']} 轮 + 结尾 {_coverage_meta['tail_turns']} 轮，"
+                    f"中间 {_coverage_meta['omitted_turns']} 轮省略）"
+                )
+                result.truncated = True
+            else:
+                result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
+                result.truncated = False
+        result.distill_input_mode = _coverage_meta.get("distill_input_mode", "unknown")
 
         # 追加 message-level 截断信息
         msg_trunc = _coverage_meta.get("message_truncations", [])
         truncated_msgs = [m for m in msg_trunc if m["truncated"]]
-        if truncated_msgs:
+        if truncated_msgs and raw_chars <= 60000:
             trunc_summary = ", ".join(
                 f"turn{m['turn']}({m['role']}): {m['original_length']}→{m['kept_length']}"
                 for m in truncated_msgs[:5]
@@ -1948,11 +2085,11 @@ class DistillationEngine:
             if len(truncated_msgs) > 5:
                 trunc_summary += f" 等共 {len(truncated_msgs)} 条消息被截断"
             result.session_coverage += f"；消息截断: {trunc_summary}"
-        fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
-        result.fragments = fragments
+
+        result.fragments = all_fragments
         result.layer_results.append(
-            PipelineLayerResult(4, "knowledge_extraction", bool(fragments),
-                                {"fragment_count": len(fragments)}),
+            PipelineLayerResult(4, "knowledge_extraction", bool(all_fragments),
+                                {"fragment_count": len(all_fragments), "chunks": chunk_infos}),
         )
 
         if not fragments:
@@ -2022,7 +2159,14 @@ class DistillationEngine:
                 counter += 1
             seen_slugs.add(slug)
             page_id = slug
-            page_content = generate_wiki_page(fragment, result.session_id, source=result.source, session_coverage=result.session_coverage)
+            page_content = generate_wiki_page(
+                fragment, result.session_id,
+                source=result.source,
+                session_coverage=result.session_coverage,
+                distill_input_mode=getattr(result, 'distill_input_mode', ''),
+                distill_prompt_version=PROMPT_VERSION,
+                truncated=getattr(result, 'truncated', False),
+            )
             file_path = self.inbox_dir / f"{page_id}.md"
             try:
                 file_path.write_text(page_content, encoding="utf-8")

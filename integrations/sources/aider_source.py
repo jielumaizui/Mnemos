@@ -88,8 +88,19 @@ class AiderSource(AgentSource):
 
         return sessions
 
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "not_available",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
+
     def parse_turns(self, session_path: Path) -> List[Turn]:
-        """解析 Aider 的 Markdown 聊天记录为 Turn 列表"""
+        """解析 Aider 的 Markdown 聊天记录为 Turn 列表 — P0-6 完整录入版"""
         turns = []
         try:
             content = session_path.read_text(encoding="utf-8")
@@ -111,11 +122,7 @@ class AiderSource(AgentSource):
         # < assistant
         # assistant content
 
-        user_pattern = re.compile(r'^(?:####\s*/(?:message|ask)|>\s*message)\s*$', re.MULTILINE | re.IGNORECASE)
-        assistant_pattern = re.compile(r'^(?:####\s*assistant|<\s*assistant)\s*$', re.MULTILINE | re.IGNORECASE)
-
         # 更宽松的匹配：寻找明显的分隔符
-        # 策略：按段落分割，识别用户/助手角色
         sections = re.split(r'\n####\s+', content)
         if len(sections) <= 1:
             # 尝试另一种格式
@@ -124,6 +131,8 @@ class AiderSource(AgentSource):
         turn_number = 0
         current_user = ""
         current_assistant = ""
+        unrecognised_sections: List[str] = []
+        completeness_loss: List[str] = []
 
         for section in sections:
             section = section.strip()
@@ -143,14 +152,29 @@ class AiderSource(AgentSource):
                         turn_number=turn_number,
                         user_content=current_user,
                         assistant_content=current_assistant,
+                        raw_event_refs=([{"type": "unrecognised", "sections": unrecognised_sections}] if unrecognised_sections else []),
+                        source_files=[str(session_path)],
+                        completeness={
+                            "visible_text": "full",
+                            "tool_results": "unavailable",
+                            "reasoning": "unavailable",
+                            "attachments": "unavailable",
+                            "truncated": False,
+                            "loss_reasons": completeness_loss,
+                        },
                     ))
                     turn_number += 1
                 current_user = '\n'.join(lines[1:]).strip()
                 current_assistant = ""
+                unrecognised_sections = []
+                completeness_loss = []
             elif is_assistant:
                 current_assistant = '\n'.join(lines[1:]).strip()
             else:
-                # 无法识别 header，可能是内容延续
+                # 无法识别 header，记录到 unrecognised 待后续写入 artifact
+                unrecognised_sections.append(section)
+                completeness_loss.append(f"unrecognised_header:{header[:50]}")
+                # 尝试作为内容延续
                 if current_assistant:
                     current_assistant += '\n' + section
                 elif current_user:
@@ -162,6 +186,16 @@ class AiderSource(AgentSource):
                 turn_number=turn_number,
                 user_content=current_user,
                 assistant_content=current_assistant,
+                raw_event_refs=([{"type": "unrecognised", "sections": unrecognised_sections}] if unrecognised_sections else []),
+                source_files=[str(session_path)],
+                completeness={
+                    "visible_text": "full",
+                    "tool_results": "unavailable",
+                    "reasoning": "unavailable",
+                    "attachments": "unavailable",
+                    "truncated": False,
+                    "loss_reasons": completeness_loss,
+                },
             ))
 
         return turns

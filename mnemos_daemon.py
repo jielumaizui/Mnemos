@@ -132,6 +132,9 @@ class _L1ScanState:
         record = self._data.get(self._key(source_name, session_info))
         if not record:
             return False
+        # 优先使用 fingerprint（支持多文件聚合状态）
+        if "fingerprint" in file_state and "fingerprint" in record:
+            return record.get("fingerprint") == file_state.get("fingerprint")
         return (
             record.get("mtime") == file_state.get("mtime")
             and record.get("size") == file_state.get("size")
@@ -144,7 +147,7 @@ class _L1ScanState:
         file_state: Dict[str, Any],
         status: str,
     ) -> None:
-        self._data[self._key(source_name, session_info)] = {
+        entry = {
             "path": str(session_info.source_path),
             "session_id": session_info.session_id,
             "mtime": file_state.get("mtime"),
@@ -152,6 +155,11 @@ class _L1ScanState:
             "status": status,
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }
+        if "fingerprint" in file_state:
+            entry["fingerprint"] = file_state["fingerprint"]
+        if "file_count" in file_state:
+            entry["file_count"] = file_state["file_count"]
+        self._data[self._key(source_name, session_info)] = entry
         self._dirty = True
 
     def save(self) -> None:
@@ -186,19 +194,31 @@ def _l1_scan_limits(config: Any) -> Dict[str, Any]:
     }
 
 
-def _l1_session_file_state(session_info: Any) -> Optional[Dict[str, Any]]:
+def _l1_session_file_state(source: Any, session_info: Any) -> Optional[Dict[str, Any]]:
+    """获取 session 状态：优先使用 source 的聚合状态，回退到单文件 stat"""
+    # P0-2: 优先使用 AgentSource 自己的 get_session_state()
+    try:
+        if hasattr(source, "get_session_state"):
+            state = source.get_session_state(session_info)
+            if state is not None:
+                return state
+    except Exception:
+        pass
+    # 回退到单文件 stat
     try:
         stat = session_info.source_path.stat()
         return {
             "mtime": session_info.mtime if session_info.mtime is not None else stat.st_mtime,
             "size": stat.st_size,
+            "file_count": 1,
+            "fingerprint": f"{session_info.source_path.name}:{stat.st_size}:{stat.st_mtime}",
         }
     except OSError:
         return None
 
 
 def _select_l1_sessions(
-    source_name: str,
+    source: Any,
     sessions: List[Any],
     state: _L1ScanState,
     limits: Dict[str, Any],
@@ -218,9 +238,10 @@ def _select_l1_sessions(
         "skipped_over_limit": 0,
     }
 
+    source_name = source.name if hasattr(source, "name") else str(source)
     candidates: List[Tuple[float, Any, Dict[str, Any]]] = []
     for session_info in sessions:
-        file_state = _l1_session_file_state(session_info)
+        file_state = _l1_session_file_state(source, session_info)
         if file_state is None:
             stats["skipped_missing"] += 1
             continue
@@ -410,7 +431,7 @@ def service_l1_sync(stop_event: threading.Event):
                             continue
 
                         selected_sessions, scan_stats = _select_l1_sessions(
-                            source.name, sessions, state, limits
+                            source, sessions, state, limits
                         )
                         if not selected_sessions:
                             if any(v for k, v in scan_stats.items() if k.startswith("skipped_")):

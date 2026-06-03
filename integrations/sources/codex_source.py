@@ -99,9 +99,47 @@ class CodexSource(AgentSource):
         messages = self._parse_rollout(session_path)
         return self._pair_messages_to_turns(messages)
 
-    def _parse_rollout(self, rollout_path: Path) -> List[Dict[str, str]]:
-        """解析 rollout 文件，提取消息列表"""
+    def get_session_state(self, session_info: SessionInfo) -> Optional[Dict[str, Any]]:
+        """Codex 聚合状态：sessions 目录下所有 rollout 文件"""
+        session_dir = session_info.source_path.parent
+        files = list(session_dir.rglob("rollout-*.jsonl"))
+        if not files:
+            return None
+        total_size = 0
+        max_mtime = 0
+        file_entries = []
+        for f in sorted(files):
+            try:
+                stat = f.stat()
+                total_size += stat.st_size
+                max_mtime = max(max_mtime, stat.st_mtime)
+                file_entries.append(f"{f.name}:{stat.st_size}:{stat.st_mtime}")
+            except OSError:
+                pass
+        import hashlib
+        fingerprint = hashlib.md5("|".join(file_entries).encode()).hexdigest()[:16]
+        return {
+            "mtime": max_mtime,
+            "size": total_size,
+            "file_count": len(files),
+            "fingerprint": fingerprint,
+        }
+
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": True,
+            "tool_results": True,
+            "reasoning": "unknown",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
+
+    def _parse_rollout(self, rollout_path: Path) -> List[Dict[str, Any]]:
+        """解析 rollout 文件，提取消息列表 — P0-6 完整录入版"""
         messages = []
+        raw_event_refs = []
         try:
             with open(rollout_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -125,37 +163,57 @@ class CodexSource(AgentSource):
                                     btype = block.get("type", "")
                                     if btype in ("input_text", "output_text"):
                                         texts.append(block.get("text", ""))
+                                    elif btype == "tool_call":
+                                        raw_event_refs.append({"event_type": "tool_call", "raw": block})
+                                    elif btype == "tool_output":
+                                        raw_event_refs.append({"event_type": "tool_output", "raw": block})
+                                    else:
+                                        raw_event_refs.append({"event_type": btype, "raw": block})
                             if texts and role:
                                 messages.append({
                                     "role": role,
                                     "content": "\n".join(texts),
+                                    "raw_event_refs": list(raw_event_refs),
                                 })
+                                raw_event_refs = []
 
                     elif event_type == "event_msg":
                         payload = obj.get("payload", {})
                         if payload.get("type") == "user_message":
                             msg = payload.get("message", "")
                             if msg:
+                                # P0-6: user_message 也应附加 raw_event_refs，然后清空
                                 messages.append({
                                     "role": "user",
                                     "content": str(msg),
+                                    "raw_event_refs": list(raw_event_refs),
                                 })
+                                raw_event_refs = []
+                        else:
+                            # P0-6: 保留非 message 事件引用
+                            raw_event_refs.append({"event_type": event_type, "raw": obj})
+                    else:
+                        # P0-6: 保留所有非 message 事件
+                        raw_event_refs.append({"event_type": event_type, "raw": obj})
 
         except Exception as e:
             logger.warning(f"[CodexSource] 读取失败 {rollout_path}: {e}")
 
         return messages
 
-    def _pair_messages_to_turns(self, messages: List[Dict[str, str]]) -> List[Turn]:
+    def _pair_messages_to_turns(self, messages: List[Dict[str, Any]]) -> List[Turn]:
         """将消息列表配对为 Turn 列表"""
         turns = []
         user_content = ""
         assistant_content = ""
         turn_number = 0
+        turn_raw_events: List[Dict[str, Any]] = []
+        completeness_loss: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content", "")
+            msg_raw_events = msg.get("raw_event_refs", [])
 
             if role == "user":
                 if assistant_content:
@@ -163,13 +221,27 @@ class CodexSource(AgentSource):
                         turn_number=turn_number,
                         user_content=user_content,
                         assistant_content=assistant_content,
+                        raw_event_refs=turn_raw_events,
+                        source_files=[str(self.data_dir)] if self.data_dir else [],
+                        completeness={
+                            "visible_text": "full",
+                            "tool_results": "unavailable",
+                            "reasoning": "unavailable",
+                            "attachments": "unavailable",
+                            "truncated": False,
+                            "loss_reasons": completeness_loss,
+                        },
                     ))
                     turn_number += 1
                 user_content = content
                 assistant_content = ""
+                turn_raw_events = []
+                completeness_loss = []
 
             elif role == "assistant":
                 assistant_content += ("\n\n" if assistant_content else "") + content
+                if msg_raw_events:
+                    turn_raw_events.extend(msg_raw_events)
 
         # 保存最后一轮
         if user_content or assistant_content:
@@ -177,6 +249,16 @@ class CodexSource(AgentSource):
                 turn_number=turn_number,
                 user_content=user_content,
                 assistant_content=assistant_content,
+                raw_event_refs=turn_raw_events,
+                source_files=[str(self.data_dir)] if self.data_dir else [],
+                completeness={
+                    "visible_text": "full",
+                    "tool_results": "unavailable",
+                    "reasoning": "unavailable",
+                    "attachments": "unavailable",
+                    "truncated": False,
+                    "loss_reasons": completeness_loss,
+                },
             ))
 
         return turns

@@ -176,9 +176,20 @@ class WindsurfSource(AgentSource):
 
         return turns
 
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "unknown",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "experimental",
+        }
+
     def build_extra_tags(self, turn: Turn) -> List[str]:
         """Windsurf 自定义标签"""
-        return []
+        return ["source_fidelity=experimental"]
 
 
 import sys
