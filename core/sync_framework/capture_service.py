@@ -23,12 +23,17 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from core.config import get_config
 from core.db_utils import SqlitePool
 from core.sync_framework.sync_engine import compute_content_hash
 from core.sync_framework.agent_source import Turn
+
+if TYPE_CHECKING:
+    from core.sync_framework.capture_queue import CaptureQueue
+    from core.sync_framework.capture_worker import CaptureWorkerPool
 
 logger = logging.getLogger(__name__)
 
