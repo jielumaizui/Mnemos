@@ -126,6 +126,8 @@ class DistillationResult:
     self_check_passed: bool = True
     self_check_issues: List[str] = field(default_factory=list)
     cross_agent_links: List[str] = field(default_factory=list)
+    # 会话覆盖范围（用于 Wiki 来源追踪）
+    session_coverage: str = ""
 
 
 # ========== 内容清洗 ==========
@@ -145,7 +147,8 @@ def clean_message_content(content: str) -> str:
     return content.strip()
 
 
-def build_session_text(messages: List[Dict], max_chars: int = 24000) -> str:
+def build_session_text(messages: List[Dict], max_chars: int = 24000,
+                         out_meta: Optional[Dict] = None) -> str:
     """从消息列表构建对话文本。
 
     长会话处理策略（head-tail 截断）：
@@ -153,6 +156,10 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000) -> str:
     - 保留结尾 70% 的最新对话（关键决策、结论）
     - 中间用省略标记标注被跳过的 turn 数量
     - 单条消息仍限制 1000 字符，避免极端长消息撑爆上下文
+
+    Args:
+        out_meta: 如果传入 dict，会将截断信息写入其中（total_turns, head_turns,
+                  tail_turns, omitted_turns, truncated）。
     """
     lines = []
     for msg in messages:
@@ -168,7 +175,17 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000) -> str:
         lines.append(f"[{role}] {content}")
 
     full_text = "\n\n".join(lines)
+    total_turns = len(lines)
+
     if len(full_text) <= max_chars:
+        if out_meta is not None:
+            out_meta.update({
+                "total_turns": total_turns,
+                "head_turns": total_turns,
+                "tail_turns": 0,
+                "omitted_turns": 0,
+                "truncated": False,
+            })
         return full_text
 
     # head-tail 智能截断：保留会话两端，标注省略范围
@@ -192,6 +209,15 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000) -> str:
     head_turns = head_text.count("\n\n") + 1 if head_text else 0
     tail_turns = tail_text.count("\n\n") + 1 if tail_text else 0
     omitted_turns = max(0, len(lines) - head_turns - tail_turns)
+
+    if out_meta is not None:
+        out_meta.update({
+            "total_turns": total_turns,
+            "head_turns": head_turns,
+            "tail_turns": tail_turns,
+            "omitted_turns": omitted_turns,
+            "truncated": True,
+        })
 
     return (
         f"{head_text}\n\n"
@@ -1416,7 +1442,7 @@ def _map_form_to_type(form: str) -> str:
 
 
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
-                       source: str = "") -> str:
+                       source: str = "", session_coverage: str = "") -> str:
     """生成 wiki 页面 Markdown — 对齐蓝图 32 字段规范"""
     # 实体类型优先从 LLM 输出获取，fallback 从知识形态映射
     entity_type = fm_get(fragment.frontmatter, "type", "")
@@ -1572,6 +1598,10 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body.append(f"- 来源会话: `{session_id}`")
     if source:
         body.append(f"- 来源 Agent: {source}")
+    # 会话覆盖范围（截断透明度）
+    coverage = session_coverage or (fragment.frontmatter or {}).get("session_coverage", "")
+    if coverage:
+        body.append(f"- 会话覆盖: {coverage}")
     # 从 frontmatter 中读取原始 Memos 来源（如果存在）
     original_source = (fragment.frontmatter or {}).get("来源", (fragment.frontmatter or {}).get("source", ""))
     if original_source and original_source != source:
@@ -1779,7 +1809,16 @@ class DistillationEngine:
             return result
 
         # ===== L4: 知识提取 =====
-        session_text = build_session_text(filtered)
+        _coverage_meta: Dict[str, Any] = {}
+        session_text = build_session_text(filtered, out_meta=_coverage_meta)
+        if _coverage_meta.get("truncated"):
+            result.session_coverage = (
+                f"部分覆盖（共 {_coverage_meta['total_turns']} 轮，"
+                f"保留开头 {_coverage_meta['head_turns']} 轮 + 结尾 {_coverage_meta['tail_turns']} 轮，"
+                f"中间 {_coverage_meta['omitted_turns']} 轮省略）"
+            )
+        else:
+            result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
         fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
         result.fragments = fragments
         result.layer_results.append(
@@ -1854,7 +1893,7 @@ class DistillationEngine:
                 counter += 1
             seen_slugs.add(slug)
             page_id = slug
-            page_content = generate_wiki_page(fragment, result.session_id)
+            page_content = generate_wiki_page(fragment, result.session_id, session_coverage=result.session_coverage)
             file_path = self.inbox_dir / f"{page_id}.md"
             try:
                 file_path.write_text(page_content, encoding="utf-8")

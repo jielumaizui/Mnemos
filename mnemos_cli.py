@@ -646,6 +646,33 @@ def cmd_doctor(args):
             recent_failed = cursor.fetchone()[0]
             if recent_failed > 0:
                 warnings.append(f"最近 24 小时有 {recent_failed} 条 capture 失败/错误记录")
+            # capture_mode 统计（full / truncated / artifact）
+            cursor.execute(
+                "SELECT payload_json FROM capture_events WHERE created_at > datetime('now', '-7 day')"
+            )
+            mode_counts: dict[str, int] = {"full": 0, "truncated": 0, "artifact": 0}
+            for row in cursor.fetchall():
+                try:
+                    payload = json.loads(row[0] or "{}")
+                    mode = payload.get("metadata", {}).get("capture_mode", "full")
+                    if mode in mode_counts:
+                        mode_counts[mode] += 1
+                    else:
+                        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+                except Exception:
+                    pass
+            total_recent = sum(mode_counts.values())
+            if total_recent > 0:
+                print(f"  最近 7 天 capture 完整性:")
+                for mode, count in sorted(mode_counts.items(), key=lambda x: -x[1]):
+                    pct = count / total_recent * 100
+                    print(f"    {mode}: {count} ({pct:.0f}%)")
+                if mode_counts.get("truncated", 0) + mode_counts.get("artifact", 0) > 0:
+                    warnings.append(
+                        f"最近 7 天有 {mode_counts.get('truncated', 0)} 条 truncated 和 "
+                        f"{mode_counts.get('artifact', 0)} 条 artifact capture，"
+                        f"请检查大 payload 来源"
+                    )
             conn.close()
         else:
             print(f"  ☐ capture_queue.db 不存在")

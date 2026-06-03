@@ -316,12 +316,14 @@ class KnowledgeScheduler:
             trigger=CronTrigger("0 4 * * *"),
             timeout=300,
         ))
-        self.register(ScheduledStep(
-            name="falsify_mark",
-            func=lambda: self._run_falsify_mark(wiki_base),
-            trigger=CronTrigger("30 4 * * *"),
-            timeout=300,
-        ))
+        # TODO: falsify_mark 已按蓝图弃用（aporia 模块合并到 ShadowPage/争议解决流程）。
+        # 如需恢复，请重新评估功能定位后再注册。
+        # self.register(ScheduledStep(
+        #     name="falsify_mark",
+        #     func=lambda: self._run_falsify_mark(wiki_base),
+        #     trigger=CronTrigger("30 4 * * *"),
+        #     timeout=300,
+        # ))
         self.register(ScheduledStep(
             name="heat_map",
             func=lambda: self._run_heat_map(wiki_base),
@@ -340,12 +342,14 @@ class KnowledgeScheduler:
             trigger=CronTrigger("0 * * * *"),
             timeout=60,
         ))
-        self.register(ScheduledStep(
-            name="version_snapshot",
-            func=lambda: self._run_kia_module("ananke", "VersionTimeTravel", "scan_and_snapshot_all", wiki_base=wiki_base),
-            trigger=CronTrigger("0 6 * * *"),
-            timeout=300,
-        ))
+        # TODO: version_snapshot 已按蓝图弃用（ananke 模块建议合并或删除）。
+        # 如需恢复，请重新评估功能定位后再注册。
+        # self.register(ScheduledStep(
+        #     name="version_snapshot",
+        #     func=lambda: self._run_kia_module("ananke", "VersionTimeTravel", "scan_and_snapshot_all", wiki_base=wiki_base),
+        #     trigger=CronTrigger("0 6 * * *"),
+        #     timeout=300,
+        # ))
         # TODO: dark_knowledge 原由 erebus 模块执行，该模块已按蓝图合并到知识图谱。
         # 如需恢复周度盲区扫描，请注册 hygieia.detect_knowledge_gaps 或 knowledge_graph 关系发现。
         # self.register(ScheduledStep(
