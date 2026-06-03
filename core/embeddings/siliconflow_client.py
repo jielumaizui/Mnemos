@@ -258,7 +258,11 @@ class SiliconFlowEmbeddingClient:
             total_tokens = data.get("usage", {}).get("total_tokens", 0)
             if self._limiter:
                 self._limiter.record(actual_tokens=total_tokens or estimated_tokens)
-            return [(r["index"], r["score"]) for r in results]
+            parsed = []
+            for r in results:
+                score = r.get("score", r.get("relevance_score", r.get("similarity", 0.0)))
+                parsed.append((r["index"], float(score)))
+            return parsed
         except Exception as e:
             logger.warning(f"[Rerank] API 调用失败: {e}")
             raise

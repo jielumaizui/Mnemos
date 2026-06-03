@@ -22,10 +22,27 @@ def _fragment(content, frontmatter=None):
 def test_clean_message_content_keeps_chinese_shell_explanation():
     content = "git status 可以用来查看当前改动\nnpm install lodash"
 
+    # 含中文解释的命令行保留
     assert "git status 可以用来查看当前改动" in clean_message_content(content)
-    assert "npm install lodash" not in clean_message_content(content)
     assert "git status 可以用来查看当前改动" in _clean_message_content(content)
-    assert "npm install lodash" not in _clean_message_content(content)
+
+    # 纯英文命令行改为压缩保留（而非删除）
+    cleaned = clean_message_content(content)
+    assert "npm install lodash" in cleaned
+    cleaned_wb = _clean_message_content(content)
+    assert "npm install lodash" in cleaned_wb
+
+
+def test_clean_message_content_compresses_multiple_shell_commands():
+    content = "git init\ngit add .\ngit commit -m 'init'\ngit push\ngit log"
+    cleaned = clean_message_content(content)
+    assert "git init" in cleaned
+    assert "git add ." in cleaned
+    assert "git commit" in cleaned
+    # 前 3 条保留，第 4 条和第 5 条被压缩标记替代
+    assert "git push" not in cleaned
+    assert "[... 2 more shell commands omitted ...]" in cleaned
+    assert "git log" not in cleaned  # 被压缩标记替代
 
 
 def test_self_check_marks_contextual_and_url_pending():

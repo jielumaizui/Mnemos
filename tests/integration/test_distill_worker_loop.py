@@ -117,7 +117,7 @@ class TestHephaestusWorkerLoop:
             p.mkdir(parents=True)
         return d
 
-    def test_process_one_file_writes_output(self, dirs, monkeypatch):
+    def test_process_one_file_uses_api_path_by_default(self, dirs, monkeypatch):
         from core.hephaestus_worker import HephaestusWorker
 
         # 构造一个任务 JSON
@@ -129,12 +129,11 @@ class TestHephaestusWorkerLoop:
         task_file = dirs["queue"] / "task_001.json"
         task_file.write_text(json.dumps(task), encoding="utf-8")
 
-        # mock delegate 让它立即写输出文件
+        calls = {"delegate": 0, "sync": 0}
+
+        # 默认 API-only 下不应调用宿主 AgentDelegate
         def mock_delegate(task_obj, output_path):
-            output_path.write_text(
-                'MNEMOS_DISTILL_TASK\n{"judgment": "knowledge", "fragments": [{"title": "Test"}]}\n\n# Test Output\n',
-                encoding="utf-8",
-            )
+            calls["delegate"] += 1
             return True
 
         mock_cls = MagicMock()
@@ -142,6 +141,10 @@ class TestHephaestusWorkerLoop:
         mock_instance.delegate = mock_delegate
         mock_cls.return_value = mock_instance
         monkeypatch.setattr("core.hephaestus_worker.AgentDelegate", mock_cls)
+        monkeypatch.setattr(
+            "core.hephaestus_worker.HephaestusWorker._sync_distill_and_complete",
+            lambda self, session_id, distill_task: calls.__setitem__("sync", calls["sync"] + 1) or True,
+        )
 
         worker = HephaestusWorker(
             queue_dir=dirs["queue"],
@@ -152,8 +155,8 @@ class TestHephaestusWorkerLoop:
         result = worker.process_one_file(task_file)
 
         assert result is True
-        # 输出文件应被 delegate mock 写入
-        assert len(list(dirs["output"].glob("*.md"))) >= 1
+        assert calls["sync"] == 1
+        assert calls["delegate"] == 0
 
     def test_collect_completed_moves_to_inbox(self, dirs, monkeypatch):
         from core.hephaestus_worker import HephaestusWorker

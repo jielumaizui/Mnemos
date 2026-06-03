@@ -181,6 +181,12 @@ def _migrate_legacy_table(conn: sqlite3.Connection):
 
 
 def _write_messages(task_id: str, messages: List[Dict]) -> Path:
+    if isinstance(messages, str):
+        messages = [{"role": "user", "content": messages}]
+    elif isinstance(messages, dict):
+        messages = [messages]
+    elif not isinstance(messages, list):
+        messages = []
     path = _messages_dir() / f"{task_id}.json"
     path.write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
     return path

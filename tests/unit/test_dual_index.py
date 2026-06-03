@@ -83,6 +83,13 @@ class TestDualIndexSearch:
         assert results[0] == ("page_a.md", pytest.approx(0.95 * 0.7))
         assert results[1] == ("page_b.md", pytest.approx(0.80 * 0.7))
 
+        # search_detailed 返回分解分数
+        detailed = retriever.search_detailed("test query", top_k=5)
+        assert detailed[0][0] == "page_a.md"
+        assert detailed[0][1] == pytest.approx(0.95 * 0.7)
+        assert detailed[0][2] == pytest.approx(0.95)  # page_embedding_score
+        assert detailed[0][3] == pytest.approx(0.0)   # relation_score
+
     def test_fusion_with_relation_boost(self, tmp_path, tmp_wiki):
         """双索引融合：页面得分 + 关联 boost"""
         page_results = [("page_a.md", 0.90), ("page_b.md", 0.70)]
@@ -108,10 +115,15 @@ class TestDualIndexSearch:
         # page_a: 0.7*0.90 + 0.3*0.80 = 0.87
         # page_b: 0.7*0.70 + 0.3*0.60 = 0.67
         # page_c: 0 + 0.3*0.80 = 0.24
-        scores = {path: score for path, score in results}
+        detailed = retriever.search_detailed("test query", top_k=5, use_rerank=False)
+        scores = {path: score for path, score, _, _ in detailed}
+        page_scores = {path: ps for path, _, ps, _ in detailed}
+        rel_scores = {path: rs for path, _, _, rs in detailed}
         assert scores["page_a.md"] == pytest.approx(0.87, abs=0.01)
         assert scores["page_b.md"] == pytest.approx(0.67, abs=0.01)
         assert scores["page_c.md"] == pytest.approx(0.24, abs=0.01)
+        assert page_scores["page_a.md"] == pytest.approx(0.90)
+        assert rel_scores["page_a.md"] == pytest.approx(0.24)  # 0.3*0.80 capped to 0.25, actually 0.24
 
     def test_relation_manager_no_client(self, tmp_wiki):
         """relation_manager 存在但 client 为 None 时，忽略关联索引"""
@@ -155,8 +167,13 @@ class TestDualIndexSearch:
         )
         results = retriever.search("test", top_k=2, use_rerank=True)
         # rerank 返回 [(1, 0.99), (0, 0.88)] → valid_paths[1]=page_b, valid_paths[0]=page_a
-        assert results[0] == ("page_b.md", 0.99)
-        assert results[1] == ("page_a.md", 0.88)
+        detailed = retriever.search_detailed("test", top_k=2, use_rerank=True)
+        assert detailed[0][0] == "page_b.md"
+        assert detailed[0][1] == pytest.approx(0.99)
+        assert detailed[0][2] == pytest.approx(0.85)  # page_embedding_score
+        assert detailed[1][0] == "page_a.md"
+        assert detailed[1][1] == pytest.approx(0.88)
+        assert detailed[1][2] == pytest.approx(0.95)  # page_embedding_score
 
     def test_rerank_failure_fallback(self, tmp_wiki):
         """rerank 失败时回退到融合排序"""

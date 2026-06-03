@@ -17,12 +17,15 @@ def test_auto_setup_writes_runtime_json_config(tmp_path, monkeypatch):
     assert data["memos"]["enabled"] is True
     assert data["memos"]["api_url"] == "http://localhost:5230"
     assert data["daemon"]["services"]["capture_worker"] is True
-    assert data["daemon"]["services"]["l1_sync"] is False
+    assert data["daemon"]["services"]["l1_sync"] is True
+    assert data["integrations"]["mcp"]["enabled"] is True
+    assert data["distill"]["provider"] == "api"
 
     config = Config()
     assert config.config_path == config_path
     assert config.wiki_dir == wiki_dir
-    assert config.get("daemon.services.l1_sync") is False
+    assert config.get("daemon.services.l1_sync") is True
+    assert config.get("integrations.mcp.enabled") is True
 
 
 def test_legacy_yaml_migrates_to_json_and_env_still_wins(tmp_path, monkeypatch):

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -86,6 +87,8 @@ DOCUMENT_JUDGE_PROMPT = '''你是一个文档价值判断器。请分析以下�
 
 BOOK_METHODOLOGY_PROMPT = '''你是一位严格的知识蒸馏专家。你的任务是从书籍章节中**深度分析作者的核心方法论**，不允许添加你自己的意见、评价或补充。
 
+{related_pages}
+
 ## 🔴 铁律：客观性要求
 
 1. **禁止添加你的观点**：你只能复述和结构化作者明确表达的内容，不能加入"我认为""值得注意的是""更重要的是"等主观评价。
@@ -105,7 +108,21 @@ BOOK_METHODOLOGY_PROMPT = '''你是一位严格的知识蒸馏专家。你的任
       "title": "概念名称（保持作者原话命名）",
       "form": "concept",
       "content": "## 作者核心论点\n[2-3段，包含作者原话引用和完整论证逻辑]\n\n## 关键实验与证据\n[详细描述：实验设计、数据、结论。不要一句话带过]\n\n## 现实应用场景\n[跨行业通用场景，不只限于书中提到的行业]\n\n## 边界与失效条件\n[作者明确说或暗示的：什么时候这个原理不灵]\n\n## 防御策略\n[作者提到的或可从原文推导的：如何识别和反制]",
-      "ai_expansion": "## 相关概念\n[与本书其他章节的关联]\n\n## 跨领域类比\n[与其他学科、历史、商业的类比]\n\n## 待验证问题\n[值得进一步思考的问题]"
+      "ai_expansion": "## 相关概念\n[与本书其他章节的关联]\n\n## 跨领域类比\n[与其他学科、历史、商业的类比]\n\n## 待验证问题\n[值得进一步思考的问题]",
+      "frontmatter": {{
+        "关键词": ["至少5个：核心概念、作者、学科领域、应用场景、对立概念"],
+        "触发器": ["什么场景下会想起这个概念"],
+        "别名": ["其他叫法、简称、同义词"],
+        "boundaries": {{"applies": "适用于...", "not_applies": "不适用于..."}},
+        "anti_patterns": ["常见误用、概念陷阱、错误应用方式"]
+      }},
+      "relations": [
+        {{
+          "target": "[[相关页面标题]]",
+          "type": "prerequisite|related_to|contradicts|derives_from|supercedes",
+          "context": "30-100字说明这两个知识在什么场景下关联"
+        }}
+      ]
     }}
   ]
 }}
@@ -118,6 +135,8 @@ BOOK_METHODOLOGY_PROMPT = '''你是一位严格的知识蒸馏专家。你的任
 - 如果某个区域作者没有提及，写"作者在本章未明确讨论此方面"
 - 严禁在 `content` 中出现主观评价，只陈述作者观点
 - `ai_expansion` 是 AI 关联补充，必须与 `content` 物理隔离
+- `frontmatter` 必须输出，不能省略
+- `relations` 分析与已有知识的关联，无关联则留空数组
 
 **输入：书籍章节内容**
 {book_content}
@@ -128,6 +147,8 @@ DATA_INSIGHT_PROMPT = '''你是一位数据分析师。请从以下数据报表�
 
 **数据内容：**
 {data_content}
+
+{related_pages}
 
 **提取要求：**
 
@@ -156,7 +177,21 @@ DATA_INSIGHT_PROMPT = '''你是一位数据分析师。请从以下数据报表�
   ],
   "recommendations": [
     "基于数据的可行动建议"
-  ]
+  ],
+  "relations": [
+    {{
+      "target": "[[相关页面标题]]",
+      "type": "prerequisite|related_to|contradicts|derives_from|supercedes",
+      "context": "30-100字说明这两个知识在什么场景下关联"
+    }}
+  ],
+  "frontmatter": {{
+    "关键词": ["至少5个：核心指标、业务场景、分析方法、关键工具、对立概念"],
+    "触发器": ["什么场景下会想起这条知识"],
+    "别名": ["其他叫法、简称、同义词"],
+    "boundaries": {{"applies": "适用于...", "not_applies": "不适用于..."}},
+    "anti_patterns": ["常见误用、数据陷阱、错误解读方式"]
+  }}
 }}
 ```
 
@@ -164,6 +199,8 @@ DATA_INSIGHT_PROMPT = '''你是一位数据分析师。请从以下数据报表�
 - 每个洞察必须有具体数字支撑
 - 区分"相关性"和"因果性"
 - 标注置信度，不确定的用"低"
+- relations: 分析数据与已有知识的关联，无关联则留空数组
+- frontmatter: 必须输出，不能省略
 '''
 
 
@@ -171,6 +208,8 @@ STRATEGY_EXTRACT_PROMPT = '''你是一位策略分析专家。请客观提取以
 
 **文档内容：**
 {strategy_content}
+
+{related_pages}
 
 **提取要求：**
 
@@ -215,6 +254,13 @@ STRATEGY_EXTRACT_PROMPT = '''你是一位策略分析专家。请客观提取以
     "potential_blindspots": ["该策略可能忽略的视角或风险（AI提醒）"],
     "practice_suggestions": ["将该方法论应用于其他场景的建议（AI建议）"],
     "critical_questions": ["值得进一步思考的问题（AI提出）"]
+  }},
+  "frontmatter": {{
+    "关键词": ["至少5个：核心策略、方法论、业务场景、关键工具、风险点"],
+    "触发器": ["什么场景下会想起这条策略"],
+    "别名": ["其他叫法、简称、同义词"],
+    "boundaries": {{"applies": "适用于...", "not_applies": "不适用于..."}},
+    "anti_patterns": ["常见误用、策略陷阱、错误执行方式"]
   }}
 }}
 ```
@@ -224,6 +270,7 @@ STRATEGY_EXTRACT_PROMPT = '''你是一位策略分析专家。请客观提取以
 - 将具体业务动作抽象为通用方法论
 - 保留决策逻辑，去掉具体人名/公司名
 - ai_expansion 是 AI 关联补充，必须与客观提取分离
+- frontmatter: 必须输出，不能省略
 '''
 
 
@@ -231,6 +278,8 @@ REPORT_SUMMARY_PROMPT = '''你是一位复盘分析专家。请从以下报告/�
 
 **报告内容：**
 {report_content}
+
+{related_pages}
 
 **提取要求：**
 
@@ -271,9 +320,27 @@ REPORT_SUMMARY_PROMPT = '''你是一位复盘分析专家。请从以下报告/�
       "context": "适用场景",
       "effectiveness": "有效程度"
     }}
-  ]
+  ],
+  "relations": [
+    {{
+      "target": "[[相关页面标题]]",
+      "type": "prerequisite|related_to|contradicts|derives_from|supercedes",
+      "context": "30-100字说明这两个知识在什么场景下关联"
+    }}
+  ],
+  "frontmatter": {{
+    "关键词": ["至少5个：项目类型、核心方法、业务领域、关键成果、风险点"],
+    "触发器": ["什么场景下会想起这条复盘"],
+    "别名": ["其他叫法、简称、同义词"],
+    "boundaries": {{"applies": "适用于...", "not_applies": "不适用于..."}},
+    "anti_patterns": ["常见误用、复盘陷阱、错误归因方式"]
+  }}
 }}
 ```
+
+**规则：**
+- relations: 分析与已有知识的关联，无关联则留空数组
+- frontmatter: 必须输出，不能省略
 '''
 
 
@@ -390,12 +457,119 @@ class DocumentLLMJudge:
 class DocumentKnowledgeExtractor:
     """文档知识提取器 — 按文档类别使用不同策略提取结构化知识"""
 
-    def __init__(self, caller: HostAgentCaller = None):
+    def __init__(self, caller: HostAgentCaller = None, wiki_base: Path = None):
         self._caller = caller or HostAgentCaller()
+        self._wiki_base = wiki_base
+        self._embedding_index = None  # 懒加载
+
+    def _get_embedding_index(self):
+        """懒加载 EmbeddingIndexManager"""
+        if self._embedding_index is None and self._wiki_base is not None:
+            try:
+                from core.embeddings import EmbeddingIndexManager
+                from core.config import get_config
+                cfg = get_config()
+                if cfg.get("embedding.enabled", False):
+                    self._embedding_index = EmbeddingIndexManager(wiki_base=self._wiki_base)
+            except Exception as e:
+                logger.warning(f"[DocExtractor] EmbeddingIndexManager 加载失败: {e}")
+        return self._embedding_index
+
+    def _fetch_related_pages(self, content: str, top_k: int = 3) -> str:
+        """检索与文档内容最相似的已有 Wiki 页面，返回格式化的上下文字符串"""
+        idx = self._get_embedding_index()
+        if idx is None:
+            return ""
+
+        # 用文档前 800 字作为 query（足够表达主题）
+        query = content[:800].strip()
+        if len(query) < 50:
+            return ""
+
+        try:
+            results = idx.search(query, top_k=top_k, similarity_threshold=0.5, use_rerank=False)
+        except Exception as e:
+            logger.warning(f"[DocExtractor] 关联页面检索失败: {e}")
+            return ""
+
+        if not results:
+            return ""
+
+        lines = ["## 已有相关知识页面（供你建立关联）"]
+        for rel_path, score in results:
+            page_path = self._wiki_base / rel_path
+            if not page_path.exists():
+                continue
+            try:
+                text = page_path.read_text(encoding="utf-8")
+                # 提取 frontmatter
+                fm_match = re.search(r'^---\n(.*?)\n---', text, re.DOTALL)
+                if fm_match:
+                    import yaml
+                    fm = yaml.safe_load(fm_match.group(1)) or {}
+                    name = fm.get("名称", fm.get("title", fm.get("Name", Path(rel_path).stem)))
+                    summary = fm.get("摘要", "")[:120]
+                else:
+                    name = Path(rel_path).stem
+                    summary = text.split("\n# ", 1)[-1].split("\n", 1)[0][:120] if "# " in text else ""
+                lines.append(f"- [[{name}]]: {summary}")
+            except Exception:
+                continue
+
+        return "\n".join(lines)
+
+    def _preprocess_large_tables(self, content: str, max_rows: int = 12, max_cols: int = 8) -> str:
+        """预处理超大 Markdown 表格：截断并添加汇总提示，减少 token 消耗和碎片化分析"""
+        lines = content.split("\n")
+        result = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            # 检测表格行：以 | 开头和结尾
+            if line.strip().startswith("|") and line.strip().endswith("|"):
+                # 收集连续表格块
+                table_lines = []
+                while i < len(lines) and lines[i].strip().startswith("|") and lines[i].strip().endswith("|"):
+                    table_lines.append(lines[i])
+                    i += 1
+
+                if len(table_lines) < 2:
+                    result.extend(table_lines)
+                    continue
+
+                # 解析列数（第一行的 | 分隔符数量）
+                first_row_cells = [c.strip() for c in table_lines[0].split("|") if c.strip() or c == ""]
+                col_count = len(first_row_cells)
+                row_count = len(table_lines)
+
+                # 判断是否需要截断
+                if row_count > max_rows or col_count > max_cols:
+                    # 保留表头（第一行）和分隔行（第二行，如果有）
+                    header = table_lines[0]
+                    separator = table_lines[1] if len(table_lines) > 1 and "---" in table_lines[1] else None
+                    # 保留前 3 行数据（不含分隔行）
+                    data_rows = [l for l in table_lines[1:] if "---" not in l][:3]
+
+                    # 构建提示
+                    result.append(f"> 📊 **大表格**：{row_count} 行 × {col_count} 列，以下仅展示前 {len(data_rows)} 行示例")
+                    result.append(header)
+                    if separator:
+                        result.append(separator)
+                    result.extend(data_rows)
+                    result.append(f"> ...（共 {row_count} 行数据，已在预处理阶段截断以避免逐行碎片化分析）")
+                else:
+                    result.extend(table_lines)
+            else:
+                result.append(line)
+                i += 1
+
+        return "\n".join(result)
 
     def extract(self, content: str, judge_result: DocumentJudgeResult,
                 session_id: str = "") -> Tuple[List[KnowledgeFragment], Dict]:
         """按文档类别提取知识片段和结构化数据"""
+        # 预处理：截断超大表格
+        content = self._preprocess_large_tables(content)
         category = judge_result.doc_category
 
         if category == "book":
@@ -421,7 +595,9 @@ class DocumentKnowledgeExtractor:
         for i, chunk in enumerate(chunks):
             logger.info(f"[DocExtractor] 蒸馏第 {i+1}/{len(chunks)} 章...")
             # 不截断，给 LLM 完整 chunk（API 模式下上下文窗口足够）
+            related = self._fetch_related_pages(chunk)
             prompt = BOOK_METHODOLOGY_PROMPT.replace("{book_content}", chunk)
+            prompt = prompt.replace("{related_pages}", related)
             result = self._caller.call(prompt, expect_json=True, timeout=120, max_retries=0)
             if result is None:
                 logger.warning(f"[DocExtractor] 第 {i+1} 章 LLM 调用失败，跳过")
@@ -476,6 +652,24 @@ class DocumentKnowledgeExtractor:
         if not title or not content:
             return None
 
+        # 提取 concept 级 frontmatter（新格式）
+        concept_fm = concept.get("frontmatter", {})
+        concept_boundaries = concept_fm.get("boundaries", {})
+        concept_anti_patterns = concept_fm.get("anti_patterns", [])
+        concept_keywords = concept_fm.get("关键词", [])
+        concept_triggers = concept_fm.get("触发器", [])
+        concept_aliases = concept_fm.get("别名", [])
+
+        # 兼容旧格式：从 content 中提取边界和反模式（如果 frontmatter 未提供）
+        if not concept_boundaries or not concept_anti_patterns:
+            # 尝试从 content 的 Markdown 结构中提取
+            boundaries_match = re.search(r'## 边界与失效条件\n(.*?)(?=\n## |$)', content, re.DOTALL)
+            if boundaries_match and not concept_boundaries:
+                concept_boundaries = {"applies": "详见正文", "not_applies": boundaries_match.group(1).strip()[:200]}
+            anti_patterns_match = re.search(r'## 防御策略\n(.*?)(?=\n## |$)', content, re.DOTALL)
+            if anti_patterns_match and not concept_anti_patterns:
+                concept_anti_patterns = [anti_patterns_match.group(1).strip()[:200]]
+
         return KnowledgeFragment(
             form=concept.get("form", "concept"),
             title=title,
@@ -483,12 +677,16 @@ class DocumentKnowledgeExtractor:
                 "类型": "concept",
                 "领域": ", ".join(judge.key_topics[:3]) if judge.key_topics else "影响力, 心理学",
                 "摘要": f"{title} — {content[:80].replace(chr(10), ' ')}...",
+                "关键词": concept_keywords,
+                "触发器": concept_triggers,
+                "别名": concept_aliases,
             },
             background="",
             core_content=content,
-            boundaries={},
-            anti_patterns=[],
+            boundaries=concept_boundaries,
+            anti_patterns=concept_anti_patterns,
             related_concepts=[],
+            relations=concept.get("relations", []),
             keywords=judge.key_topics,
         )
 
@@ -515,6 +713,14 @@ class DocumentKnowledgeExtractor:
         # 数据画像
         profile = data.get("data_profile", {})
 
+        # 提取文档级 frontmatter（新格式）
+        doc_frontmatter = data.get("frontmatter", {})
+        doc_boundaries = doc_frontmatter.get("boundaries", {})
+        doc_anti_patterns = doc_frontmatter.get("anti_patterns", [])
+        doc_keywords = doc_frontmatter.get("关键词", [])
+        doc_triggers = doc_frontmatter.get("触发器", [])
+        doc_aliases = doc_frontmatter.get("别名", [])
+
         # 洞察 → 知识片段
         for ins in data.get("insights", []):
             frag = KnowledgeFragment(
@@ -523,13 +729,16 @@ class DocumentKnowledgeExtractor:
                 frontmatter={
                     "领域": "数据分析",
                     "证据级别": ins.get("confidence", "中"),
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
                 },
                 background=f"数据来源：{profile.get('scope', '未知')}",
                 core_content=f"**观察**：{ins.get('observation', '')}\n\n"
                            f"**证据**：{ins.get('evidence', '')}\n\n"
                            f"**含义**：{ins.get('implication', '')}",
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -539,12 +748,17 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="反模式",
                 title=f"异常：{anom.get('description', '')[:50]}",
-                frontmatter={"领域": "数据分析"},
+                frontmatter={
+                    "领域": "数据分析",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=anom.get("description", ""),
                 core_content=f"**数据点**：{anom.get('data_point', '')}\n\n"
                            f"**可能原因**：{anom.get('possible_cause', '')}",
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -554,23 +768,33 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="经验法则",
                 title=f"建议：{rec[:50]}",
-                frontmatter={"领域": "数据分析"},
+                frontmatter={
+                    "领域": "数据分析",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background="基于数据分析的建议",
                 core_content=rec,
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
 
+        # 关联上下文（ADR-019）
+        doc_relations = data.get("relations", [])
         merged_ai = self._merge_ai_expansions(ai_expansions)
         for frag in fragments:
             frag.ai_expansion = merged_ai
+            frag.relations = doc_relations
         return fragments, data
 
     def _extract_strategy(self, content: str, judge: DocumentJudgeResult) -> Tuple[List[KnowledgeFragment], Dict]:
         """提取策略/方案中的决策和方法论"""
+        related = self._fetch_related_pages(content)
         prompt = STRATEGY_EXTRACT_PROMPT.replace("{strategy_content}", content[:10000])
+        prompt = prompt.replace("{related_pages}", related)
         result = self._caller.call(prompt, expect_json=True)
 
         if result is None:
@@ -590,19 +814,32 @@ class DocumentKnowledgeExtractor:
         if ai_exp:
             ai_expansions.append(ai_exp)
 
+        # 提取文档级 frontmatter（新格式）
+        doc_frontmatter = data.get("frontmatter", {})
+        doc_boundaries = doc_frontmatter.get("boundaries", {})
+        doc_anti_patterns = doc_frontmatter.get("anti_patterns", [])
+        doc_keywords = doc_frontmatter.get("关键词", [])
+        doc_triggers = doc_frontmatter.get("触发器", [])
+        doc_aliases = doc_frontmatter.get("别名", [])
+
         # 决策 → 决策记录
         for dec in obj.get("key_decisions", []):
             frag = KnowledgeFragment(
                 form="决策记录",
                 title=dec.get("decision", "决策")[:60],
-                frontmatter={"领域": "策略规划"},
+                frontmatter={
+                    "领域": "策略规划",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=dec.get("rationale", ""),
                 core_content=f"**决策**：{dec.get('decision', '')}\n\n"
                            f"**理由**：{dec.get('rationale', '')}\n\n"
                            f"**替代方案**：{dec.get('alternatives_considered', '')}\n\n"
                            f"**风险**：{', '.join(dec.get('risks', []) or [])}",
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -612,11 +849,16 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="方法论",
                 title=meth.get("name", "方法论")[:60],
-                frontmatter={"领域": "策略规划"},
+                frontmatter={
+                    "领域": "策略规划",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=meth.get("how_applied", ""),
                 core_content=meth.get("how_applied", ""),
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -626,23 +868,33 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="经验法则",
                 title=lesson[:60],
-                frontmatter={"领域": "策略规划"},
+                frontmatter={
+                    "领域": "策略规划",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background="",
                 core_content=lesson,
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
 
+        # 关联上下文（ADR-019）
+        doc_relations = data.get("relations", [])
         merged_ai = self._merge_ai_expansions(ai_expansions)
         for frag in fragments:
             frag.ai_expansion = merged_ai
+            frag.relations = doc_relations
         return fragments, data
 
     def _extract_report(self, content: str, judge: DocumentJudgeResult) -> Tuple[List[KnowledgeFragment], Dict]:
         """提取报告/总结中的经验教训"""
+        related = self._fetch_related_pages(content)
         prompt = REPORT_SUMMARY_PROMPT.replace("{report_content}", content[:10000])
+        prompt = prompt.replace("{related_pages}", related)
         result = self._caller.call(prompt, expect_json=True)
 
         if result is None:
@@ -661,18 +913,31 @@ class DocumentKnowledgeExtractor:
         if ai_exp:
             ai_expansions.append(ai_exp)
 
+        # 提取文档级 frontmatter（新格式）
+        doc_frontmatter = data.get("frontmatter", {})
+        doc_boundaries = doc_frontmatter.get("boundaries", {})
+        doc_anti_patterns = doc_frontmatter.get("anti_patterns", [])
+        doc_keywords = doc_frontmatter.get("关键词", [])
+        doc_triggers = doc_frontmatter.get("触发器", [])
+        doc_aliases = doc_frontmatter.get("别名", [])
+
         # 成果 → 经验法则
         for ach in obj.get("key_achievements", []):
             frag = KnowledgeFragment(
                 form="经验法则",
                 title=ach.get("achievement", "成果")[:60],
-                frontmatter={"领域": "复盘总结"},
+                frontmatter={
+                    "领域": "复盘总结",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=f"成功因素：{ach.get('factors', '')}",
                 core_content=f"**成果**：{ach.get('achievement', '')}\n\n"
                            f"**数据**：{ach.get('metrics', '')}\n\n"
                            f"**成功因素**：{ach.get('factors', '')}",
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -682,13 +947,18 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="反模式",
                 title=chal.get("challenge", "挑战")[:60],
-                frontmatter={"领域": "复盘总结"},
+                frontmatter={
+                    "领域": "复盘总结",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=chal.get("root_cause", ""),
                 core_content=f"**挑战**：{chal.get('challenge', '')}\n\n"
                            f"**根因**：{chal.get('root_cause', '')}\n\n"
                            f"**教训**：{chal.get('lesson', '')}",
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
@@ -698,18 +968,26 @@ class DocumentKnowledgeExtractor:
             frag = KnowledgeFragment(
                 form="方法论",
                 title=method.get("method", "方法")[:60],
-                frontmatter={"领域": "复盘总结"},
+                frontmatter={
+                    "领域": "复盘总结",
+                    "关键词": doc_keywords,
+                    "触发器": doc_triggers,
+                    "别名": doc_aliases,
+                },
                 background=f"适用场景：{method.get('context', '')}",
                 core_content=method.get("method", ""),
-                boundaries={},
-                anti_patterns=[],
+                boundaries=doc_boundaries,
+                anti_patterns=doc_anti_patterns,
                 related_concepts=[],
             )
             fragments.append(frag)
 
+        # 关联上下文（ADR-019）
+        doc_relations = data.get("relations", [])
         merged_ai = self._merge_ai_expansions(ai_expansions)
         for frag in fragments:
             frag.ai_expansion = merged_ai
+            frag.relations = doc_relations
         return fragments, data
 
     def _extract_generic(self, content: str, judge: DocumentJudgeResult) -> Tuple[List[KnowledgeFragment], Dict]:
@@ -942,13 +1220,22 @@ class DocumentDistillationPipeline:
         self.inbox_dir = self.wiki_base / "00-Inbox"
         self._caller = caller or HostAgentCaller()
         self._judge = DocumentLLMJudge(self._caller)
-        self._extractor = DocumentKnowledgeExtractor(self._caller)
+        self._extractor = DocumentKnowledgeExtractor(self._caller, wiki_base=self.wiki_base)
         self._self_check = DistillSelfCheck()
         self._cross_linker = None  # 懒加载
 
     def _get_wiki_dir(self) -> Path:
         from core.config import get_config
         return get_config().wiki_dir
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """将名称转为 URL/文件安全的 slug"""
+        import re
+        slug = name.lower().strip()
+        slug = re.sub(r"[^\w\u4e00-\u9fa5-]", "-", slug)
+        slug = re.sub(r"-+", "-", slug).strip("-")
+        return slug[:64] if slug else "untitled"
 
     def process(self, sid: str, messages: list, meta: dict) -> DocumentDistillResult:
         """处理文档 session，返回蒸馏结果"""
@@ -1046,23 +1333,71 @@ class DocumentDistillationPipeline:
         )
 
     def write_to_wiki(self, result: DocumentDistillResult, source: str = "") -> List[Path]:
-        """将蒸馏结果写入 wiki Inbox"""
+        """将蒸馏结果写入 wiki Inbox，并记录来源追踪"""
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
         written = []
         sid = result.session_id
 
+        seen_slugs = set()
         for i, frag in enumerate(result.fragments):
             md = generate_wiki_page(frag, sid, source=source)
 
-            # 文件名：session前8位_形态_序号.md
-            safe_form = frag.form.replace("-", "_").replace(" ", "_")
-            filename = f"{sid[:8]}_{safe_form}_{i+1}.md"
+            # 文件名：人类可读的 slug（标题）
+            title = frag.title or frag.frontmatter.get("名称", "untitled")
+            slug = self._slugify(title)
+            original_slug = slug
+            counter = 1
+            while slug in seen_slugs:
+                slug = f"{original_slug}-{counter}"
+                counter += 1
+            seen_slugs.add(slug)
+            filename = f"{slug}.md"
             path = self.inbox_dir / filename
             path.write_text(md, encoding="utf-8")
             written.append(path)
             logger.info(f"[DocPipeline] 已写入 wiki: {path.name}")
 
+        # 记录来源追踪（文档蒸馏路径）
+        self._record_source_links(sid, source, written)
+        try:
+            from core.wiki_metrics import WikiMetrics, write_mnemos_home
+            metrics = WikiMetrics(wiki_dir=str(self.wiki_base))
+            for path in written:
+                rel_path = str(path.relative_to(self.wiki_base)) if self.wiki_base in path.parents else str(path)
+                content = path.read_text(encoding="utf-8", errors="ignore")
+                metrics.assess_quality(rel_path, content)
+                metrics.upsert_page(rel_path, title=path.stem, source_count=1, heat_score=1.0, heat_level="warm")
+            write_mnemos_home(str(self.wiki_base))
+        except Exception:
+            logger.debug("文档 Wiki metrics/dashboard 更新失败", exc_info=True)
         return written
+
+    def _record_source_links(self, session_id: str, source: str, paths: List[Path]) -> None:
+        """记录文档→Wiki 的来源追踪到知识图谱数据库"""
+        try:
+            from core.config import get_config
+            import sqlite3
+            db_path = get_config().data_dir / "knowledge_graph.db"
+            with sqlite3.connect(str(db_path), timeout=5) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS document_wiki_link (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        source TEXT DEFAULT '',
+                        wiki_page_path TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                for p in paths:
+                    rel_path = str(p.relative_to(self.wiki_base)) if self.wiki_base in p.parents else str(p)
+                    conn.execute(
+                        """INSERT INTO document_wiki_link (session_id, source, wiki_page_path)
+                           VALUES (?, ?, ?)""",
+                        (session_id, source, rel_path),
+                    )
+                conn.commit()
+        except Exception:
+            logger.debug("来源追踪记录失败", exc_info=True)
 
     def _parse_doc_header(self, content: str) -> Tuple[str, str]:
         """从内容第一行解析文档标题和类型"""

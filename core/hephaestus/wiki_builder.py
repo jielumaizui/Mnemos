@@ -386,17 +386,47 @@ def _extract_messages_from_block(block: str) -> List[Dict]:
 
 
 def _clean_message_content(content: str) -> str:
-    """清理消息内容"""
+    """清理消息内容，保留技术命令行但压缩"""
+    import re as _re
     if not content:
         return ""
-    content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
-    content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
-    content = re.sub(
+    content = _re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=_re.DOTALL)
+    content = _re.sub(r'```.*?```', '', content, flags=_re.DOTALL)
+
+    # 压缩连续纯命令行（无中文的 shell 命令），保留前 3 条
+    shell_cmd_pattern = _re.compile(
         r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
-        '', content, flags=re.MULTILINE,
+        flags=_re.MULTILINE,
     )
-    content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
-    content = re.sub(r'\n{3,}', '\n\n', content)
+    lines = content.split('\n')
+    new_lines = []
+    cmd_buffer = []
+    for line in lines:
+        if shell_cmd_pattern.match(line):
+            cmd_buffer.append(line)
+        else:
+            if cmd_buffer:
+                if len(cmd_buffer) <= 3:
+                    new_lines.extend(cmd_buffer)
+                else:
+                    new_lines.extend(cmd_buffer[:3])
+                    new_lines.append(
+                        f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+                    )
+                cmd_buffer = []
+            new_lines.append(line)
+    if cmd_buffer:
+        if len(cmd_buffer) <= 3:
+            new_lines.extend(cmd_buffer)
+        else:
+            new_lines.extend(cmd_buffer[:3])
+            new_lines.append(
+                f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+            )
+    content = '\n'.join(new_lines)
+
+    content = _re.sub(r'^\s*\d+\.\s*$', '', content, flags=_re.MULTILINE)
+    content = _re.sub(r'\n{3,}', '\n\n', content)
     return content.strip()
 
 

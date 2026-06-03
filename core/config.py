@@ -16,8 +16,64 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# === 性能档位预设 ===
+PERFORMANCE_TIERS: Dict[str, Dict[str, Any]] = {
+    "low_power": {
+        "embedding": {"enabled": False, "use_rerank": False},
+        "capture": {"max_payload_bytes": 100000, "max_workers": 1},
+        "distill": {"max_tasks_per_cycle": 1, "token_budget_total": 4000},
+        "scheduler": {"worker_threads": 1},
+        "daemon": {
+            "services": {
+                "distill_merge": False,
+                "persona_analyzer": False,
+                "signal_collector": False,
+                "event_bus": False,
+                "inbox_scanner": False,
+                "capture_worker": True,  # 核心采集链路必须保留
+            }
+        },
+    },
+    "eco": {
+        "embedding": {"enabled": False, "use_rerank": False},
+        "capture": {"max_payload_bytes": 100000, "max_workers": 1},
+        "distill": {"max_tasks_per_cycle": 1, "token_budget_total": 4000},
+        "scheduler": {"worker_threads": 1},
+        "daemon": {
+            "services": {
+                "distill_merge": False,
+                "persona_analyzer": False,
+                "signal_collector": False,
+                "event_bus": False,
+                "inbox_scanner": False,
+                "capture_worker": True,  # 核心采集链路必须保留
+            }
+        },
+    },
+    "default": {
+        "embedding": {"enabled": True, "use_rerank": True},
+        "capture": {"max_payload_bytes": 200000, "max_workers": 4},
+        "distill": {"max_tasks_per_cycle": 5, "token_budget_total": 16000},
+        "scheduler": {"worker_threads": 4},
+    },
+    "performance": {
+        "embedding": {"enabled": True, "use_rerank": True},
+        "capture": {"max_payload_bytes": 500000, "max_workers": 8},
+        "distill": {"max_tasks_per_cycle": 10, "token_budget_total": 32000},
+        "scheduler": {"worker_threads": 8},
+    },
+    "dev": {
+        "embedding": {"enabled": True, "use_rerank": True},
+        "capture": {"max_payload_bytes": 1048576, "max_workers": 8},
+        "distill": {"max_tasks_per_cycle": 20, "token_budget_total": 64000},
+        "scheduler": {"worker_threads": 8},
+    },
+}
+
+
 # === 代码默认值 ===
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "performance_tier": "default",
     "wiki": {
         "vault_path": None,  # 自动检测
         "subdirs": [
@@ -51,7 +107,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "settings_json_path": None,
         },
-        "mcp": {"enabled": False},
+        "mcp": {"enabled": True},
     },
     # === 评分层常量 ===
     "scoring": {
@@ -66,6 +122,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # === 蒸馏层常量 ===
     "distill": {
+        # 默认按当前产品设计走 LLM API 蒸馏。宿主 Agent 负责调用工具和使用知识，
+        # 不再默认承担“自己蒸馏自己”的后台脑力任务。
+        "provider": "api",
+        "allow_host_agent_delegate": False,
         "trigger_threshold": 0.4,
         "similarity_dedup_threshold": 0.85,
         "single_threshold": 0.30,
@@ -83,6 +143,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_tasks_per_cycle": 5,
         "max_collect_per_cycle": 20,
         "min_task_interval_seconds": 1.0,
+        "poll_interval_seconds": 60,
+        "tick_interval_seconds": 300,
     },
     # === 知识图谱常量 ===
     "knowledge_graph": {
@@ -120,8 +182,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "daemon": {
         "services": {
             "capture_worker": True,
-            # 默认不扫描本机历史 Agent 会话；MCP/Hook 入队仍会被 capture_worker 消费。
-            "l1_sync": False,
+            # 默认启用受限增量扫描；性能由 sync.l1_scan_* 预算控制。
+            "l1_sync": True,
             "distill_merge": True,
             "heartbeat": True,
             "inbox_scanner": True,
@@ -163,6 +225,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_latency_ms": 10,
         "queue_depth_alert": 1000,
         "max_queue_depth": 10000,
+        "poll_interval_seconds": 10,
         "max_recover_events": 1000,
         "dead_letter_alert": 10,
         "max_retries": 5,
@@ -203,10 +266,29 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "api_key": "",                 # 用户填写
         "embedding_model": "BAAI/bge-m3",
         "rerank_model": "BAAI/bge-reranker-v2-m3",
-        "use_rerank": False,           # 是否启用重排（额外消耗）
+        "use_rerank": True,            # 是否启用重排（个人版默认开启）
         "ttl_days": 7,
         "similarity_threshold": 0.72,  # 语义相似度阈值（bge-m3 建议 0.72）
         "index_interval_hours": 24,    # 自动重建索引间隔
+    },
+    # === LLM API / 蒸馏模型 ===
+    "llm": {
+        "provider": "siliconflow",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "api_key": "",
+        "model": "deepseek-ai/DeepSeek-V3",
+        "providers": {
+            "siliconflow": {
+                "base_url": "https://api.siliconflow.cn/v1",
+                "api_key": "",
+                "model": "deepseek-ai/DeepSeek-V3",
+            },
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "",
+                "model": "gpt-4o-mini",
+            },
+        },
     },
     # === 增量批处理 ===
     "incremental": {
@@ -236,28 +318,46 @@ class Config:
         return Path.home() / ".mnemos"
 
     def _load(self) -> Dict:
-        """加载配置：代码默认值 < JSON 文件 < 环境变量"""
+        """加载配置：代码默认值 < 档位预设 < JSON 文件 < 环境变量
+
+        加载顺序修正：
+        1. 代码默认值
+        2. 从 JSON 文件读取 performance_tier
+        3. 应用该 tier 的档位预设
+        4. 合并 JSON 文件的其他配置（用户显式覆盖项）
+        5. 环境变量覆盖
+        """
         import copy
         data = copy.deepcopy(DEFAULT_CONFIG)
 
-        # 1. 从 JSON 文件加载；如果没有 JSON，再尝试旧 YAML 作为迁移来源。
+        # 先读取 JSON 文件（不合并），只为拿到用户设置的 performance_tier
+        file_data = {}
         if self.config_path.exists():
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     file_data = json.load(f)
-                self._deep_merge(data, file_data)
             except Exception as e:
                 logger.warning(f"配置文件加载失败: {e}")
         elif self._use_default_config_path:
             legacy_data = self._load_legacy_config()
             if legacy_data:
-                self._deep_merge(data, legacy_data)
+                file_data = legacy_data
                 self._migrated_from_legacy = True
 
-        # 2. 环境变量覆盖 (MNEMOS_* 前缀)
+        # 应用性能档位预设（优先使用 JSON 中的 tier，其次默认值）
+        tier = file_data.get("performance_tier", data.get("performance_tier", "default"))
+        if tier in PERFORMANCE_TIERS:
+            self._deep_merge(data, PERFORMANCE_TIERS[tier])
+            data["performance_tier"] = tier  # 确保 tier 本身被保留
+
+        # 合并 JSON 文件的其他配置（用户显式覆盖项优先于档位预设）
+        if file_data:
+            self._deep_merge(data, file_data)
+
+        # 环境变量覆盖 (MNEMOS_* 前缀)
         self._apply_env_overrides(data)
 
-        # 3. 解析自动检测值
+        # 解析自动检测值
         self._resolve_auto_values(data)
 
         return data

@@ -325,8 +325,8 @@ mnemos mcp serve                  # 启动 MCP 服务器
 |------|------|
 | `knowledge_ingest` | 用户主动口述知识 — 当用户说"记住这个"时调用 |
 | `knowledge_import` | 用户指定文件导入 — 解析后写入 Wiki |
-| `knowledge_distill` | 触发知识蒸馏 — 聊天记录转为结构化 Wiki 知识 |
-| `document_process` | 解析文档 — PDF/PPT/Excel/Word/HTML/EBOOK |
+| `knowledge_distill` | 通过 LLM API 触发知识蒸馏 — 聊天记录转为结构化 Wiki 知识 |
+| `document_process` | 解析文档 — 默认只解析；`write_to_wiki=true` 时 API 蒸馏写入 Wiki |
 
 **会话捕获（推荐）**
 
@@ -345,6 +345,7 @@ mnemos mcp serve                  # 启动 MCP 服务器
 | `preflight_inject` | 任务前装载历史经验（KIA 闭环第一步） |
 | `guard_check` | 执行中风险守护（KIA 闭环第二步） |
 | `retrospective_list` | 列出可用的 retrospective 经验 |
+| `check_pending_recaps` | 检查待复盘事项，推动任务收尾和复盘闭环 |
 
 **决策与搜索**
 
@@ -384,11 +385,17 @@ mnemos mcp serve                  # 启动 MCP 服务器
 
 ### 方式二：Claude Code Hooks
 
-运行 `mnemos init` 时自动安装 hooks 到 `~/.claude/settings.json`。
+运行 `mnemos init` 时会默认尝试为检测到的 Agent 安装 hooks；Claude Code 会写入 `~/.claude/settings.json`。安装失败时运行 `mnemos agent doctor` 查看原因。
 
 ### 方式三：Hermes / OpenClaw / OpenCode / Codex Agent
 
-各 Agent 通过各自的适配器机制（Poll / SQLite / JSON Config / File-based）自动采集对话记录，无需额外配置。
+各 Agent 通过各自的适配器机制（Poll / SQLite / JSON Config / File-based）采集对话记录。首次部署后建议运行：
+
+```bash
+mnemos agent doctor
+mnemos agent install
+mnemos doctor
+```
 
 ## 与 Memos 和 Obsidian 的关系
 
@@ -437,8 +444,11 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
 | `MEMOS_API_URL` | `memos.api_url` | Memos 实例地址 |
 | `MNEMOS_WIKI_DIR` / `WIKI_DIR` | `wiki.vault_path` | Wiki 知识库目录 |
 | `MNEMOS_DIR` | — | Mnemos 数据根目录（默认 `~/.mnemos`） |
-| `SILICONFLOW_API_KEY` | `embedding.api_key` | 硅基流动 API Key（语义搜索） |
-| `SILICONFLOW_BASE_URL` | `embedding.base_url` | 硅基流动 API 地址 |
+| `SILICONFLOW_API_KEY` | `llm.api_key` / `embedding.api_key` | 硅基流动 API Key（默认用于 API 蒸馏，也可用于语义搜索） |
+| `SILICONFLOW_BASE_URL` | `llm.base_url` / `embedding.base_url` | 硅基流动 API 地址 |
+| `OPENAI_API_KEY` | `llm.api_key` | OpenAI 兼容 API Key（API 蒸馏） |
+| `OPENAI_BASE_URL` | `llm.base_url` | OpenAI 兼容 API 地址 |
+| `OPENAI_MODEL` | `llm.model` | API 蒸馏模型 |
 | `CLAUDE_SETTINGS_JSON` | — | Claude Code settings.json 路径 |
 
 关键配置项：
@@ -466,18 +476,28 @@ Mnemos 与 [Memos](https://github.com/usememos/memos) 和 [Obsidian](https://obs
   "daemon": {
     "services": {
       "capture_worker": true,
-      "l1_sync": false,
+      "l1_sync": true,
       "event_bus": true
     }
   },
+  "distill": {
+    "provider": "api",
+    "allow_host_agent_delegate": false
+  },
+  "llm": {
+    "provider": "siliconflow",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "api_key": "",
+    "model": "deepseek-ai/DeepSeek-V3"
+  },
   "embedding": {
-    "enabled": false,
+    "enabled": true,
     "provider": "siliconflow",
     "base_url": "https://api.siliconflow.cn/v1",
     "api_key": "",
     "embedding_model": "BAAI/bge-m3",
     "rerank_model": "BAAI/bge-reranker-v2-m3",
-    "use_rerank": false,
+    "use_rerank": true,
     "similarity_threshold": 0.72
   }
 }

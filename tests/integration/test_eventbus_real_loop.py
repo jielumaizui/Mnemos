@@ -46,7 +46,7 @@ class TestEventBusRealLoop:
             "session_id": "sess-001",
             "source": "memos",
         })
-        event_id = bus.publish(event)
+        event_id = bus.publish(event, force=True)
         assert event_id
 
         conn = bus._get_conn()
@@ -144,9 +144,9 @@ class TestEventBusRealLoop:
     def test_bus_stats_returns_counts(self, bus):
         """stats() 应返回事件统计。"""
         from core.mnemos_bus import Event
-        bus.publish(Event(event_type="type_a", source="s", payload={}))
-        bus.publish(Event(event_type="type_a", source="s", payload={}))
-        bus.publish(Event(event_type="type_b", source="s", payload={}))
+        bus.publish(Event(event_type="type_a", source="s", payload={}), force=True)
+        bus.publish(Event(event_type="type_a", source="s", payload={}), force=True)
+        bus.publish(Event(event_type="type_b", source="s", payload={}), force=True)
         time.sleep(0.3)
 
         stats = bus.stats()

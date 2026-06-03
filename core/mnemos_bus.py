@@ -24,7 +24,7 @@ import time
 import uuid
 import warnings
 from dataclasses import dataclass, asdict, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Union
 
@@ -309,11 +309,19 @@ class EventBus:
 
     # ========== 发布事件 ==========
 
+    # 必须持久化的事件类型（即使暂时没有消费者，也有审计/追溯价值）
+    _PERSISTENT_EVENT_TYPES = {
+        "session.start", "session.end", "distill.request", "signal.batch",
+        "knowledge.ingested", "system_alert", "dispute_created",
+        "knowledge_distilled", "distill_complete",
+    }
+
     def publish(
         self,
         event: Union[Event, str],
         payload: Optional[Dict[str, Any]] = None,
         agent: Optional[str] = None,
+        force: bool = False,
     ) -> str:
         """发布事件
 
@@ -328,6 +336,9 @@ class EventBus:
 
         为保持完全向后兼容，当第二个位置参数是 dict 时，
         视为 payload；当是 str 时，视为 agent。
+
+        优化：无消费者且非必须持久化的事件直接丢弃，避免 SQLite 堆积。
+        测试可传 force=True 强制持久化。
 
         Returns:
             trace_id
@@ -354,12 +365,24 @@ class EventBus:
                 # 标准新风格: publish("type", payload={...})
                 event = Event(event_type=event, source="", payload=payload or {})
 
+        # 优化：无消费者且非必须持久化的事件直接丢弃（force 时强制持久化）
+        event_type = event.event_type
+        with self._handlers_lock:
+            has_handler = event_type in self._handlers or "*" in self._handlers
+        if not force and not has_handler and event_type not in self._PERSISTENT_EVENT_TYPES:
+            logger.debug(
+                f"[EventBus] 丢弃无消费者事件: {event_type} from {event.source}"
+            )
+            return event.trace_id
+
         # ---- 持久化到 SQLite ----
         trace_id = event.trace_id
         conn = self._get_conn()
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            """INSERT INTO events (timestamp, trace_id, event_type, source, payload_json, status, retry_count, created_at)
+            """INSERT INTO events
+               (timestamp, trace_id, event_type, source, payload_json,
+                status, retry_count, created_at)
                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)""",
             (
                 event.timestamp,
@@ -621,6 +644,54 @@ class EventBus:
         result["queue_depth"] = self._queue.qsize()
 
         return result
+
+    def stats_by_type(self) -> Dict[str, Dict[str, int]]:
+        """返回各状态按事件类型分布的统计"""
+        conn = self._get_conn()
+        result: Dict[str, Dict[str, int]] = {}
+        for status in ("pending", "processing", "done"):
+            rows = conn.execute(
+                "SELECT event_type, COUNT(*) as cnt FROM events WHERE status = ? GROUP BY event_type",
+                (status,),
+            ).fetchall()
+            result[status] = {r["event_type"]: r["cnt"] for r in rows}
+        return result
+
+    def cleanup_stale(self, max_age_hours: int = 24) -> int:
+        """将长期 pending/processing 且无消费者的事件标记为 archived"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "UPDATE events SET status = 'archived' WHERE status IN ('pending', 'processing') AND timestamp < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cursor.rowcount
+
+    def archive_no_consumer_events(self) -> int:
+        """归档当前无消费者的事件（减少 pending 堆积）"""
+        with self._handlers_lock:
+            consumer_types = set(self._handlers.keys())
+            has_wildcard = "*" in self._handlers
+        if has_wildcard:
+            return 0
+        conn = self._get_conn()
+        # 获取所有 pending 的事件类型
+        rows = conn.execute(
+            "SELECT DISTINCT event_type FROM events WHERE status = 'pending'"
+        ).fetchall()
+        archived = 0
+        for (event_type,) in rows:
+            if event_type not in consumer_types:
+                cursor = conn.execute(
+                    "UPDATE events SET status = 'archived' WHERE status = 'pending' AND event_type = ?",
+                    (event_type,),
+                )
+                archived += cursor.rowcount
+        conn.commit()
+        if archived > 0:
+            logger.info(f"[EventBus] 归档 {archived} 个无消费者事件")
+        return archived
 
     # ========== 旧文件系统接口（deprecated） ==========
 

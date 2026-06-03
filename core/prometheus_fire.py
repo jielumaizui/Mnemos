@@ -3,12 +3,11 @@
 
 """
 职责：
-- 将 distill_queue 中的原始对话打包为结构化蒸馏任务
-- 通过 Agent 适配器下发任务
-- 监控结果路径，等待 Agent 完成
+- 保留旧版 AgentDelegate 蒸馏任务下发能力，供 legacy/debug 模式使用
+- 主蒸馏链路默认由 HephaestusWorker 通过 LLM API 完成
+- 宿主 Agent 的核心职责是调用 Mnemos 工具、使用知识、回写结果
 
-设计原则：Mnemos 本身不直接调用 LLM API，
-所有"脑力工作"委托给本地 AI Agent 完成。
+当前设计原则：蒸馏默认不委托宿主 Agent，避免上下文限制和“自己做自己查”。
 """
 
 import json

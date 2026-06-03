@@ -150,7 +150,7 @@ class PredictivePush:
 
         decisions = []
         for signal in signals:
-            # 同主题 30 分钟缓存
+            # 同主题 30 分钟缓存（内存+数据库双层兜底）
             if self._is_topic_cached(signal.topic):
                 continue
 
@@ -182,13 +182,28 @@ class PredictivePush:
                 signal=signal,
             ))
 
-        # 限制每批最多 3 条
-        decisions = [d for d in decisions if d.should_push][:3]
+        # 按 page_path 去重：同一页面只保留最高置信度的一条
+        seen_paths: Dict[str, PushDecision] = {}
+        for d in decisions:
+            if not d.should_push:
+                continue
+            path = d.page_path or d.title
+            if path in seen_paths:
+                if d.confidence > seen_paths[path].confidence:
+                    seen_paths[path] = d
+            else:
+                seen_paths[path] = d
+        decisions = list(seen_paths.values())
 
-        # 记录推送历史
+        # 按置信度排序，限制每批最多 3 条
+        decisions.sort(key=lambda d: d.confidence, reverse=True)
+        decisions = decisions[:3]
+
+        # 记录推送历史（使用标准化 topic 作为缓存 key，避免 title/topic 不一致导致冷却失效）
         for d in decisions:
             self._record_push(d)
-            self._topic_cache[d.title] = time.time()
+            cache_key = (d.signal.topic if d.signal else d.title).strip().lower()
+            self._topic_cache[cache_key] = time.time()
 
         return decisions
 
@@ -289,26 +304,32 @@ class PredictivePush:
         topic_lower = signal.topic.lower()
         topic_tokens = set(re.findall(r'[a-z0-9]+', topic_lower))
 
+        def _result_get(result, key, default=None):
+            """兼容 dataclass 和 dict 的字段读取"""
+            if isinstance(result, dict):
+                return result.get(key, default)
+            return getattr(result, key, default)
+
         def _relevance_gate(result) -> bool:
             """检查搜索结果是否与主题真正相关"""
-            # 语义召回的结果：用 semantic_score 直接判断，放宽 token 匹配
-            semantic_score = getattr(result, "relevance", 0.0) or result.get("relevance", 0.0)
-            if getattr(result, "match_type", "") == "semantic" or result.get("match_type") == "semantic":
-                if semantic_score >= 0.72:  # bge-m3 语义阈值
-                    return True
-                return False
-
-            # score 阈值
-            score = getattr(result, "score", 0.0) or result.get("score", 0.0)
+            # 统一 score 阈值（relation boost 已封顶，语义和关键词用同一标准）
+            score = _result_get(result, "score", 0.0)
             if score < 0.55:
                 return False
+
             # title/snippet 必须包含至少一个主题 token
-            title = (getattr(result, "title", "") or result.get("title", "")).lower()
-            snippet = (getattr(result, "snippet", "") or result.get("content", "")).lower()
-            combined = title + " " + snippet
+            title = _result_get(result, "title", "").lower()
+            snippet = (_result_get(result, "snippet", "") or _result_get(result, "content", "")).lower()
+            path = _result_get(result, "page_path", "").lower()
+            combined = title + " " + snippet + " " + path
             matched_tokens = [t for t in topic_tokens if t in combined and len(t) >= 2]
             if not matched_tokens:
                 return False
+
+            # 标题精确包含主题词的额外保护
+            if signal.topic.lower() in title or signal.topic.lower() in path:
+                return True
+
             return True
 
         # 1. 优先 ContextAwareSearch（相关性更可靠）
@@ -364,15 +385,34 @@ class PredictivePush:
         return True
 
     def _is_topic_cached(self, topic: str) -> bool:
-        """同主题 30 分钟缓存，定期清理过期条目防止内存泄漏"""
+        """同主题 30 分钟缓存，定期清理过期条目防止内存泄漏。
+        同时查询内存缓存和数据库历史，进程重启后仍能防重复推送。"""
         now = time.time()
-        # 每 100 次检查清理一次过期缓存
+        normalized = topic.strip().lower()
+
+        # 1. 内存缓存检查
         if len(self._topic_cache) > 100 and getattr(self, '_cache_check_count', 0) % 100 == 0:
             cutoff = now - 1800
             self._topic_cache = {k: v for k, v in self._topic_cache.items() if v > cutoff}
         self._cache_check_count = getattr(self, '_cache_check_count', 0) + 1
-        last_push = self._topic_cache.get(topic, 0)
-        return (now - last_push) < 1800
+        last_push = self._topic_cache.get(normalized, 0)
+        if (now - last_push) < 1800:
+            return True
+
+        # 2. 数据库兜底检查（进程重启后仍能防重）
+        try:
+            cutoff = now - 1800
+            with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+                cursor = conn.execute(
+                    "SELECT 1 FROM push_history WHERE topic = ? AND pushed_at >= ? LIMIT 1",
+                    (normalized, cutoff),
+                )
+                if cursor.fetchone():
+                    return True
+        except Exception:
+            pass
+
+        return False
 
     def _is_blindspot_related(self, topic: str) -> bool:
         """检查主题是否与已知盲点相关"""

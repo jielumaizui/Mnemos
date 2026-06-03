@@ -23,6 +23,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # 历史截断标记（不同模块/版本遗留）
 TRUNCATION_MARKERS = [
     r"内容过长已截断",           # [⚠️ 内容过长已截断：N 字节 → M 字节]
@@ -141,6 +145,11 @@ def get_truncated_count() -> int:
 
 
 if __name__ == "__main__":
-    dry = "--dry-run" in sys.argv
-    tag = "--tag" in sys.argv
-    scan_and_record(dry_run=dry, tag_memos=tag)
+    import argparse
+
+    parser = argparse.ArgumentParser(description="扫描并记录历史截断的 Memos 原始记录")
+    parser.add_argument("--dry-run", action="store_true", help="只扫描展示，不写入本地追踪表")
+    parser.add_argument("--tag", action="store_true", help="尝试给 Memos 记录追加 raw_incomplete=true 标签")
+    args = parser.parse_args()
+
+    scan_and_record(dry_run=args.dry_run, tag_memos=args.tag)

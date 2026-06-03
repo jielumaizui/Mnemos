@@ -189,11 +189,18 @@ class PollingTrigger(BaseTrigger):
         )
 
     def stop(self):
+        """停止轮询并关闭持久连接"""
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
         self._save_state()
+        self.close()
+
+    def close(self):
+        """关闭持久连接"""
+        if hasattr(self, '_pool'):
+            self._pool.close()
 
     def _poll_loop(self, watch_path: Path):
         """轮询主循环"""
@@ -236,16 +243,6 @@ class PollingTrigger(BaseTrigger):
                 self._seen.pop(old_path, None)
 
         self._save_state()
-
-    def stop(self):
-        """停止轮询并关闭持久连接"""
-        self._running = False
-        self.close()
-
-    def close(self):
-        """关闭持久连接"""
-        if hasattr(self, '_pool'):
-            self._pool.close()
 
     def _load_state(self):
         """从 SQLite 加载已扫描文件状态"""

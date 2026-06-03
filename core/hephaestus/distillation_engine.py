@@ -7,13 +7,14 @@ DistillationEngine — 七层蒸馏流水线
 七层架构：
   L1 噪音过滤   — 规则级，<1ms，复用 ingest_helpers.is_noise_message()
   L2 价值预判   — 规则 + 贝叶斯，CERTAINLY_YES / CERTAINLY_NO / MAYBE
-  L3 LLM判断    — 宿主Agent调用，knowledge / skill / skip
+  L3 LLM判断    — LLM API 调用，knowledge / skill / skip
   L4 知识提取   — LLM + assertion_extractor 验证，6种知识形态
   L5 自检       — 断言验证 / 代码语法 / 链接有效性 / 时间范围
   L6 跨Agent关联 — Jaccard关键词重叠，自动注入 [[反向链接]]
   L7 反馈循环   — AdaptiveScorer + 用户画像信号驱动
 
-同源复用原则：Mnemos 不直接调用 LLM API，所有 LLM 工作委托给宿主 Agent。
+当前产品原则：宿主 Agent 负责调用 Mnemos 工具和使用知识；蒸馏本身默认走
+OpenAI 兼容 LLM API，避免“自己做自己查”和宿主上下文限制。
 """
 
 from __future__ import annotations
@@ -24,22 +25,20 @@ import os
 import re
 import sqlite3
 import subprocess
-import time
-import traceback
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import log1p
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.config import get_config
 from core.frontmatter import to_chinese_frontmatter, fm_get
 from core.kia.ingest_helpers import is_noise_message
-
+from core.llm_config import resolve_llm_api_config
 
 
 logger = logging.getLogger(__name__)
+
+
 def _get_wiki_dir() -> Path:
     return get_config().wiki_dir
 
@@ -126,29 +125,111 @@ class DistillationResult:
     self_check_passed: bool = True
     self_check_issues: List[str] = field(default_factory=list)
     cross_agent_links: List[str] = field(default_factory=list)
+    # 会话覆盖范围（用于 Wiki 来源追踪）
+    session_coverage: str = ""
+    # 来源 Agent
+    source: str = ""
 
 
 # ========== 内容清洗 ==========
 
 def clean_message_content(content: str) -> str:
-    """清理消息内容"""
+    """清理消息内容，保留代码块结构"""
     if not content:
         return ""
+    # 移除 thinking 块
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
-    content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
-    content = re.sub(
+
+    # 压缩代码块：保留语言标记+文件路径+关键结构，中间省略
+    def _compress_code_block(m):
+        block = m.group(0)
+        lines = block.split('\n')
+        if len(lines) <= 10:
+            return block
+        # 提取文件路径（通常在代码块前的注释或首行）
+        file_hint = ""
+        for line in lines[:5]:
+            if line.startswith("# file:") or line.startswith("# File:") or line.startswith("// file:"):
+                file_hint = line.strip()
+                break
+        # 保留关键结构：函数定义、类定义、import
+        key_lines = []
+        for line in lines[1:-1]:
+            stripped = line.strip()
+            if stripped.startswith(("def ", "class ", "import ", "from ", "@")):
+                key_lines.append(line)
+        # 限制关键结构数量，避免过长
+        if len(key_lines) > 5:
+            key_lines = key_lines[:5] + ["[... more definitions omitted ...]"]
+        head = lines[:3]  # ```lang + 前两行
+        if file_hint and file_hint not in head:
+            head.insert(1, file_hint)
+        tail = lines[-2:]  # 最后两行 + ```
+        omitted_count = len(lines) - len(head) - len(tail) - len(key_lines)
+        parts = head
+        if key_lines:
+            parts = parts + ["[... key structures ...]"] + key_lines
+        parts = parts + [f"[... {omitted_count} lines omitted ...]"] + tail
+        return '\n'.join(parts)
+
+    content = re.sub(r'```.*?```', _compress_code_block, content, flags=re.DOTALL)
+
+    # 压缩连续纯命令行（无中文的 shell 命令），保留前 3 条，标注省略数量
+    shell_cmd_pattern = re.compile(
         r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
-        '', content, flags=re.MULTILINE,
+        flags=re.MULTILINE,
     )
+    lines = content.split('\n')
+    new_lines = []
+    cmd_buffer = []
+    for line in lines:
+        if shell_cmd_pattern.match(line):
+            cmd_buffer.append(line)
+        else:
+            if cmd_buffer:
+                if len(cmd_buffer) <= 3:
+                    new_lines.extend(cmd_buffer)
+                else:
+                    new_lines.extend(cmd_buffer[:3])
+                    new_lines.append(
+                        f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+                    )
+                cmd_buffer = []
+            new_lines.append(line)
+    if cmd_buffer:
+        if len(cmd_buffer) <= 3:
+            new_lines.extend(cmd_buffer)
+        else:
+            new_lines.extend(cmd_buffer[:3])
+            new_lines.append(
+                f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+            )
+    content = '\n'.join(new_lines)
+
     content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip()
 
 
-def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
-    """从消息列表构建对话文本"""
+def build_session_text(
+    messages: List[Dict], max_chars: int = 24000,
+    out_meta: Optional[Dict] = None,
+) -> str:
+    """从消息列表构建对话文本。
+
+    长会话处理策略（head-tail 截断）：
+    - 保留开头 30% 的上下文（背景、问题设定）
+    - 保留结尾 70% 的最新对话（关键决策、结论）
+    - 中间用省略标记标注被跳过的 turn 数量
+    - 单条消息仍限制 1000 字符，避免极端长消息撑爆上下文
+
+    Args:
+        out_meta: 如果传入 dict，会将截断信息写入其中（total_turns, head_turns,
+                  tail_turns, omitted_turns, truncated）。
+    """
     lines = []
-    for msg in messages:
+    message_truncations = []
+    for i, msg in enumerate(messages):
         role = msg.get("role", "unknown")
         content = msg.get("content", "").strip()
         if not content:
@@ -156,14 +237,78 @@ def build_session_text(messages: List[Dict], max_chars: int = 12000) -> str:
         content = clean_message_content(content)
         if not content:
             continue
+        original_len = len(content)
         if len(content) > 1000:
             content = content[:1000] + "...(truncated)"
+            message_truncations.append({
+                "turn": i + 1,
+                "role": role,
+                "original_length": original_len,
+                "kept_length": 1000,
+                "truncated": True,
+            })
+        else:
+            message_truncations.append({
+                "turn": i + 1,
+                "role": role,
+                "original_length": original_len,
+                "kept_length": original_len,
+                "truncated": False,
+            })
         lines.append(f"[{role}] {content}")
 
     full_text = "\n\n".join(lines)
-    if len(full_text) > max_chars:
-        full_text = full_text[:max_chars] + "\n\n...(session truncated)"
-    return full_text
+    total_turns = len(lines)
+
+    if len(full_text) <= max_chars:
+        if out_meta is not None:
+            out_meta.update({
+                "total_turns": total_turns,
+                "head_turns": total_turns,
+                "tail_turns": 0,
+                "omitted_turns": 0,
+                "truncated": False,
+                "message_truncations": message_truncations,
+            })
+        return full_text
+
+    # head-tail 智能截断：保留会话两端，标注省略范围
+    omission_marker_len = 80  # 预留省略标记长度
+    usable = max_chars - omission_marker_len
+    head_limit = int(usable * 0.3)
+    tail_limit = usable - head_limit
+
+    head_text = full_text[:head_limit]
+    # 截断到完整的 turn 边界（最近的一个 \n\n）
+    last_boundary = head_text.rfind("\n\n")
+    if last_boundary > 0:
+        head_text = head_text[:last_boundary]
+
+    tail_text = full_text[-tail_limit:]
+    first_boundary = tail_text.find("\n\n")
+    if first_boundary >= 0:
+        tail_text = tail_text[first_boundary + 2:]
+
+    # 计算被省略的 turn 数（基于原始 lines）
+    head_turns = head_text.count("\n\n") + 1 if head_text else 0
+    tail_turns = tail_text.count("\n\n") + 1 if tail_text else 0
+    omitted_turns = max(0, len(lines) - head_turns - tail_turns)
+
+    if out_meta is not None:
+        out_meta.update({
+            "total_turns": total_turns,
+            "head_turns": head_turns,
+            "tail_turns": tail_turns,
+            "omitted_turns": omitted_turns,
+            "truncated": True,
+            "message_truncations": message_truncations,
+        })
+
+    return (
+        f"{head_text}\n\n"
+        f"[... {omitted_turns} turns omitted; showing head + tail ...]\n\n"
+        f"{tail_text}"
+    )
 
 
 # ========== JSON 解析容错 ==========
@@ -259,9 +404,10 @@ def extract_json(text: str) -> Optional[Dict]:
 # ========== HostAgentCaller — 宿主 Agent 调用器 ==========
 
 class HostAgentCaller:
-    """宿主 Agent 调用器 — 同源复用
+    """LLM 调用器。
 
-    优先级：claude -p → kimi --print → OpenAI 兼容 API → AgentDelegate 异步
+    默认使用 OpenAI 兼容 API。CLI / AgentDelegate 仅作为显式 legacy 模式，
+    防止后台蒸馏反向污染宿主 Agent 的工作上下文。
     """
 
     MAX_RETRIES = 2
@@ -269,7 +415,9 @@ class HostAgentCaller:
 
     def __init__(self, timeout: int = None, force_provider: str = None):
         self._timeout = timeout or self.TIMEOUT
-        self._force_provider = force_provider  # "api" | "cli" | None
+        cfg = get_config()
+        self._force_provider = (force_provider or cfg.get("distill.provider", "api") or "api").lower()
+        self._allow_delegate = bool(cfg.get("distill.allow_host_agent_delegate", False))
 
     def call(self, prompt: str, expect_json: bool = True,
              max_retries: int = None, timeout: int = None) -> Optional[Dict]:
@@ -303,10 +451,7 @@ class HostAgentCaller:
 
     def _invoke(self, prompt: str, timeout: int) -> Optional[str]:
         if self._force_provider == "api":
-            raw = self._try_openai_compatible_api(prompt, timeout)
-            if raw is not None:
-                return raw
-            return self._try_delegate(prompt, timeout)
+            return self._try_openai_compatible_api(prompt, timeout)
 
         if self._force_provider == "cli":
             raw = self._try_cli("claude", ["-p", prompt], timeout)
@@ -315,19 +460,24 @@ class HostAgentCaller:
             raw = self._try_cli("kimi", ["--print", prompt], timeout)
             if raw is not None:
                 return raw
-            return self._try_delegate(prompt, timeout)
+            return self._try_delegate(prompt, timeout) if self._allow_delegate else None
 
-        # 默认优先级：claude → kimi → api → delegate
+        if self._force_provider == "delegate":
+            return self._try_delegate(prompt, timeout) if self._allow_delegate else None
+
+        # Legacy auto mode: api first, then optional CLI/delegate if explicitly configured.
+        raw = self._try_openai_compatible_api(prompt, timeout)
+        if raw is not None:
+            return raw
+        if self._force_provider != "auto":
+            return None
         raw = self._try_cli("claude", ["-p", prompt], timeout)
         if raw is not None:
             return raw
         raw = self._try_cli("kimi", ["--print", prompt], timeout)
         if raw is not None:
             return raw
-        raw = self._try_openai_compatible_api(prompt, timeout)
-        if raw is not None:
-            return raw
-        return self._try_delegate(prompt, timeout)
+        return self._try_delegate(prompt, timeout) if self._allow_delegate else None
 
     def _try_openai_compatible_api(self, prompt: str, timeout: int) -> Optional[str]:
         """尝试通过 OpenAI 兼容 API 调用 LLM（如 SiliconFlow、OpenAI、Azure 等）
@@ -339,32 +489,19 @@ class HostAgentCaller:
         - OPENAI_MODEL: 模型名称（默认 gpt-4o-mini）
         """
         import urllib.request
-        base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        # 根据提供商选择默认模型
-        if "siliconflow" in base_url.lower():
-            default_model = "deepseek-ai/DeepSeek-V3"
-        else:
-            default_model = "gpt-4o-mini"
-        model = os.environ.get("OPENAI_MODEL", default_model)
-
-        # 根据 base_url 智能选择对应的 API key
-        if "siliconflow" in base_url.lower():
-            api_key = os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        else:
-            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("SILICONFLOW_API_KEY")
-
-        if not api_key:
+        llm = resolve_llm_api_config()
+        if not llm.configured:
             return None
         data = json.dumps({
-            "model": model,
+            "model": llm.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 4000,
             "temperature": 0.2,
         }).encode()
         req = urllib.request.Request(
-            f"{base_url}/chat/completions",
+            f"{llm.base_url}/chat/completions",
             data=data,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {llm.api_key}"},
             method="POST",
         )
         try:
@@ -960,7 +1097,7 @@ class CrossAgentLinker:
     自动注入 [[反向链接]]，连接不同 Agent 产出的相关知识。
     """
 
-    JACCARD_THRESHOLD = 0.3
+    JACCARD_THRESHOLD = 0.45
 
     def __init__(self):
         self._db_path = _get_wiki_db()
@@ -1016,16 +1153,95 @@ class CrossAgentLinker:
         kw = set(frag.keywords) if frag.keywords else set()
         title_words = re.findall(r'[a-zA-Z_]{3,}', frag.title)
         kw.update(w.lower() for w in title_words)
-        content_words = re.findall(r'[一-龥]{2,4}', frag.core_content[:500])
-        kw.update(content_words)
+        # 中文只取 3-6 字词组，避免 2 字碎片噪音；同时过滤纯虚词组合
+        content_words = re.findall(r'[一-龥]{3,6}', frag.core_content[:500])
+        kw.update(w for w in content_words if not self._is_stop_phrase(w))
         return kw
 
     def _text_to_keywords(self, text: str) -> set:
         """从文本提取关键词集合"""
         kw = set()
         kw.update(w.lower() for w in re.findall(r'[a-zA-Z_]{3,}', text))
-        kw.update(re.findall(r'[一-龥]{2,4}', text))
+        content_words = re.findall(r'[一-龥]{3,6}', text)
+        kw.update(w for w in content_words if not self._is_stop_phrase(w))
         return kw
+
+    _STOP_PHRASES = {
+        "在系统", "系统中", "系统里", "在进程", "进程中", "过程里", "在实现",
+        "实现中", "在运行", "运行时", "在代码", "代码中", "在配置", "配置中",
+        "在部署", "部署中", "在服务", "服务中", "在应用", "应用中", "在模块",
+        "模块中", "在函数", "函数中", "在方法", "方法中", "在类中", "在文件",
+        "文件中", "在目录", "目录中", "在路径", "路径中", "在环境", "环境中",
+        "在容器", "容器中", "在集群", "集群中", "在节点", "节点中", "在数据库",
+        "数据库", "在缓存", "缓存中", "在网络", "网络中", "在协议", "协议中",
+        "在接口", "接口中", "在框架", "框架中", "在工具", "工具中", "在平台",
+        "平台中", "在版本", "版本中", "在分支", "分支中", "在主线", "主线中",
+        "在开发", "开发中", "在测试", "测试中", "在生产", "生产中", "在线上",
+        "线上下", "在本地", "本地中", "在远程", "远程中", "在客户端", "客户端",
+        "在服务", "服务端", "在前后", "前后端", "在业务", "业务中", "在逻辑",
+        "逻辑中", "在数据", "数据中", "在状态", "状态中", "在事件", "事件中",
+        "在消息", "消息中", "在队列", "队列中", "在任务", "任务中", "在作业",
+        "作业中", "在流程", "流程中", "在步骤", "步骤中", "在阶段", "阶段中",
+        "在周期", "周期中", "在迭代", "迭代中", "在循环", "循环中", "在条件",
+        "条件下", "在异常", "异常中", "在错误", "错误中", "在日志", "日志中",
+        "在监控", "监控中", "在告警", "告警中", "在指标", "指标中", "在报表",
+        "报表中", "在统计", "统计中", "在分析", "分析中", "在查询", "查询中",
+        "在搜索", "搜索中", "在索引", "索引中", "在存储", "存储中", "在备份",
+        "备份中", "在恢复", "恢复中", "在迁移", "迁移中", "在升级", "升级中",
+        "在降级", "降级中", "在回滚", "回滚中", "在发布", "发布中", "在构建",
+        "构建中", "在编译", "编译中", "在打包", "打包中", "在分发", "分发中",
+        "在安装", "安装中", "在卸载", "卸载中", "在启动", "启动中", "在停止",
+        "停止中", "在重启", "重启中", "在加载", "加载中", "在卸载", "保存中",
+        "在读取", "读取中", "在写入", "写入中", "在删除", "删除中", "在更新",
+        "更新中", "在创建", "创建中", "在销毁", "销毁中", "在初始化", "初始化",
+        "在注册", "注册中", "在注销", "注销中", "在订阅", "订阅中", "在取消",
+        "取消中", "在确认", "确认中", "在验证", "验证中", "在授权", "授权中",
+        "在认证", "认证中", "在审计", "审计中", "在加密", "加密中", "在解密",
+        "解密中", "在压缩", "压缩中", "在解压", "解压中", "在编码", "编码中",
+        "在解码", "解码中", "在序列", "序列化", "在反序", "反序列", "在并发",
+        "并发中", "在并行", "并行中", "在同步", "同步中", "在异步", "异步中",
+        "在阻塞", "阻塞中", "在非阻", "非阻塞", "在缓冲", "缓冲中", "在缓存",
+        "缓存中", "在池化", "池化中", "在复用", "复用中", "在共享", "共享中",
+        "在隔离", "隔离中", "在限流", "限流中", "在降级", "降级中", "在熔断",
+        "熔断中", "在重试", "重试中", "在超时", "超时中", "在负载", "负载中",
+        "在均衡", "均衡中", "在路由", "路由中", "在代理", "代理中", "在转发",
+        "转发中", "在网关", "网关中", "在防火墙", "防火墙", "在安", "安全中",
+        "在防护", "防护中", "在攻击", "攻击中", "在漏洞", "漏洞中", "在风险",
+        "风险中", "在问题", "问题中", "在解决", "解决中", "在方案", "方案中",
+        "在计划", "计划中", "在策略", "策略中", "在规则", "规则中", "在规范",
+        "规范中", "在标准", "标准中", "在指南", "指南中", "在手册", "手册中",
+        "在文档", "文档中", "在注释", "注释中", "在说明", "说明中", "在描述",
+        "描述中", "在定义", "定义中", "在命名", "命名中", "在约定", "约定中",
+        "在最佳", "最佳实", "最佳实践", "在实践", "实践中", "在模式", "模式中",
+        "在架构", "架构中", "在设计", "设计中", "在模型", "模型中", "在结构",
+        "结构中", "在层次", "层次中", "在组件", "组件中", "在依赖", "依赖中",
+        "在耦合", "耦合中", "在内聚", "内聚中", "在封装", "封装中", "在抽象",
+        "抽象中", "在继承", "继承中", "在多态", "多态中", "在组合", "组合中",
+        "在聚合", "聚合中", "在关联", "关联中", "在泛化", "泛化中", "在实现",
+        "实现中", "在接口", "接口中", "在契约", "契约中", "在协议", "协议中",
+        "在规范", "规范中", "在标准", "标准中", "在要求", "要求中", "在需求",
+        "需求中", "在功能", "功能中", "在特性", "特性中", "在性能", "性能中",
+        "在效率", "效率中", "在优化", "优化中", "在调优", "调优中", "在配置",
+        "配置中", "在参数", "参数中", "在选项", "选项中", "在设置", "设置中",
+        "在变量", "变量中", "在常量", "常量中", "在枚举", "枚举中", "在结构",
+        "结构中", "在联合", "联合中", "在元组", "元组中", "在列表", "列表中",
+        "在字典", "字典中", "在集合", "集合中", "在队列", "队列中", "在栈中",
+        "栈中", "在堆中", "堆中", "在树中", "树中", "在图中", "图中", "在网",
+        "网络中",
+    }
+
+    @classmethod
+    def _is_stop_phrase(cls, phrase: str) -> bool:
+        """判断是否为无意义的停用短语（中文切片噪音）"""
+        if phrase in cls._STOP_PHRASES:
+            return True
+        # 以介词/虚词开头或结尾的 3-4 字短语大概率是切片
+        if len(phrase) <= 4:
+            prefix_stop = {"在", "的", "了", "和", "与", "或", "是", "有", "为", "以", "及", "对", "从", "到", "向", "把", "被", "让", "给", "比", "跟", "同", "当", "因", "于", "就", "都", "也", "还", "但", "而", "却", "若", "虽", "既", "即", "则", "乃", "且", "并", "又", "亦", "之", "其", "所", "这", "那", "哪", "什", "怎", "谁", "何", "如", "若", "倘", "假如", "假使", "若是", "若是", "即使", "即便", "尽管", "不管", "不论", "无论", "只要", "只有", "除非", "因为", "由于", "因此", "因而", "所以", "于是", "从而", "但是", "可是", "然而", "不过", "只是", "不料", "岂知", "虽然", "虽说", "尽管", "固然", "固然", "诚然", "纵然", "即使", "哪怕", "不管", "无论", "不论", "不要", "不能", "不会", "不可", "不得", "不必", "不用", "应该", "应当", "应", "该", "须", "需", "必须", "必需", "必要", "需要", "须要", "得", "须得", "定", "一定", "必定", "必然", "势必", "当然", "自然", "固然", "本来", "原来", "原本", "原先", "最初", "起先", "开始", "起初", "先", "首先", "其次", "再次", "最后", "最终", "终于", "结果", "后果", "成果", "然后", "而后", "之后", "后来", "随即", "随手", "随手", "立刻", "立即", "马上", "赶紧", "赶快", "连忙", "急忙", "匆忙", "仓促", "临时", "暂且", "暂时", "暂", "且", "姑且", "权且", "暂且", "慢说", "别说", "不但", "不仅", "不只", "不光", "不单", "不独", "而且", "并且", "况且", "何况", "再说", "再者", "否则", "不然", "要不", "要不然", "要么", "因为", "由于", "因此", "因而", "所以", "于是", "从而", "如果", "若是", "要是", "假如", "假使", "假若", "倘若", "倘使", "设若", "若是", "若", "即使", "即便", "纵然", "纵使", "纵然", "哪怕", "尽管", "虽然", "虽说", "固然", "诚然", "固然", "尽管", "不管", "无论", "不论", "不要", "别", "毋", "勿", "莫", "不", "没", "没有", "未", "无", "非", "勿", "别", "甭", "不必", "未必", "也许", "或许", "大概", "大约", "约", "差不多", "几乎", "简直", "根本", "决", "绝对", "完全", "全然", "统统", "通共", "通通", "一律", "一般", "一样", "同样", "也", "又", "还", "再", "更", "最", "太", "极", "非常", "十分", "相当", "比较", "稍微", "略", "较", "挺", "怪", "老", "好", "真", "实在", "确实", "的确", "确乎", "确然", "果然", "居然", "竟然", "竟", "偏偏", "偏", "岂", "难道", "莫非", "别是", "可是", "但是", "然而", "不过", "只是", "不料", "岂知", "固然", "虽然", "尽管", "纵然", "即使", "哪怕", "不管", "无论", "不论", "与其", "不如", "宁可", "宁愿", "宁肯", "情愿", "甘愿", "甘心", "宁愿", "最好", "不如", "何不", "干吗不", "为什么不", "为什么", "怎么", "怎样", "如何", "何以", "为何", "为什么", "干什么", "做什么", "怎么办", "怎么样", "好不好", "行不行", "能不能", "可不可以", "可不可以", "可以", "能", "能够", "会", "可能", "也许", "或许", "大概", "大约", "约莫", "约", "差不多", "几乎", "简直", "差点儿", "险些", "险些儿", "根本", "决", "绝对", "完全", "全然", "统统", "一律", "一般", "一样", "同样", "也", "又", "还", "再", "更", "最", "太", "极", "很", "非常", "十分", "相当", "比较", "较", "更", "最", "越", "越发", "越加", "愈加", "愈发", "尤其", "特别", "格外", "分外", "更加", "更为", "越", "越是", "愈", "愈发", "愈加", "越来越", "愈来愈", "一天比一天", "一年比一年", "越来越", "愈来愈", "格外", "分外", "特别", "尤其", "尤其", "尤为", "格外", "分外", "更加", "更为", "越", "越发", "越加", "愈加", "愈发", "尤其", "特别", "格外", "分外", "更加", "更为"}
+            suffix_stop = {"的", "了", "和", "与", "或", "是", "有", "为", "以", "及", "对", "从", "到", "向", "把", "被", "让", "给", "比", "跟", "同", "当", "因", "于", "就", "都", "也", "还", "但", "而", "却", "若", "虽", "既", "即", "则", "乃", "且", "并", "又", "亦", "之", "其", "所", "中", "里", "上", "下", "内", "外", "间", "旁", "边", "面", "头", "底", "前", "后", "左", "右", "东", "西", "南", "北", "里", "内", "中", "间", "处", "方", "面", "头", "部", "边", "缘", "侧", "端", "顶", "底", "根", "源", "本", "末", "初", "始", "终", "结", "果", "尾", "后", "余", "剩", "残", "余", "剩", "余下", "剩下", "残余", "残留", "遗存", "遗迹", "式", "型", "类", "种", "样", "般", "等", "之类", "之流", "之辈", "之徒", "之属", "之俦", "之伦", "之曹", "之亚", "之群", "之类", "之属", "之俦", "之伦", "之曹", "之亚", "之群"}
+            if phrase[:1] in prefix_stop or phrase[-1:] in suffix_stop:
+                return True
+        return False
 
     @staticmethod
     def _jaccard(a: set, b: set) -> float:
@@ -1303,7 +1519,7 @@ def _map_form_to_type(form: str) -> str:
 
 
 def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
-                       source: str = "") -> str:
+                       source: str = "", session_coverage: str = "") -> str:
     """生成 wiki 页面 Markdown — 对齐蓝图 32 字段规范"""
     # 实体类型优先从 LLM 输出获取，fallback 从知识形态映射
     entity_type = fm_get(fragment.frontmatter, "type", "")
@@ -1344,7 +1560,7 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     ordered_keys = [
         "类型", "名称", "领域", "摘要", "状态", "知识阶段",
         "来源数量", "证据级别", "置信度", "时效性", "创建日期",
-        "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
+        "来源", "来源会话", "蒸馏时间", "关键词", "触发器", "别名", "版本标记", "决策摘要", "合并来源",
         "跨Agent关联",
     ]
     for key in ordered_keys:
@@ -1372,32 +1588,77 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
 
     body = [f"# {fragment.title}", ""]
 
-    if fragment.background:
-        # 如果 background 已包含 Markdown 标题，直接渲染；否则包装在 ## 背景 下
-        if fragment.background.strip().startswith("#"):
-            body.extend([fragment.background, ""])
-        else:
-            body.extend(["## 背景", "", fragment.background, ""])
+    has_deep_structure = bool(
+        fragment.core_content and fragment.core_content.strip().startswith("#")
+    )
 
+    # 结论：优先从 background 提取；否则从 core_content 首句提取
+    conclusion = ""
+    if fragment.background and not fragment.background.strip().startswith("#"):
+        conclusion = fragment.background.strip()
+    elif fragment.core_content and not has_deep_structure:
+        first_para = fragment.core_content.strip().split("\n")[0].strip()
+        if len(first_para) > 10:
+            conclusion = first_para.split("。")[0].strip() + "。"
+    if conclusion and len(conclusion) > 10:
+        body.extend(["## 结论", "", conclusion, ""])
+
+    # 适用场景
+    applies = (fragment.boundaries or {}).get("applies", "")
+    if applies:
+        body.extend(["## 适用场景", "", applies, ""])
+    elif not has_deep_structure and fragment.form in (
+        "decision-log", "decision", "问题-解决", "problem-solution",
+        "heuristic", "经验法则", "methodology", "方法论",
+    ):
+        body.extend(["## 适用场景", "", "*待补充：该知识在什么场景下适用*", ""])
+
+    # 操作步骤 / 使用方法：提取代码块和命令行
+    procedures = []
     if fragment.core_content:
-        # 如果 core_content 已包含 Markdown 标题（深度模式），直接渲染
-        if fragment.core_content.strip().startswith("#"):
-            body.extend([fragment.core_content, ""])
-        else:
-            body.extend(["## 核心内容", "", fragment.core_content, ""])
-
-    if fragment.boundaries and (fragment.boundaries.get("applies") or fragment.boundaries.get("not_applies")):
-        body.extend(["### 适用边界", ""])
-        if fragment.boundaries.get("applies"):
-            body.append(f"- 适用于：{fragment.boundaries['applies']}")
-        if fragment.boundaries.get("not_applies"):
-            body.append(f"- 不适用于：{fragment.boundaries['not_applies']}")
+        code_blocks = re.findall(
+            r'```(?:\w+)?\n(.*?)```', fragment.core_content, re.DOTALL,
+        )
+        for block in code_blocks:
+            stripped = block.strip()
+            if any(cmd in stripped for cmd in [
+                "curl ", "git ", "docker ", "pip ", "npm ",
+                "cd ", "mkdir ", "rm ", "mv ", "cp ",
+                "unset ", "export ", "source ", "conda ", "brew ",
+            ]):
+                procedures.append("```bash\n" + stripped + "\n```")
+        for line in fragment.core_content.split("\n"):
+            line = line.strip()
+            if line.startswith((
+                "curl ", "git ", "docker ", "pip ", "npm ",
+                "cd ", "mkdir ", "rm ", "mv ", "cp ",
+                "unset ", "export ", "source ", "conda ", "brew ",
+            )):
+                procedures.append(f"- `{line}`")
+    if procedures:
+        body.extend(["## 操作步骤 / 使用方法", ""])
+        body.extend(procedures)
         body.append("")
 
+    # 详细内容（原核心内容）
+    if fragment.core_content:
+        if has_deep_structure:
+            body.extend([fragment.core_content, ""])
+        else:
+            body.extend(["## 详细内容", "", fragment.core_content, ""])
+
+    # 反例 / 坑
     if fragment.anti_patterns:
-        body.extend(["### 反模式/注意事项", ""])
+        body.extend(["## 反例 / 坑", ""])
         for ap in fragment.anti_patterns:
             body.append(f"- {ap}")
+        body.append("")
+
+    # 不适用于
+    not_applies = (fragment.boundaries or {}).get("not_applies", "")
+    if not_applies:
+        body.extend(["### 不适用于", ""])
+        body.append(f"- {not_applies}")
         body.append("")
 
     if fragment.self_check_issues:
@@ -1409,19 +1670,32 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body.extend(["## 演化历史", "",
                  f"- v1: 初始记录（{datetime.now().strftime('%Y-%m-%d')}）", ""])
 
-    all_related = list(fragment.related_concepts)
-    for link in fragment.cross_agent_links:
-        if link not in all_related:
-            all_related.append(link)
+    # 关联知识：合并 related_concepts 与 cross_agent_links
+    all_related = []
+    seen = set()
+    for concept in list(fragment.related_concepts) + list(fragment.cross_agent_links):
+        if not concept or concept in seen:
+            continue
+        seen.add(concept)
+        if len(concept) < 2 or concept.startswith("待"):
+            continue
+        if CrossAgentLinker._is_stop_phrase(concept):
+            continue
+        if "/" in concept or "\\" in concept:
+            target_path = _get_wiki_dir() / f"{concept}.md"
+            if not target_path.exists():
+                continue
+        all_related.append(concept)
+
     if all_related:
-        body.extend(["## 相关链接", ""])
+        body.extend(["## 关联知识", ""])
         for concept in all_related:
             body.append(f"- [[{concept}]]")
         body.append("")
 
-    # 结构化关联说明（ADR-019：含关联上下文，便于人类阅读）
+    # 结构化关联说明（ADR-019）
     if fragment.relations:
-        body.extend(["## 关联说明", ""])
+        body.extend(["### 关联说明", ""])
         for rel in fragment.relations:
             target = rel.get("target", "")
             rel_type = rel.get("type", "related_to")
@@ -1437,6 +1711,23 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         body.append("")
         body.append(fragment.ai_expansion)
         body.append("")
+
+    # 来源追踪区（L1→L2 可追溯性）
+    body.extend(["## 来源追踪", ""])
+    body.append(f"- 来源会话: `{session_id}`")
+    if source:
+        body.append(f"- 来源 Agent: {source}")
+    coverage = session_coverage or (fragment.frontmatter or {}).get("session_coverage", "")
+    if coverage:
+        body.append(f"- 会话覆盖: {coverage}")
+    original_source = (fragment.frontmatter or {}).get("来源", (fragment.frontmatter or {}).get("source", ""))
+    if original_source and original_source != source:
+        body.append(f"- 原始来源: {original_source}")
+    body.append(f"- 蒸馏时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    memos_id = (fragment.frontmatter or {}).get("memos_id", "")
+    if memos_id:
+        body.append(f"- 原始 Memos ID: `{memos_id}`")
+    body.append("")
 
     return "\n".join(lines + [""] + body)
 
@@ -1559,6 +1850,16 @@ class DistillationEngine:
                 self._kia_linker = False  # 标记为已尝试但失败
         return self._kia_linker if self._kia_linker is not False else None
 
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """将名称转为 URL/文件安全的 slug"""
+        import re
+        slug = name.lower().strip()
+        # 保留中英文、数字、横线；其他字符替换为横线
+        slug = re.sub(r"[^\w\u4e00-\u9fa5-]", "-", slug)
+        slug = re.sub(r"-+", "-", slug).strip("-")
+        return slug[:64] if slug else "untitled"
+
     def process(self, session_id: str, messages: List[Dict],
                 meta: Dict = None) -> DistillationResult:
         """运行七层蒸馏流水线
@@ -1573,6 +1874,7 @@ class DistillationEngine:
         """
         result = DistillationResult(session_id=session_id)
         meta = meta or {}
+        result.source = meta.get("source", "")
 
         # ===== L1: 噪音过滤 =====
         filtered, noise_stats = self._noise_filter.filter(messages)
@@ -1624,7 +1926,28 @@ class DistillationEngine:
             return result
 
         # ===== L4: 知识提取 =====
-        session_text = build_session_text(filtered)
+        _coverage_meta: Dict[str, Any] = {}
+        session_text = build_session_text(filtered, out_meta=_coverage_meta)
+        if _coverage_meta.get("truncated"):
+            result.session_coverage = (
+                f"部分覆盖（共 {_coverage_meta['total_turns']} 轮，"
+                f"保留开头 {_coverage_meta['head_turns']} 轮 + 结尾 {_coverage_meta['tail_turns']} 轮，"
+                f"中间 {_coverage_meta['omitted_turns']} 轮省略）"
+            )
+        else:
+            result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
+
+        # 追加 message-level 截断信息
+        msg_trunc = _coverage_meta.get("message_truncations", [])
+        truncated_msgs = [m for m in msg_trunc if m["truncated"]]
+        if truncated_msgs:
+            trunc_summary = ", ".join(
+                f"turn{m['turn']}({m['role']}): {m['original_length']}→{m['kept_length']}"
+                for m in truncated_msgs[:5]
+            )
+            if len(truncated_msgs) > 5:
+                trunc_summary += f" 等共 {len(truncated_msgs)} 条消息被截断"
+            result.session_coverage += f"；消息截断: {trunc_summary}"
         fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
         result.fragments = fragments
         result.layer_results.append(
@@ -1686,9 +2009,20 @@ class DistillationEngine:
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
 
         file_fragments = []
+        seen_slugs = set()
         for i, fragment in enumerate(result.fragments):
-            page_id = f"{result.session_id[:8]}_{fragment.form}_{i + 1}"
-            page_content = generate_wiki_page(fragment, result.session_id)
+            # 用知识标题生成人类可读的文件名
+            title = fragment.title or fragment.frontmatter.get("名称", "untitled")
+            slug = self._slugify(title)
+            # 去重：同名加序号
+            original_slug = slug
+            counter = 1
+            while slug in seen_slugs:
+                slug = f"{original_slug}-{counter}"
+                counter += 1
+            seen_slugs.add(slug)
+            page_id = slug
+            page_content = generate_wiki_page(fragment, result.session_id, source=result.source, session_coverage=result.session_coverage)
             file_path = self.inbox_dir / f"{page_id}.md"
             try:
                 file_path.write_text(page_content, encoding="utf-8")
@@ -1753,6 +2087,11 @@ class DistillationEngine:
                         self._update_frontmatter_field(
                             file_path, "mnemos_last_scored", datetime.now().strftime("%Y-%m-%d")
                         )
+                try:
+                    from core.wiki_metrics import write_mnemos_home
+                    write_mnemos_home(str(self.wiki_base))
+                except Exception:
+                    logger.debug("Mnemos home update failed", exc_info=True)
             except Exception:
                 logger.debug("Frontmatter metrics writeback failed", exc_info=True)
 
@@ -1856,10 +2195,10 @@ class AgentDelegateProvider(LLMProvider):
 
 
 def distill_session(session_id: str, messages: List[Dict],
-                    wiki_base: str = None) -> DistillationResult:
+                    wiki_base: str = None, meta: Dict = None) -> DistillationResult:
     """便捷函数：蒸馏单个 session"""
     engine = DistillationEngine(wiki_base=wiki_base)
-    return engine.process(session_id, messages)
+    return engine.process(session_id, messages, meta=meta or {})
 
 
 def _record_memos_wiki_links(session_id: str, wiki_page_paths: List[str]) -> None:
@@ -1948,10 +2287,10 @@ def _emit_knowledge_distilled(session_id: str, result: DistillationResult, writt
 
 
 def distill_and_write(session_id: str, messages: List[Dict],
-                      wiki_base: str = None) -> Tuple[DistillationResult, List[str]]:
+                      wiki_base: str = None, meta: Dict = None) -> Tuple[DistillationResult, List[str]]:
     """便捷函数：蒸馏并写入 Wiki"""
     engine = DistillationEngine(wiki_base=wiki_base)
-    result = engine.process(session_id, messages)
+    result = engine.process(session_id, messages, meta=meta or {})
     written = engine.write_pages(result)
 
     if written and result.fragments:

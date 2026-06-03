@@ -476,14 +476,14 @@ class DocumentProcessor:
             logger.warning(f"[DocumentProcessor] ❌ 处理失败: {e}")
             return None
 
-    def process_and_distill(self, file_path: Path, inbox: Path = None, force_provider: str = None) -> int:
+    def process_and_distill(self, file_path: Path, inbox: Path = None, force_provider: str = "api") -> int:
         """
         直接处理本地文档并蒸馏入 wiki（不走 Memos）
 
         Args:
             file_path: 本地文件路径
             inbox: wiki Inbox 目录（默认自动检测）
-            force_provider: 强制 LLM 提供商 — "api" 强制走 API，"cli" 强制走本地 CLI，None 自动选择
+            force_provider: 强制 LLM 提供商 — "api" 强制走 API（默认），"cli" 强制走本地 CLI，None 自动选择
         """
         from core.hephaestus.document_pipeline import DocumentDistillationPipeline
         from core.hephaestus.distillation_engine import HostAgentCaller

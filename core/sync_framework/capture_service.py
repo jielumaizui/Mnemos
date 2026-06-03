@@ -23,14 +23,17 @@ import json
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from pathlib import Path
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
 from core.config import get_config
 from core.db_utils import SqlitePool
-from core.sync_framework.capture_queue import CaptureQueue
-from core.sync_framework.capture_worker import CaptureWorkerPool
 from core.sync_framework.sync_engine import compute_content_hash
 from core.sync_framework.agent_source import Turn
+
+if TYPE_CHECKING:
+    from core.sync_framework.capture_queue import CaptureQueue
+    from core.sync_framework.capture_worker import CaptureWorkerPool
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,10 @@ class CaptureService:
                 return
             self._initialized = True
 
+            # 延迟导入避免循环导入
+            from core.sync_framework.capture_queue import CaptureQueue
+            from core.sync_framework.capture_worker import CaptureWorkerPool
+
             self.config = get_config()
             self.queue = queue or CaptureQueue()
             self.worker_pool = worker_pool or CaptureWorkerPool(queue=self.queue)
@@ -78,6 +85,48 @@ class CaptureService:
                 self.queue.cleanup_old(days=30)
             except Exception:
                 pass
+
+    def _truncate_with_marker(self, text: str, max_bytes: int) -> str:
+        """截断文本到指定字节长度，并添加省略标记"""
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+        # 截断到完整字符边界
+        truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+        # 回退到最近一个完整句子或换行
+        for delim in ("\n\n", "\n", "。", "；", "; ", ". "):
+            idx = truncated.rfind(delim)
+            if idx > max_bytes * 0.5:
+                truncated = truncated[:idx]
+                break
+        return truncated + f"\n\n[... 内容已截断；完整内容见 artifact 文件 ...]"
+
+    def _store_artifact(self, session_id: str, turn_number: int,
+                        user_content: str, assistant_content: str) -> Path:
+        """将完整 payload 写入 artifact 文件，返回文件路径"""
+        artifact_dir = self.config.data_dir / "capture_artifacts" / session_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"turn_{turn_number}.md"
+        content = f"""# Capture Artifact
+
+- session_id: {session_id}
+- turn_number: {turn_number}
+- captured_at: {datetime.now().isoformat()}
+
+---
+
+## User
+
+{user_content}
+
+---
+
+## Assistant
+
+{assistant_content}
+"""
+        path.write_text(content, encoding="utf-8")
+        return path
 
     def close(self):
         """关闭持久连接和 worker_pool"""
@@ -123,15 +172,38 @@ class CaptureService:
         user_content = user_content or ""
         assistant_content = assistant_content or ""
 
-        # 大小限制
-        total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))
-        if total_bytes > self.max_payload_bytes:
-            return {
-                "status": "error",
-                "message": f"payload too large: {total_bytes} bytes (max {self.max_payload_bytes})",
-            }
+        # 截断前保存原始内容，用于计算 full_content_hash
+        original_user = user_content
+        original_assistant = assistant_content
 
-        # 计算 content_hash（统一使用 SyncEngine 的算法，确保 sync_log 去重兜底有效）
+        # 大小限制与完整性策略
+        total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))
+        capture_mode = "full"
+        artifact_path = None
+
+        if total_bytes > self.max_payload_bytes:
+            # 超大 payload：先写完整 artifact，再截断 payload 保留摘要
+            artifact_path = self._store_artifact(
+                session_id, turn_number, user_content, assistant_content
+            )
+            max_assistant = self.max_payload_bytes - len(user_content.encode("utf-8")) - 1000
+            if max_assistant < 5000:
+                # user_content 本身已占满配额，两端都保留摘要
+                user_content = self._truncate_with_marker(user_content, self.max_payload_bytes // 4)
+                assistant_content = self._truncate_with_marker(assistant_content, self.max_payload_bytes // 2)
+                capture_mode = "artifact_summary"
+            else:
+                # payload 保留 assistant 头部摘要
+                assistant_content = self._truncate_with_marker(assistant_content, max_assistant)
+                capture_mode = "artifact"
+            total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))
+
+        metadata = metadata or {}
+        metadata["capture_mode"] = capture_mode
+        if artifact_path:
+            metadata["artifact_path"] = str(artifact_path)
+
+        # 计算 content_hash（截断后，保持与现有 sync_log 兼容）
         model_tag = model or source_agent
         content_hash = compute_content_hash(
             user_content=user_content,
@@ -139,6 +211,14 @@ class CaptureService:
             turn_number=turn_number,
             model_tag=model_tag,
         )
+        # 计算 full_content_hash（原始完整内容，防止截断后去重误判）
+        full_content_hash = compute_content_hash(
+            user_content=original_user,
+            assistant_content=original_assistant,
+            turn_number=turn_number,
+            model_tag=model_tag,
+        )
+        metadata["full_content_hash"] = full_content_hash
 
         # 计算 dedupe_key
         dedupe_key = hashlib.sha256(

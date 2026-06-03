@@ -44,7 +44,7 @@ class RelationEmbeddingManager:
         index_dir: Optional[Path] = None,
         client: Optional[SiliconFlowEmbeddingClient] = None,
     ):
-        self.db_path = db_path or (Path.home() / ".mnemos" / "sync_log.db")
+        self.db_path = db_path or (Path.home() / ".mnemos" / "knowledge_graph.db")
         self.index_dir = Path(index_dir).expanduser() if index_dir else (
             Path.home() / ".mnemos" / "embedding_index"
         )
@@ -102,7 +102,9 @@ class RelationEmbeddingManager:
         self._index = index
         return index
 
-    def add_relation_context(self, relation_id: int, context: str, model_version: str = "BAAI/bge-m3") -> bool:
+    def add_relation_context(
+        self, relation_id: int, context: str, model_version: str = "BAAI/bge-m3", force: bool = False
+    ) -> bool:
         """
         为关系上下文生成 embedding 并入库。
 
@@ -110,6 +112,7 @@ class RelationEmbeddingManager:
             relation_id: 知识图谱 relations 表的 id
             context: 关联上下文文本
             model_version: embedding 模型版本
+            force: 是否强制更新已存在的 embedding
 
         Returns:
             是否成功
@@ -118,7 +121,7 @@ class RelationEmbeddingManager:
             return False
 
         # 检查是否已存在
-        if relation_id in self._rel_id_map:
+        if relation_id in self._rel_id_map and not force:
             logger.debug(f"[RelationEmbedding] relation_id={relation_id} 已存在，跳过")
             return True
 

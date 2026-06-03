@@ -1,14 +1,15 @@
 # Hephaestus Worker — 赫菲斯托斯之工坊
-# 蒸馏 Worker — 自动处理 distill_queue，委托 Agent 执行蒸馏
+# 蒸馏 Worker — 自动处理 distill_queue，通过 LLM API 执行蒸馏
 
 """
 职责：
 - 轮询 distill_queue/ 中的待蒸馏任务（默认跟随 claude_data_dir）
-- 调用 AgentDelegate 将任务委托给可用 Agent
+- 默认调用 OpenAI 兼容 LLM API 完成蒸馏
+- 仅在显式开启 legacy delegate 时才委托宿主 Agent
 - 监控结果路径，处理完成的蒸馏输出
 - 将结果移入 00-Inbox/，原文件归档
 
-设计原则：同源复用 — 谁启动 Mnemos，蒸馏就交给谁。
+设计原则：宿主 Agent 负责调用工具和使用知识；Mnemos 蒸馏默认由 LLM API 完成。
 """
 
 import json
@@ -24,6 +25,23 @@ from core.prometheus_fire import AgentDelegate, DistillTask
 from core.helios import AgentDetector
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_messages(messages) -> List[Dict]:
+    """Accept legacy string/dict payloads from amphora and convert to messages."""
+    if isinstance(messages, str):
+        return [{"role": "user", "content": messages}]
+    if isinstance(messages, dict):
+        return [messages]
+    if isinstance(messages, list):
+        normalized = []
+        for item in messages:
+            if isinstance(item, dict):
+                normalized.append(item)
+            elif isinstance(item, str):
+                normalized.append({"role": "user", "content": item})
+        return normalized
+    return []
 
 
 class HephaestusWorker:
@@ -259,11 +277,19 @@ class HephaestusWorker:
         # 构建任务
         distill_task = DistillTask(
             session_id=session_id,
-            messages=task.get("messages", []),
+            messages=_normalize_messages(task.get("messages", [])),
             meta=task.get("meta", {}),
         )
 
-        # 委托给 Agent
+        # 默认 API-only：不再先委托宿主 Agent。旧的 AgentDelegate 仅保留为
+        # 显式 legacy 模式，避免“自己做自己查”和宿主上下文污染。
+        allow_delegate = bool(self.config.get("distill.allow_host_agent_delegate", False))
+        provider = str(self.config.get("distill.provider", "api") or "api").lower()
+        if provider == "api" or not allow_delegate:
+            logger.info(f"[Hephaestus] 使用 API 模式执行蒸馏: {session_id}")
+            return self._sync_distill_and_complete(session_id, distill_task)
+
+        # Legacy: 委托给 Agent
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._rate_limit_delegate()
         ok = self.delegate.delegate(distill_task, output_path)
@@ -293,11 +319,7 @@ class HephaestusWorker:
         return True
 
     def _sync_distill_and_complete(self, session_id: str, distill_task: DistillTask) -> bool:
-        """同步执行蒸馏（API 回退模式），不依赖外部 Agent 异步处理。
-
-        当宿主 Agent 无法自动执行蒸馏时（如 Claude 适配器仅写占位符），
-        直接调用 distillation_engine 通过 OpenAI 兼容 API 完成蒸馏。
-        """
+        """同步执行 API 蒸馏，不依赖外部 Agent 异步处理。"""
         self._emit_progress(session_id, "extracting", "同步蒸馏中（API 模式）...")
         try:
             from core.hephaestus.distillation_engine import (

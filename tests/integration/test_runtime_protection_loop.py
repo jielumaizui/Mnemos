@@ -1,4 +1,3 @@
-import json
 import sqlite3
 
 
@@ -30,29 +29,23 @@ def test_hephaestus_process_all_respects_batch_limit(tmp_path, monkeypatch):
                 meta={"source": "test"},
             )
 
-        class FakeDelegate:
-            def delegate(self, task, output_path):
-                output_path.write_text(
-                    json.dumps({
-                        "judgment": "knowledge",
-                        "fragments": [{"title": "Redis 连接池", "form": "pitfall"}],
-                    }),
-                    encoding="utf-8",
-                )
-                return True
-
         monkeypatch.setattr(
             "core.hephaestus_worker.HephaestusWorker._emit_progress",
             lambda self, *args, **kwargs: None,
         )
+        calls = {"sync": 0}
+        monkeypatch.setattr(
+            "core.hephaestus_worker.HephaestusWorker._sync_distill_and_complete",
+            lambda self, session_id, distill_task: calls.__setitem__("sync", calls["sync"] + 1) or True,
+        )
 
         worker = HephaestusWorker(queue, output, inbox, archive)
-        worker.delegate = FakeDelegate()
         worker.config.set("distill.min_task_interval_seconds", 0)
 
         processed = worker.process_all(max_tasks=2)
 
         assert processed == 2
+        assert calls["sync"] == 2
         # amphora 中应有 3 个 pending（5-2=3）
         pending = amphora.list_pending()
         assert len(pending) == 3
