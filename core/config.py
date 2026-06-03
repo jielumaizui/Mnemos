@@ -177,6 +177,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "tick_interval_seconds": 5,
         "max_payload_bytes": 200000,
         "duplicate_ttl_days": 30,
+        # reasoning/thinking 采集策略：off|summary|artifact_summary|full
+        "reasoning_mode": "artifact_summary",
     },
     # === daemon 服务开关 ===
     "daemon": {
@@ -198,6 +200,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "noise_threshold": 0.7,
         "debounce_stable_reads": 3,
         "polling_interval_openclaw": 3600,
+        # L1 实时增量扫描限制（只同步尾部新增）
+        "l1_scan_max_turns_per_session": 50,
+        "l1_scan_max_sessions_per_source": 20,
+        "l1_scan_max_sources_per_cycle": 3,
+        "l1_scan_poll_interval_seconds": 60,
+        "l1_scan_max_file_bytes": 2097152,
+        "l1_scan_recent_hours": 24.0,
+        # Backfill 历史回填配置（补齐中间缺洞）
+        "backfill_max_turns_per_session": 0,  # 0=无限制
+        "backfill_fill_gaps": True,
+        "backfill_skip_stale_hours": 168,  # 7天
         "l1_scan_poll_interval_seconds": 60,
         "l1_scan_max_sources_per_cycle": 3,
         "l1_scan_max_sessions_per_source": 20,

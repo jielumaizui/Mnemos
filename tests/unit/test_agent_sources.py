@@ -217,5 +217,61 @@ class TestWindsurfSource(unittest.TestCase):
         self.assertIn("closure", turns[0].assistant_content)
 
 
+class TestKimiSource(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_context_file_sort_key_natural_order(self):
+        """context_1 < context_2 < context_10 < context.jsonl"""
+        from integrations.sources.kimi_source import KimiSource
+        source = KimiSource()
+
+        session_dir = Path(self.tmpdir.name) / "session"
+        session_dir.mkdir()
+        (session_dir / "context.jsonl").write_text("", encoding="utf-8")
+        (session_dir / "context_1.jsonl").write_text("", encoding="utf-8")
+        (session_dir / "context_2.jsonl").write_text("", encoding="utf-8")
+        (session_dir / "context_10.jsonl").write_text("", encoding="utf-8")
+
+        files = sorted(session_dir.glob("context*.jsonl"), key=source._context_file_sort_key)
+        names = [f.name for f in files]
+        self.assertEqual(names, ["context_1.jsonl", "context_2.jsonl", "context_10.jsonl", "context.jsonl"])
+
+    def test_parse_turns_preserve_order(self):
+        """多文件合并后 turn_number 单调递增"""
+        from integrations.sources.kimi_source import KimiSource
+        source = KimiSource()
+
+        session_dir = Path(self.tmpdir.name) / "session"
+        session_dir.mkdir()
+        # context_1.jsonl: turn 0
+        (session_dir / "context_1.jsonl").write_text(
+            json.dumps({"role": "user", "content": "hello"}) + "\n" +
+            json.dumps({"role": "assistant", "content": "hi"}) + "\n",
+            encoding="utf-8"
+        )
+        # context_2.jsonl: turn 1
+        (session_dir / "context_2.jsonl").write_text(
+            json.dumps({"role": "user", "content": "world"}) + "\n" +
+            json.dumps({"role": "assistant", "content": "earth"}) + "\n",
+            encoding="utf-8"
+        )
+        # context_10.jsonl: turn 2
+        (session_dir / "context_10.jsonl").write_text(
+            json.dumps({"role": "user", "content": "foo"}) + "\n" +
+            json.dumps({"role": "assistant", "content": "bar"}) + "\n",
+            encoding="utf-8"
+        )
+
+        turns = source.parse_turns(session_dir / "context.jsonl")
+        self.assertEqual(len(turns), 3)
+        self.assertEqual(turns[0].user_content, "hello")
+        self.assertEqual(turns[1].user_content, "world")
+        self.assertEqual(turns[2].user_content, "foo")
+
+
 if __name__ == "__main__":
     unittest.main()

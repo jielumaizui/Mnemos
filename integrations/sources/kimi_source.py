@@ -8,6 +8,7 @@ KimiSource — Kimi Agent 同步插件
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -72,9 +73,19 @@ class KimiSource(AgentSource):
         all_messages = self._read_all_context_files(session_path.parent)
         return self._pair_messages_to_turns(all_messages)
 
+    @staticmethod
+    def _context_file_sort_key(path: Path) -> tuple:
+        """自然排序 key：context_1.jsonl < context_2.jsonl < context_10.jsonl < context.jsonl"""
+        if path.name == "context.jsonl":
+            return (1, 0)  # 当前活跃文件最后读
+        m = re.match(r"context_(\d+)\.jsonl$", path.name)
+        if m:
+            return (0, int(m.group(1)))
+        return (2, 0)
+
     def _read_all_context_files(self, session_dir: Path) -> List[Dict[str, Any]]:
-        """读取所有 context*.jsonl 文件（包括归档），按顺序合并"""
-        context_files = sorted(session_dir.glob("context*.jsonl"))
+        """读取所有 context*.jsonl 文件（包括归档），按自然顺序合并"""
+        context_files = sorted(session_dir.glob("context*.jsonl"), key=self._context_file_sort_key)
         all_messages = []
 
         for cf in context_files:
@@ -94,19 +105,75 @@ class KimiSource(AgentSource):
 
         return all_messages
 
+    def get_session_state(self, session_info: SessionInfo) -> Optional[Dict[str, Any]]:
+        """Kimi 多文件聚合状态：所有 context*.jsonl + wire.jsonl"""
+        session_dir = session_info.source_path.parent
+        files = list(session_dir.glob("context*.jsonl"))
+        wire = session_dir / "wire.jsonl"
+        if wire.exists():
+            files.append(wire)
+
+        if not files:
+            return None
+
+        total_size = 0
+        max_mtime = 0
+        for f in files:
+            try:
+                stat = f.stat()
+                total_size += stat.st_size
+                max_mtime = max(max_mtime, stat.st_mtime)
+            except OSError:
+                pass
+
+        # fingerprint 按自然排序文件名:size:mtime 拼接后 hash
+        file_entries = []
+        for f in sorted(files, key=self._context_file_sort_key):
+            try:
+                stat = f.stat()
+                file_entries.append(f"{f.name}:{stat.st_size}:{stat.st_mtime}")
+            except OSError:
+                pass
+        fingerprint = hashlib.md5("|".join(file_entries).encode()).hexdigest()[:16]
+
+        return {
+            "mtime": max_mtime,
+            "size": total_size,
+            "file_count": len(files),
+            "fingerprint": fingerprint,
+        }
+
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": True,
+            "tool_results": True,
+            "reasoning": "available",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
+
     def _pair_messages_to_turns(self, messages: List[Dict[str, Any]]) -> List[Turn]:
-        """将消息列表配对为 Turn 列表"""
+        """将消息列表配对为 Turn 列表 — 完整录入版（P0-6）"""
         turns = []
         user_content = ""
         assistant_content = ""
         turn_meta: Dict[str, Any] = {}
         turn_number = 0
+        turn_tool_calls: List[Dict[str, Any]] = []
+        turn_tool_results: List[Dict[str, Any]] = []
+        turn_reasoning = ""
+        turn_raw_events: List[Dict[str, Any]] = []
+        turn_source_files: List[str] = []
+        completeness_loss: List[str] = []
 
         for msg in messages:
             role = msg.get("role", "")
 
-            # 跳过系统消息
+            # 跳过系统消息，但记录到 raw_event_refs
             if role in ("_system_prompt", "_checkpoint", "_usage", "system"):
+                turn_raw_events.append({"role": role, "event_type": "system", "raw": msg})
                 continue
 
             if role == "user":
@@ -117,23 +184,48 @@ class KimiSource(AgentSource):
                         user_content=user_content,
                         assistant_content=assistant_content,
                         metadata=turn_meta,
+                        tool_calls=turn_tool_calls,
+                        tool_results=turn_tool_results,
+                        reasoning=turn_reasoning,
+                        raw_event_refs=turn_raw_events,
+                        source_files=turn_source_files,
+                        completeness={
+                            "visible_text": "full",
+                            "tool_results": "full" if turn_tool_results else "unavailable",
+                            "reasoning": "full" if turn_reasoning else "unavailable",
+                            "attachments": "unavailable",
+                            "truncated": False,
+                            "loss_reasons": completeness_loss,
+                        },
                     ))
                     turn_number += 1
 
                 # 处理列表格式 [{"type": "text", "text": "..."}]
                 raw = msg.get("content", "")
                 if isinstance(raw, list):
-                    texts = [
-                        item.get("text", "")
-                        for item in raw
-                        if isinstance(item, dict) and item.get("type") == "text"
-                    ]
+                    texts = []
+                    for item in raw:
+                        if not isinstance(item, dict):
+                            continue
+                        itype = item.get("type", "")
+                        if itype == "text":
+                            texts.append(item.get("text", ""))
+                        else:
+                            # 未知块记录到 raw_event_refs，不静默丢弃
+                            turn_raw_events.append({"role": "user", "event_type": itype, "raw": item})
+                            completeness_loss.append(f"user_unknown_block:{itype}")
                     user_content = "\n".join(texts)
                 else:
                     user_content = str(raw)
 
                 assistant_content = ""
                 turn_meta = {}
+                turn_tool_calls = []
+                turn_tool_results = []
+                turn_reasoning = ""
+                turn_raw_events = []
+                turn_source_files = []
+                completeness_loss = []
 
             elif role == "assistant":
                 parts = msg.get("content", [])
@@ -148,28 +240,47 @@ class KimiSource(AgentSource):
                         if ptype == "text":
                             texts.append(p.get("text", ""))
                         elif ptype == "think":
-                            t = p.get("think", "")
-                            if t:
-                                reasoning = t[:2000]
+                            # 不再截断，完整保留 reasoning
+                            reasoning = p.get("think", "")
+                        elif ptype == "tool_use":
+                            turn_tool_calls.append({
+                                "name": p.get("name", "unknown"),
+                                "input": p.get("input", {}),
+                                "id": p.get("id", ""),
+                            })
+                        else:
+                            # 未知块记录到 raw_event_refs
+                            turn_raw_events.append({"role": "assistant", "event_type": ptype, "raw": p})
+                            completeness_loss.append(f"assistant_unknown_block:{ptype}")
                 elif isinstance(parts, str):
                     texts.append(parts)
 
                 assistant_content = "\n\n".join(texts)
                 if reasoning:
+                    turn_reasoning = reasoning
                     turn_meta["reasoning"] = reasoning
 
             elif role == "tool":
-                # tool 结果追加到 assistant_content
+                # tool 结果结构化保存
                 tool_content = msg.get("content", "")
+                tool_texts = []
                 if isinstance(tool_content, list):
-                    tool_texts = [
-                        item.get("text", "")
-                        for item in tool_content
-                        if isinstance(item, dict) and item.get("type") == "text"
-                    ]
-                    tool_content = "\n".join(tool_texts)
-                if tool_content:
-                    assistant_content += f"\n\n[TOOL_RESULT]{tool_content}[/TOOL_RESULT]"
+                    for item in tool_content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            tool_texts.append(item.get("text", ""))
+                        else:
+                            turn_raw_events.append({"role": "tool", "event_type": "unknown", "raw": item})
+                else:
+                    tool_texts = [str(tool_content)]
+
+                tool_result_text = "\n".join(tool_texts)
+                if tool_result_text:
+                    turn_tool_results.append({
+                        "tool_call_id": msg.get("tool_call_id", ""),
+                        "content": tool_result_text,
+                        "name": msg.get("name", ""),
+                    })
+                    assistant_content += f"\n\n[TOOL_RESULT]{tool_result_text}[/TOOL_RESULT]"
 
         # 保存最后一轮
         if user_content or assistant_content:
@@ -178,6 +289,19 @@ class KimiSource(AgentSource):
                 user_content=user_content,
                 assistant_content=assistant_content,
                 metadata=turn_meta,
+                tool_calls=turn_tool_calls,
+                tool_results=turn_tool_results,
+                reasoning=turn_reasoning,
+                raw_event_refs=turn_raw_events,
+                source_files=turn_source_files,
+                completeness={
+                    "visible_text": "full",
+                    "tool_results": "full" if turn_tool_results else "unavailable",
+                    "reasoning": "full" if turn_reasoning else "unavailable",
+                    "attachments": "unavailable",
+                    "truncated": False,
+                    "loss_reasons": completeness_loss,
+                },
             ))
 
         return turns

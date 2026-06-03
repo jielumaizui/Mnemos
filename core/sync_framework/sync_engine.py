@@ -178,6 +178,7 @@ class SyncEngine:
                 error TEXT,
                 working_dir TEXT,
                 tags TEXT,
+                artifact_path TEXT,
                 UNIQUE(agent_name, session_id, turn_number)
             )
         """)
@@ -185,6 +186,12 @@ class SyncEngine:
             CREATE INDEX IF NOT EXISTS idx_sync_lookup
             ON sync_log(agent_name, session_id, turn_number)
         """)
+        # 向后兼容：为旧数据库添加 artifact_path 列
+        try:
+            cursor.execute("SELECT artifact_path FROM sync_log LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE sync_log ADD COLUMN artifact_path TEXT")
+            conn.commit()
         # 向后兼容：为旧数据库添加 error 列
         try:
             cursor.execute("SELECT error FROM sync_log LIMIT 1")
@@ -296,6 +303,9 @@ class SyncEngine:
             )
 
         # 5b. 去重检查（Memos 端兜底）— 防止 sync_log 丢失导致全量重同步
+        # 从 Turn metadata 获取 artifact_path（由 CaptureService 写入）
+        artifact_path = (turn.metadata or {}).get("artifact_path", "")
+
         memos_dupe = self._check_memos_duplicate(
             source.name, session_info.session_id, turn.turn_number, content_hash
         )
@@ -303,7 +313,8 @@ class SyncEngine:
             # 记录到 sync_log 防止下次再查
             self._record_sync(
                 source.name, session_info.session_id,
-                turn.turn_number, content_hash, memos_dupe, "skipped_memos"
+                turn.turn_number, content_hash, memos_dupe, "skipped_memos",
+                artifact_path=artifact_path,
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -330,6 +341,7 @@ class SyncEngine:
             self._record_sync(
                 source.name, session_info.session_id,
                 turn.turn_number, content_hash, uids, status_str,
+                artifact_path=artifact_path,
             )
             self._collect_persona_signal(source, turn, session_info.session_id)
 
@@ -346,6 +358,7 @@ class SyncEngine:
             self._record_sync(
                 source.name, session_info.session_id,
                 turn.turn_number, content_hash, [], "failed", error=err_msg,
+                artifact_path=artifact_path,
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -360,6 +373,7 @@ class SyncEngine:
             self._record_sync(
                 source.name, session_info.session_id,
                 turn.turn_number, content_hash, [], "failed", error=err_msg,
+                artifact_path=artifact_path,
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -374,6 +388,7 @@ class SyncEngine:
             self._record_sync(
                 source.name, session_info.session_id,
                 turn.turn_number, content_hash, [], "failed", error=err_msg,
+                artifact_path=artifact_path,
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -388,6 +403,7 @@ class SyncEngine:
             self._record_sync(
                 source.name, session_info.session_id,
                 turn.turn_number, content_hash, [], "failed", error=err_msg,
+                artifact_path=artifact_path,
             )
             return SyncResult(
                 session_id=session_info.session_id,
@@ -585,6 +601,18 @@ class SyncEngine:
         if "[TOOL_RESULT]" in combined or turn.metadata.get("tool_calls"):
             tags.append("has-tools=true")
 
+        # P0-0: 完整性标签写入 Memos
+        comp = turn.completeness or {}
+        tags.append(f"capture_visible={comp.get('visible_text', 'unknown')}")
+        if comp.get('tool_results') and comp.get('tool_results') != 'unavailable':
+            tags.append(f"capture_tool_results={comp.get('tool_results')}")
+        if comp.get('reasoning') and comp.get('reasoning') != 'unavailable':
+            tags.append(f"capture_reasoning={comp.get('reasoning')}")
+        if comp.get('truncated'):
+            tags.append("capture_truncated=true")
+        if comp.get('loss_reasons'):
+            tags.append(f"capture_loss={','.join(comp.get('loss_reasons', [])[:3])}")
+
         # 回流防护：wiki 生成内容不蒸馏
         if "<wiki-context" in combined or "<!-- wiki-generated -->" in combined:
             tags.append("skip-distill=true")
@@ -643,6 +671,20 @@ class SyncEngine:
             logging.getLogger(__name__).warning(f"Caught unexpected error at sync_engine.py", exc_info=True)
             return 0
 
+    def _get_synced_turns(self, agent_name: str, session_id: str) -> List[int]:
+        """获取某 session 已同步的所有 turn_number 列表（P0-4 backfill 缺洞检测）"""
+        try:
+            conn = self._pool.get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT turn_number FROM sync_log WHERE agent_name = ? AND session_id = ? AND status IN ('synced', 'updated')",
+                (agent_name, session_id),
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception:
+            logging.getLogger(__name__).warning(f"Caught unexpected error at sync_engine.py", exc_info=True)
+            return []
+
     def _check_synced(self, agent_name: str, session_id: str, turn_number: int) -> Optional[Dict]:
         """检查某轮次是否已同步"""
         try:
@@ -700,6 +742,7 @@ class SyncEngine:
         memos_uids: List[str],
         status: str,
         error: Optional[str] = None,
+        artifact_path: Optional[str] = None,
     ):
         """记录同步状态（含蒸馏扩展字段）"""
         try:
@@ -708,14 +751,15 @@ class SyncEngine:
             cursor.execute("""
                 INSERT OR REPLACE INTO sync_log
                 (agent_name, session_id, turn_number, content_hash, memos_uids,
-                 status, synced_at, distill_status, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 status, synced_at, distill_status, error, artifact_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 agent_name, session_id, turn_number, content_hash,
                 json.dumps(memos_uids) if isinstance(memos_uids, list) else json.dumps([memos_uids]),
                 status, datetime.now().isoformat(),
                 "pending" if status in ("new", "updated") else "skipped",
                 error,
+                artifact_path,
             ))
             conn.commit()
         except Exception:

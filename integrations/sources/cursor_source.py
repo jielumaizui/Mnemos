@@ -222,9 +222,48 @@ class CursorSource(AgentSource):
 
         return turns
 
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "unknown",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "experimental",
+        }
+
+    def get_session_state(self, session_info: SessionInfo) -> Optional[Dict[str, Any]]:
+        """Cursor 聚合状态：JSON + SQLite 多源"""
+        base = session_info.source_path.parent
+        files = []
+        for pattern in ["*.json", "*.vscdb"]:
+            files.extend(base.rglob(pattern))
+        if not files:
+            return None
+        total_size = 0
+        max_mtime = 0
+        file_entries = []
+        for f in sorted(files):
+            try:
+                stat = f.stat()
+                total_size += stat.st_size
+                max_mtime = max(max_mtime, stat.st_mtime)
+                file_entries.append(f"{f.name}:{stat.st_size}:{stat.st_mtime}")
+            except OSError:
+                pass
+        import hashlib
+        fingerprint = hashlib.md5("|".join(file_entries).encode()).hexdigest()[:16]
+        return {
+            "mtime": max_mtime,
+            "size": total_size,
+            "file_count": len(files),
+            "fingerprint": fingerprint,
+        }
+
     def build_extra_tags(self, turn: Turn) -> List[str]:
         """Cursor 自定义标签"""
-        return []
+        return ["source_fidelity=experimental"]
 
 
 import sys

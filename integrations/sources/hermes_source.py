@@ -64,8 +64,19 @@ class HermesSource(AgentSource):
             ))
         return sessions
 
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "available",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
+
     def parse_turns(self, session_path: Path) -> List[Turn]:
-        """解析 Hermes JSONL 会话文件为 Turn 列表"""
+        """解析 Hermes JSONL 会话文件为 Turn 列表 — P0-6 完整录入版"""
         turns = []
         try:
             with open(session_path, "r", encoding="utf-8") as f:
@@ -78,6 +89,9 @@ class HermesSource(AgentSource):
         assistant_content = ""
         turn_meta: Dict[str, Any] = {}
         turn_number = 0
+        turn_reasoning = ""
+        turn_raw_events: List[Dict[str, Any]] = []
+        completeness_loss: List[str] = []
 
         for line in lines:
             line = line.strip()
@@ -86,13 +100,15 @@ class HermesSource(AgentSource):
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
+                completeness_loss.append("json_decode_error")
                 continue
 
             role = msg.get("role", "")
             content = msg.get("content", "")
 
-            # 跳过系统消息
+            # 跳过系统消息，但记录到 raw_event_refs
             if role in ("system", "_system"):
+                turn_raw_events.append({"role": role, "event_type": "system", "raw": msg})
                 continue
 
             if role == "user":
@@ -102,22 +118,43 @@ class HermesSource(AgentSource):
                         user_content=user_content,
                         assistant_content=assistant_content,
                         metadata=turn_meta,
+                        reasoning=turn_reasoning,
+                        raw_event_refs=turn_raw_events,
+                        source_files=[str(session_path)],
+                        completeness={
+                            "visible_text": "full",
+                            "tool_results": "unavailable",
+                            "reasoning": "full" if turn_reasoning else "unavailable",
+                            "attachments": "unavailable",
+                            "truncated": False,
+                            "loss_reasons": completeness_loss,
+                        },
                     ))
                     turn_number += 1
 
                 user_content = str(content) if not isinstance(content, str) else content
                 assistant_content = ""
                 turn_meta = {}
+                turn_reasoning = ""
+                turn_raw_events = []
+                completeness_loss = []
 
             elif role == "assistant":
                 if isinstance(content, list):
                     texts = []
                     for part in content:
                         if isinstance(part, dict):
-                            if part.get("type") == "text":
+                            ptype = part.get("type", "")
+                            if ptype == "text":
                                 texts.append(part.get("text", ""))
-                            elif part.get("type") == "thinking":
-                                turn_meta["reasoning"] = part.get("thinking", "")[:2000]
+                            elif ptype == "thinking":
+                                # P0-6: 不再截断 thinking
+                                turn_reasoning = part.get("thinking", "")
+                                turn_meta["reasoning"] = turn_reasoning
+                            else:
+                                # 未知 block 入 raw_event_refs
+                                turn_raw_events.append({"role": "assistant", "event_type": ptype, "raw": part})
+                                completeness_loss.append(f"assistant_unknown_block:{ptype}")
                         elif isinstance(part, str):
                             texts.append(part)
                     assistant_content = "\n\n".join(texts)
@@ -131,6 +168,17 @@ class HermesSource(AgentSource):
                 user_content=user_content,
                 assistant_content=assistant_content,
                 metadata=turn_meta,
+                reasoning=turn_reasoning,
+                raw_event_refs=turn_raw_events,
+                source_files=[str(session_path)],
+                completeness={
+                    "visible_text": "full",
+                    "tool_results": "unavailable",
+                    "reasoning": "full" if turn_reasoning else "unavailable",
+                    "attachments": "unavailable",
+                    "truncated": False,
+                    "loss_reasons": completeness_loss,
+                },
             ))
 
         return turns

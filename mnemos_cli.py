@@ -18,8 +18,10 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
+from typing import List
 
 from core.config import get_config, Config
+from core.hephaestus.distillation_prompts import PROMPT_VERSION
 
 
 def _format_bytes(size: int) -> str:
@@ -497,6 +499,35 @@ def cmd_doctor(args):
             print(f"  ✓ 宿主 Agent: {host}")
     except Exception as e:
         warnings.append(f"Agent 检测失败: {e}")
+
+    # 6.5b Agent 完整性能力
+    print()
+    print("Agent 完整性能力:")
+    try:
+        from core.sync_framework.registry import AgentRegistry
+        AgentRegistry.register_builtin_agents()
+        agents = AgentRegistry.auto_discover()
+        for agent in agents:
+            caps = agent.completeness_capabilities() if hasattr(agent, "completeness_capabilities") else {}
+            fidelity = caps.get("source_fidelity", "unknown")
+            mark = "✓" if fidelity == "full" else "⚠" if fidelity in ("derived", "experimental") else "?"
+            print(f"  {mark} {agent.name}: fidelity={fidelity}")
+            if caps.get("reasoning"):
+                print(f"    reasoning={caps.get('reasoning')}, tool_results={caps.get('tool_results')}")
+    except Exception as e:
+        warnings.append(f"Agent 完整性检测失败: {e}")
+
+    # 6.5c Reasoning 采集策略
+    print()
+    reasoning_mode = config.get("capture.reasoning_mode", "artifact_summary")
+    print(f"Reasoning 采集策略: {reasoning_mode}")
+    mode_desc = {
+        "off": "不采集 reasoning",
+        "summary": "只保存前 2000 字摘要",
+        "artifact_summary": "Memos 写摘要，本地 artifact 存完整 reasoning（推荐）",
+        "full": "完整 reasoning 入 Memos",
+    }
+    print(f"  {mode_desc.get(reasoning_mode, '未知策略')}")
 
     # 6.6 API 蒸馏状态
     print()
@@ -1236,20 +1267,40 @@ def cmd_sync(args):
     elif args.sync_cmd == "backfill":
         _cmd_sync_backfill(args)
 
+    elif args.sync_cmd == "audit":
+        _cmd_sync_audit(args)
+
     else:
-        print("用法: mnemos sync {status|retry-failed|backfill}")
+        print("用法: mnemos sync {status|retry-failed|backfill|audit}")
+
+
+def _compress_ranges(numbers: List[int]) -> str:
+    """将连续整数列表压缩为范围字符串，如 [1,2,3,5,7] -> '1-3,5,7'"""
+    if not numbers:
+        return ""
+    numbers = sorted(numbers)
+    ranges = []
+    start = end = numbers[0]
+    for n in numbers[1:]:
+        if n == end + 1:
+            end = n
+        else:
+            ranges.append(f"{start}-{end}" if start != end else str(start))
+            start = end = n
+    ranges.append(f"{start}-{end}" if start != end else str(start))
+    return ",".join(ranges)
 
 
 def _cmd_sync_backfill(args):
-    """历史回填：全量/大批量扫描 Agent 历史会话"""
-    from core.sync_framework.capture_service import CaptureService
+    """历史回填：全量/大批量扫描 Agent 历史会话 — P0-4 直接调用 SyncEngine，绕过 CaptureQueue"""
+    from core.sync_framework.sync_engine import SyncEngine
     from core.sync_framework.registry import AgentRegistry
     from core.config import get_config
 
     config = get_config()
     source_filter = getattr(args, 'source', None)
     since_hours = getattr(args, 'since', 0) or 0
-    max_turns = getattr(args, 'max_turns', 0) or 0
+    max_turns = getattr(args, 'max_turns', 0) or config.get("sync.backfill_max_turns_per_session", 0)
     max_sessions = getattr(args, 'max_sessions', 0) or 0
     dry_run = getattr(args, 'dry_run', False)
 
@@ -1269,14 +1320,15 @@ def _cmd_sync_backfill(args):
     print(f"  每 session 最大 turn 数: {max_turns if max_turns else '无限制'}")
     print(f"  每 source 最大 session 数: {max_sessions if max_sessions else '无限制'}")
     if dry_run:
-        print("  [dry-run] 只统计，不入队")
+        print("  [dry-run] 只统计，不入库")
     print()
 
-    capture_service = CaptureService(start_worker=False)
+    # P0-4: 直接调用 SyncEngine，incremental=False 确保中间缺洞也能补齐
+    engine = SyncEngine()
     total_stats = {
         "agents": 0, "sessions": 0, "turns": 0,
-        "queued": 0, "duplicate": 0, "backpressure": 0, "error": 0,
-        "skipped_large": 0, "skipped_empty": 0,
+        "synced": 0, "skipped": 0, "failed": 0, "noise": 0,
+        "skipped_empty": 0, "missing_turns": 0,
     }
 
     import time
@@ -1304,7 +1356,7 @@ def _cmd_sync_backfill(args):
         if max_sessions:
             sessions_with_mtime = sessions_with_mtime[:max_sessions]
 
-        agent_queued = 0
+        agent_synced = 0
         agent_turns = 0
         for mtime, session_info in sessions_with_mtime:
             try:
@@ -1313,6 +1365,13 @@ def _cmd_sync_backfill(args):
                     total_stats["skipped_empty"] += 1
                     continue
                 turns = sorted(turns, key=lambda t: t.turn_number)
+                # 查询已同步的 turn 范围，用于 dry-run 报告缺洞
+                existing_turns = engine._get_synced_turns(source.name, session_info.session_id)
+                all_turn_numbers = {t.turn_number for t in turns}
+                missing_turns = sorted(all_turn_numbers - set(existing_turns))
+                if missing_turns:
+                    total_stats["missing_turns"] += len(missing_turns)
+
                 if max_turns and len(turns) > max_turns:
                     turns = turns[-max_turns:]
                 agent_turns += len(turns)
@@ -1320,62 +1379,112 @@ def _cmd_sync_backfill(args):
                 total_stats["turns"] += len(turns)
 
                 if dry_run:
+                    if missing_turns:
+                        ranges = _compress_ranges(missing_turns)
+                        print(f"  [dry-run] {source.name}/{session_info.session_id}: {len(turns)} turns, missing {len(missing_turns)} ({ranges})")
                     continue
 
-                context = source.on_session_start(
-                    session_info.session_id,
-                    {"working_dir": session_info.working_dir, "agent": source.name},
-                )
-                for turn in turns:
-                    result = capture_service.capture_turn(
-                        source_agent=source.name,
-                        session_id=session_info.session_id,
-                        turn_number=turn.turn_number,
-                        user_content=turn.user_content,
-                        assistant_content=turn.assistant_content,
-                        timestamp=turn.timestamp,
-                        model=source.model_tag,
-                        cwd=str(session_info.source_path),
-                        metadata=turn.metadata,
-                    )
-                    status = result.get("status")
-                    if status == "queued":
-                        total_stats["queued"] += 1
-                        agent_queued += 1
-                    elif status == "duplicate":
-                        total_stats["duplicate"] += 1
-                    elif status == "backpressure":
-                        total_stats["backpressure"] += 1
-                    elif status == "error":
-                        total_stats["error"] += 1
-                try:
-                    capture_service.end_session(source.name, session_info.session_id)
-                except Exception:
-                    pass
-                all_messages = []
-                for turn in turns:
-                    if turn.user_content:
-                        all_messages.append({"role": "user", "content": turn.user_content})
-                    if turn.assistant_content:
-                        all_messages.append({"role": "assistant", "content": turn.assistant_content})
-                source.on_session_end(session_info.session_id, all_messages)
+                # P0-4: 直接调用 SyncEngine.sync_session，incremental=False
+                results = engine.sync_session(source, session_info, incremental=False)
+                for r in results:
+                    if r.action == "new":
+                        total_stats["synced"] += 1
+                        agent_synced += 1
+                    elif r.action in ("skipped", "skipped_memos"):
+                        total_stats["skipped"] += 1
+                    elif r.action == "noise":
+                        total_stats["noise"] += 1
+                    elif r.action == "failed":
+                        total_stats["failed"] += 1
             except Exception as e:
-                total_stats["error"] += 1
+                total_stats["failed"] += 1
                 print(f"  ✗ {source.name}/{session_info.session_id}: {e}")
 
-        print(f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, {agent_turns} turns, 入队 {agent_queued}")
+        print(f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, {agent_turns} turns, 同步 {agent_synced}")
 
+    engine.close()
     print()
     print("回填统计:")
     print(f"  Agent 源: {total_stats['agents']}")
     print(f"  Sessions: {total_stats['sessions']}")
     print(f"  Turns: {total_stats['turns']}")
     if not dry_run:
-        print(f"  Queued: {total_stats['queued']}")
-        print(f"  Duplicate: {total_stats['duplicate']}")
-        print(f"  Backpressure: {total_stats['backpressure']}")
-        print(f"  Error: {total_stats['error']}")
+        print(f"  Synced(new): {total_stats['synced']}")
+        print(f"  Skipped: {total_stats['skipped']}")
+        print(f"  Noise: {total_stats['noise']}")
+        print(f"  Failed: {total_stats['failed']}")
+    print(f"  Missing turns: {total_stats['missing_turns']}")
     print(f"  Skipped(empty): {total_stats['skipped_empty']}")
+
+
+def _cmd_sync_audit(args):
+    """同步完整性审计：扫描各 Agent 的 session 缺洞情况"""
+    from core.sync_framework.sync_engine import SyncEngine
+    from core.sync_framework.registry import AgentRegistry
+    from core.config import get_config
+    import sqlite3
+
+    source_filter = getattr(args, 'source', None)
+    config = get_config()
+    db_path = config.data_dir / "sync_log.db"
+
+    AgentRegistry.register_builtin_agents()
+    agents = AgentRegistry.auto_discover()
+    if source_filter and source_filter != "all":
+        agents = [a for a in agents if a.name == source_filter]
+    if not agents:
+        print("未发现任何 Agent 源")
+        return
+
+    engine = SyncEngine()
+    total_sessions = 0
+    sessions_with_gaps = 0
+    largest_gap = {"session_id": "", "parsed_turns": 0, "synced_turns": 0, "missing_turns": 0, "missing_ranges": ""}
+
+    for source in agents:
+        sessions = source.discover_sessions()
+        if not sessions:
+            continue
+        agent_sessions = 0
+        agent_gaps = 0
+        for session_info in sessions:
+            try:
+                turns = source.parse_turns(session_info.source_path)
+                if not turns:
+                    continue
+                all_turn_numbers = sorted({t.turn_number for t in turns})
+                synced_turns = engine._get_synced_turns(source.name, session_info.session_id)
+                missing = sorted(set(all_turn_numbers) - set(synced_turns))
+                total_sessions += 1
+                agent_sessions += 1
+                if missing:
+                    sessions_with_gaps += 1
+                    agent_gaps += 1
+                    if len(missing) > largest_gap["missing_turns"]:
+                        largest_gap = {
+                            "session_id": session_info.session_id,
+                            "parsed_turns": len(all_turn_numbers),
+                            "synced_turns": len(synced_turns),
+                            "missing_turns": len(missing),
+                            "missing_ranges": _compress_ranges(missing),
+                        }
+            except Exception as e:
+                print(f"  ✗ {source.name}/{session_info.session_id}: {e}")
+
+        print(f"{source.name}: {agent_sessions} sessions, {agent_gaps} with gaps")
+
+    engine.close()
+    print()
+    print("同步完整性审计结果:")
+    print(f"  总 sessions: {total_sessions}")
+    print(f"  有缺洞的 sessions: {sessions_with_gaps}")
+    if largest_gap["missing_turns"] > 0:
+        print(f"  最大缺洞:")
+        print(f"    session_id: {largest_gap['session_id']}")
+        print(f"    parsed_turns: {largest_gap['parsed_turns']}")
+        print(f"    synced_turns: {largest_gap['synced_turns']}")
+        print(f"    missing_turns: {largest_gap['missing_turns']}")
+        print(f"    missing_ranges: {largest_gap['missing_ranges']}")
 
 
 def cmd_build_relation_index(args):
@@ -1623,6 +1732,65 @@ def cmd_report(args):
         print("用法: mnemos report generate")
 
 
+def cmd_distill(args):
+    """蒸馏层管理"""
+    if args.distill_cmd == "audit":
+        _cmd_distill_audit(args)
+    else:
+        print("用法: mnemos distill audit")
+
+
+def _cmd_distill_audit(args):
+    """蒸馏完整性审计：报告截断、缺失 prompt_version、缺失 source_coverage"""
+    from core.config import get_config
+    config = get_config()
+    wiki_dir = config.wiki_dir
+
+    if not wiki_dir.exists():
+        print("Wiki 目录不存在")
+        return
+
+    md_files = list(wiki_dir.rglob("*.md"))
+    total = len(md_files)
+    pages_with_truncated_source = 0
+    pages_without_prompt_version = 0
+    pages_without_source_coverage = 0
+    pages_with_old_prompt_version = 0
+
+    import yaml
+    for md_file in md_files:
+        try:
+            content = md_file.read_text(encoding="utf-8", errors="ignore")
+            if not content.startswith("---"):
+                continue
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                continue
+            fm = yaml.safe_load(parts[1]) or {}
+
+            # 只统计蒸馏生成的页面（有 source_session 或 distilled_at）
+            if not (fm.get("source_session") or fm.get("蒸馏时间")):
+                continue
+
+            if fm.get("truncated") is True:
+                pages_with_truncated_source += 1
+            if not fm.get("distill_prompt_version"):
+                pages_without_prompt_version += 1
+            elif str(fm.get("distill_prompt_version")) != PROMPT_VERSION:
+                pages_with_old_prompt_version += 1
+            if not fm.get("source_coverage"):
+                pages_without_source_coverage += 1
+        except Exception:
+            continue
+
+    print("蒸馏完整性审计结果:")
+    print(f"  Wiki 页面总数: {total}")
+    print(f"  截断输入页面: {pages_with_truncated_source}")
+    print(f"  缺少 prompt_version: {pages_without_prompt_version}")
+    print(f"  旧 prompt_version: {pages_with_old_prompt_version}")
+    print(f"  缺少 source_coverage: {pages_without_source_coverage}")
+
+
 def cmd_events(args):
     """事件总线管理"""
     from core.config import get_config
@@ -1814,6 +1982,8 @@ def main():
     backfill_parser.add_argument("--max-turns", type=int, default=0, help="每 session 最大 turn 数（0=无限制）")
     backfill_parser.add_argument("--max-sessions", type=int, default=0, help="每 source 最大 session 数（0=无限制）")
     backfill_parser.add_argument("--dry-run", action="store_true", help="只统计，不入队")
+    audit_parser = sync_sub.add_parser("audit", help="同步完整性审计：报告缺洞、截断、覆盖率")
+    audit_parser.add_argument("--source", default="all", help="指定 Agent 源（如 claude/kimi/codex/all）")
 
     # build-relation-index
     subparsers.add_parser("build-relation-index", help="重建关联上下文向量索引")
@@ -1835,6 +2005,11 @@ def main():
     report_parser = subparsers.add_parser("report", help="报告生成")
     report_sub = report_parser.add_subparsers(dest="report_cmd")
     report_sub.add_parser("generate", help="生成周报")
+
+    # distill
+    distill_parser = subparsers.add_parser("distill", help="蒸馏层管理")
+    distill_sub = distill_parser.add_subparsers(dest="distill_cmd")
+    distill_sub.add_parser("audit", help="蒸馏完整性审计：报告截断、缺失 prompt_version、source_coverage")
 
     # events
     events_parser = subparsers.add_parser("events", help="事件总线管理")
@@ -1877,6 +2052,8 @@ def main():
         cmd_wiki(args)
     elif args.command == "report":
         cmd_report(args)
+    elif args.command == "distill":
+        cmd_distill(args)
     elif args.command == "events":
         cmd_events(args)
     elif args.command == "metrics" and args.metrics_cmd == "scan":

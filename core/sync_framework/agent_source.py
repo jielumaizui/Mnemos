@@ -27,12 +27,32 @@ class SessionInfo:
 
 @dataclass
 class Turn:
-    """单轮对话记录"""
+    """单轮对话记录 — 扩展以支持完整对话录入契约"""
     turn_number: int
     user_content: str
     assistant_content: str
     timestamp: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # 完整录入契约字段（P0-0）
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    tool_results: List[Dict[str, Any]] = field(default_factory=list)
+    reasoning: str = ""
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
+    raw_event_refs: List[Dict[str, Any]] = field(default_factory=list)
+    source_files: List[str] = field(default_factory=list)
+    completeness: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # 确保 completeness 有默认值
+        if not self.completeness:
+            self.completeness = {
+                "visible_text": "full",
+                "tool_results": "full" if self.tool_results else "unavailable",
+                "reasoning": "full" if self.reasoning else "unavailable",
+                "attachments": "full" if self.attachments else "unavailable",
+                "truncated": False,
+                "loss_reasons": [],
+            }
 
 
 @dataclass
@@ -119,6 +139,43 @@ class AgentSource(ABC):
     def on_session_start(self, session_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """KIA Hook：Session 开始时调用"""
         return {}
+
+    def get_session_state(self, session_info: SessionInfo) -> Optional[Dict[str, Any]]:
+        """
+        返回 session 的聚合状态（多文件/数据库来源必须覆写）。
+        用于 L1 扫描判断 session 是否变化，避免只看单个入口文件。
+
+        返回 dict 必须包含：
+          - mtime: 所有相关文件的最大 mtime
+          - size: 所有相关文件的总大小（字节）
+          - file_count: 相关文件数量
+          - fingerprint: 可复现的哈希字符串
+        """
+        try:
+            stat = session_info.source_path.stat()
+            return {
+                "mtime": session_info.mtime if session_info.mtime is not None else stat.st_mtime,
+                "size": stat.st_size,
+                "file_count": 1,
+                "fingerprint": f"{session_info.source_path.name}:{stat.st_size}:{stat.st_mtime}",
+            }
+        except OSError:
+            return None
+
+    def completeness_capabilities(self) -> Dict[str, Any]:
+        """
+        声明该 AgentSource 理论上能采集到什么。
+        用于 doctor/audit 显示来源完整性等级。
+        """
+        return {
+            "visible_text": True,
+            "tool_calls": False,
+            "tool_results": False,
+            "reasoning": "unknown",
+            "attachments": "unknown",
+            "raw_files": True,
+            "source_fidelity": "full",
+        }
 
     def on_session_end(self, session_id: str, messages: List[Dict[str, Any]]) -> None:
         """KIA Hook：Session 结束时调用"""
