@@ -182,9 +182,24 @@ def cmd_init(args):
     else:
         config.set("memos.enabled", False)
 
-    # 3. 画像数据源
+    # 3. 蒸馏 API 配置
     print()
-    print(f"[3/6] 用户画像数据源")
+    print(f"[3/6] 蒸馏 API 配置（推荐配置，用于文档/会话蒸馏入 Wiki）")
+    sf_key = os.environ.get("SILICONFLOW_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if sf_key or openai_key:
+        print(f"      ✓ 检测到环境变量中已配置 API key")
+    else:
+        print(f"      ⚠ 未检测到 SILICONFLOW_API_KEY 或 OPENAI_API_KEY")
+        print(f"        └─ 影响: document_process / knowledge_distill 等工具将不可用")
+        print(f"        └─ 建议: export SILICONFLOW_API_KEY=your_key")
+        print(f"        └─ 或:   export OPENAI_API_KEY=your_key")
+        print(f"        └─ 模型: 默认 deepseek-ai/DeepSeek-V3 (SiliconFlow)")
+        print()
+
+    # 4. 画像数据源
+    print()
+    print(f"[4/6] 用户画像数据源")
     print(f"      以下数据源用于构建你的用户画像。")
     print(f"      开启越多画像越精准，但隐私暴露也越多。")
     print()
@@ -200,9 +215,9 @@ def cmd_init(args):
             enabled = ans.lower() != "n" if default == "Y" else ans.lower() == "y"
             config.set(f"persona.data_sources.{key}.enabled", enabled)
 
-    # 4. AI Agent 集成
+    # 5. AI Agent 集成
     print()
-    print(f"[4/6] AI Agent 集成")
+    print(f"[5/6] AI Agent 集成")
     cc_path = input(f"      Claude Code settings.json 路径 (回车={config.claude_settings_path}): ").strip()
     if cc_path:
         config.set("integrations.claude_code.settings_json_path", cc_path)
@@ -210,9 +225,9 @@ def cmd_init(args):
     mcp = input("      启用 MCP 协议? [y/N]: ").strip()
     config.set("integrations.mcp.enabled", mcp.lower() == "y")
 
-    # 5. 可选依赖推荐
+    # 6. 可选依赖推荐
     print()
-    print(f"[5/6] 可选依赖安装")
+    print(f"[6/6] 可选依赖安装")
     print(f"      以下依赖不装也能跑，但会影响部分功能：")
     print()
 
@@ -230,9 +245,9 @@ def cmd_init(args):
             print(f"        └─ 安装: pip install mnemos[dev]")
             print()
 
-    # 6. 保存
+    # 7. 保存
     print()
-    print(f"[6/6] 保存配置")
+    print(f"[7/7] 保存配置")
     config.save()
     print(f"      ✓ 配置已保存到: {config.config_path}")
 
@@ -317,6 +332,19 @@ def cmd_doctor(args):
     print(f"  rerank: {'开启' if config.get('embedding.use_rerank') else '关闭'}")
     print(f"  max_workers: {config.get('capture.max_workers')}")
     print(f"  max_payload: {config.get('capture.max_payload_bytes')} bytes")
+    print()
+
+    # 0.5 采集模式说明
+    print("采集模式:")
+    l1_recent = config.get("sync.l1_scan_recent_hours", 24)
+    l1_max_sources = config.get("sync.l1_scan_max_sources_per_cycle", 3)
+    l1_max_sessions = config.get("sync.l1_scan_max_sessions_per_source", 20)
+    l1_max_turns = config.get("sync.l1_scan_max_turns_per_session", 50)
+    print(f"  默认 L1 扫描: 受限增量采集（最近 {l1_recent} 小时）")
+    print(f"    每轮最多 {l1_max_sources} 个 Agent 源")
+    print(f"    每源最多 {l1_max_sessions} 个 sessions")
+    print(f"    每 session 最多 {l1_max_turns} 个 turns")
+    print(f"  如需历史全量回填: `mnemos sync backfill --since 0`")
     print()
 
     # 1. Python 版本
@@ -407,6 +435,31 @@ def cmd_doctor(args):
     except Exception as e:
         warnings.append(f"Agent 检测失败: {e}")
 
+    # 6.6 API 蒸馏状态
+    print()
+    print("API 蒸馏状态:")
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("SILICONFLOW_API_KEY")
+    base_url = os.environ.get("OPENAI_BASE_URL", "")
+    if "siliconflow" in base_url.lower():
+        provider = "siliconflow"
+        model = os.environ.get("OPENAI_MODEL", "deepseek-ai/DeepSeek-V3")
+    else:
+        provider = "openai-compatible"
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    if api_key:
+        print(f"  ✓ Provider: {provider}")
+        print(f"  ✓ Model: {model}")
+        if base_url:
+            print(f"  ✓ Base URL: {base_url}")
+    else:
+        warnings.append(
+            "未配置蒸馏 API key（OPENAI_API_KEY 或 SILICONFLOW_API_KEY），"
+            "document_process / knowledge_distill 将返回配置缺失提示"
+        )
+        print(f"  ✗ API key 未配置")
+        print(f"  ☐ Provider: {provider}（未就绪）")
+        print(f"  ☐ Model: {model}（未就绪）")
+
     # 6.6 跨平台兼容性
     print()
     print("跨平台兼容性:")
@@ -472,8 +525,14 @@ def cmd_doctor(args):
             from core.embeddings import EmbeddingIndexManager
             from core.embeddings.relation_manager import RelationEmbeddingManager
             idx = EmbeddingIndexManager(wiki_base=wiki_dir)
-            page_count = idx._index.get_current_count() if idx._index else 0
+            # 触发索引加载（只读，无变更时快速加载已有索引）
+            idx.build_index()
+            page_count = idx._index.get_current_count() if idx._index else len(idx._meta)
             print(f"  ✓ 页面索引: {page_count} 个 embedding")
+            if page_count == 0:
+                warnings.append(
+                    "页面索引为空（首次搜索时将自动构建，或运行 `mnemos search <query>` 触发）"
+                )
 
             rel_mgr = RelationEmbeddingManager()
             rel_stats = rel_mgr.get_stats()
@@ -504,7 +563,7 @@ def cmd_doctor(args):
             if coverage < 50:
                 warnings.append(
                     f"Wiki metrics 覆盖率仅 {coverage:.0f}%，"
-                    f"运行 `mnemos doctor --repair` 或 `mnemos metrics scan` 补齐"
+                    f"运行 `mnemos metrics scan` 补齐"
                 )
         except Exception as e:
             warnings.append(f"Wiki metrics 检查失败: {e}")
@@ -1094,8 +1153,149 @@ def cmd_sync(args):
         except Exception as e:
             print(f"重试失败: {e}")
 
+    elif args.sync_cmd == "backfill":
+        _cmd_sync_backfill(args)
+
     else:
-        print("用法: mnemos sync {status|retry-failed}")
+        print("用法: mnemos sync {status|retry-failed|backfill}")
+
+
+def _cmd_sync_backfill(args):
+    """历史回填：全量/大批量扫描 Agent 历史会话"""
+    from core.sync_framework.capture_service import CaptureService
+    from core.sync_framework.registry import AgentRegistry
+    from core.config import get_config
+
+    config = get_config()
+    source_filter = getattr(args, 'source', None)
+    since_hours = getattr(args, 'since', 0) or 0
+    max_turns = getattr(args, 'max_turns', 0) or 0
+    max_sessions = getattr(args, 'max_sessions', 0) or 0
+    dry_run = getattr(args, 'dry_run', False)
+
+    AgentRegistry.register_builtin_agents()
+    agents = AgentRegistry.auto_discover()
+    if source_filter:
+        agents = [a for a in agents if a.name == source_filter]
+    if not agents:
+        print("未发现任何 Agent 源")
+        return
+
+    print(f"历史回填: 发现 {len(agents)} 个 Agent 源")
+    if since_hours:
+        print(f"  时间范围: 最近 {since_hours} 小时")
+    else:
+        print(f"  时间范围: 全部历史")
+    print(f"  每 session 最大 turn 数: {max_turns if max_turns else '无限制'}")
+    print(f"  每 source 最大 session 数: {max_sessions if max_sessions else '无限制'}")
+    if dry_run:
+        print("  [dry-run] 只统计，不入队")
+    print()
+
+    capture_service = CaptureService(start_worker=False)
+    total_stats = {
+        "agents": 0, "sessions": 0, "turns": 0,
+        "queued": 0, "duplicate": 0, "backpressure": 0, "error": 0,
+        "skipped_large": 0, "skipped_empty": 0,
+    }
+
+    import time
+    now = time.time()
+    recent_seconds = since_hours * 3600 if since_hours else 0
+
+    for source in agents:
+        sessions = source.discover_sessions()
+        if not sessions:
+            continue
+        total_stats["agents"] += 1
+
+        # 按修改时间排序（最新的在前）
+        sessions_with_mtime = []
+        for si in sessions:
+            try:
+                mtime = si.source_path.stat().st_mtime
+            except OSError:
+                mtime = 0
+            if recent_seconds and (now - mtime) > recent_seconds:
+                continue
+            sessions_with_mtime.append((mtime, si))
+        sessions_with_mtime.sort(key=lambda x: x[0], reverse=True)
+
+        if max_sessions:
+            sessions_with_mtime = sessions_with_mtime[:max_sessions]
+
+        agent_queued = 0
+        agent_turns = 0
+        for mtime, session_info in sessions_with_mtime:
+            try:
+                turns = source.parse_turns(session_info.source_path)
+                if not turns:
+                    total_stats["skipped_empty"] += 1
+                    continue
+                turns = sorted(turns, key=lambda t: t.turn_number)
+                if max_turns and len(turns) > max_turns:
+                    turns = turns[-max_turns:]
+                agent_turns += len(turns)
+                total_stats["sessions"] += 1
+                total_stats["turns"] += len(turns)
+
+                if dry_run:
+                    continue
+
+                context = source.on_session_start(
+                    session_info.session_id,
+                    {"working_dir": session_info.working_dir, "agent": source.name},
+                )
+                for turn in turns:
+                    result = capture_service.capture_turn(
+                        source_agent=source.name,
+                        session_id=session_info.session_id,
+                        turn_number=turn.turn_number,
+                        user_content=turn.user_content,
+                        assistant_content=turn.assistant_content,
+                        timestamp=turn.timestamp,
+                        model=source.model_tag,
+                        cwd=str(session_info.source_path),
+                        metadata=turn.metadata,
+                    )
+                    status = result.get("status")
+                    if status == "queued":
+                        total_stats["queued"] += 1
+                        agent_queued += 1
+                    elif status == "duplicate":
+                        total_stats["duplicate"] += 1
+                    elif status == "backpressure":
+                        total_stats["backpressure"] += 1
+                    elif status == "error":
+                        total_stats["error"] += 1
+                try:
+                    capture_service.end_session(source.name, session_info.session_id)
+                except Exception:
+                    pass
+                all_messages = []
+                for turn in turns:
+                    if turn.user_content:
+                        all_messages.append({"role": "user", "content": turn.user_content})
+                    if turn.assistant_content:
+                        all_messages.append({"role": "assistant", "content": turn.assistant_content})
+                source.on_session_end(session_info.session_id, all_messages)
+            except Exception as e:
+                total_stats["error"] += 1
+                print(f"  ✗ {source.name}/{session_info.session_id}: {e}")
+
+        print(f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, {agent_turns} turns, 入队 {agent_queued}")
+
+    print()
+    print("回填统计:")
+    print(f"  Agent 源: {total_stats['agents']}")
+    print(f"  Sessions: {total_stats['sessions']}")
+    print(f"  Turns: {total_stats['turns']}")
+    if not dry_run:
+        print(f"  Queued: {total_stats['queued']}")
+        print(f"  Duplicate: {total_stats['duplicate']}")
+        print(f"  Backpressure: {total_stats['backpressure']}")
+        print(f"  Error: {total_stats['error']}")
+    print(f"  Skipped(empty): {total_stats['skipped_empty']}")
 
 
 def cmd_build_relation_index(args):
@@ -1161,6 +1361,21 @@ def cmd_search(args):
             print(f"     路径: {r.page_path}")
     except Exception as e:
         print(f"搜索失败: {e}")
+
+
+def cmd_metrics_scan(args):
+    """扫描 Wiki 页面 metrics"""
+    try:
+        from core.wiki_metrics import WikiMetrics
+        from core.config import get_config
+        wiki_dir = get_config().wiki_dir
+        wm = WikiMetrics(wiki_dir=str(wiki_dir))
+        print(f"扫描 Wiki metrics: {wiki_dir}")
+        result = wm.scan_all_pages()
+        print(f"  扫描完成: {result['total']} 个页面")
+        print(f"  新增: {result['inserted']}  更新: {result['updated']}")
+    except Exception as e:
+        print(f"扫描失败: {e}")
 
 
 def cmd_wiki(args):
@@ -1244,41 +1459,66 @@ def cmd_events(args):
         except Exception as e:
             print(f"统计失败: {e}")
 
+    elif args.events_cmd == "archive-orphans":
+        try:
+            from core.mnemos_bus import _get_bus
+            bus = _get_bus()
+            archived = bus.archive_no_consumer_events()
+            print(f"归档完成: {archived} 个无消费者历史事件已归档")
+        except Exception as e:
+            print(f"归档失败: {e}")
+
     elif args.events_cmd == "cleanup":
         if not events_db.exists():
             print("events.db 不存在")
             return
         try:
             with sqlite3.connect(str(events_db), timeout=10) as conn:
-                # 1. 删除已完成超过 7 天的事件
+                # 1. 统计待删除项
+                done_old = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE status = 'done' "
+                    "AND created_at < datetime('now', '-7 days')"
+                ).fetchone()[0]
+                dl_old = conn.execute(
+                    "SELECT COUNT(*) FROM dead_letters WHERE timestamp < datetime('now', '-30 days')"
+                ).fetchone()[0]
+                orphaned = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE status = 'pending' "
+                    "AND created_at < datetime('now', '-3 days')"
+                ).fetchone()[0]
+
+            print("[dry-run] 以下事件将被清理（使用 --confirm 执行）：")
+            print(f"  已完成超过 7 天的事件: {done_old}")
+            print(f"  死信超过 30 天的事件: {dl_old}")
+            print(f"  orphaned pending 超过 3 天的事件: {orphaned}")
+
+            if not getattr(args, 'confirm', False):
+                print("  未指定 --confirm，跳过删除。建议先运行 `mnemos events archive-orphans` 归档。")
+                return
+
+            with sqlite3.connect(str(events_db), timeout=10) as conn:
                 cursor = conn.execute(
                     "DELETE FROM events WHERE status = 'done' "
                     "AND created_at < datetime('now', '-7 days')"
                 )
                 done_removed = cursor.rowcount
 
-                # 2. 删除死信超过 30 天的事件
                 cursor = conn.execute(
                     "DELETE FROM dead_letters WHERE timestamp < datetime('now', '-30 days')"
                 )
                 dl_removed = cursor.rowcount
 
-                # 3. 对无处理器且长期 pending 的事件，标记为 dead-letter 或删除
-                # 先找出 pending 超过 3 天的事件
                 cursor = conn.execute(
-                    "SELECT id, event_type, trace_id, timestamp FROM events "
-                    "WHERE status = 'pending' AND created_at < datetime('now', '-3 days')"
+                    "SELECT id FROM events WHERE status = 'pending' "
+                    "AND created_at < datetime('now', '-3 days')"
                 )
-                old_pending = cursor.fetchall()
                 orphaned_removed = 0
-                for row in old_pending:
-                    # 简单处理：直接删除（这些事件没有处理器，daemon 也无法消费）
+                for row in cursor.fetchall():
                     conn.execute("DELETE FROM events WHERE id = ?", (row[0],))
                     orphaned_removed += 1
 
                 conn.commit()
 
-            # VACUUM 必须在事务外执行，使用独立连接
             with sqlite3.connect(str(events_db), timeout=10) as vacuum_conn:
                 vacuum_conn.execute("VACUUM")
 
@@ -1316,6 +1556,11 @@ def main():
 
     # status
     status_parser = subparsers.add_parser("status", help="查看系统状态")
+
+    # metrics
+    metrics_parser = subparsers.add_parser("metrics", help="Wiki 页面度量管理")
+    metrics_sub = metrics_parser.add_subparsers(dest="metrics_cmd")
+    metrics_sub.add_parser("scan", help="全量扫描 Wiki 页面 metrics")
 
     # config
     config_parser = subparsers.add_parser("config", help="查看/编辑配置")
@@ -1363,6 +1608,12 @@ def main():
     sync_sub = sync_parser.add_subparsers(dest="sync_cmd")
     sync_sub.add_parser("status", help="查看同步状态")
     sync_sub.add_parser("retry-failed", help="重试失败的同步任务")
+    backfill_parser = sync_sub.add_parser("backfill", help="历史回填：全量/大批量扫描 Agent 历史会话")
+    backfill_parser.add_argument("--source", help="指定 Agent 源（如 claude/kimi/codex）")
+    backfill_parser.add_argument("--since", type=float, default=0, help="时间范围（小时，0=全部）")
+    backfill_parser.add_argument("--max-turns", type=int, default=0, help="每 session 最大 turn 数（0=无限制）")
+    backfill_parser.add_argument("--max-sessions", type=int, default=0, help="每 source 最大 session 数（0=无限制）")
+    backfill_parser.add_argument("--dry-run", action="store_true", help="只统计，不入队")
 
     # build-relation-index
     subparsers.add_parser("build-relation-index", help="重建关联上下文向量索引")
@@ -1388,7 +1639,9 @@ def main():
     # events
     events_parser = subparsers.add_parser("events", help="事件总线管理")
     events_sub = events_parser.add_subparsers(dest="events_cmd")
-    events_sub.add_parser("cleanup", help="清理旧事件和死信（释放磁盘空间）")
+    cleanup_parser = events_sub.add_parser("cleanup", help="清理旧事件和死信（默认 dry-run）")
+    cleanup_parser.add_argument("--confirm", action="store_true", help="确认执行删除和 VACUUM")
+    events_sub.add_parser("archive-orphans", help="归档无消费者的历史 pending 事件")
     events_sub.add_parser("stats", help="查看事件总线统计")
 
     args = parser.parse_args()
@@ -1426,6 +1679,8 @@ def main():
         cmd_report(args)
     elif args.command == "events":
         cmd_events(args)
+    elif args.command == "metrics" and args.metrics_cmd == "scan":
+        cmd_metrics_scan(args)
     else:
         parser.print_help()
 

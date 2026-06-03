@@ -24,12 +24,8 @@ import os
 import re
 import sqlite3
 import subprocess
-import time
-import traceback
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import log1p
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,8 +34,9 @@ from core.frontmatter import to_chinese_frontmatter, fm_get
 from core.kia.ingest_helpers import is_noise_message
 
 
-
 logger = logging.getLogger(__name__)
+
+
 def _get_wiki_dir() -> Path:
     return get_config().wiki_dir
 
@@ -141,31 +138,81 @@ def clean_message_content(content: str) -> str:
     # 移除 thinking 块
     content = re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=re.DOTALL)
 
-    # 压缩代码块：保留语言标记+前后关键行，中间省略
+    # 压缩代码块：保留语言标记+文件路径+关键结构，中间省略
     def _compress_code_block(m):
         block = m.group(0)
         lines = block.split('\n')
-        if len(lines) <= 8:
+        if len(lines) <= 10:
             return block
-        # 保留开头 ```lang 和前几行，结尾后几行和 ```
-        head = lines[:4]
-        tail = lines[-3:]
-        return '\n'.join(head + ['[... code omitted ...]'] + tail)
+        # 提取文件路径（通常在代码块前的注释或首行）
+        file_hint = ""
+        for line in lines[:5]:
+            if line.startswith("# file:") or line.startswith("# File:") or line.startswith("// file:"):
+                file_hint = line.strip()
+                break
+        # 保留关键结构：函数定义、类定义、import
+        key_lines = []
+        for line in lines[1:-1]:
+            stripped = line.strip()
+            if stripped.startswith(("def ", "class ", "import ", "from ", "@")):
+                key_lines.append(line)
+        # 限制关键结构数量，避免过长
+        if len(key_lines) > 5:
+            key_lines = key_lines[:5] + ["[... more definitions omitted ...]"]
+        head = lines[:3]  # ```lang + 前两行
+        if file_hint and file_hint not in head:
+            head.insert(1, file_hint)
+        tail = lines[-2:]  # 最后两行 + ```
+        omitted_count = len(lines) - len(head) - len(tail) - len(key_lines)
+        parts = head
+        if key_lines:
+            parts = parts + ["[... key structures ...]"] + key_lines
+        parts = parts + [f"[... {omitted_count} lines omitted ...]"] + tail
+        return '\n'.join(parts)
 
     content = re.sub(r'```.*?```', _compress_code_block, content, flags=re.DOTALL)
 
-    # 移除纯命令行（无中文的 shell 命令）
-    content = re.sub(
+    # 压缩连续纯命令行（无中文的 shell 命令），保留前 3 条，标注省略数量
+    shell_cmd_pattern = re.compile(
         r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
-        '', content, flags=re.MULTILINE,
+        flags=re.MULTILINE,
     )
+    lines = content.split('\n')
+    new_lines = []
+    cmd_buffer = []
+    for line in lines:
+        if shell_cmd_pattern.match(line):
+            cmd_buffer.append(line)
+        else:
+            if cmd_buffer:
+                if len(cmd_buffer) <= 3:
+                    new_lines.extend(cmd_buffer)
+                else:
+                    new_lines.extend(cmd_buffer[:3])
+                    new_lines.append(
+                        f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+                    )
+                cmd_buffer = []
+            new_lines.append(line)
+    if cmd_buffer:
+        if len(cmd_buffer) <= 3:
+            new_lines.extend(cmd_buffer)
+        else:
+            new_lines.extend(cmd_buffer[:3])
+            new_lines.append(
+                f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
+            )
+    content = '\n'.join(new_lines)
+
     content = re.sub(r'^\s*\d+\.\s*$', '', content, flags=re.MULTILINE)
     content = re.sub(r'\n{3,}', '\n\n', content)
     return content.strip()
 
 
-def build_session_text(messages: List[Dict], max_chars: int = 24000,
-                         out_meta: Optional[Dict] = None) -> str:
+def build_session_text(
+    messages: List[Dict], max_chars: int = 24000,
+    out_meta: Optional[Dict] = None,
+) -> str:
     """从消息列表构建对话文本。
 
     长会话处理策略（head-tail 截断）：
@@ -179,7 +226,8 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000,
                   tail_turns, omitted_turns, truncated）。
     """
     lines = []
-    for msg in messages:
+    message_truncations = []
+    for i, msg in enumerate(messages):
         role = msg.get("role", "unknown")
         content = msg.get("content", "").strip()
         if not content:
@@ -187,8 +235,24 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000,
         content = clean_message_content(content)
         if not content:
             continue
+        original_len = len(content)
         if len(content) > 1000:
             content = content[:1000] + "...(truncated)"
+            message_truncations.append({
+                "turn": i + 1,
+                "role": role,
+                "original_length": original_len,
+                "kept_length": 1000,
+                "truncated": True,
+            })
+        else:
+            message_truncations.append({
+                "turn": i + 1,
+                "role": role,
+                "original_length": original_len,
+                "kept_length": original_len,
+                "truncated": False,
+            })
         lines.append(f"[{role}] {content}")
 
     full_text = "\n\n".join(lines)
@@ -202,6 +266,7 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000,
                 "tail_turns": 0,
                 "omitted_turns": 0,
                 "truncated": False,
+                "message_truncations": message_truncations,
             })
         return full_text
 
@@ -234,6 +299,7 @@ def build_session_text(messages: List[Dict], max_chars: int = 24000,
             "tail_turns": tail_turns,
             "omitted_turns": omitted_turns,
             "truncated": True,
+            "message_truncations": message_truncations,
         })
 
     return (
@@ -1528,32 +1594,77 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
 
     body = [f"# {fragment.title}", ""]
 
-    if fragment.background:
-        # 如果 background 已包含 Markdown 标题，直接渲染；否则包装在 ## 背景 下
-        if fragment.background.strip().startswith("#"):
-            body.extend([fragment.background, ""])
-        else:
-            body.extend(["## 背景", "", fragment.background, ""])
+    has_deep_structure = bool(
+        fragment.core_content and fragment.core_content.strip().startswith("#")
+    )
 
+    # 结论：优先从 background 提取；否则从 core_content 首句提取
+    conclusion = ""
+    if fragment.background and not fragment.background.strip().startswith("#"):
+        conclusion = fragment.background.strip()
+    elif fragment.core_content and not has_deep_structure:
+        first_para = fragment.core_content.strip().split("\n")[0].strip()
+        if len(first_para) > 10:
+            conclusion = first_para.split("。")[0].strip() + "。"
+    if conclusion and len(conclusion) > 10:
+        body.extend(["## 结论", "", conclusion, ""])
+
+    # 适用场景
+    applies = (fragment.boundaries or {}).get("applies", "")
+    if applies:
+        body.extend(["## 适用场景", "", applies, ""])
+    elif not has_deep_structure and fragment.form in (
+        "decision-log", "decision", "问题-解决", "problem-solution",
+        "heuristic", "经验法则", "methodology", "方法论",
+    ):
+        body.extend(["## 适用场景", "", "*待补充：该知识在什么场景下适用*", ""])
+
+    # 操作步骤 / 使用方法：提取代码块和命令行
+    procedures = []
     if fragment.core_content:
-        # 如果 core_content 已包含 Markdown 标题（深度模式），直接渲染
-        if fragment.core_content.strip().startswith("#"):
-            body.extend([fragment.core_content, ""])
-        else:
-            body.extend(["## 核心内容", "", fragment.core_content, ""])
-
-    if fragment.boundaries and (fragment.boundaries.get("applies") or fragment.boundaries.get("not_applies")):
-        body.extend(["### 适用边界", ""])
-        if fragment.boundaries.get("applies"):
-            body.append(f"- 适用于：{fragment.boundaries['applies']}")
-        if fragment.boundaries.get("not_applies"):
-            body.append(f"- 不适用于：{fragment.boundaries['not_applies']}")
+        code_blocks = re.findall(
+            r'```(?:\w+)?\n(.*?)```', fragment.core_content, re.DOTALL,
+        )
+        for block in code_blocks:
+            stripped = block.strip()
+            if any(cmd in stripped for cmd in [
+                "curl ", "git ", "docker ", "pip ", "npm ",
+                "cd ", "mkdir ", "rm ", "mv ", "cp ",
+                "unset ", "export ", "source ", "conda ", "brew ",
+            ]):
+                procedures.append("```bash\n" + stripped + "\n```")
+        for line in fragment.core_content.split("\n"):
+            line = line.strip()
+            if line.startswith((
+                "curl ", "git ", "docker ", "pip ", "npm ",
+                "cd ", "mkdir ", "rm ", "mv ", "cp ",
+                "unset ", "export ", "source ", "conda ", "brew ",
+            )):
+                procedures.append(f"- `{line}`")
+    if procedures:
+        body.extend(["## 操作步骤 / 使用方法", ""])
+        body.extend(procedures)
         body.append("")
 
+    # 详细内容（原核心内容）
+    if fragment.core_content:
+        if has_deep_structure:
+            body.extend([fragment.core_content, ""])
+        else:
+            body.extend(["## 详细内容", "", fragment.core_content, ""])
+
+    # 反例 / 坑
     if fragment.anti_patterns:
-        body.extend(["### 反模式/注意事项", ""])
+        body.extend(["## 反例 / 坑", ""])
         for ap in fragment.anti_patterns:
             body.append(f"- {ap}")
+        body.append("")
+
+    # 不适用于
+    not_applies = (fragment.boundaries or {}).get("not_applies", "")
+    if not_applies:
+        body.extend(["### 不适用于", ""])
+        body.append(f"- {not_applies}")
         body.append("")
 
     if fragment.self_check_issues:
@@ -1565,20 +1676,17 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body.extend(["## 演化历史", "",
                  f"- v1: 初始记录（{datetime.now().strftime('%Y-%m-%d')}）", ""])
 
-    # 合并 related_concepts 与 cross_agent_links，过滤无效/噪音链接
+    # 关联知识：合并 related_concepts 与 cross_agent_links
     all_related = []
     seen = set()
     for concept in list(fragment.related_concepts) + list(fragment.cross_agent_links):
         if not concept or concept in seen:
             continue
         seen.add(concept)
-        # 过滤明显的中文切片噪音和无效链接
         if len(concept) < 2 or concept.startswith("待"):
             continue
-        # 过滤停用短语（避免 [[在系统演进过]] 这类切片）
         if CrossAgentLinker._is_stop_phrase(concept):
             continue
-        # 如果链接包含路径分隔符，检查目标文件是否存在；纯概念名则保留
         if "/" in concept or "\\" in concept:
             target_path = _get_wiki_dir() / f"{concept}.md"
             if not target_path.exists():
@@ -1586,14 +1694,14 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
         all_related.append(concept)
 
     if all_related:
-        body.extend(["## 相关链接", ""])
+        body.extend(["## 关联知识", ""])
         for concept in all_related:
             body.append(f"- [[{concept}]]")
         body.append("")
 
-    # 结构化关联说明（ADR-019：含关联上下文，便于人类阅读）
+    # 结构化关联说明（ADR-019）
     if fragment.relations:
-        body.extend(["## 关联说明", ""])
+        body.extend(["### 关联说明", ""])
         for rel in fragment.relations:
             target = rel.get("target", "")
             rel_type = rel.get("type", "related_to")
@@ -1615,16 +1723,13 @@ def generate_wiki_page(fragment: KnowledgeFragment, session_id: str,
     body.append(f"- 来源会话: `{session_id}`")
     if source:
         body.append(f"- 来源 Agent: {source}")
-    # 会话覆盖范围（截断透明度）
     coverage = session_coverage or (fragment.frontmatter or {}).get("session_coverage", "")
     if coverage:
         body.append(f"- 会话覆盖: {coverage}")
-    # 从 frontmatter 中读取原始 Memos 来源（如果存在）
     original_source = (fragment.frontmatter or {}).get("来源", (fragment.frontmatter or {}).get("source", ""))
     if original_source and original_source != source:
         body.append(f"- 原始来源: {original_source}")
     body.append(f"- 蒸馏时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    # 若存在 memos_wiki_link 可追加 memos_id（由调用方在 frontmatter 中注入）
     memos_id = (fragment.frontmatter or {}).get("memos_id", "")
     if memos_id:
         body.append(f"- 原始 Memos ID: `{memos_id}`")
@@ -1837,6 +1942,18 @@ class DistillationEngine:
             )
         else:
             result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
+
+        # 追加 message-level 截断信息
+        msg_trunc = _coverage_meta.get("message_truncations", [])
+        truncated_msgs = [m for m in msg_trunc if m["truncated"]]
+        if truncated_msgs:
+            trunc_summary = ", ".join(
+                f"turn{m['turn']}({m['role']}): {m['original_length']}→{m['kept_length']}"
+                for m in truncated_msgs[:5]
+            )
+            if len(truncated_msgs) > 5:
+                trunc_summary += f" 等共 {len(truncated_msgs)} 条消息被截断"
+            result.session_coverage += f"；消息截断: {trunc_summary}"
         fragments = self._extractor.extract(session_text, session_id, result.analysis_type)
         result.fragments = fragments
         result.layer_results.append(
@@ -2079,10 +2196,10 @@ class AgentDelegateProvider(LLMProvider):
 
 
 def distill_session(session_id: str, messages: List[Dict],
-                    wiki_base: str = None) -> DistillationResult:
+                    wiki_base: str = None, meta: Dict = None) -> DistillationResult:
     """便捷函数：蒸馏单个 session"""
     engine = DistillationEngine(wiki_base=wiki_base)
-    return engine.process(session_id, messages)
+    return engine.process(session_id, messages, meta=meta or {})
 
 
 def _record_memos_wiki_links(session_id: str, wiki_page_paths: List[str]) -> None:
@@ -2171,10 +2288,10 @@ def _emit_knowledge_distilled(session_id: str, result: DistillationResult, writt
 
 
 def distill_and_write(session_id: str, messages: List[Dict],
-                      wiki_base: str = None) -> Tuple[DistillationResult, List[str]]:
+                      wiki_base: str = None, meta: Dict = None) -> Tuple[DistillationResult, List[str]]:
     """便捷函数：蒸馏并写入 Wiki"""
     engine = DistillationEngine(wiki_base=wiki_base)
-    result = engine.process(session_id, messages)
+    result = engine.process(session_id, messages, meta=meta or {})
     written = engine.write_pages(result)
 
     if written and result.fragments:

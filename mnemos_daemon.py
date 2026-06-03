@@ -1012,6 +1012,7 @@ def service_signal_collector(stop_event: threading.Event):
     """
     logger.info("[画像] 服务启动")
 
+    from core.config import get_config
     config = get_config()
     interval = max(60, _config_int(config, "ops.persona_analysis_interval_seconds", 3600))
     MIN_SIGNALS_FOR_ANALYSIS = 10  # 触发画像分析的最小信号数

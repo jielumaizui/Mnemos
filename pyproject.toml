@@ -48,6 +48,9 @@ all = ["mcp>=1.0.0", "tomli_w>=1.0.0", "scikit-learn>=1.3.0", "hnswlib>=0.8.0"]
 [project.scripts]
 mnemos = "mnemos_cli:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.urls]
 Homepage = "https://github.com/jielumaizui/mnemos"
 Documentation = "https://github.com/jielumaizui/mnemos/blob/main/README.md"
