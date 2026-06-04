@@ -51,6 +51,38 @@ class ChecklistItem:
     detail: str = ""
 
 
+# AI 行为约束清单（跨任务通用，注入所有对话）
+BEHAVIOR_CONSTRAINTS = [
+    ChecklistItem(
+        item="同一文件/工具读取超过 2 次 → 立即停止分析，基于已有信息直接行动",
+        source="anti-pattern:analysis-paralysis",
+        severity="high",
+        trigger_keywords=["读取", "分析", "查看", "检查"],
+        risk_patterns=["重复读取", "同一文件", "反复分析"],
+    ),
+    ChecklistItem(
+        item="发现根因后 3 句话内必须进入修复/提交/行动，不得继续深入分析",
+        source="anti-pattern:analysis-paralysis",
+        severity="high",
+        trigger_keywords=["根因", "原因", "问题"],
+        risk_patterns=["继续分析", "深入研究", "再确认一下"],
+    ),
+    ChecklistItem(
+        item="用户明确要求'修复/修/提交/改'时，分析权重降到 10%，行动权重提到 90%",
+        source="user-preference:action-first",
+        severity="critical",
+        trigger_keywords=["修复", "修", "提交", "改", "改一下"],
+    ),
+    ChecklistItem(
+        item="思考记录超过 50 行但无代码/文件修改 → 触发分析瘫痪告警，立即切换为行动模式",
+        source="anti-pattern:analysis-paralysis",
+        severity="high",
+        trigger_keywords=["思考", "分析", "考虑"],
+        risk_patterns=["还在分析", "继续思考", "让我再想想"],
+    ),
+]
+
+
 @dataclass
 class LoadedKnowledge:
     """装载的知识"""
@@ -121,6 +153,15 @@ class PreFlightInjector:
             # 中期/长期：不装载
             return None
 
+    @staticmethod
+    def _merge_behavior_constraints(checklist_items: List[ChecklistItem]) -> List[ChecklistItem]:
+        """合并通用行为约束到 checklist 头部（高优先级）"""
+        merged = list(BEHAVIOR_CONSTRAINTS)
+        for item in checklist_items:
+            if not any(b.item == item.item for b in BEHAVIOR_CONSTRAINTS):
+                merged.append(item)
+        return merged
+
     def _load_full(self, task_type: str, subtype: str,
                    context_text: str) -> Optional[LoadedKnowledge]:
         """装载完整清单（无专用复盘文件时从 Wiki 页面 fallback）"""
@@ -129,6 +170,7 @@ class PreFlightInjector:
             # Fallback：从缓存或 Wiki 页面搜索匹配类型的页面
             checklist_items = self._get_checklist_for_type(task_type)
             if checklist_items:
+                checklist_items = self._merge_behavior_constraints(checklist_items)
                 max_items = 10
                 displayed_items = checklist_items[:max_items]
                 return LoadedKnowledge(
@@ -167,7 +209,13 @@ class PreFlightInjector:
         compact = len(checklist_items) > max_items
         displayed_items = checklist_items[:max_items]
 
-        # 4. 静默装载存在感统计
+        # 4. 注入通用行为约束（防分析瘫痪）
+        checklist_items = self._merge_behavior_constraints(checklist_items)
+        # 重新限制数量（行为约束优先）
+        displayed_items = checklist_items[:max_items]
+        compact = len(checklist_items) > max_items
+
+        # 5. 静默装载存在感统计
         total_items = len(checklist_items)
         hit_items = sum(1 for i in checklist_items if i.hit_count > 0)
         ignored_items = sum(1 for i in checklist_items if i.ignore_count > 0)

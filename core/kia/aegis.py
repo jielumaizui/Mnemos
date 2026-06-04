@@ -276,6 +276,9 @@ class InProcessGuard:
         self.contextual_mode = "normal"
         # 重置重复检测器历史
         self.duplicate_detector = DuplicateWorkDetector()
+        # 会话内分析计数（用于检测分析瘫痪）
+        self._analysis_turn_count = 0
+        self._last_action_turn = 0
 
     def _infer_contextual_mode(self, user_message: str) -> str:
         """
@@ -454,6 +457,11 @@ class InProcessGuard:
                     )
                     self._record_alert(alert)
                     return alert
+
+        # 5. 思考循环检测（不依赖 checklist，基于会话状态）
+        loop_alert = self._check_thinking_loop(user_message, ai_response)
+        if loop_alert:
+            return loop_alert
 
         return None
 
@@ -662,6 +670,85 @@ class InProcessGuard:
         except Exception:
             logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
             pass
+    def _check_thinking_loop(self, user_message: str, ai_response: str = "") -> Optional[GuardAlert]:
+        """检测 AI 是否陷入分析瘫痪循环
+
+        基于会话状态进行行为分析，不依赖 checklist 项：
+        1. 连续纯分析轮次 >= 3 且无行动迹象
+        2. 用户说了"修/改/提交"但 AI 回复中无代码块/文件修改
+        3. AI 回复中包含循环信号词
+        """
+        if not ai_response:
+            return None
+
+        combined = (user_message + " " + ai_response).lower()
+
+        # 判断本轮是否为"纯分析轮"（无代码块、无文件修改标记）
+        has_code_block = "```" in ai_response
+        has_file_edit = any(marker in ai_response for marker in
+                           ["StrReplaceFile", "Edit:", "Write:", "Bash:", "+ " , "- "])
+        is_action_turn = has_code_block or has_file_edit
+
+        # 更新计数
+        if is_action_turn:
+            self._analysis_turn_count = 0
+            self._last_action_turn = len(self.session_messages)
+        else:
+            # 检测是否包含分析信号词
+            analysis_signals = ["分析", "思考", "查看", "检查", "确认", "验证",
+                              "让我再看看", "继续分析", "深入研究", "仔细看看"]
+            if any(s in ai_response for s in analysis_signals):
+                self._analysis_turn_count += 1
+
+        # 规则 1：连续 3 轮纯分析 → HINT
+        if self._analysis_turn_count >= 3:
+            self._analysis_turn_count = 0  # 重置避免重复告警
+            return GuardAlert(
+                level=GuardLevel.HINT,
+                checklist_item=ChecklistItem(
+                    item="思考循环检测：连续多轮纯分析无行动",
+                    source="system:thinking-loop-detector",
+                    severity="high"
+                ),
+                triggered_by="ai",
+                trigger_text="连续分析轮次",
+                suggestion="💡 已连续多轮分析但未采取行动。建议：基于已有信息直接开始修复，分析可留给事后复盘。",
+            )
+
+        # 规则 2：用户要求修复但 AI 还在分析 → HINT
+        user_wants_action = any(kw in user_message.lower() for kw in
+                               ["修复", "修", "改", "改一下", "提交", "push", "deploy"])
+        if user_wants_action and not is_action_turn:
+            return GuardAlert(
+                level=GuardLevel.HINT,
+                checklist_item=ChecklistItem(
+                    item="用户要求行动但 AI 仍在分析",
+                    source="system:thinking-loop-detector",
+                    severity="critical"
+                ),
+                triggered_by="user",
+                trigger_text=user_message[:50],
+                suggestion="💡 用户明确要求修复/修改，请立即停止分析，直接开始行动（代码修改/文件写入/命令执行）。",
+            )
+
+        # 规则 3：AI 回复中出现循环信号词 → SILENT（记录即可，不打扰）
+        loop_signals = ["让我再看看", "继续分析", "再确认一下", "深入研究",
+                       "再验证", "再检查", "重新理解", "重新分析"]
+        if any(s in ai_response for s in loop_signals):
+            return GuardAlert(
+                level=GuardLevel.SILENT,
+                checklist_item=ChecklistItem(
+                    item="检测到循环信号词",
+                    source="system:thinking-loop-detector",
+                    severity="medium"
+                ),
+                triggered_by="ai",
+                trigger_text=next(s for s in loop_signals if s in ai_response),
+                suggestion='检测到"让我再看看/继续分析"等循环信号，建议评估是否已有足够信息可以行动。',
+            )
+
+        return None
+
     def get_silent_summary(self) -> str:
         """获取静默记录汇总（任务完成后报告）"""
         if not self.session or not self.session.silent_records:

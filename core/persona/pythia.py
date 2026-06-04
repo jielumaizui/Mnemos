@@ -63,6 +63,7 @@ class ValueProfile:
     perfection_vs_completion: float = 0.5    # 完美↔完成
     innovation_vs_safety: float = 0.5        # 创新↔稳妥
     autonomy_vs_collaboration: float = 0.5   # 自主↔协作
+    action_vs_analysis: float = 0.5          # 行动↔分析 0=分析优先, 1=行动优先
     confidence: float = 0.0
     insufficient_dimensions: List[str] = None
 
@@ -121,6 +122,7 @@ class PreferenceProfile:
             "perfection_vs_completion": {"score": round(self.value.perfection_vs_completion, 2), "label": "先完成" if self.value.perfection_vs_completion < 0.4 else "先完美" if self.value.perfection_vs_completion > 0.6 else "平衡"},
             "innovation_vs_safety": {"score": "—", "label": "数据不足"} if "innovation_vs_safety" in ins else {"score": round(self.value.innovation_vs_safety, 2), "label": "稳妥优先" if self.value.innovation_vs_safety < 0.4 else "创新优先" if self.value.innovation_vs_safety > 0.6 else "视风险而定"},
             "autonomy_vs_collaboration": {"score": "—", "label": "数据不足"} if "autonomy_vs_collaboration" in ins else {"score": round(self.value.autonomy_vs_collaboration, 2), "label": "协作优先" if self.value.autonomy_vs_collaboration < 0.4 else "自主优先" if self.value.autonomy_vs_collaboration > 0.6 else "灵活切换"},
+            "action_vs_analysis": {"score": "—", "label": "数据不足"} if "action_vs_analysis" in ins else {"score": round(self.value.action_vs_analysis, 2), "label": "分析优先" if self.value.action_vs_analysis < 0.4 else "行动优先" if self.value.action_vs_analysis > 0.6 else "视情况平衡"},
             "confidence": round(self.value.confidence, 2),
         }
 
@@ -278,6 +280,7 @@ class PreferenceAnalyzer:
             perfection_vs_completion=merge_score(previous.value.perfection_vs_completion, delta_value.perfection_vs_completion),
             innovation_vs_safety=merge_score(previous.value.innovation_vs_safety, delta_value.innovation_vs_safety),
             autonomy_vs_collaboration=merge_score(previous.value.autonomy_vs_collaboration, delta_value.autonomy_vs_collaboration),
+            action_vs_analysis=merge_score(previous.value.action_vs_analysis, delta_value.action_vs_analysis),
             confidence=min(1.0, previous.value.confidence + 0.05),
             insufficient_dimensions=merged_ins_value,
         )
@@ -367,6 +370,7 @@ class PreferenceAnalyzer:
         profile.value.insufficient_dimensions = [
             "correctness_vs_efficiency", "perfection_vs_completion",
             "innovation_vs_safety", "autonomy_vs_collaboration",
+            "action_vs_analysis",
         ]
         return profile
 
@@ -661,6 +665,24 @@ class PreferenceAnalyzer:
         else:
             insufficient.append("autonomy_vs_collaboration")
 
+        # 行动↔分析：session output_type 分布 + 用户打断信号
+        # code/document = 行动型, discussion/analysis = 分析型
+        # interrupted/用户不满 = 分析过多的强烈信号
+        if session_signals:
+            outputs = [s.get("output_type", "") for s in session_signals]
+            interrupted = sum(1 for s in session_signals if s.get("termination_type") == "interrupted")
+            action_signals = sum(1 for o in outputs if o in ("code", "document", "deploy"))
+            analysis_signals = sum(1 for o in outputs if o in ("discussion", "analysis", "review"))
+            total_out = action_signals + analysis_signals
+            if total_out > 0:
+                base = action_signals / total_out
+                # 用户打断 = 分析过多的惩罚（推动向行动端偏移）
+                if interrupted > 0:
+                    base = min(1.0, base + 0.2 * min(interrupted / len(session_signals), 1.0))
+                profile.action_vs_analysis = base
+        else:
+            insufficient.append("action_vs_analysis")
+
         # Memos 笔记补充价值信号
         if memos_signals:
             # 深度↔广度：长笔记比例（长笔记倾向于深度）
@@ -747,6 +769,7 @@ class PreferenceAnalyzer:
             "perfection_vs_completion": calc_change(value.perfection_vs_completion, previous.value.perfection_vs_completion),
             "innovation_vs_safety": calc_change(value.innovation_vs_safety, previous.value.innovation_vs_safety),
             "autonomy_vs_collaboration": calc_change(value.autonomy_vs_collaboration, previous.value.autonomy_vs_collaboration),
+            "action_vs_analysis": calc_change(value.action_vs_analysis, previous.value.action_vs_analysis),
         }
 
     def detect_drift(self, current: PreferenceProfile,
@@ -785,6 +808,7 @@ class PreferenceAnalyzer:
             ("value.perfection_vs_completion", previous.value.perfection_vs_completion, current.value.perfection_vs_completion),
             ("value.innovation_vs_safety", previous.value.innovation_vs_safety, current.value.innovation_vs_safety),
             ("value.autonomy_vs_collaboration", previous.value.autonomy_vs_collaboration, current.value.autonomy_vs_collaboration),
+            ("value.action_vs_analysis", previous.value.action_vs_analysis, current.value.action_vs_analysis),
         ]
 
         sudden_shifts = []

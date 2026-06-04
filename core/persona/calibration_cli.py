@@ -52,6 +52,7 @@ DIMENSION_LABELS = {
         "perfection_vs_completion": ("完美vs完成", "先完成 -> 先完美", ["先完成", "平衡", "先完美"]),
         "innovation_vs_safety": ("创新vs稳妥", "稳妥优先 -> 创新优先", ["稳妥优先", "视风险而定", "创新优先"]),
         "autonomy_vs_collaboration": ("自主vs协作", "协作优先 -> 自主优先", ["协作优先", "灵活切换", "自主优先"]),
+        "action_vs_analysis": ("行动vs分析", "分析优先 -> 行动优先", ["分析优先", "视情况平衡", "行动优先"]),
     },
 }
 
