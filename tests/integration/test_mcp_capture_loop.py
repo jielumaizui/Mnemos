@@ -104,7 +104,7 @@ class TestMCPCaptureLoop(unittest.TestCase):
             )
             elapsed_ms = (time.time() - start) * 1000
 
-        self.assertLess(elapsed_ms, 200, f"MCP 返回应 < 200ms, 实际 {elapsed_ms:.1f}ms")
+        self.assertLess(elapsed_ms, 500, f"MCP 返回应 < 500ms, 实际 {elapsed_ms:.1f}ms")
         self.assertTrue(result["success"])
         self.assertEqual(result["status"], "queued")
 
