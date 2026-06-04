@@ -46,7 +46,7 @@ from core.kia.assertion_extractor import (
 from core.kia.conflict_resolver import detect_conflicts
 from core.hephaestus.distillation_engine import (
     DistillationEngine, DistillationResult, KnowledgeFragment, _emit_knowledge_distilled,
-    generate_wiki_page, build_session_text,
+    generate_wiki_page, build_session_text, clean_message_content as _clean_for_distill,
 )
 from core.hephaestus.evolution_tracker import RecirculationGuard
 
@@ -386,48 +386,12 @@ def _extract_messages_from_block(block: str) -> List[Dict]:
 
 
 def _clean_message_content(content: str) -> str:
-    """清理消息内容，保留技术命令行但压缩"""
-    import re as _re
-    if not content:
-        return ""
-    content = _re.sub(r'\[thinking\].*?(?:\[/thinking\]|$)', '', content, flags=_re.DOTALL)
-    content = _re.sub(r'```.*?```', '', content, flags=_re.DOTALL)
+    """清理消息内容，但保留代码块/工具结果证据。
 
-    # 压缩连续纯命令行（无中文的 shell 命令），保留前 3 条
-    shell_cmd_pattern = _re.compile(
-        r'^(?!.*[\u4e00-\u9fff])\s*(curl|chmod|wget|npm|pip|pip3|docker|git|mkdir|cd|ls|cat|rm|mv|cp)\b.+$',
-        flags=_re.MULTILINE,
-    )
-    lines = content.split('\n')
-    new_lines = []
-    cmd_buffer = []
-    for line in lines:
-        if shell_cmd_pattern.match(line):
-            cmd_buffer.append(line)
-        else:
-            if cmd_buffer:
-                if len(cmd_buffer) <= 3:
-                    new_lines.extend(cmd_buffer)
-                else:
-                    new_lines.extend(cmd_buffer[:3])
-                    new_lines.append(
-                        f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
-                    )
-                cmd_buffer = []
-            new_lines.append(line)
-    if cmd_buffer:
-        if len(cmd_buffer) <= 3:
-            new_lines.extend(cmd_buffer)
-        else:
-            new_lines.extend(cmd_buffer[:3])
-            new_lines.append(
-                f"[... {len(cmd_buffer) - 3} more shell commands omitted ...]"
-            )
-    content = '\n'.join(new_lines)
-
-    content = _re.sub(r'^\s*\d+\.\s*$', '', content, flags=_re.MULTILINE)
-    content = _re.sub(r'\n{3,}', '\n\n', content)
-    return content.strip()
+    这里重建的是蒸馏输入，不应把 SyncEngine 投影出来的 Tool Results JSON
+    或错误堆栈直接删掉；统一复用 DistillationEngine 的压缩策略。
+    """
+    return _clean_for_distill(content)
 
 
 def _mask_wiki_generated_blocks(content: str) -> str:
