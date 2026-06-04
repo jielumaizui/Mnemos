@@ -9,6 +9,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from integrations.active import (
+    codex_mcp_configured,
+    generated_wrapper,
+    upsert_codex_mcp_server,
+    wrapper_uses_active_bridge,
+)
 from integrations.olympus import AgentAdapter, AgentRegistry
 
 
@@ -111,8 +117,14 @@ class CodexAdapter(AgentAdapter):
         if not wrapper_py.exists():
             return False
         if sys.platform == "win32":
-            return wrapper_bat.exists()
-        return wrapper_sh.exists()
+            return wrapper_bat.exists() and wrapper_uses_active_bridge(wrapper_py)
+        return wrapper_sh.exists() and wrapper_uses_active_bridge(wrapper_py)
+
+    def is_mcp_configured(self) -> bool:
+        return codex_mcp_configured(self.get_data_dir() / "config.toml")
+
+    def install_mcp_server(self) -> bool:
+        return upsert_codex_mcp_server(self.get_data_dir() / "config.toml")
 
     def install_hooks(self) -> bool:
         """安装 Codex 的 session hooks
@@ -126,7 +138,7 @@ class CodexAdapter(AgentAdapter):
 
             # 1. 生成 Python wrapper
             wrapper_py = data_dir / "mnemos_wrapper.py"
-            wrapper_py.write_text(self._generate_wrapper_script(), encoding="utf-8")
+            wrapper_py.write_text(generated_wrapper(self.name), encoding="utf-8")
 
             # 2. 生成 Windows .bat wrapper
             wrapper_bat = data_dir / "mnemos-codex.bat"
@@ -148,6 +160,7 @@ class CodexAdapter(AgentAdapter):
             logger.info(f"  Python wrapper: {wrapper_py}")
             logger.info(f"  Windows .bat: {wrapper_bat}")
             logger.info(f"  Unix shell: {wrapper_sh}")
+            self.install_mcp_server()
             return True
         except Exception as e:
             logger.warning(f"[Daedalus] 安装 Codex hooks 失败: {e}")
@@ -220,7 +233,9 @@ if "%1"=="--session-end" (
 )
 
 REM 默认行为：调用原始 codex 命令
+python "{wrapper_py_path}" --session-start --working-dir "%CD%" --user-message "%*"
 codex %*
+python "{wrapper_py_path}" --session-end --working-dir "%CD%"
 '''
 
     def _generate_unix_sh(self, wrapper_py_path: str) -> str:
@@ -240,7 +255,11 @@ if [ "$1" = "--session-end" ]; then
 fi
 
 # 默认行为：调用原始 codex 命令
+python3 "{wrapper_py_path}" --session-start --working-dir "$PWD" --user-message "$*" >/dev/null 2>&1 || true
 codex "$@"
+status=$?
+python3 "{wrapper_py_path}" --session-end --working-dir "$PWD" >/dev/null 2>&1 || true
+exit $status
 '''
 
     def collect_signals(self, days: int = 7) -> List[Dict]:

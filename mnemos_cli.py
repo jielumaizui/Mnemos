@@ -344,7 +344,7 @@ def _install_claude_hook(config):
 
 
 def _install_detected_agent_hooks(config):
-    """安装所有可用 Agent 的 hooks，失败时给出明确状态但不中断 init。"""
+    """安装所有可用 Agent 的主动接入，失败时给出明确状态但不中断 init。"""
     try:
         from integrations.olympus import AgentRegistry
         agents = AgentRegistry.discover_all()
@@ -359,14 +359,21 @@ def _install_detected_agent_hooks(config):
         return
 
     installed = 0
+    active = 0
     for agent in agents:
         try:
-            ok = agent.install_hooks()
-            installed += 1 if ok else 0
-            print(f"      {'✓' if ok else '✗'} {agent.name} hooks")
+            hooks_ok = agent.install_hooks()
+            mcp_ok = agent.install_mcp_server()
+            policy_ok = agent.install_active_policy()
+            installed += 1 if hooks_ok else 0
+            active += 1 if (hooks_ok and mcp_ok and policy_ok) else 0
+            print(f"      {'✓' if hooks_ok else '✗'} {agent.name} hooks")
+            print(f"      {'✓' if mcp_ok else '✗'} {agent.name} MCP 主动工具")
+            print(f"      {'✓' if policy_ok else '✗'} {agent.name} 主动使用策略")
         except Exception as e:
-            print(f"      ✗ {agent.name} hooks: {e}")
+            print(f"      ✗ {agent.name} 主动接入: {e}")
     print(f"      Agent hooks 安装完成: {installed}/{len(agents)}")
+    print(f"      Agent 主动接入完成: {active}/{len(agents)}")
 
 
 def cmd_doctor(args):
@@ -500,7 +507,27 @@ def cmd_doctor(args):
     except Exception as e:
         warnings.append(f"Agent 检测失败: {e}")
 
-    # 6.5b Agent 完整性能力
+    # 6.5b Agent 主动接入状态
+    print()
+    print("Agent 主动接入状态:")
+    try:
+        from core.diagnostics import ConnectionDiagnostics
+        agent_statuses = ConnectionDiagnostics.check_agents()
+        if agent_statuses:
+            for agent in agent_statuses:
+                mark = "✓" if agent.active_ready else "✗"
+                hooks = "hooks✓" if agent.hooks_installed else "hooks✗"
+                mcp = "mcp✓" if agent.mcp_configured else "mcp✗"
+                policy = "policy✓" if agent.policy_installed else "policy✗"
+                print(f"  {mark} {agent.name}: {hooks}, {mcp}, {policy}")
+                if not agent.active_ready:
+                    warnings.append(f"{agent.name} 主动接入未就绪，运行 `mnemos agent install {agent.name}`")
+        else:
+            print("  ☐ 未发现可诊断的 Agent adapter")
+    except Exception as e:
+        warnings.append(f"Agent 主动接入检测失败: {e}")
+
+    # 6.5c Agent 完整性能力
     print()
     print("Agent 完整性能力:")
     try:
@@ -864,7 +891,6 @@ def cmd_doctor(args):
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
-        ("tomli_w", "TOML 写入", "Kimi hooks 配置", "pip install mnemos[kimi]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
         ("sklearn", "scikit-learn", "ML 评分器训练（standard 后端）", "pip install mnemos[ml]"),
@@ -1089,10 +1115,13 @@ def cmd_agent(args):
         wiki_status = "就绪" if (wiki.exists and wiki.writable) else ("存在但不可写" if wiki.exists else "未就绪")
         print(f"  {'✓' if (wiki.exists and wiki.writable) else '✗'} Wiki: {wiki_status} ({wiki.path})")
 
-        # Agent 数据源（带 hooks 状态）
+        # Agent 数据源（带 hooks/MCP 主动状态）
         for agent in agents:
             hook_mark = "[hooks]" if agent.hooks_installed else ""
-            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
+            mcp_mark = "[mcp]" if agent.mcp_configured else ""
+            policy_mark = "[policy]" if agent.policy_installed else ""
+            active_mark = "[active]" if agent.active_ready else ""
+            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}{mcp_mark}{policy_mark}{active_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
 
         # 待办任务
         tasks = ConnectionDiagnostics.generate_task_list(memos, wiki, agents)
@@ -1109,14 +1138,27 @@ def cmd_agent(args):
 
     elif args.agent_cmd == "install":
         print("=" * 60)
-        print("安装 Agent hooks")
+        print("安装 Agent 主动接入")
         print("=" * 60)
-        agents = AgentRegistry.discover_all()
+        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
+        if target:
+            agent = AgentRegistry.get_adapter(target, include_unavailable=True)
+            agents = [agent] if agent else []
+        else:
+            agents = AgentRegistry.discover_all()
+        if not agents:
+            print(f"  ✗ 未找到 Agent 适配器: {target or 'all'}")
+            return False
         for agent in agents:
             print(f"\n安装 {agent.name} ...")
             try:
-                ok = agent.install_hooks()
-                print(f"  {'✓' if ok else '✗'} {agent.name}")
+                hooks_ok = agent.install_hooks()
+                mcp_ok = agent.install_mcp_server()
+                policy_ok = agent.install_active_policy()
+                print(f"  {'✓' if hooks_ok else '✗'} hooks/wrapper")
+                print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具")
+                print(f"  {'✓' if policy_ok else '✗'} 主动使用策略")
+                print(f"  {'✓' if (hooks_ok and mcp_ok and policy_ok) else '✗'} active ready")
             except Exception as e:
                 print(f"  ✗ {agent.name}: {e}")
 
@@ -1124,12 +1166,16 @@ def cmd_agent(args):
         print("=" * 60)
         print("Agent 诊断")
         print("=" * 60)
-        agents = AgentRegistry.discover_all()
+        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
+        if target:
+            agent = AgentRegistry.get_adapter(target, include_unavailable=True)
+            agents = [agent] if agent else []
+        else:
+            agents = AgentRegistry.discover_all()
         if not agents:
             print("✗ 未注册任何 Agent 适配器")
             return False
 
-        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
         checked = 0
         for agent in agents:
             if target and agent.name != target:
@@ -1149,6 +1195,24 @@ def cmd_agent(args):
                 print(f"  {'✓' if hooks_ok else '✗'} Hooks: {'已安装' if hooks_ok else '未安装'}")
             except Exception as e:
                 print(f"  ✗ Hooks 检查失败: {e}")
+
+            try:
+                mcp_ok = agent.is_mcp_configured()
+                print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具: {'已配置' if mcp_ok else '未配置'}")
+            except Exception as e:
+                print(f"  ✗ MCP 检查失败: {e}")
+
+            try:
+                policy_ok = agent.is_active_policy_installed()
+                print(f"  {'✓' if policy_ok else '✗'} 主动使用策略: {'已安装' if policy_ok else '未安装'}")
+            except Exception as e:
+                print(f"  ✗ 主动使用策略检查失败: {e}")
+
+            try:
+                active_ok = agent.is_active_connection_installed()
+                print(f"  {'✓' if active_ok else '✗'} 主动接入: {'就绪' if active_ok else '未就绪'}")
+            except Exception as e:
+                print(f"  ✗ 主动接入检查失败: {e}")
 
             # 3. 事件目录
             event_dir = Path.home() / ".mnemos" / "events"
@@ -1306,7 +1370,7 @@ def _cmd_sync_backfill(args):
 
     AgentRegistry.register_builtin_agents()
     agents = AgentRegistry.auto_discover()
-    if source_filter:
+    if source_filter and source_filter != "all":
         agents = [a for a in agents if a.name == source_filter]
     if not agents:
         print("未发现任何 Agent 源")
@@ -1327,8 +1391,9 @@ def _cmd_sync_backfill(args):
     engine = SyncEngine()
     total_stats = {
         "agents": 0, "sessions": 0, "turns": 0,
-        "synced": 0, "skipped": 0, "failed": 0, "noise": 0,
+        "synced": 0, "updated": 0, "skipped": 0, "failed": 0, "noise": 0,
         "skipped_empty": 0, "missing_turns": 0,
+        "skipped_complete": 0,
     }
 
     import time
@@ -1357,7 +1422,10 @@ def _cmd_sync_backfill(args):
             sessions_with_mtime = sessions_with_mtime[:max_sessions]
 
         agent_synced = 0
-        agent_turns = 0
+        agent_parsed_turns = 0
+        agent_missing_turns = 0
+        duplicate_cache = None
+        duplicate_cache_ready = False
         for mtime, session_info in sessions_with_mtime:
             try:
                 turns = source.parse_turns(session_info.source_path)
@@ -1369,14 +1437,20 @@ def _cmd_sync_backfill(args):
                 existing_turns = engine._get_synced_turns(source.name, session_info.session_id)
                 all_turn_numbers = {t.turn_number for t in turns}
                 missing_turns = sorted(all_turn_numbers - set(existing_turns))
-                if missing_turns:
-                    total_stats["missing_turns"] += len(missing_turns)
 
                 if max_turns and len(turns) > max_turns:
                     turns = turns[-max_turns:]
-                agent_turns += len(turns)
+                    all_turn_numbers = {t.turn_number for t in turns}
+                    missing_turns = sorted(all_turn_numbers - set(existing_turns))
+                if missing_turns:
+                    total_stats["missing_turns"] += len(missing_turns)
+
+                missing_set = set(missing_turns)
+                turns_to_sync = [t for t in turns if t.turn_number in missing_set]
+                agent_parsed_turns += len(turns)
+                agent_missing_turns += len(turns_to_sync)
                 total_stats["sessions"] += 1
-                total_stats["turns"] += len(turns)
+                total_stats["turns"] += len(turns_to_sync if not dry_run else turns)
 
                 if dry_run:
                     if missing_turns:
@@ -1384,11 +1458,45 @@ def _cmd_sync_backfill(args):
                         print(f"  [dry-run] {source.name}/{session_info.session_id}: {len(turns)} turns, missing {len(missing_turns)} ({ranges})")
                     continue
 
-                # P0-4: 直接调用 SyncEngine.sync_session，incremental=False
-                results = engine.sync_session(source, session_info, incremental=False)
+                if not turns_to_sync:
+                    total_stats["skipped_complete"] += 1
+                    continue
+
+                if not duplicate_cache_ready:
+                    duplicate_cache = engine.build_memos_duplicate_cache(source.name)
+                    duplicate_cache_ready = True
+
+                ranges = _compress_ranges(missing_turns)
+                print(
+                    f"  {source.name}/{session_info.session_id}: "
+                    f"sync missing {len(turns_to_sync)}/{len(turns)} turns ({ranges})",
+                    flush=True,
+                )
+
+                # P0-4/P0-6: backfill 只补缺洞 turn，并用 source 级 Memos 缓存兜底防重。
+                results = []
+                for idx, turn in enumerate(turns_to_sync, 1):
+                    result = engine.sync_single_turn(
+                        source,
+                        session_info,
+                        turn,
+                        incremental=False,
+                        check_memos_duplicate=duplicate_cache is None,
+                        memos_duplicate_cache=duplicate_cache,
+                    )
+                    results.append(result)
+                    if len(turns_to_sync) >= 50 and (idx % 50 == 0 or idx == len(turns_to_sync)):
+                        print(
+                            f"    progress {idx}/{len(turns_to_sync)} "
+                            f"(turn={turn.turn_number}, action={result.action})",
+                            flush=True,
+                        )
                 for r in results:
                     if r.action == "new":
                         total_stats["synced"] += 1
+                        agent_synced += 1
+                    elif r.action == "updated":
+                        total_stats["updated"] += 1
                         agent_synced += 1
                     elif r.action in ("skipped", "skipped_memos"):
                         total_stats["skipped"] += 1
@@ -1400,7 +1508,10 @@ def _cmd_sync_backfill(args):
                 total_stats["failed"] += 1
                 print(f"  ✗ {source.name}/{session_info.session_id}: {e}")
 
-        print(f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, {agent_turns} turns, 同步 {agent_synced}")
+        print(
+            f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, "
+            f"解析 {agent_parsed_turns} turns, 待补 {agent_missing_turns} turns, 同步 {agent_synced}"
+        )
 
     engine.close()
     print()
@@ -1410,10 +1521,12 @@ def _cmd_sync_backfill(args):
     print(f"  Turns: {total_stats['turns']}")
     if not dry_run:
         print(f"  Synced(new): {total_stats['synced']}")
+        print(f"  Updated: {total_stats['updated']}")
         print(f"  Skipped: {total_stats['skipped']}")
         print(f"  Noise: {total_stats['noise']}")
         print(f"  Failed: {total_stats['failed']}")
     print(f"  Missing turns: {total_stats['missing_turns']}")
+    print(f"  Skipped(complete): {total_stats['skipped_complete']}")
     print(f"  Skipped(empty): {total_stats['skipped_empty']}")
 
 
@@ -1711,7 +1824,9 @@ def cmd_wiki(args):
             if result.get('related'):
                 print(f"\n🔗 关联页面 ({len(result['related'])} 个):")
                 for rel in result['related'][:5]:
-                    print(f"   - {rel.get('title', rel.get('path', 'unknown'))}")
+                    label = rel.get('title') or rel.get('path') or rel.get('page_id') or 'unknown'
+                    relation = rel.get('relation')
+                    print(f"   - {label}{f' ({relation})' if relation else ''}")
         except Exception as e:
             print(f"读取 Wiki 失败: {e}")
     else:
@@ -1938,7 +2053,8 @@ def main():
     agent_parser = subparsers.add_parser("agent", help="AI Agent 管理")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
     agent_sub.add_parser("list", help="列出本地可用的 AI Agent")
-    agent_sub.add_parser("install", help="为所有可用 Agent 安装 hooks")
+    install_parser = agent_sub.add_parser("install", help="为所有可用 Agent 安装主动接入")
+    install_parser.add_argument("agent_name", nargs="?", default="", help="指定 Agent 名称（可选，如 claude/hermes/openclaw/opencode/codex/kimi）")
     agent_sub.add_parser("detect", help="检测宿主 Agent（MNEMOS_HOST_AGENT）")
     doctor_parser = agent_sub.add_parser("doctor", help="诊断 Agent 状态")
     doctor_parser.add_argument("agent_name", nargs="?", default="", help="指定 Agent 名称（可选，如 claude/hermes/openclaw/opencode/codex）")
@@ -1977,7 +2093,7 @@ def main():
     sync_sub.add_parser("status", help="查看同步状态")
     sync_sub.add_parser("retry-failed", help="重试失败的同步任务")
     backfill_parser = sync_sub.add_parser("backfill", help="历史回填：全量/大批量扫描 Agent 历史会话")
-    backfill_parser.add_argument("--source", help="指定 Agent 源（如 claude/kimi/codex）")
+    backfill_parser.add_argument("--source", help="指定 Agent 源（如 claude/kimi/codex/all）")
     backfill_parser.add_argument("--since", type=float, default=0, help="时间范围（小时，0=全部）")
     backfill_parser.add_argument("--max-turns", type=int, default=0, help="每 session 最大 turn 数（0=无限制）")
     backfill_parser.add_argument("--max-sessions", type=int, default=0, help="每 source 最大 session 数（0=无限制）")

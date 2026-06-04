@@ -15,6 +15,7 @@
 """
 
 import sys
+import hashlib
 import json
 import time
 import sqlite3
@@ -169,6 +170,13 @@ class TestSyncEngineSessionSync(unittest.TestCase):
             return call[0][1]
         return call[1].get("tags", []) if call and call[1] else []
 
+    def _get_save_content(self):
+        """辅助：从 mock save 的位置参数中提取 content"""
+        call = self.mock_client.save.call_args
+        if call and call[0]:
+            return call[0][0]
+        return call[1].get("content", "") if call and call[1] else ""
+
     def test_sync_session_all_turns(self):
         """同步会话所有轮次"""
         engine = self._make_engine()
@@ -308,6 +316,36 @@ class TestSyncEngineSessionSync(unittest.TestCase):
         tags = self._get_save_tags()
         self.assertTrue(any("has-code" in t for t in tags))
 
+    def test_structured_capture_visible_in_markdown(self):
+        """工具调用、工具结果和 reasoning artifact 引用会进入 Memos 可见内容"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        source.parse_turns = lambda _p: [
+            Turn(
+                turn_number=0,
+                user_content="please run tests",
+                assistant_content="I ran them",
+                tool_calls=[{"name": "pytest", "input": {"path": "tests"}}],
+                tool_results=[{"stdout": "2 passed", "stderr": "", "tool_use_id": "tool-1"}],
+                reasoning="internal reasoning should be artifacted",
+            ),
+        ]
+        session = SessionInfo(session_id="sess-structured", source_path=Path("/tmp/s.json"))
+        engine.sync_session(source, session, incremental=False)
+
+        content = self._get_save_content()
+        self.assertIn("## Tool Calls", content)
+        self.assertIn("pytest", content)
+        self.assertIn("## Tool Results", content)
+        self.assertIn("2 passed", content)
+        self.assertIn("Reasoning captured", content)
+        self.assertNotIn("internal reasoning should be artifacted", content)
+
+        tags = self._get_save_tags()
+        self.assertIn("has-tools=true", tags)
+        self.assertIn("has-reasoning=true", tags)
+        self.assertIn("reasoning_capture=artifact_summary", tags)
+
     def test_skip_distill_tag_for_wiki_content(self):
         """wiki 生成内容添加 skip-distill 标签"""
         engine = self._make_engine()
@@ -338,6 +376,114 @@ class TestSyncEngineSessionSync(unittest.TestCase):
             rows = cursor.fetchall()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][3], "new")
+
+    def test_get_synced_turns_counts_new_status(self):
+        """缺洞审计应把当前成功状态 new 识别为已同步"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        source.parse_turns = lambda _p: [
+            Turn(turn_number=0, user_content="hi", assistant_content="hello"),
+        ]
+        session = SessionInfo(session_id="sess-audit", source_path=Path("/tmp/s.json"))
+        engine.sync_session(source, session, incremental=False)
+        self.assertEqual(engine._get_synced_turns(source.name, session.session_id), [0])
+
+    def test_get_synced_turns_counts_backfilled_status(self):
+        """历史 backfilled 状态也应被缺洞审计识别为已同步。"""
+        engine = self._make_engine()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("""
+                INSERT INTO sync_log (agent_name, session_id, turn_number, content_hash, status)
+                VALUES (?, ?, ?, ?, ?)
+            """, ("claude", "sess-backfilled", 7, "hash", "backfilled"))
+            conn.commit()
+        self.assertEqual(engine._get_synced_turns("claude", "sess-backfilled"), [7])
+
+    def test_sync_single_turn_can_skip_memos_duplicate_check(self):
+        """历史缺洞回填可跳过 Memos 端全量兜底查重，避免每 turn 拉全库。"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        session = SessionInfo(session_id="sess-fast-backfill", source_path=Path("/tmp/s.json"))
+        turn = Turn(turn_number=0, user_content="hi", assistant_content="hello")
+
+        with patch.object(engine, "_check_memos_duplicate", side_effect=AssertionError("should not call")):
+            result = engine.sync_single_turn(
+                source,
+                session,
+                turn,
+                incremental=False,
+                check_memos_duplicate=False,
+            )
+
+        self.assertEqual(result.action, "new")
+
+    def test_sync_single_turn_uses_memos_duplicate_cache(self):
+        """历史回填使用 Memos 缓存兜底防重，不重复写入已有 memo。"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        session = SessionInfo(session_id="sess-cache-backfill", source_path=Path("/tmp/s.json"))
+        turn = Turn(turn_number=0, user_content="hi", assistant_content="hello")
+
+        content = engine._sanitize_content(
+            engine._build_markdown(turn, session.session_id, source.model_tag)
+        )
+        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
+        self.mock_client.list_by_tags.return_value = [
+            Mock(
+                uid="existing-uid",
+                content=content,
+                tags=[
+                    "source=claude",
+                    "session=sess-cache-backfill",
+                    "turn=1",
+                    f"content_hash={content_hash}",
+                ],
+            )
+        ]
+        duplicate_cache = engine.build_memos_duplicate_cache(source.name)
+
+        with patch.object(engine, "_check_memos_duplicate", side_effect=AssertionError("should not call")):
+            result = engine.sync_single_turn(
+                source,
+                session,
+                turn,
+                incremental=False,
+                memos_duplicate_cache=duplicate_cache,
+            )
+
+        self.assertEqual(result.action, "skipped")
+        self.assertEqual(result.memos_uids, ["existing-uid"])
+        self.mock_client.save.assert_not_called()
+
+    def test_failed_sync_log_same_hash_is_not_treated_as_synced(self):
+        """failed 记录不能因为 content_hash 相同就被当作已同步跳过。"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        session = SessionInfo(session_id="sess-failed-retry", source_path=Path("/tmp/s.json"))
+        turn = Turn(turn_number=0, user_content="hi", assistant_content="hello")
+
+        content = engine._sanitize_content(
+            engine._build_markdown(turn, session.session_id, source.model_tag)
+        )
+        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.execute("""
+                INSERT INTO sync_log (agent_name, session_id, turn_number, content_hash, status)
+                VALUES (?, ?, ?, ?, ?)
+            """, (source.name, session.session_id, turn.turn_number, content_hash, "failed"))
+            conn.commit()
+
+        self.mock_client.list_by_tags.return_value = []
+        result = engine.sync_single_turn(source, session, turn, incremental=False)
+
+        self.assertEqual(result.action, "updated")
+        self.mock_client.save.assert_called_once()
+        with sqlite3.connect(str(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT status FROM sync_log WHERE session_id=? AND turn_number=?",
+                (session.session_id, turn.turn_number),
+            ).fetchone()
+        self.assertEqual(row[0], "updated")
 
     def test_user_signals_collected(self):
         """画像信号采集到 user_signals 表"""

@@ -263,6 +263,95 @@ class TestCaptureServiceDedup(unittest.TestCase):
         )
         self.assertEqual(r2["status"], "queued")
 
+    def test_capture_turn_preserves_extended_payload(self):
+        """结构化对话字段入队后不丢失"""
+        fake_cfg = _FakeConfig(data_dir=Path(self.tmpdir.name))
+        with patch("core.sync_framework.capture_service.get_config", return_value=fake_cfg):
+            service = CaptureService(queue=self.queue, start_worker=False)
+        r = service.capture_turn(
+            source_agent="claude",
+            session_id="sess-extended",
+            turn_number=0,
+            user_content="run tests",
+            assistant_content="done",
+            tool_calls=[{"name": "pytest", "input": {"path": "tests"}}],
+            tool_results=[{"stdout": "2 passed", "stderr": "", "tool_use_id": "tool-1"}],
+            reasoning="checked failing path",
+            attachments=[{"path": "/tmp/report.txt"}],
+            raw_event_refs=[{"type": "tool_result"}],
+            source_files=["/tmp/session.jsonl"],
+            completeness={"visible_text": "full", "tool_results": "full", "reasoning": "full", "truncated": False},
+        )
+        self.assertEqual(r["status"], "queued")
+
+        events = self.queue.dequeue(limit=1)
+        payload = events[0]["payload"]
+        self.assertEqual(payload["tool_results"][0]["stdout"], "2 passed")
+        self.assertEqual(payload["reasoning"], "")
+        self.assertIn("reasoning_artifact_path", payload["metadata"])
+        self.assertIn("reasoning_sha256", payload["metadata"])
+        self.assertEqual(payload["metadata"]["tool_calls"][0]["name"], "pytest")
+        self.assertEqual(payload["completeness"]["tool_results"], "full")
+        self.assertEqual(payload["completeness"]["reasoning"], "artifact")
+
+    def test_extended_capture_hash_matches_sync_engine(self):
+        """带结构化字段的 CaptureService hash 与 SyncEngine 最终 hash 一致"""
+        fake_cfg = _FakeConfig(data_dir=Path(self.tmpdir.name))
+        with patch("core.sync_framework.capture_service.get_config", return_value=fake_cfg):
+            service = CaptureService(queue=self.queue, start_worker=False)
+
+        result = service.capture_turn(
+            source_agent="claude",
+            session_id="sess-hash-extended",
+            turn_number=0,
+            user_content="run tests",
+            assistant_content="done",
+            tool_results=[{"stdout": "2 passed", "tool_use_id": "tool-1"}],
+            reasoning="artifact this reasoning",
+        )
+        self.assertEqual(result["status"], "queued")
+        event = self.queue.dequeue(limit=1)[0]
+        payload = event["payload"]
+
+        from core.sync_framework.sync_engine import SyncEngine
+        from core.sync_framework.agent_source import AgentSource, SessionInfo, Turn
+
+        class FakeSource(AgentSource):
+            @property
+            def name(self): return "claude"
+            @property
+            def model_tag(self): return "claude"
+            def discover_sessions(self): return []
+            def parse_turns(self, path): return []
+
+        mock_client = Mock()
+        mock_client._sanitize = lambda x: x
+        mock_client.save.return_value = Mock(uid="uid-1")
+        with patch("core.sync_framework.sync_engine.get_config", return_value=fake_cfg):
+            engine = SyncEngine(client=mock_client, db_path=str(self.sync_db_path))
+
+        turn = Turn(
+            turn_number=event["turn_number"],
+            user_content=payload["user_content"],
+            assistant_content=payload["assistant_content"],
+            timestamp=payload["timestamp"],
+            metadata=payload["metadata"],
+            tool_calls=payload["tool_calls"],
+            tool_results=payload["tool_results"],
+            reasoning=payload["reasoning"],
+            attachments=payload["attachments"],
+            raw_event_refs=payload["raw_event_refs"],
+            source_files=payload["source_files"],
+            completeness=payload["completeness"],
+        )
+        sync_result = engine.sync_single_turn(
+            FakeSource(),
+            SessionInfo(session_id="sess-hash-extended", source_path=Path("/tmp/session.jsonl")),
+            turn,
+            incremental=False,
+        )
+        self.assertEqual(event["content_hash"], sync_result.content_hash)
+
     def test_capture_turn_returns_fast_when_queue_backlogged(self):
         """队列积压时仍 < 200ms"""
         service = self._make_service()

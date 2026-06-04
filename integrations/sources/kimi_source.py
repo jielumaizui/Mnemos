@@ -70,8 +70,16 @@ class KimiSource(AgentSource):
 
     def parse_turns(self, session_path: Path) -> List[Turn]:
         """解析 Kimi 会话文件（含归档文件）为 Turn 列表"""
-        all_messages = self._read_all_context_files(session_path.parent)
-        return self._pair_messages_to_turns(all_messages)
+        session_dir = session_path.parent
+        source_files = [
+            str(p)
+            for p in sorted(session_dir.glob("context*.jsonl"), key=self._context_file_sort_key)
+        ]
+        wire_path = session_dir / "wire.jsonl"
+        if wire_path.exists():
+            source_files.append(str(wire_path))
+        all_messages = self._read_all_context_files(session_dir)
+        return self._pair_messages_to_turns(all_messages, source_files)
 
     @staticmethod
     def _context_file_sort_key(path: Path) -> tuple:
@@ -154,7 +162,7 @@ class KimiSource(AgentSource):
             "source_fidelity": "full",
         }
 
-    def _pair_messages_to_turns(self, messages: List[Dict[str, Any]]) -> List[Turn]:
+    def _pair_messages_to_turns(self, messages: List[Dict[str, Any]], source_files: Optional[List[str]] = None) -> List[Turn]:
         """将消息列表配对为 Turn 列表 — 完整录入版（P0-6）"""
         turns = []
         user_content = ""
@@ -165,7 +173,7 @@ class KimiSource(AgentSource):
         turn_tool_results: List[Dict[str, Any]] = []
         turn_reasoning = ""
         turn_raw_events: List[Dict[str, Any]] = []
-        turn_source_files: List[str] = []
+        turn_source_files: List[str] = list(source_files or [])
         completeness_loss: List[str] = []
 
         for msg in messages:
@@ -224,7 +232,7 @@ class KimiSource(AgentSource):
                 turn_tool_results = []
                 turn_reasoning = ""
                 turn_raw_events = []
-                turn_source_files = []
+                turn_source_files = list(source_files or [])
                 completeness_loss = []
 
             elif role == "assistant":

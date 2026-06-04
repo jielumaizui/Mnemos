@@ -77,9 +77,16 @@ class WikiReader:
 
     # 读取深度配置（简化为3级）
     READ_DEPTH = {
+        "metadata": {"type": "metadata", "chars": 0, "related": False, "deep": False, "desc": "元数据"},
         "cold": {"type": "summary", "chars": 100, "related": False, "deep": False, "desc": "冷知识，摘要100字"},
         "warm": {"type": "paragraph", "chars": 500, "related": False, "deep": False, "desc": "温知识，段落500字"},
         "hot": {"type": "full", "chars": -1, "related": True, "deep": False, "desc": "热知识，全文+关联"},
+    }
+
+    DEPTH_TO_LEVEL = {
+        "metadata": "metadata",
+        "summary": "cold",
+        "full": "hot",
     }
 
     def __init__(self, wiki_path: str = None):
@@ -159,6 +166,10 @@ class WikiReader:
                     logger.warning(f"快速解析 frontmatter 失败: {e}")
         return {}, content
 
+    def _page_title(self, frontmatter: Dict, page_id: str) -> str:
+        """返回用户可读标题，兼容中文 frontmatter。"""
+        return fm_get(frontmatter, "name") or fm_get(frontmatter, "title") or page_id
+
     def _read_by_depth(self, page_id: str, heat_level: str) -> Optional[Dict]:
         """
         根据热力等级读取对应深度
@@ -188,7 +199,7 @@ class WikiReader:
         if read_type == "metadata":
             # L0：只返回元数据
             return {
-                "title": frontmatter.get("title", page_id),
+                "title": self._page_title(frontmatter, page_id),
                 "tags": frontmatter.get("tags", []),
                 "entities": frontmatter.get("entities", []),
                 "concepts": frontmatter.get("concepts", []),
@@ -210,7 +221,7 @@ class WikiReader:
                 summary += "..."
             return {
                 "summary": summary,
-                "title": frontmatter.get("title", page_id),
+                "title": self._page_title(frontmatter, page_id),
                 "heat_level": heat_level,
                 "heat_score": info["heat_score"],
                 "verification": info.get("verification", ""),
@@ -227,7 +238,7 @@ class WikiReader:
 
             result = {
                 "content": content,
-                "title": frontmatter.get("title", page_id),
+                "title": self._page_title(frontmatter, page_id),
                 "entities": frontmatter.get("entities", []),
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
@@ -249,7 +260,7 @@ class WikiReader:
             # L7-L8：全文 + 关联
             result = {
                 "content": body,
-                "title": frontmatter.get("title", page_id),
+                "title": self._page_title(frontmatter, page_id),
                 "entities": frontmatter.get("entities", []),
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
@@ -267,7 +278,7 @@ class WikiReader:
             # L9：全文 + 深度追踪
             result = {
                 "content": body,
-                "title": frontmatter.get("title", page_id),
+                "title": self._page_title(frontmatter, page_id),
                 "entities": frontmatter.get("entities", []),
                 "concepts": frontmatter.get("concepts", []),
                 "heat_level": heat_level,
@@ -341,13 +352,17 @@ class WikiReader:
         results = self.search_all_relevant(query)
         return results[:limit]
 
-    def read_page(self, page_path: str) -> Optional[Dict]:
+    def read_page(self, page_path: str, depth: str = None) -> Optional[Dict]:
         """读取指定 wiki 页面（MCP / Agora 兼容接口）
 
         page_path 可以是相对路径或 page_id（支持 .md 后缀）。
         """
         # Normalize: 去掉 .md 后缀，统一路径分隔符
         page_id = page_path.replace("\\", "/").removesuffix(".md")
+        if depth:
+            level = self.DEPTH_TO_LEVEL.get(depth)
+            if level:
+                return self._read_by_depth(page_id, level)
         return self.read_page_by_heat(page_id)
 
     @staticmethod

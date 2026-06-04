@@ -2019,6 +2019,7 @@ class DistillationEngine:
         _coverage_meta: Dict[str, Any] = {}
         all_fragments: List[KnowledgeFragment] = []
         chunk_infos: List[Dict[str, Any]] = []
+        message_positions = {id(m): idx + 1 for idx, m in enumerate(filtered)}
 
         if raw_chars <= 60000:
             session_text = build_session_text(filtered, max_chars=60000, out_meta=_coverage_meta)
@@ -2033,7 +2034,10 @@ class DistillationEngine:
                 chunk_meta: Dict[str, Any] = {}
                 chunk_text = build_session_text(chunk, max_chars=30000, out_meta=chunk_meta)
                 chunk_fragments = self._extractor.extract(chunk_text, session_id, "chunked")
-                covered_turns = [m.get("turn", i) for m in chunk]
+                covered_turns = [
+                    m.get("turn") or message_positions.get(id(m), i + 1)
+                    for m in chunk
+                ]
                 turn_range = f"{min(covered_turns)}-{max(covered_turns)}" if covered_turns else ""
                 chunk_infos.append({
                     "chunk_index": i,
@@ -2055,6 +2059,8 @@ class DistillationEngine:
                     f"chunk{c['chunk_index']}: turn{c['covered_turn_range']}"
                     for c in chunk_infos
                 )
+            result.distill_input_mode = "chunked"
+            result.truncated = any(c.get("truncated", False) for c in chunk_infos)
         else:
             session_text = build_session_text(filtered, max_chars=24000, out_meta=_coverage_meta)
             result.analysis_type = "summarized"
@@ -2072,7 +2078,7 @@ class DistillationEngine:
             else:
                 result.session_coverage = f"完整覆盖（共 {_coverage_meta.get('total_turns', len(filtered))} 轮）"
                 result.truncated = False
-        result.distill_input_mode = _coverage_meta.get("distill_input_mode", "unknown")
+            result.distill_input_mode = _coverage_meta.get("distill_input_mode", "unknown")
 
         # 追加 message-level 截断信息
         msg_trunc = _coverage_meta.get("message_truncations", [])
@@ -2092,13 +2098,13 @@ class DistillationEngine:
                                 {"fragment_count": len(all_fragments), "chunks": chunk_infos}),
         )
 
-        if not fragments:
+        if not all_fragments:
             result.judgment = "skip"
             result.judgment_reason = "提取无有效知识片段"
             return result
 
         # ===== L5: 自检 =====
-        check_passed, issues = self._self_check.check(fragments, filtered)
+        check_passed, issues = self._self_check.check(all_fragments, filtered)
         result.self_check_passed = check_passed
         result.self_check_issues = issues
         result.layer_results.append(
@@ -2107,7 +2113,7 @@ class DistillationEngine:
         )
 
         # ===== L6: 跨 Agent 关联 =====
-        linked_fragments = self._cross_linker.link(fragments)
+        linked_fragments = self._cross_linker.link(all_fragments)
         result.fragments = linked_fragments
         result.cross_agent_links = [
             link for f in linked_fragments for link in f.cross_agent_links

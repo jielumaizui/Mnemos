@@ -36,6 +36,9 @@ class TestDiagnosticsDataclasses(unittest.TestCase):
         self.assertEqual(s.name, "")
         self.assertFalse(s.available)
         self.assertFalse(s.hooks_installed)
+        self.assertFalse(s.mcp_configured)
+        self.assertFalse(s.policy_installed)
+        self.assertFalse(s.active_ready)
 
     def test_connection_task_sorting(self):
         from core.diagnostics import ConnectionTask
@@ -177,6 +180,9 @@ class TestQuickStatus(unittest.TestCase):
         self.assertIn("writable", status["wiki"])
         self.assertIn("total", status["agents"])
         self.assertIn("hooked", status["agents"])
+        self.assertIn("mcp", status["agents"])
+        self.assertIn("policy", status["agents"])
+        self.assertIn("active", status["agents"])
 
 
 if __name__ == "__main__":

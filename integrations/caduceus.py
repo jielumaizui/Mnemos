@@ -8,6 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from integrations.active import (
+    generated_wrapper,
+    upsert_yaml_mcp_server,
+    wrapper_uses_active_bridge,
+    yaml_mcp_configured,
+)
 from integrations.olympus import AgentAdapter, AgentRegistry
 
 
@@ -92,7 +98,19 @@ class HermesAdapter(AgentAdapter):
             return False
         wrapper = hermes_dir / "mnemos_wrapper.py"
         config = hermes_dir / "mnemos_config.toml"
-        return wrapper.exists() and config.exists()
+        return wrapper.exists() and config.exists() and wrapper_uses_active_bridge(wrapper)
+
+    def is_mcp_configured(self) -> bool:
+        hermes_dir = self.get_data_dir()
+        if not hermes_dir:
+            return False
+        return yaml_mcp_configured(hermes_dir / "config.yaml")
+
+    def install_mcp_server(self) -> bool:
+        hermes_dir = self.get_data_dir()
+        if not hermes_dir:
+            return False
+        return upsert_yaml_mcp_server(hermes_dir / "config.yaml")
 
     def install_hooks(self) -> bool:
         """安装 Hermes 的 session hooks
@@ -105,7 +123,7 @@ class HermesAdapter(AgentAdapter):
 
             # 1. 生成 wrapper 脚本
             wrapper_path = hermes_dir / "mnemos_wrapper.py"
-            wrapper_content = self._generate_wrapper_script()
+            wrapper_content = generated_wrapper(self.name)
             wrapper_path.write_text(wrapper_content, encoding="utf-8")
 
             # 2. 写入配置文件
@@ -116,16 +134,21 @@ class HermesAdapter(AgentAdapter):
 [mnemos]
 enabled = true
 wrapper = "{wrapper_path}"
+active_context = "{Path.home() / '.mnemos' / 'active_context' / self.name / 'latest.md'}"
 
 [callbacks]
 session_start = "python3 {wrapper_path} --session-start"
 session_end = "python3 {wrapper_path} --session-end"
+
+[mcp]
+server = "python3 {Path(__file__).resolve().parents[1] / 'mnemos_cli.py'} mcp serve"
 
 [paths]
 sessions = "{hermes_dir / 'sessions'}"
 inbox = "{hermes_dir / 'inbox'}"
 """
             config_path.write_text(config_content, encoding="utf-8")
+            self.install_mcp_server()
 
             # 3. 生成安装说明
             readme_path = hermes_dir / "mnemos_install.md"

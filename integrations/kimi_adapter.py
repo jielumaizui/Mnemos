@@ -7,6 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from integrations.active import (
+    generated_wrapper,
+    json_mcp_configured,
+    kimi_hooks_configured,
+    upsert_json_mcp_server,
+    upsert_kimi_hooks,
+    wrapper_uses_active_bridge,
+)
 from integrations.olympus import AgentAdapter, AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -82,49 +90,31 @@ class KimiAdapter(AgentAdapter):
         """检查 Kimi config.toml 中是否已注册 Mnemos hooks"""
         config_path = self.get_data_dir() / "config.toml"
         wrapper_path = self.get_data_dir() / "mnemos_wrapper.py"
-        if not config_path.exists() or not wrapper_path.exists():
-            return False
-        try:
-            import tomllib
-            with open(config_path, "rb") as f:
-                cfg = tomllib.load(f)
-            hooks = cfg.get("hooks", [])
-            hook_cmds = [h.get("command", "") if isinstance(h, dict) else str(h) for h in hooks]
-            wrapper_cmd = f"python3 {wrapper_path}"
-            return wrapper_cmd in hook_cmds
-        except Exception:
-            return False
+        return (
+            kimi_hooks_configured(config_path, wrapper_path)
+            and wrapper_uses_active_bridge(wrapper_path)
+        )
+
+    def is_mcp_configured(self) -> bool:
+        return json_mcp_configured(self.get_data_dir() / "mcp.json")
+
+    def install_mcp_server(self) -> bool:
+        return upsert_json_mcp_server(self.get_data_dir() / "mcp.json")
 
     def install_hooks(self) -> bool:
         """在 Kimi config.toml 中注册 session hooks"""
         try:
             config_path = self.get_data_dir() / "config.toml"
             if not config_path.exists():
-                logger.warning(f"Kimi config.toml 不存在: {config_path}")
-                return False
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text("", encoding="utf-8")
 
-            import tomllib
-            with open(config_path, "rb") as f:
-                cfg = tomllib.load(f)
-
-            hooks = cfg.get("hooks", [])
             wrapper_path = self.get_data_dir() / "mnemos_wrapper.py"
 
             # 生成 wrapper 脚本
-            wrapper_path.write_text(self._generate_wrapper_script(), encoding="utf-8")
-
-            # 检查是否已注册
-            hook_cmds = [h.get("command", "") if isinstance(h, dict) else str(h) for h in hooks]
-            wrapper_cmd = f"python3 {wrapper_path}"
-            if wrapper_cmd not in hook_cmds:
-                hooks.append({"command": wrapper_cmd, "event": "session_start"})
-                hooks.append({"command": wrapper_cmd, "event": "session_end"})
-
-                # 写回 config.toml
-                import tomli_w
-                cfg["hooks"] = hooks
-                with open(config_path, "wb") as f:
-                    tomli_w.dump(cfg, f)
+            wrapper_path.write_text(generated_wrapper(self.name), encoding="utf-8")
+            upsert_kimi_hooks(config_path, wrapper_path)
+            self.install_mcp_server()
 
             logger.info(f"[KimiAdapter] Hooks 已安装到 {config_path}")
             return True

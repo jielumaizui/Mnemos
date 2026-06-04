@@ -102,11 +102,27 @@ class CaptureService:
         return truncated + f"\n\n[... 内容已截断；完整内容见 artifact 文件 ...]"
 
     def _store_artifact(self, session_id: str, turn_number: int,
-                        user_content: str, assistant_content: str) -> Path:
+                        user_content: str, assistant_content: str,
+                        tool_calls: Optional[List[Dict[str, Any]]] = None,
+                        tool_results: Optional[List[Dict[str, Any]]] = None,
+                        reasoning: str = "",
+                        attachments: Optional[List[Dict[str, Any]]] = None,
+                        raw_event_refs: Optional[List[Dict[str, Any]]] = None,
+                        source_files: Optional[List[str]] = None,
+                        completeness: Optional[Dict[str, Any]] = None) -> Path:
         """将完整 payload 写入 artifact 文件，返回文件路径"""
         artifact_dir = self.config.data_dir / "capture_artifacts" / session_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
         path = artifact_dir / f"turn_{turn_number}.md"
+        structured = {
+            "tool_calls": tool_calls or [],
+            "tool_results": tool_results or [],
+            "reasoning": reasoning or "",
+            "attachments": attachments or [],
+            "raw_event_refs": raw_event_refs or [],
+            "source_files": source_files or [],
+            "completeness": completeness or {},
+        }
         content = f"""# Capture Artifact
 
 - session_id: {session_id}
@@ -124,9 +140,44 @@ class CaptureService:
 ## Assistant
 
 {assistant_content}
+
+---
+
+## Structured Capture
+
+````json
+{json.dumps(structured, ensure_ascii=False, indent=2, sort_keys=True, default=str)}
+````
 """
         path.write_text(content, encoding="utf-8")
         return path
+
+    def _store_reasoning_artifact(self, session_id: str, turn_number: int, reasoning: str) -> Path:
+        """按 SyncEngine 相同路径保存 reasoning artifact，保证 hash 投影稳定。"""
+        artifact_dir = self.config.data_dir / "capture_artifacts" / session_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"turn_{turn_number}_reasoning.md"
+        content = "\n".join([
+            "# Reasoning Artifact",
+            "",
+            f"- session_id: {session_id}",
+            f"- turn_number: {turn_number}",
+            f"- captured_at: {datetime.now().isoformat()}",
+            "",
+            "---",
+            "",
+            reasoning,
+            "",
+        ])
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _normalize_list(self, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
 
     def close(self):
         """关闭持久连接和 worker_pool"""
@@ -155,6 +206,13 @@ class CaptureService:
         model: Optional[str] = None,
         cwd: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        tool_results: Optional[List[Dict[str, Any]]] = None,
+        reasoning: str = "",
+        attachments: Optional[List[Dict[str, Any]]] = None,
+        raw_event_refs: Optional[List[Dict[str, Any]]] = None,
+        source_files: Optional[List[str]] = None,
+        completeness: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         单轮对话上报入口。
@@ -172,6 +230,15 @@ class CaptureService:
         user_content = user_content or ""
         assistant_content = assistant_content or ""
 
+        metadata = dict(metadata or {})
+        tool_calls = self._normalize_list(tool_calls if tool_calls is not None else metadata.get("tool_calls"))
+        tool_results = self._normalize_list(tool_results if tool_results is not None else metadata.get("tool_results"))
+        reasoning = reasoning or metadata.get("reasoning", "")
+        attachments = self._normalize_list(attachments if attachments is not None else metadata.get("attachments"))
+        raw_event_refs = self._normalize_list(raw_event_refs if raw_event_refs is not None else metadata.get("raw_event_refs"))
+        source_files = [str(p) for p in self._normalize_list(source_files if source_files is not None else metadata.get("source_files"))]
+        completeness = dict(completeness or metadata.get("completeness") or {})
+
         # 截断前保存原始内容，用于计算 full_content_hash
         original_user = user_content
         original_assistant = assistant_content
@@ -184,7 +251,14 @@ class CaptureService:
         if total_bytes > self.max_payload_bytes:
             # 超大 payload：先写完整 artifact，再截断 payload 保留摘要
             artifact_path = self._store_artifact(
-                session_id, turn_number, user_content, assistant_content
+                session_id, turn_number, user_content, assistant_content,
+                tool_calls=tool_calls,
+                tool_results=tool_results,
+                reasoning=reasoning,
+                attachments=attachments,
+                raw_event_refs=raw_event_refs,
+                source_files=source_files,
+                completeness=completeness,
             )
             max_assistant = self.max_payload_bytes - len(user_content.encode("utf-8")) - 1000
             if max_assistant < 5000:
@@ -198,8 +272,27 @@ class CaptureService:
                 capture_mode = "artifact"
             total_bytes = len(user_content.encode("utf-8")) + len(assistant_content.encode("utf-8"))
 
-        metadata = metadata or {}
+        reasoning_mode = self.config.get("capture.reasoning_mode", "artifact_summary")
+        payload_reasoning = reasoning
+        if reasoning:
+            metadata["reasoning_sha256"] = hashlib.sha256(reasoning.encode("utf-8")).hexdigest()[:16]
+            if reasoning_mode == "artifact_summary":
+                reasoning_artifact = metadata.get("reasoning_artifact_path")
+                if not reasoning_artifact:
+                    reasoning_artifact = str(self._store_reasoning_artifact(session_id, turn_number, reasoning))
+                    metadata["reasoning_artifact_path"] = reasoning_artifact
+                completeness["reasoning"] = "artifact"
+                payload_reasoning = ""
+
         metadata["capture_mode"] = capture_mode
+        metadata["tool_calls"] = tool_calls
+        metadata["tool_results"] = tool_results
+        metadata["attachments"] = attachments
+        metadata["raw_event_refs"] = raw_event_refs
+        metadata["source_files"] = source_files
+        metadata["completeness"] = completeness
+        if reasoning and reasoning_mode != "artifact_summary":
+            metadata["reasoning"] = reasoning
         if artifact_path:
             metadata["artifact_path"] = str(artifact_path)
 
@@ -210,6 +303,11 @@ class CaptureService:
             assistant_content=assistant_content,
             turn_number=turn_number,
             model_tag=model_tag,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+            reasoning=payload_reasoning,
+            attachments=attachments,
+            metadata=metadata,
         )
         # 计算 full_content_hash（原始完整内容，防止截断后去重误判）
         full_content_hash = compute_content_hash(
@@ -217,6 +315,11 @@ class CaptureService:
             assistant_content=original_assistant,
             turn_number=turn_number,
             model_tag=model_tag,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+            reasoning=payload_reasoning,
+            attachments=attachments,
+            metadata=metadata,
         )
         metadata["full_content_hash"] = full_content_hash
 
@@ -241,6 +344,13 @@ class CaptureService:
             "model": model or source_agent,
             "cwd": cwd,
             "metadata": metadata or {},
+            "tool_calls": tool_calls,
+            "tool_results": tool_results,
+            "reasoning": payload_reasoning,
+            "attachments": attachments,
+            "raw_event_refs": raw_event_refs,
+            "source_files": source_files,
+            "completeness": completeness,
         }
 
         # 入队
@@ -290,6 +400,13 @@ class CaptureService:
                 model=turn.get("model"),
                 cwd=turn.get("cwd"),
                 metadata=turn.get("metadata"),
+                tool_calls=turn.get("tool_calls"),
+                tool_results=turn.get("tool_results"),
+                reasoning=turn.get("reasoning", ""),
+                attachments=turn.get("attachments"),
+                raw_event_refs=turn.get("raw_event_refs"),
+                source_files=turn.get("source_files"),
+                completeness=turn.get("completeness"),
             )
             results.append(result)
 

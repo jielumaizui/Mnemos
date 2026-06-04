@@ -102,8 +102,8 @@ Mnemos 通过 MCP 协议向宿主 Agent 暴露以下工具：
 ```json
 {
   "hooks": {
-    "session_start": "python3 mnemos_cli.py --session-start --working-dir ...",
-    "session_end": "python3 mnemos_cli.py --session-end --working-dir ..."
+    "SessionStart": "python3 integrations/apollon.py --session-start --working-dir ...",
+    "SessionEnd": "python3 integrations/apollon.py --session-end --working-dir ..."
   }
 }
 ```
