@@ -260,9 +260,11 @@ def codex_mcp_configured(path: Path) -> bool:
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8")
+    # Windows 兼容性：路径比较统一使用正斜杠
+    cli_path = mnemos_cli_path().as_posix()
     return (
         "[mcp_servers.mnemos]" in text
-        and str(mnemos_cli_path()) in text
+        and cli_path in text
         and "mcp" in text
         and "serve" in text
     )

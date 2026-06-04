@@ -108,7 +108,7 @@ class WikiReader:
 
             for file_path in dir_path.rglob("*.md"):
                 rel_path = file_path.relative_to(self.wiki_path)
-                page_id = str(rel_path.with_suffix(''))
+                page_id = str(rel_path.with_suffix('')).replace('\\', '/')
 
                 # 快速索引（只读frontmatter）
                 try:

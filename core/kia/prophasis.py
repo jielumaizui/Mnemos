@@ -221,7 +221,7 @@ class PreFlightInjector:
                 continue
             for md_file in d.rglob("*.md"):
                 try:
-                    page_path = str(md_file.relative_to(self.WIKI_BASE))
+                    page_path = str(md_file.relative_to(self.WIKI_BASE)).replace('\\', '/')
                     current_paths.add(page_path)
                     frontmatter, body = self._parse_retrospective(md_file)
                     page_type = fm_get(frontmatter, "type", "")
