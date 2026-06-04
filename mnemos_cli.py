@@ -1306,7 +1306,7 @@ def _cmd_sync_backfill(args):
 
     AgentRegistry.register_builtin_agents()
     agents = AgentRegistry.auto_discover()
-    if source_filter:
+    if source_filter and source_filter != "all":
         agents = [a for a in agents if a.name == source_filter]
     if not agents:
         print("未发现任何 Agent 源")
@@ -1327,8 +1327,9 @@ def _cmd_sync_backfill(args):
     engine = SyncEngine()
     total_stats = {
         "agents": 0, "sessions": 0, "turns": 0,
-        "synced": 0, "skipped": 0, "failed": 0, "noise": 0,
+        "synced": 0, "updated": 0, "skipped": 0, "failed": 0, "noise": 0,
         "skipped_empty": 0, "missing_turns": 0,
+        "skipped_complete": 0,
     }
 
     import time
@@ -1357,7 +1358,10 @@ def _cmd_sync_backfill(args):
             sessions_with_mtime = sessions_with_mtime[:max_sessions]
 
         agent_synced = 0
-        agent_turns = 0
+        agent_parsed_turns = 0
+        agent_missing_turns = 0
+        duplicate_cache = None
+        duplicate_cache_ready = False
         for mtime, session_info in sessions_with_mtime:
             try:
                 turns = source.parse_turns(session_info.source_path)
@@ -1369,14 +1373,20 @@ def _cmd_sync_backfill(args):
                 existing_turns = engine._get_synced_turns(source.name, session_info.session_id)
                 all_turn_numbers = {t.turn_number for t in turns}
                 missing_turns = sorted(all_turn_numbers - set(existing_turns))
-                if missing_turns:
-                    total_stats["missing_turns"] += len(missing_turns)
 
                 if max_turns and len(turns) > max_turns:
                     turns = turns[-max_turns:]
-                agent_turns += len(turns)
+                    all_turn_numbers = {t.turn_number for t in turns}
+                    missing_turns = sorted(all_turn_numbers - set(existing_turns))
+                if missing_turns:
+                    total_stats["missing_turns"] += len(missing_turns)
+
+                missing_set = set(missing_turns)
+                turns_to_sync = [t for t in turns if t.turn_number in missing_set]
+                agent_parsed_turns += len(turns)
+                agent_missing_turns += len(turns_to_sync)
                 total_stats["sessions"] += 1
-                total_stats["turns"] += len(turns)
+                total_stats["turns"] += len(turns_to_sync if not dry_run else turns)
 
                 if dry_run:
                     if missing_turns:
@@ -1384,11 +1394,45 @@ def _cmd_sync_backfill(args):
                         print(f"  [dry-run] {source.name}/{session_info.session_id}: {len(turns)} turns, missing {len(missing_turns)} ({ranges})")
                     continue
 
-                # P0-4: 直接调用 SyncEngine.sync_session，incremental=False
-                results = engine.sync_session(source, session_info, incremental=False)
+                if not turns_to_sync:
+                    total_stats["skipped_complete"] += 1
+                    continue
+
+                if not duplicate_cache_ready:
+                    duplicate_cache = engine.build_memos_duplicate_cache(source.name)
+                    duplicate_cache_ready = True
+
+                ranges = _compress_ranges(missing_turns)
+                print(
+                    f"  {source.name}/{session_info.session_id}: "
+                    f"sync missing {len(turns_to_sync)}/{len(turns)} turns ({ranges})",
+                    flush=True,
+                )
+
+                # P0-4/P0-6: backfill 只补缺洞 turn，并用 source 级 Memos 缓存兜底防重。
+                results = []
+                for idx, turn in enumerate(turns_to_sync, 1):
+                    result = engine.sync_single_turn(
+                        source,
+                        session_info,
+                        turn,
+                        incremental=False,
+                        check_memos_duplicate=duplicate_cache is None,
+                        memos_duplicate_cache=duplicate_cache,
+                    )
+                    results.append(result)
+                    if len(turns_to_sync) >= 50 and (idx % 50 == 0 or idx == len(turns_to_sync)):
+                        print(
+                            f"    progress {idx}/{len(turns_to_sync)} "
+                            f"(turn={turn.turn_number}, action={result.action})",
+                            flush=True,
+                        )
                 for r in results:
                     if r.action == "new":
                         total_stats["synced"] += 1
+                        agent_synced += 1
+                    elif r.action == "updated":
+                        total_stats["updated"] += 1
                         agent_synced += 1
                     elif r.action in ("skipped", "skipped_memos"):
                         total_stats["skipped"] += 1
@@ -1400,7 +1444,10 @@ def _cmd_sync_backfill(args):
                 total_stats["failed"] += 1
                 print(f"  ✗ {source.name}/{session_info.session_id}: {e}")
 
-        print(f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, {agent_turns} turns, 同步 {agent_synced}")
+        print(
+            f"  {source.name}: 扫描 {len(sessions_with_mtime)} sessions, "
+            f"解析 {agent_parsed_turns} turns, 待补 {agent_missing_turns} turns, 同步 {agent_synced}"
+        )
 
     engine.close()
     print()
@@ -1410,10 +1457,12 @@ def _cmd_sync_backfill(args):
     print(f"  Turns: {total_stats['turns']}")
     if not dry_run:
         print(f"  Synced(new): {total_stats['synced']}")
+        print(f"  Updated: {total_stats['updated']}")
         print(f"  Skipped: {total_stats['skipped']}")
         print(f"  Noise: {total_stats['noise']}")
         print(f"  Failed: {total_stats['failed']}")
     print(f"  Missing turns: {total_stats['missing_turns']}")
+    print(f"  Skipped(complete): {total_stats['skipped_complete']}")
     print(f"  Skipped(empty): {total_stats['skipped_empty']}")
 
 
@@ -1977,7 +2026,7 @@ def main():
     sync_sub.add_parser("status", help="查看同步状态")
     sync_sub.add_parser("retry-failed", help="重试失败的同步任务")
     backfill_parser = sync_sub.add_parser("backfill", help="历史回填：全量/大批量扫描 Agent 历史会话")
-    backfill_parser.add_argument("--source", help="指定 Agent 源（如 claude/kimi/codex）")
+    backfill_parser.add_argument("--source", help="指定 Agent 源（如 claude/kimi/codex/all）")
     backfill_parser.add_argument("--since", type=float, default=0, help="时间范围（小时，0=全部）")
     backfill_parser.add_argument("--max-turns", type=int, default=0, help="每 session 最大 turn 数（0=无限制）")
     backfill_parser.add_argument("--max-sessions", type=int, default=0, help="每 source 最大 session 数（0=无限制）")

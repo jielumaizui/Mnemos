@@ -26,9 +26,11 @@ import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+_SYNCED_STATUSES = {"new", "updated", "synced", "backfilled", "skipped_memos"}
 
 from integrations.styx import (
     MemosClient,
@@ -345,6 +347,8 @@ class SyncEngine:
         session_info: SessionInfo,
         turn: Turn,
         incremental: bool = True,
+        check_memos_duplicate: bool = True,
+        memos_duplicate_cache: Optional[Dict[Tuple[str, int, str], List[str]]] = None,
     ) -> SyncResult:
         """
         同步单轮对话。
@@ -383,7 +387,11 @@ class SyncEngine:
         existing = self._check_synced(
             source.name, session_info.session_id, turn.turn_number
         )
-        if existing and existing.get("content_hash") == content_hash:
+        if (
+            existing
+            and existing.get("status") in _SYNCED_STATUSES
+            and existing.get("content_hash") == content_hash
+        ):
             return SyncResult(
                 session_id=session_info.session_id,
                 turn_number=turn.turn_number,
@@ -395,9 +403,17 @@ class SyncEngine:
         # 从 Turn metadata 获取 artifact_path（由 CaptureService 写入）
         artifact_path = (turn.metadata or {}).get("artifact_path", "") or (turn.metadata or {}).get("reasoning_artifact_path", "")
 
-        memos_dupe = self._check_memos_duplicate(
-            source.name, session_info.session_id, turn.turn_number, content_hash
-        )
+        if memos_duplicate_cache is not None:
+            memos_dupe = memos_duplicate_cache.get(
+                (session_info.session_id, turn.turn_number, content_hash),
+                [],
+            )
+        elif check_memos_duplicate:
+            memos_dupe = self._check_memos_duplicate(
+                source.name, session_info.session_id, turn.turn_number, content_hash
+            )
+        else:
+            memos_dupe = []
         if memos_dupe:
             # 记录到 sync_log 防止下次再查
             self._record_sync(
@@ -805,7 +821,7 @@ class SyncEngine:
                 """
                 SELECT turn_number FROM sync_log
                 WHERE agent_name = ? AND session_id = ?
-                  AND status IN ('new', 'updated', 'synced', 'skipped_memos')
+                  AND status IN ('new', 'updated', 'synced', 'backfilled', 'skipped_memos')
                 """,
                 (agent_name, session_id),
             )
@@ -861,6 +877,50 @@ class SyncEngine:
         except Exception:
             pass
         return []
+
+    def build_memos_duplicate_cache(
+        self, agent_name: str
+    ) -> Optional[Dict[Tuple[str, int, str], List[str]]]:
+        """按 Agent 一次性构建 Memos 去重缓存，供历史回填避免每 turn 拉全库。"""
+        try:
+            memories = self.client.list_by_tags([f"source={agent_name}"], limit=None)
+        except Exception:
+            logger.warning("[SyncEngine] 构建 Memos 去重缓存失败", exc_info=True)
+            return None
+
+        cache: Dict[Tuple[str, int, str], List[str]] = {}
+        for memory in memories or []:
+            tags = list(getattr(memory, "tags", []) or [])
+            session_id = None
+            turn_number = None
+            hashes: List[str] = []
+
+            for tag in tags:
+                if tag.startswith("session="):
+                    session_id = tag.split("=", 1)[1]
+                elif tag.startswith("turn="):
+                    try:
+                        turn_number = int(tag.split("=", 1)[1]) - 1
+                    except ValueError:
+                        turn_number = None
+                elif tag.startswith("content_hash="):
+                    hashes.append(tag.split("=", 1)[1])
+
+            if session_id is None or turn_number is None:
+                continue
+
+            if not hashes:
+                body = (getattr(memory, "content", "") or "").strip()
+                hashes = [hashlib.md5(body.encode("utf-8")).hexdigest()[:16]]
+
+            uid = getattr(memory, "uid", None)
+            if not uid:
+                continue
+            for content_hash in hashes:
+                key = (session_id, turn_number, content_hash)
+                cache.setdefault(key, []).append(uid)
+
+        return cache
 
     def _record_sync(
         self,
