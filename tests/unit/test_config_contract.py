@@ -52,7 +52,7 @@ daemon:
 
     assert config.config_path == mnemos_dir / "configs" / "main.json"
     assert config.config_path.exists()
-    assert str(config.wiki_dir) == "/legacy/wiki"
+    assert config.wiki_dir.as_posix() == "/legacy/wiki"
     assert config.get("daemon.services.l1_sync") is False
 
     saved = json.loads(config.config_path.read_text(encoding="utf-8"))

@@ -306,6 +306,13 @@ class CaptureWorkerPool:
             assistant_content=payload.get("assistant_content", ""),
             timestamp=payload.get("timestamp"),
             metadata=payload.get("metadata", {}),
+            tool_calls=payload.get("tool_calls") or payload.get("metadata", {}).get("tool_calls", []),
+            tool_results=payload.get("tool_results") or payload.get("metadata", {}).get("tool_results", []),
+            reasoning=payload.get("reasoning") or payload.get("metadata", {}).get("reasoning", ""),
+            attachments=payload.get("attachments") or payload.get("metadata", {}).get("attachments", []),
+            raw_event_refs=payload.get("raw_event_refs") or payload.get("metadata", {}).get("raw_event_refs", []),
+            source_files=payload.get("source_files") or payload.get("metadata", {}).get("source_files", []),
+            completeness=payload.get("completeness") or payload.get("metadata", {}).get("completeness", {}),
         )
 
         # 构建 Source（从 registry 获取，或用动态 Source）

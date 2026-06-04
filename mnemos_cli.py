@@ -324,13 +324,13 @@ def _install_claude_hook(config):
             settings["hooks"] = {}
 
         # 添加 session-start hook（跨平台：Windows 用 sys.executable 代替 python3）
-        script_path = Path(__file__).resolve()
+        script_path = Path(__file__).resolve().parent / "integrations" / "apollon.py"
         python_cmd = sys.executable
-        settings["hooks"]["session_start"] = (
+        settings["hooks"]["SessionStart"] = (
             f"{python_cmd} {script_path} --session-start "
             f"--working-dir \"$PWD\" --user-message \"$USER_MESSAGE\""
         )
-        settings["hooks"]["session_end"] = (
+        settings["hooks"]["SessionEnd"] = (
             f"{python_cmd} {script_path} --session-end "
             f"--working-dir \"$PWD\" --session-messages \"$SESSION_MESSAGES\""
         )

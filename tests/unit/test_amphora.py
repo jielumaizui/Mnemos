@@ -104,6 +104,8 @@ class TestAmphoraQueue(unittest.TestCase):
         amphora.enqueue("sess-old", [{"role": "user", "content": "a"}])
         amphora.get_next()
         amphora.mark_done("sess-old")
+        # 确保 completed_at 严格早于 cutoff（Windows 时间精度较低）
+        time.sleep(0.05)
 
         pending_before = amphora.get_task_count()
         archived = amphora.cleanup_old(days=0)

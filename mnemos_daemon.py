@@ -475,6 +475,13 @@ def service_l1_sync(stop_event: threading.Event):
                                             model=source.model_tag,
                                             cwd=str(session_info.source_path),
                                             metadata=turn.metadata,
+                                            tool_calls=turn.tool_calls,
+                                            tool_results=turn.tool_results,
+                                            reasoning=turn.reasoning,
+                                            attachments=turn.attachments,
+                                            raw_event_refs=turn.raw_event_refs,
+                                            source_files=turn.source_files,
+                                            completeness=turn.completeness,
                                         )
                                         status = result.get("status")
                                         if status == "queued":

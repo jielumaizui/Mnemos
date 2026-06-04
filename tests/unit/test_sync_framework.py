@@ -169,6 +169,13 @@ class TestSyncEngineSessionSync(unittest.TestCase):
             return call[0][1]
         return call[1].get("tags", []) if call and call[1] else []
 
+    def _get_save_content(self):
+        """辅助：从 mock save 的位置参数中提取 content"""
+        call = self.mock_client.save.call_args
+        if call and call[0]:
+            return call[0][0]
+        return call[1].get("content", "") if call and call[1] else ""
+
     def test_sync_session_all_turns(self):
         """同步会话所有轮次"""
         engine = self._make_engine()
@@ -308,6 +315,36 @@ class TestSyncEngineSessionSync(unittest.TestCase):
         tags = self._get_save_tags()
         self.assertTrue(any("has-code" in t for t in tags))
 
+    def test_structured_capture_visible_in_markdown(self):
+        """工具调用、工具结果和 reasoning artifact 引用会进入 Memos 可见内容"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        source.parse_turns = lambda _p: [
+            Turn(
+                turn_number=0,
+                user_content="please run tests",
+                assistant_content="I ran them",
+                tool_calls=[{"name": "pytest", "input": {"path": "tests"}}],
+                tool_results=[{"stdout": "2 passed", "stderr": "", "tool_use_id": "tool-1"}],
+                reasoning="internal reasoning should be artifacted",
+            ),
+        ]
+        session = SessionInfo(session_id="sess-structured", source_path=Path("/tmp/s.json"))
+        engine.sync_session(source, session, incremental=False)
+
+        content = self._get_save_content()
+        self.assertIn("## Tool Calls", content)
+        self.assertIn("pytest", content)
+        self.assertIn("## Tool Results", content)
+        self.assertIn("2 passed", content)
+        self.assertIn("Reasoning captured", content)
+        self.assertNotIn("internal reasoning should be artifacted", content)
+
+        tags = self._get_save_tags()
+        self.assertIn("has-tools=true", tags)
+        self.assertIn("has-reasoning=true", tags)
+        self.assertIn("reasoning_capture=artifact_summary", tags)
+
     def test_skip_distill_tag_for_wiki_content(self):
         """wiki 生成内容添加 skip-distill 标签"""
         engine = self._make_engine()
@@ -338,6 +375,17 @@ class TestSyncEngineSessionSync(unittest.TestCase):
             rows = cursor.fetchall()
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0][3], "new")
+
+    def test_get_synced_turns_counts_new_status(self):
+        """缺洞审计应把当前成功状态 new 识别为已同步"""
+        engine = self._make_engine()
+        source = FakeAgentSource()
+        source.parse_turns = lambda _p: [
+            Turn(turn_number=0, user_content="hi", assistant_content="hello"),
+        ]
+        session = SessionInfo(session_id="sess-audit", source_path=Path("/tmp/s.json"))
+        engine.sync_session(source, session, incremental=False)
+        self.assertEqual(engine._get_synced_turns(source.name, session.session_id), [0])
 
     def test_user_signals_collected(self):
         """画像信号采集到 user_signals 表"""

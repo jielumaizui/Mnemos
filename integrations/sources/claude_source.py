@@ -247,7 +247,7 @@ class ClaudeSource(AgentSource):
                     "input": t.get("input", t.get("arguments", t.get("function", {}).get("arguments", {}))),
                     "id": t.get("id", ""),
                 }
-                for t in tool_calls[:10]
+                for t in tool_calls
             ]
 
         if tool_results:

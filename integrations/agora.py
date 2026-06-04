@@ -1077,6 +1077,13 @@ tags: [{', '.join(tags or ['file_import'])}]
         model: str = "",
         cwd: str = "",
         metadata: Dict = None,
+        tool_calls: list = None,
+        tool_results: list = None,
+        reasoning: str = "",
+        attachments: list = None,
+        raw_event_refs: list = None,
+        source_files: list = None,
+        completeness: Dict = None,
     ) -> Dict:
         """
         MCP 主动上报单轮对话。
@@ -1099,6 +1106,13 @@ tags: [{', '.join(tags or ['file_import'])}]
                 model=model or None,
                 cwd=cwd or None,
                 metadata=metadata or {},
+                tool_calls=tool_calls,
+                tool_results=tool_results,
+                reasoning=reasoning,
+                attachments=attachments,
+                raw_event_refs=raw_event_refs,
+                source_files=source_files,
+                completeness=completeness,
             )
             return {
                 "success": result["status"] in ("queued", "duplicate"),

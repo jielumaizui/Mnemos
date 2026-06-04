@@ -82,6 +82,45 @@ def sanitize_content(content: str) -> str:
     return content
 
 
+def _json_dumps(value: Any) -> str:
+    """稳定渲染结构化采集字段，避免不同路径生成不同 content_hash。"""
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+    except TypeError:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _append_json_section(lines: List[str], title: str, value: Any):
+    if not value:
+        return
+    lines.extend([
+        f"## {title}",
+        "",
+        "````json",
+        _json_dumps(value),
+        "````",
+        "",
+    ])
+
+
+def _append_text_section(lines: List[str], title: str, text: str):
+    if not text:
+        return
+    lines.extend([
+        f"## {title}",
+        "",
+        text,
+        "",
+    ])
+
+
+def _get_reasoning_mode() -> str:
+    try:
+        return get_config().get("capture.reasoning_mode", "artifact_summary")
+    except Exception:
+        return "artifact_summary"
+
+
 def build_turn_markdown(turn: Turn, session_id: str, model_tag: str) -> str:
     """将 Turn 构建为 Markdown 内容"""
     lines = [
@@ -95,13 +134,56 @@ def build_turn_markdown(turn: Turn, session_id: str, model_tag: str) -> str:
         "",
         turn.assistant_content,
         "",
-        "---",
-        "",
     ]
+
+    # 结构化对话证据必须进入投影层，否则 parser 已采到的信息会在 Memos/Obsidian 可见层丢失。
+    _append_json_section(lines, "Tool Calls", turn.tool_calls)
+    _append_json_section(lines, "Tool Results", turn.tool_results)
+    _append_json_section(lines, "Attachments", turn.attachments)
+
+    reasoning_mode = _get_reasoning_mode()
+    metadata = turn.metadata or {}
+    reasoning_text = turn.reasoning or metadata.get("reasoning", "")
+    reasoning_artifact = metadata.get("reasoning_artifact_path") or metadata.get("artifact_path")
+    reasoning_hash = metadata.get("reasoning_sha256")
+    if reasoning_text and not reasoning_hash:
+        reasoning_hash = hashlib.sha256(reasoning_text.encode("utf-8")).hexdigest()[:16]
+
+    if reasoning_text or reasoning_artifact or reasoning_hash:
+        if reasoning_mode == "full":
+            _append_text_section(lines, "Reasoning", reasoning_text)
+        elif reasoning_mode == "summary":
+            summary = reasoning_text
+            if len(summary) > 2000:
+                summary = summary[:2000] + "\n\n[... reasoning summary truncated by capture.reasoning_mode=summary ...]"
+            _append_text_section(lines, "Reasoning Summary", summary)
+        elif reasoning_mode == "artifact_summary":
+            note = "Reasoning captured; full content is stored as a local artifact."
+            if reasoning_hash:
+                note += f"\n\nChecksum: `{reasoning_hash}`"
+            if reasoning_artifact:
+                note += f"\n\nArtifact: `{reasoning_artifact}`"
+            _append_text_section(lines, "Reasoning", note)
+
+    artifact_path = (turn.metadata or {}).get("artifact_path")
+    if artifact_path and artifact_path != (turn.metadata or {}).get("reasoning_artifact_path"):
+        _append_text_section(lines, "Capture Artifact", f"Full oversized payload: `{artifact_path}`")
+
+    lines.extend(["---", ""])
     return "\n".join(lines)
 
 
-def compute_content_hash(user_content: str, assistant_content: str, turn_number: int, model_tag: str) -> str:
+def compute_content_hash(
+    user_content: str,
+    assistant_content: str,
+    turn_number: int,
+    model_tag: str,
+    tool_calls: Optional[List[Dict[str, Any]]] = None,
+    tool_results: Optional[List[Dict[str, Any]]] = None,
+    reasoning: str = "",
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     统一 content_hash 计算函数。
     CaptureService 和 SyncEngine 必须复用同一函数，确保 sync_log 去重兜底有效。
@@ -110,6 +192,11 @@ def compute_content_hash(user_content: str, assistant_content: str, turn_number:
         turn_number=turn_number,
         user_content=user_content or "",
         assistant_content=assistant_content or "",
+        metadata=metadata or {},
+        tool_calls=tool_calls or [],
+        tool_results=tool_results or [],
+        reasoning=reasoning or "",
+        attachments=attachments or [],
     )
     content = build_turn_markdown(turn, "", model_tag)
     content = sanitize_content(content)
@@ -282,6 +369,8 @@ class SyncEngine:
                 action="noise",
             )
 
+        self._ensure_reasoning_artifact(turn, session_info.session_id)
+
         # 3. 内容构建
         content = self._build_markdown(turn, session_info.session_id, source.model_tag)
 
@@ -304,7 +393,7 @@ class SyncEngine:
 
         # 5b. 去重检查（Memos 端兜底）— 防止 sync_log 丢失导致全量重同步
         # 从 Turn metadata 获取 artifact_path（由 CaptureService 写入）
-        artifact_path = (turn.metadata or {}).get("artifact_path", "")
+        artifact_path = (turn.metadata or {}).get("artifact_path", "") or (turn.metadata or {}).get("reasoning_artifact_path", "")
 
         memos_dupe = self._check_memos_duplicate(
             source.name, session_info.session_id, turn.turn_number, content_hash
@@ -568,6 +657,39 @@ class SyncEngine:
         """脱敏处理 — 复用 MemosClient 的规则"""
         return sanitize_content(content)
 
+    def _ensure_reasoning_artifact(self, turn: Turn, session_id: str):
+        """默认把完整 reasoning 留在本地 artifact，而不是塞满 Memos 正文。"""
+        mode = self.config.get("capture.reasoning_mode", "artifact_summary")
+        if mode != "artifact_summary" or not turn.reasoning:
+            return
+
+        metadata = turn.metadata or {}
+        metadata["reasoning_sha256"] = hashlib.sha256(turn.reasoning.encode("utf-8")).hexdigest()[:16]
+        if metadata.get("reasoning_artifact_path"):
+            return
+
+        data_dir = getattr(self.config, "data_dir", None) or self.config.get("data_dir", Path.home() / ".mnemos")
+        artifact_dir = Path(data_dir) / "capture_artifacts" / session_id
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        path = artifact_dir / f"turn_{turn.turn_number}_reasoning.md"
+        content = "\n".join([
+            "# Reasoning Artifact",
+            "",
+            f"- session_id: {session_id}",
+            f"- turn_number: {turn.turn_number}",
+            f"- captured_at: {datetime.now().isoformat()}",
+            "",
+            "---",
+            "",
+            turn.reasoning,
+            "",
+        ])
+        path.write_text(content, encoding="utf-8")
+        metadata["reasoning_artifact_path"] = str(path)
+        turn.metadata = metadata
+        if turn.completeness is not None:
+            turn.completeness["reasoning"] = "artifact"
+
     def _build_tags(
         self,
         source: AgentSource,
@@ -598,8 +720,11 @@ class SyncEngine:
         combined = f"{turn.user_content}\n{turn.assistant_content}"
         if "```" in combined:
             tags.append("has-code=true")
-        if "[TOOL_RESULT]" in combined or turn.metadata.get("tool_calls"):
+        if "[TOOL_RESULT]" in combined or turn.metadata.get("tool_calls") or turn.tool_calls or turn.tool_results:
             tags.append("has-tools=true")
+        if turn.reasoning or turn.metadata.get("reasoning") or turn.metadata.get("reasoning_artifact_path") or turn.metadata.get("reasoning_sha256"):
+            tags.append("has-reasoning=true")
+            tags.append(f"reasoning_capture={self.config.get('capture.reasoning_mode', 'artifact_summary')}")
 
         # P0-0: 完整性标签写入 Memos
         comp = turn.completeness or {}
@@ -677,7 +802,11 @@ class SyncEngine:
             conn = self._pool.get_conn()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT turn_number FROM sync_log WHERE agent_name = ? AND session_id = ? AND status IN ('synced', 'updated')",
+                """
+                SELECT turn_number FROM sync_log
+                WHERE agent_name = ? AND session_id = ?
+                  AND status IN ('new', 'updated', 'synced', 'skipped_memos')
+                """,
                 (agent_name, session_id),
             )
             return [row[0] for row in cursor.fetchall()]

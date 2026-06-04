@@ -29,6 +29,11 @@ import sys
 import json
 import argparse
 from pathlib import Path
+
+# 确保从任意工作目录执行时都能找到 core 模块
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 from datetime import datetime, timedelta, timezone, timezone
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
@@ -1285,8 +1290,8 @@ def run_kia_cycles():
 
 def show_stats():
     """显示 Mnemos v6.0 系统统计"""
-    from core.iteration_tracker import IterationTracker
-    from core.knowledge_scheduler import KnowledgeScheduler
+    from core.kia.proteus import IterationTracker
+    from core.kia.chronos import KnowledgeScheduler
 
     WIKI_DIR = get_config().wiki_dir
 
@@ -1610,8 +1615,8 @@ class ClaudeCodeAdapter(AgentAdapter):
                 settings = json.load(f)
             hooks = settings.get("hooks", {})
             script_path = str(Path(__file__).resolve())
-            start_hook = hooks.get("session_start", "")
-            end_hook = hooks.get("session_end", "")
+            start_hook = hooks.get("SessionStart", "")
+            end_hook = hooks.get("SessionEnd", "")
             return script_path in start_hook and script_path in end_hook
         except Exception:
             return False
@@ -1628,11 +1633,11 @@ class ClaudeCodeAdapter(AgentAdapter):
                 settings["hooks"] = {}
             script_path = Path(__file__).resolve()
             python_cmd = sys.executable
-            settings["hooks"]["session_start"] = (
+            settings["hooks"]["SessionStart"] = (
                 f'{python_cmd} {script_path} --session-start '
                 f'--working-dir "$PWD" --user-message "$USER_MESSAGE"'
             )
-            settings["hooks"]["session_end"] = (
+            settings["hooks"]["SessionEnd"] = (
                 f'{python_cmd} {script_path} --session-end '
                 f'--working-dir "$PWD" --session-messages "$SESSION_MESSAGES"'
             )
