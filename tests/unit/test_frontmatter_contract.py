@@ -90,3 +90,36 @@ def test_frontmatter_field_update_preserves_chinese_display_contract(tmp_path):
     assert "跨Agent关联:" in head
     assert "knowledge_stage:" not in head
     assert "cross_agent_refs:" not in head
+
+
+def test_wiki_reader_depth_and_chinese_title_contract(tmp_path):
+    from integrations.oracle import WikiReader
+
+    page_dir = tmp_path / "04-Concepts"
+    page_dir.mkdir(parents=True)
+    page = page_dir / "machine_name.md"
+    page.write_text(
+        "---\n"
+        "名称: 用户可读标题\n"
+        "摘要: 这是一条摘要\n"
+        "关键词:\n"
+        "- 同步\n"
+        "置信度: 0.8\n"
+        "---\n"
+        "# 用户可读标题\n\n"
+        "正文内容足够长，用于验证 summary 和 full 两种读取模式。\n",
+        encoding="utf-8",
+    )
+
+    reader = WikiReader(wiki_path=str(tmp_path))
+    metadata = reader.read_page("04-Concepts/machine_name.md", depth="metadata")
+    summary = reader.read_page("04-Concepts/machine_name.md", depth="summary")
+    full = reader.read_page("04-Concepts/machine_name.md", depth="full")
+
+    assert metadata["title"] == "用户可读标题"
+    assert metadata["depth"] == "metadata_only"
+    assert summary["title"] == "用户可读标题"
+    assert "summary" in summary
+    assert full["title"] == "用户可读标题"
+    assert full["depth"] == "full"
+    assert "正文内容足够长" in full["content"]

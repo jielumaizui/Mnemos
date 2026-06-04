@@ -27,6 +27,7 @@ from typing import List, Dict, Optional, Tuple
 from .kairos import TimeWindow, TimeWindowType
 from core.persona.delphi import PersonaStore, KnowledgeAligner
 from core.config import get_config
+from core.frontmatter import fm_get
 
 
 import logging
@@ -128,12 +129,14 @@ class PreFlightInjector:
             # Fallback：从缓存或 Wiki 页面搜索匹配类型的页面
             checklist_items = self._get_checklist_for_type(task_type)
             if checklist_items:
+                max_items = 10
+                displayed_items = checklist_items[:max_items]
                 return LoadedKnowledge(
                     task_type=task_type,
                     subtype=subtype,
                     version=1,
-                    checklist=checklist_items,
-                    lessons_summary="",
+                    checklist=displayed_items,
+                    lessons_summary=self._build_fallback_lessons_summary(checklist_items),
                     loaded_at=datetime.now().isoformat(),
                     is_compact=len(checklist_items) > 10,
                     total_items=len(checklist_items),
@@ -221,18 +224,18 @@ class PreFlightInjector:
                     page_path = str(md_file.relative_to(self.WIKI_BASE))
                     current_paths.add(page_path)
                     frontmatter, body = self._parse_retrospective(md_file)
-                    page_type = frontmatter.get("类型", "")
+                    page_type = fm_get(frontmatter, "type", "")
                     if page_type not in allowed_types:
                         continue
-                    title = frontmatter.get("title", frontmatter.get("name", md_file.stem))
+                    title = fm_get(frontmatter, "name") or fm_get(frontmatter, "title") or md_file.stem
                     task_types = []
-                    applies_when = frontmatter.get("applies_when", {})
+                    applies_when = fm_get(frontmatter, "applies_when", {})
                     if isinstance(applies_when, dict):
                         task_types = applies_when.get("task_type", [])
                     if isinstance(task_types, str):
                         task_types = [task_types]
                     if not task_types:
-                        task_types = frontmatter.get("task_type", [])
+                        task_types = fm_get(frontmatter, "task_type", [])
                         if isinstance(task_types, str):
                             task_types = [task_types]
                     if not task_types:
@@ -243,13 +246,13 @@ class PreFlightInjector:
                             task_types = ["design"]
                         else:
                             task_types = [""]
-                    keywords = frontmatter.get("关键词", [])
-                    triggers = frontmatter.get("触发器", [])
+                    keywords = fm_get(frontmatter, "keywords", [])
+                    triggers = fm_get(frontmatter, "triggers", [])
                     if isinstance(keywords, str):
                         keywords = [keywords]
                     if isinstance(triggers, str):
                         triggers = [triggers]
-                    source = frontmatter.get("source", "wiki")
+                    source = fm_get(frontmatter, "source", "") or "wiki"
                     created_at = datetime.now().isoformat()
                     cursor.execute("DELETE FROM checklist_cache WHERE page_path = ?", (page_path,))
                     for tt in task_types:
@@ -284,11 +287,13 @@ class PreFlightInjector:
             conn.close()
             for row in rows:
                 keyword, title, page_path, source = row
+                label = title or Path(page_path).stem or keyword
                 items.append(ChecklistItem(
-                    item=keyword,
-                    source=source or page_path or "wiki",
+                    item=f"复用《{label}》：{keyword}",
+                    source=page_path or source or "wiki",
                     severity="medium",
                     trigger_keywords=[keyword],
+                    detail=f"source_agent={source}" if source and source != page_path else "",
                 ))
         except Exception as e:
             logger.warning(f"读取 checklist 缓存失败: {e}")
@@ -296,6 +301,25 @@ class PreFlightInjector:
         if items:
             return items
         return self._get_checklist_from_files(task_type)
+
+    def _build_fallback_lessons_summary(self, items: List[ChecklistItem]) -> str:
+        """为通用 Wiki fallback 生成宿主 Agent 可读的经验摘要。"""
+        if not items:
+            return ""
+        top_items = []
+        seen = set()
+        for item in items:
+            text = item.item.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            top_items.append(text)
+            if len(top_items) >= 5:
+                break
+        return (
+            f"未命中专用复盘文件，已从 Wiki/Retrospectives 装载 {len(items)} 条相关检查项。"
+            f"优先关注：{'；'.join(top_items)}"
+        )
 
     def _get_checklist_from_files(self, task_type: str) -> List[ChecklistItem]:
         """回退：从 Wiki 文件搜索匹配的 checklist"""

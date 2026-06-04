@@ -1760,7 +1760,9 @@ def cmd_wiki(args):
             if result.get('related'):
                 print(f"\n🔗 关联页面 ({len(result['related'])} 个):")
                 for rel in result['related'][:5]:
-                    print(f"   - {rel.get('title', rel.get('path', 'unknown'))}")
+                    label = rel.get('title') or rel.get('path') or rel.get('page_id') or 'unknown'
+                    relation = rel.get('relation')
+                    print(f"   - {label}{f' ({relation})' if relation else ''}")
         except Exception as e:
             print(f"读取 Wiki 失败: {e}")
     else:

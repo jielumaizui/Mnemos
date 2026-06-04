@@ -587,9 +587,11 @@ tags: [{', '.join(tags or ['file_import'])}]
             "checklist": [
                 {
                     "item": c.item,
+                    "source": c.source,
                     "severity": c.severity,
                     "freshness_score": round(c.freshness_score, 2),
                     "hit_count": c.hit_count,
+                    **({"detail": c.detail} if c.detail else {}),
                 }
                 for c in knowledge.checklist
             ],
