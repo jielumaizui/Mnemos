@@ -155,11 +155,11 @@ class PreFlightInjector:
 
     @staticmethod
     def _merge_behavior_constraints(checklist_items: List[ChecklistItem]) -> List[ChecklistItem]:
-        """合并通用行为约束到 checklist 头部（高优先级）"""
-        merged = list(BEHAVIOR_CONSTRAINTS)
-        for item in checklist_items:
-            if not any(b.item == item.item for b in BEHAVIOR_CONSTRAINTS):
-                merged.append(item)
+        """合并通用行为约束到 checklist 末尾（不干扰已有知识顺序）"""
+        merged = list(checklist_items)
+        for behavior in BEHAVIOR_CONSTRAINTS:
+            if not any(item.item == behavior.item for item in checklist_items):
+                merged.append(behavior)
         return merged
 
     def _load_full(self, task_type: str, subtype: str,

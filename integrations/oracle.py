@@ -390,7 +390,7 @@ class WikiReader:
                     match_count = sum(1 for kw in keywords if kw in body_lower)
                     score = 5 + match_count * 2
                     rel_path = file_path.relative_to(self.wiki_path)
-                    page_id = str(rel_path.with_suffix(''))
+                    page_id = str(rel_path.with_suffix('')).replace('\\', '/')
                     title = fm_get(frontmatter, "name") or file_path.stem
                     verification = fm_get(frontmatter, "status") or ""
                     confidence = float(fm_get(frontmatter, "confidence") or 0.5)

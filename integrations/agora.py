@@ -1871,8 +1871,8 @@ tags: [{', '.join(tags or ['file_import'])}]
             "error": error,
         }
 
-    def handle_request(self, request: Dict) -> Dict:
-        """处理单个 JSON-RPC 请求"""
+    def handle_request(self, request: Dict) -> Optional[Dict]:
+        """处理单个 JSON-RPC 请求/通知"""
         # 验证 JSON-RPC 版本
         if request.get("jsonrpc") != "2.0":
             return self._make_jsonrpc_error(
@@ -1884,8 +1884,16 @@ tags: [{', '.join(tags or ['file_import'])}]
         method = request.get("method", "")
         params = request.get("params", {})
 
+        # JSON-RPC Notification: 没有 id，不需要返回响应
+        is_notification = req_id is None
+
         if method == "initialize":
             return self._make_jsonrpc_response(req_id, self._handle_initialize(params))
+
+        # 处理 notifications/initialized 通知（MCP 协议要求不返回响应）
+        if method == "notifications/initialized":
+            logger.debug("Received notifications/initialized")
+            return None  # 通知不返回响应
 
         if method == "tools/list":
             return self._make_jsonrpc_response(req_id, self._list_tools())
@@ -1894,6 +1902,11 @@ tags: [{', '.join(tags or ['file_import'])}]
             tool_name = params.get("name", "")
             tool_params = params.get("arguments", {})
             return self._call_tool(req_id, tool_name, tool_params)
+
+        # 对于未知方法，如果是通知也不返回错误
+        if is_notification:
+            logger.warning(f"Unknown notification: {method}")
+            return None
 
         return self._make_jsonrpc_error(
             req_id, JSONRPC_METHOD_NOT_FOUND,
@@ -2331,7 +2344,9 @@ tags: [{', '.join(tags or ['file_import'])}]
                 request = json.loads(line)
                 response = self.handle_request(request)
 
-                print(json.dumps(response, ensure_ascii=False), flush=True)
+                # JSON-RPC Notification 不返回响应
+                if response is not None:
+                    print(json.dumps(response, ensure_ascii=False), flush=True)
 
             except json.JSONDecodeError as e:
                 resp = self._make_jsonrpc_error(
