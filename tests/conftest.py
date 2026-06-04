@@ -29,17 +29,17 @@ def _patched_cleanup(self):
     # Windows：先触发 GC，给 SQLite 连接释放时间
     gc.collect()
     time.sleep(0.05)
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             return _original_cleanup(self)
-        except PermissionError:
+        except (PermissionError, NotADirectoryError):
+            # NotADirectoryError: Python 3.10 tempfile 的已知 bug，
+            # 当 os.unlink 失败时会错误地对文件路径调用 rmtree
             gc.collect()
-            time.sleep(0.15 * (attempt + 1))
-    # 最终尝试，忽略错误（Windows 文件锁可能是其他进程/句柄泄漏）
-    try:
-        return _original_cleanup(self)
-    except PermissionError:
-        pass
+            time.sleep(0.2 * (attempt + 1))
+    # 最终 fallback：强制删除
+    import shutil
+    shutil.rmtree(self.name, ignore_errors=True)
 
 
 tempfile.TemporaryDirectory.cleanup = _patched_cleanup
