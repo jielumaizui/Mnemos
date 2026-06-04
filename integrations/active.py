@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 
 
 SERVER_NAME = "mnemos"
+POLICY_MARKER = "MNEMOS_ACTIVE_POLICY"
 
 
 def mnemos_root() -> Path:
@@ -39,6 +40,21 @@ def mcp_server_spec(python_cmd: str | None = None, *, claude: bool = False) -> D
     if claude:
         spec = {"type": "stdio", **spec, "env": {}}
     return spec
+
+
+def opencode_mcp_server_spec(python_cmd: str | None = None) -> Dict[str, Any]:
+    """Return the current OpenCode local MCP server spec."""
+    return {
+        "type": "local",
+        "command": [
+            python_cmd or sys.executable,
+            str(mnemos_cli_path()),
+            "mcp",
+            "serve",
+        ],
+        "enabled": True,
+        "timeout": 10000,
+    }
 
 
 def codex_mcp_table(python_cmd: str | None = None) -> str:
@@ -74,6 +90,66 @@ def load_json_file(path: Path) -> Dict[str, Any]:
         return {}
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Best-effort JSONC cleaner for user config files.
+
+    OpenCode accepts JSONC. Python's stdlib does not, so we preserve data by
+    stripping comments/trailing commas and writing a clean JSON file with a
+    backup when comments were present.
+    """
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if in_string:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i + 1 < len(text) and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    cleaned = "".join(out)
+    return re.sub(r",\s*([}\]])", r"\1", cleaned)
+
+
+def load_jsonc_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    raw = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except Exception:
+        try:
+            data = json.loads(_strip_jsonc_comments(raw))
+        except Exception:
+            return {}
+    return data if isinstance(data, dict) else {}
+
+
 def upsert_json_mcp_server(path: Path, *, top_key: str = "mcpServers",
                            claude: bool = False) -> bool:
     data = load_json_file(path)
@@ -98,6 +174,50 @@ def json_mcp_configured(path: Path, *, top_key: str = "mcpServers") -> bool:
         return False
     args = spec.get("args") or []
     return spec.get("command") and str(mnemos_cli_path()) in [str(a) for a in args]
+
+
+def upsert_opencode_config(path: Path, *, include_mcp: bool = True,
+                           include_policy: bool = True) -> bool:
+    """Write current OpenCode config fields while preserving unrelated keys."""
+    data = load_jsonc_file(path)
+    if include_mcp:
+        mcp = data.get("mcp")
+        if not isinstance(mcp, dict):
+            mcp = {}
+            data["mcp"] = mcp
+        mcp[SERVER_NAME] = opencode_mcp_server_spec()
+    if include_policy:
+        policy = str(write_active_policy_file())
+        instructions = data.get("instructions")
+        if isinstance(instructions, str):
+            instructions = [instructions]
+        elif not isinstance(instructions, list):
+            instructions = []
+        if policy not in [str(x) for x in instructions]:
+            instructions.append(policy)
+        data["instructions"] = instructions
+    return write_text_if_changed(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def opencode_mcp_configured(path: Path) -> bool:
+    data = load_jsonc_file(path)
+    spec = data.get("mcp", {}).get(SERVER_NAME)
+    if not isinstance(spec, dict):
+        return False
+    command = spec.get("command") or []
+    if isinstance(command, str):
+        command = [command]
+    return str(mnemos_cli_path()) in [str(a) for a in command]
+
+
+def opencode_policy_configured(path: Path) -> bool:
+    data = load_jsonc_file(path)
+    instructions = data.get("instructions")
+    if isinstance(instructions, str):
+        instructions = [instructions]
+    if not isinstance(instructions, list):
+        return False
+    return str(active_policy_path()) in [str(x) for x in instructions]
 
 
 def upsert_openclaw_mcp_server(path: Path) -> bool:
@@ -146,6 +266,28 @@ def codex_mcp_configured(path: Path) -> bool:
         and "mcp" in text
         and "serve" in text
     )
+
+
+def upsert_marked_block(path: Path, content: str, *, marker: str = POLICY_MARKER) -> bool:
+    start = f"<!-- BEGIN {marker} -->"
+    end = f"<!-- END {marker} -->"
+    block = f"{start}\n{content.rstrip()}\n{end}"
+    old = path.read_text(encoding="utf-8") if path.exists() else ""
+    pattern = re.compile(
+        rf"(?ms)<!-- BEGIN {re.escape(marker)} -->.*?<!-- END {re.escape(marker)} -->"
+    )
+    if pattern.search(old):
+        new = pattern.sub(block, old)
+    else:
+        new = (old.rstrip() + "\n\n" if old.strip() else "") + block + "\n"
+    return write_text_if_changed(path, new)
+
+
+def marked_block_installed(path: Path, *, marker: str = POLICY_MARKER) -> bool:
+    if not path.exists():
+        return False
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return f"<!-- BEGIN {marker} -->" in text and f"<!-- END {marker} -->" in text
 
 
 def upsert_yaml_mcp_server(path: Path, *, top_key: str = "mcp_servers") -> bool:
@@ -245,6 +387,86 @@ def kimi_hooks_configured(config_path: Path, wrapper_path: Path) -> bool:
     )
 
 
+def active_policy_path() -> Path:
+    return Path.home() / ".mnemos" / "active_policy" / "MNEMOS_ACTIVE.md"
+
+
+def active_policy_text(agent: str = "") -> str:
+    agent_line = f" for {agent}" if agent else ""
+    return f"""# Mnemos Active Policy{agent_line}
+
+You have access to Mnemos as the user's long-term AI memory and knowledge system.
+
+Before meaningful planning or answering:
+- Use Mnemos startup context if it is provided.
+- For coding, debugging, architecture, review, writing, or project decisions, call the Mnemos MCP tool `preflight_inject` or the server-prefixed equivalent.
+- If the task may depend on earlier conversations, prior decisions, preferences, or project history, call `session_search`.
+- If the task may depend on durable knowledge, standards, lessons, or Obsidian notes, call `context_aware_search` or `wiki_search`.
+
+During the task:
+- Prefer specific retrieved evidence over vague memory.
+- Keep Mnemos context concise; do not paste large dumps unless the user asks.
+- When retrieved knowledge conflicts with the user's latest explicit instruction, explain the conflict and follow the latest instruction unless it is unsafe.
+
+Before finalizing high-impact output:
+- Call `guard_check` when the answer changes code, architecture, deployment, data capture, security, user workflows, or system behavior.
+
+At session end or after valuable decisions:
+- Use `capture_session`, `capture_turn`, `end_session`, or the installed hook/wrapper when available.
+- Passive capture remains the fidelity fallback, but do not rely on it as the only path when an explicit Mnemos tool is available.
+
+If a Mnemos MCP tool is unavailable:
+- Say so briefly when it matters, then proceed with the local startup context and the user's latest instruction.
+"""
+
+
+def write_active_policy_file() -> Path:
+    path = active_policy_path()
+    write_text_if_changed(path, active_policy_text(), backup=False)
+    return path
+
+
+def install_agent_policy(agent: str) -> bool:
+    policy = write_active_policy_file()
+    agent = agent.lower()
+    if agent == "claude":
+        return upsert_marked_block(Path.home() / ".claude" / "CLAUDE.md", active_policy_text(agent))
+    if agent == "codex":
+        return upsert_marked_block(Path.home() / ".codex" / "AGENTS.md", active_policy_text(agent))
+    if agent == "opencode":
+        return upsert_opencode_config(opencode_config_path(), include_mcp=False, include_policy=True)
+    if agent == "kimi":
+        return upsert_marked_block(Path.home() / ".kimi" / "MNEMOS_ACTIVE.md", active_policy_text(agent))
+    if agent == "hermes":
+        return upsert_marked_block(Path.home() / ".hermes" / "MNEMOS_ACTIVE.md", active_policy_text(agent))
+    if agent == "openclaw":
+        return upsert_marked_block(Path.home() / ".openclaw" / "MNEMOS_ACTIVE.md", active_policy_text(agent))
+    return policy.exists()
+
+
+def is_agent_policy_installed(agent: str) -> bool:
+    agent = agent.lower()
+    if not active_policy_path().exists():
+        return False
+    if agent == "claude":
+        return marked_block_installed(Path.home() / ".claude" / "CLAUDE.md")
+    if agent == "codex":
+        return marked_block_installed(Path.home() / ".codex" / "AGENTS.md")
+    if agent == "opencode":
+        return opencode_policy_configured(opencode_config_path())
+    if agent == "kimi":
+        return marked_block_installed(Path.home() / ".kimi" / "MNEMOS_ACTIVE.md")
+    if agent == "hermes":
+        return marked_block_installed(Path.home() / ".hermes" / "MNEMOS_ACTIVE.md")
+    if agent == "openclaw":
+        return marked_block_installed(Path.home() / ".openclaw" / "MNEMOS_ACTIVE.md")
+    return True
+
+
+def opencode_config_path() -> Path:
+    return Path.home() / ".config" / "opencode" / "opencode.json"
+
+
 def active_context_path(agent: str) -> Path:
     return Path.home() / ".mnemos" / "active_context" / agent / "latest.md"
 
@@ -280,6 +502,10 @@ def render_active_context(agent: str, working_dir: str = "", user_message: str =
         "",
         "Use the following Mnemos knowledge before planning or answering. "
         "If it conflicts with the current task, explain the conflict and prefer the user's latest explicit instruction.",
+        "",
+        "## Active Policy",
+        "",
+        active_policy_text(agent).strip(),
         "",
         "## Context",
         "",

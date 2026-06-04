@@ -364,10 +364,12 @@ def _install_detected_agent_hooks(config):
         try:
             hooks_ok = agent.install_hooks()
             mcp_ok = agent.install_mcp_server()
+            policy_ok = agent.install_active_policy()
             installed += 1 if hooks_ok else 0
-            active += 1 if (hooks_ok and mcp_ok) else 0
+            active += 1 if (hooks_ok and mcp_ok and policy_ok) else 0
             print(f"      {'✓' if hooks_ok else '✗'} {agent.name} hooks")
             print(f"      {'✓' if mcp_ok else '✗'} {agent.name} MCP 主动工具")
+            print(f"      {'✓' if policy_ok else '✗'} {agent.name} 主动使用策略")
         except Exception as e:
             print(f"      ✗ {agent.name} 主动接入: {e}")
     print(f"      Agent hooks 安装完成: {installed}/{len(agents)}")
@@ -516,7 +518,8 @@ def cmd_doctor(args):
                 mark = "✓" if agent.active_ready else "✗"
                 hooks = "hooks✓" if agent.hooks_installed else "hooks✗"
                 mcp = "mcp✓" if agent.mcp_configured else "mcp✗"
-                print(f"  {mark} {agent.name}: {hooks}, {mcp}")
+                policy = "policy✓" if agent.policy_installed else "policy✗"
+                print(f"  {mark} {agent.name}: {hooks}, {mcp}, {policy}")
                 if not agent.active_ready:
                     warnings.append(f"{agent.name} 主动接入未就绪，运行 `mnemos agent install {agent.name}`")
         else:
@@ -1116,8 +1119,9 @@ def cmd_agent(args):
         for agent in agents:
             hook_mark = "[hooks]" if agent.hooks_installed else ""
             mcp_mark = "[mcp]" if agent.mcp_configured else ""
+            policy_mark = "[policy]" if agent.policy_installed else ""
             active_mark = "[active]" if agent.active_ready else ""
-            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}{mcp_mark}{active_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
+            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}{mcp_mark}{policy_mark}{active_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
 
         # 待办任务
         tasks = ConnectionDiagnostics.generate_task_list(memos, wiki, agents)
@@ -1136,18 +1140,25 @@ def cmd_agent(args):
         print("=" * 60)
         print("安装 Agent 主动接入")
         print("=" * 60)
-        agents = AgentRegistry.discover_all()
         target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
+        if target:
+            agent = AgentRegistry.get_adapter(target, include_unavailable=True)
+            agents = [agent] if agent else []
+        else:
+            agents = AgentRegistry.discover_all()
+        if not agents:
+            print(f"  ✗ 未找到 Agent 适配器: {target or 'all'}")
+            return False
         for agent in agents:
-            if target and agent.name != target:
-                continue
             print(f"\n安装 {agent.name} ...")
             try:
                 hooks_ok = agent.install_hooks()
                 mcp_ok = agent.install_mcp_server()
+                policy_ok = agent.install_active_policy()
                 print(f"  {'✓' if hooks_ok else '✗'} hooks/wrapper")
                 print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具")
-                print(f"  {'✓' if (hooks_ok and mcp_ok) else '✗'} active ready")
+                print(f"  {'✓' if policy_ok else '✗'} 主动使用策略")
+                print(f"  {'✓' if (hooks_ok and mcp_ok and policy_ok) else '✗'} active ready")
             except Exception as e:
                 print(f"  ✗ {agent.name}: {e}")
 
@@ -1155,12 +1166,16 @@ def cmd_agent(args):
         print("=" * 60)
         print("Agent 诊断")
         print("=" * 60)
-        agents = AgentRegistry.discover_all()
+        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
+        if target:
+            agent = AgentRegistry.get_adapter(target, include_unavailable=True)
+            agents = [agent] if agent else []
+        else:
+            agents = AgentRegistry.discover_all()
         if not agents:
             print("✗ 未注册任何 Agent 适配器")
             return False
 
-        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
         checked = 0
         for agent in agents:
             if target and agent.name != target:
@@ -1186,6 +1201,12 @@ def cmd_agent(args):
                 print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具: {'已配置' if mcp_ok else '未配置'}")
             except Exception as e:
                 print(f"  ✗ MCP 检查失败: {e}")
+
+            try:
+                policy_ok = agent.is_active_policy_installed()
+                print(f"  {'✓' if policy_ok else '✗'} 主动使用策略: {'已安装' if policy_ok else '未安装'}")
+            except Exception as e:
+                print(f"  ✗ 主动使用策略检查失败: {e}")
 
             try:
                 active_ok = agent.is_active_connection_installed()

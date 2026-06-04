@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class TestActiveIntegrationHelpers(unittest.TestCase):
@@ -55,6 +56,44 @@ class TestActiveIntegrationHelpers(unittest.TestCase):
             self.assertIn("mnemos_cli.py", spec["args"][0])
             self.assertEqual(spec["args"][1:], ["mcp", "serve"])
             self.assertTrue(json_mcp_configured(path))
+
+    def test_opencode_config_upsert_writes_mcp_and_instructions(self):
+        from integrations.active import (
+            opencode_mcp_configured,
+            opencode_policy_configured,
+            upsert_opencode_config,
+        )
+
+        with tempfile.TemporaryDirectory() as td, patch("pathlib.Path.home", return_value=Path(td)):
+            path = Path(td) / "opencode.json"
+            path.write_text(
+                '{\n  // keep user config\n  "theme": "dark",\n}\n',
+                encoding="utf-8",
+            )
+
+            self.assertTrue(upsert_opencode_config(path))
+            data = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertEqual(data["theme"], "dark")
+            self.assertEqual(data["mcp"]["mnemos"]["type"], "local")
+            self.assertIn("mnemos_cli.py", data["mcp"]["mnemos"]["command"][1])
+            self.assertIn("instructions", data)
+            self.assertTrue(opencode_mcp_configured(path))
+            self.assertTrue(opencode_policy_configured(path))
+
+    def test_marked_policy_block_is_idempotent(self):
+        from integrations.active import active_policy_text, marked_block_installed, upsert_marked_block
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "AGENTS.md"
+            path.write_text("# Existing\n", encoding="utf-8")
+
+            self.assertTrue(upsert_marked_block(path, active_policy_text("codex")))
+            self.assertTrue(upsert_marked_block(path, active_policy_text("codex")))
+            text = path.read_text(encoding="utf-8")
+
+            self.assertEqual(text.count("BEGIN MNEMOS_ACTIVE_POLICY"), 1)
+            self.assertTrue(marked_block_installed(path))
 
 
 if __name__ == "__main__":

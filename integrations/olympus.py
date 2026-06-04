@@ -130,13 +130,34 @@ class AgentAdapter(ABC):
         """检查 Mnemos MCP server 是否已配置。"""
         return False
 
+    def install_active_policy(self) -> bool:
+        """安装 Mnemos 主动使用策略。"""
+        try:
+            from integrations.active import install_agent_policy
+            return install_agent_policy(self.name)
+        except Exception:
+            logger.warning("安装主动使用策略失败", exc_info=True)
+            return False
+
+    def is_active_policy_installed(self) -> bool:
+        """检查 Mnemos 主动使用策略是否已安装。"""
+        try:
+            from integrations.active import is_agent_policy_installed
+            return is_agent_policy_installed(self.name)
+        except Exception:
+            return False
+
     def is_active_connection_installed(self) -> bool:
         """检查主动接入是否就绪。
 
-        主动接入至少需要生命周期 hook/wrapper 和 MCP 工具配置同时存在。
+        主动接入至少需要生命周期 hook/wrapper、MCP 工具配置和主动使用策略同时存在。
         被动采集不由此状态表示。
         """
-        return self.is_hooks_installed() and self.is_mcp_configured()
+        return (
+            self.is_hooks_installed()
+            and self.is_mcp_configured()
+            and self.is_active_policy_installed()
+        )
 
 
 class AgentRegistry:
@@ -167,6 +188,26 @@ class AgentRegistry:
         # 按优先级排序
         instances.sort(key=lambda a: a.priority)
         return instances
+
+    @classmethod
+    def get_adapter(cls, name: str, *, include_unavailable: bool = False) -> Optional[AgentAdapter]:
+        """Return an adapter by name.
+
+        When include_unavailable=True, this can preinstall config for an Agent
+        before its CLI has been launched and created a data directory.
+        """
+        cls._ensure_adapters_loaded()
+        target = name.lower()
+        for adapter_class in cls._adapters:
+            try:
+                inst = adapter_class()
+                if inst.name.lower() != target:
+                    continue
+                if include_unavailable or inst.is_available():
+                    return inst
+            except Exception:
+                logging.getLogger(__name__).warning("Caught unexpected error", exc_info=True)
+        return None
 
     @classmethod
     def _ensure_adapters_loaded(cls):

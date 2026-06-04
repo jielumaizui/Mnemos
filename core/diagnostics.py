@@ -37,6 +37,7 @@ class AgentStatus:
     data_dir: Optional[str] = None
     hooks_installed: bool = False
     mcp_configured: bool = False
+    policy_installed: bool = False
     active_ready: bool = False
 
 
@@ -120,6 +121,7 @@ class ConnectionDiagnostics:
                     data_dir=str(data_dir) if data_dir else None,
                     hooks_installed=adapter.is_hooks_installed(),
                     mcp_configured=adapter.is_mcp_configured(),
+                    policy_installed=adapter.is_active_policy_installed(),
                     active_ready=adapter.is_active_connection_installed(),
                 ))
             except Exception as e:
@@ -209,6 +211,13 @@ class ConnectionDiagnostics:
                         action=f"调用 mnemos agent install {agent.name} 写入 preflight/guard/wiki_search 工具",
                         completed=False,
                     ))
+                if not agent.policy_installed:
+                    tasks.append(ConnectionTask(
+                        priority="medium",
+                        task=f"安装 {agent.name} 主动使用策略",
+                        action=f"调用 mnemos agent install {agent.name} 写入 Mnemos Active Policy",
+                        completed=False,
+                    ))
 
         # Low priority: 额外 Agent 数据源（仅检测，不一定需要 hooks）
         from core.sync_framework.registry import PathDiscover
@@ -252,6 +261,7 @@ class ConnectionDiagnostics:
                 "data_dir_path": a.data_dir,
                 "hooks_installed": a.hooks_installed,
                 "mcp_configured": a.mcp_configured,
+                "policy_installed": a.policy_installed,
                 "active_ready": a.active_ready,
             }
 
@@ -265,6 +275,7 @@ class ConnectionDiagnostics:
                     "data_dir_path": str(data_dir) if data_dir else None,
                     "hooks_installed": False,  # 无 adapter 无法验证 hooks
                     "mcp_configured": False,
+                    "policy_installed": False,
                     "active_ready": False,
                 }
 
@@ -307,6 +318,7 @@ class ConnectionDiagnostics:
         total_agents = len(agents)
         hooked_agents = sum(1 for a in agents if a.hooks_installed)
         mcp_agents = sum(1 for a in agents if a.mcp_configured)
+        policy_agents = sum(1 for a in agents if a.policy_installed)
         active_agents = sum(1 for a in agents if a.active_ready)
 
         return {
@@ -317,6 +329,7 @@ class ConnectionDiagnostics:
                 "total": total_agents,
                 "hooked": hooked_agents,
                 "mcp": mcp_agents,
+                "policy": policy_agents,
                 "active": active_agents,
                 "names": [a.name for a in agents if a.available],
             },
