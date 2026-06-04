@@ -42,6 +42,11 @@ from enum import Enum
 from integrations.styx import MemosClient
 from integrations.xenios import AIContextReader
 from integrations.oracle import WikiReader
+from integrations.active import (
+    json_mcp_configured,
+    upsert_json_mcp_server,
+    write_active_context,
+)
 
 # Knowledge-in-Action 闭环系统
 from core.kia.dike import TaskClassifier
@@ -1382,6 +1387,10 @@ def main():
             user_message=args.user_message,
             authorize_cross=args.authorize
         )
+        try:
+            write_active_context("claude", args.working_dir or os.getcwd(), args.user_message or "")
+        except Exception as e:
+            logger.debug(f"写入 Claude active context 失败: {e}")
         print(context)
     elif args.session_end:
         save_session(args.working_dir, args.summary)
@@ -1621,6 +1630,12 @@ class ClaudeCodeAdapter(AgentAdapter):
         except Exception:
             return False
 
+    def is_mcp_configured(self) -> bool:
+        return json_mcp_configured(Path.home() / ".claude.json")
+
+    def install_mcp_server(self) -> bool:
+        return upsert_json_mcp_server(Path.home() / ".claude.json", claude=True)
+
     def install_hooks(self) -> bool:
         """安装 Claude Code settings.json hooks"""
         settings_path = self.get_config_path()
@@ -1643,6 +1658,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             )
             with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
+            self.install_mcp_server()
             return True
         except Exception as e:
             logger.warning(f"安装 hooks 失败: {e}")

@@ -344,7 +344,7 @@ def _install_claude_hook(config):
 
 
 def _install_detected_agent_hooks(config):
-    """安装所有可用 Agent 的 hooks，失败时给出明确状态但不中断 init。"""
+    """安装所有可用 Agent 的主动接入，失败时给出明确状态但不中断 init。"""
     try:
         from integrations.olympus import AgentRegistry
         agents = AgentRegistry.discover_all()
@@ -359,14 +359,19 @@ def _install_detected_agent_hooks(config):
         return
 
     installed = 0
+    active = 0
     for agent in agents:
         try:
-            ok = agent.install_hooks()
-            installed += 1 if ok else 0
-            print(f"      {'✓' if ok else '✗'} {agent.name} hooks")
+            hooks_ok = agent.install_hooks()
+            mcp_ok = agent.install_mcp_server()
+            installed += 1 if hooks_ok else 0
+            active += 1 if (hooks_ok and mcp_ok) else 0
+            print(f"      {'✓' if hooks_ok else '✗'} {agent.name} hooks")
+            print(f"      {'✓' if mcp_ok else '✗'} {agent.name} MCP 主动工具")
         except Exception as e:
-            print(f"      ✗ {agent.name} hooks: {e}")
+            print(f"      ✗ {agent.name} 主动接入: {e}")
     print(f"      Agent hooks 安装完成: {installed}/{len(agents)}")
+    print(f"      Agent 主动接入完成: {active}/{len(agents)}")
 
 
 def cmd_doctor(args):
@@ -500,7 +505,26 @@ def cmd_doctor(args):
     except Exception as e:
         warnings.append(f"Agent 检测失败: {e}")
 
-    # 6.5b Agent 完整性能力
+    # 6.5b Agent 主动接入状态
+    print()
+    print("Agent 主动接入状态:")
+    try:
+        from core.diagnostics import ConnectionDiagnostics
+        agent_statuses = ConnectionDiagnostics.check_agents()
+        if agent_statuses:
+            for agent in agent_statuses:
+                mark = "✓" if agent.active_ready else "✗"
+                hooks = "hooks✓" if agent.hooks_installed else "hooks✗"
+                mcp = "mcp✓" if agent.mcp_configured else "mcp✗"
+                print(f"  {mark} {agent.name}: {hooks}, {mcp}")
+                if not agent.active_ready:
+                    warnings.append(f"{agent.name} 主动接入未就绪，运行 `mnemos agent install {agent.name}`")
+        else:
+            print("  ☐ 未发现可诊断的 Agent adapter")
+    except Exception as e:
+        warnings.append(f"Agent 主动接入检测失败: {e}")
+
+    # 6.5c Agent 完整性能力
     print()
     print("Agent 完整性能力:")
     try:
@@ -864,7 +888,6 @@ def cmd_doctor(args):
     print()
     print("可选依赖与功能影响:")
     optional_deps = [
-        ("tomli_w", "TOML 写入", "Kimi hooks 配置", "pip install mnemos[kimi]"),
         ("black", "Black 格式化", "代码格式化", "pip install mnemos[dev]"),
         ("pytest", "Pytest 测试", "运行测试套件", "pip install mnemos[dev]"),
         ("sklearn", "scikit-learn", "ML 评分器训练（standard 后端）", "pip install mnemos[ml]"),
@@ -1089,10 +1112,12 @@ def cmd_agent(args):
         wiki_status = "就绪" if (wiki.exists and wiki.writable) else ("存在但不可写" if wiki.exists else "未就绪")
         print(f"  {'✓' if (wiki.exists and wiki.writable) else '✗'} Wiki: {wiki_status} ({wiki.path})")
 
-        # Agent 数据源（带 hooks 状态）
+        # Agent 数据源（带 hooks/MCP 主动状态）
         for agent in agents:
             hook_mark = "[hooks]" if agent.hooks_installed else ""
-            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
+            mcp_mark = "[mcp]" if agent.mcp_configured else ""
+            active_mark = "[active]" if agent.active_ready else ""
+            print(f"  {'✓' if agent.available else '✗'} {agent.name}: {'已发现' if agent.available else '未发现'} {hook_mark}{mcp_mark}{active_mark}" + (f" ({agent.data_dir})" if agent.data_dir else ""))
 
         # 待办任务
         tasks = ConnectionDiagnostics.generate_task_list(memos, wiki, agents)
@@ -1109,14 +1134,20 @@ def cmd_agent(args):
 
     elif args.agent_cmd == "install":
         print("=" * 60)
-        print("安装 Agent hooks")
+        print("安装 Agent 主动接入")
         print("=" * 60)
         agents = AgentRegistry.discover_all()
+        target = getattr(args, "agent_name", "").lower() if hasattr(args, "agent_name") else ""
         for agent in agents:
+            if target and agent.name != target:
+                continue
             print(f"\n安装 {agent.name} ...")
             try:
-                ok = agent.install_hooks()
-                print(f"  {'✓' if ok else '✗'} {agent.name}")
+                hooks_ok = agent.install_hooks()
+                mcp_ok = agent.install_mcp_server()
+                print(f"  {'✓' if hooks_ok else '✗'} hooks/wrapper")
+                print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具")
+                print(f"  {'✓' if (hooks_ok and mcp_ok) else '✗'} active ready")
             except Exception as e:
                 print(f"  ✗ {agent.name}: {e}")
 
@@ -1149,6 +1180,18 @@ def cmd_agent(args):
                 print(f"  {'✓' if hooks_ok else '✗'} Hooks: {'已安装' if hooks_ok else '未安装'}")
             except Exception as e:
                 print(f"  ✗ Hooks 检查失败: {e}")
+
+            try:
+                mcp_ok = agent.is_mcp_configured()
+                print(f"  {'✓' if mcp_ok else '✗'} MCP 主动工具: {'已配置' if mcp_ok else '未配置'}")
+            except Exception as e:
+                print(f"  ✗ MCP 检查失败: {e}")
+
+            try:
+                active_ok = agent.is_active_connection_installed()
+                print(f"  {'✓' if active_ok else '✗'} 主动接入: {'就绪' if active_ok else '未就绪'}")
+            except Exception as e:
+                print(f"  ✗ 主动接入检查失败: {e}")
 
             # 3. 事件目录
             event_dir = Path.home() / ".mnemos" / "events"
@@ -1989,7 +2032,8 @@ def main():
     agent_parser = subparsers.add_parser("agent", help="AI Agent 管理")
     agent_sub = agent_parser.add_subparsers(dest="agent_cmd")
     agent_sub.add_parser("list", help="列出本地可用的 AI Agent")
-    agent_sub.add_parser("install", help="为所有可用 Agent 安装 hooks")
+    install_parser = agent_sub.add_parser("install", help="为所有可用 Agent 安装主动接入")
+    install_parser.add_argument("agent_name", nargs="?", default="", help="指定 Agent 名称（可选，如 claude/hermes/openclaw/opencode/codex/kimi）")
     agent_sub.add_parser("detect", help="检测宿主 Agent（MNEMOS_HOST_AGENT）")
     doctor_parser = agent_sub.add_parser("doctor", help="诊断 Agent 状态")
     doctor_parser.add_argument("agent_name", nargs="?", default="", help="指定 Agent 名称（可选，如 claude/hermes/openclaw/opencode/codex）")

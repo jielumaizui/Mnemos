@@ -36,6 +36,8 @@ class AgentStatus:
     available: bool = False
     data_dir: Optional[str] = None
     hooks_installed: bool = False
+    mcp_configured: bool = False
+    active_ready: bool = False
 
 
 @dataclass
@@ -117,6 +119,8 @@ class ConnectionDiagnostics:
                     available=True,
                     data_dir=str(data_dir) if data_dir else None,
                     hooks_installed=adapter.is_hooks_installed(),
+                    mcp_configured=adapter.is_mcp_configured(),
+                    active_ready=adapter.is_active_connection_installed(),
                 ))
             except Exception as e:
                 logger.debug(f"检查 Agent {adapter.name} 状态失败: {e}")
@@ -180,12 +184,12 @@ class ConnectionDiagnostics:
                 completed=True,
             ))
 
-        # Medium priority: Agent hooks
+        # Medium priority: Agent active integration
         available_agents = [a for a in agents if a.available]
         if not available_agents:
             tasks.append(ConnectionTask(
                 priority="medium",
-                task="安装 Agent hooks",
+                task="安装 Agent 主动接入",
                 action="未检测到任何支持的 Agent，请确保 Claude Code / Kimi 等已安装",
                 completed=False,
             ))
@@ -195,7 +199,14 @@ class ConnectionDiagnostics:
                     tasks.append(ConnectionTask(
                         priority="medium",
                         task=f"安装 {agent.name} hooks",
-                        action=f"调用 mnemos agent install {agent.name} 或 MCP install_hooks",
+                        action=f"调用 mnemos agent install {agent.name}",
+                        completed=False,
+                    ))
+                if not agent.mcp_configured:
+                    tasks.append(ConnectionTask(
+                        priority="medium",
+                        task=f"配置 {agent.name} Mnemos MCP",
+                        action=f"调用 mnemos agent install {agent.name} 写入 preflight/guard/wiki_search 工具",
                         completed=False,
                     ))
 
@@ -240,6 +251,8 @@ class ConnectionDiagnostics:
                 "data_dir_found": a.available,
                 "data_dir_path": a.data_dir,
                 "hooks_installed": a.hooks_installed,
+                "mcp_configured": a.mcp_configured,
+                "active_ready": a.active_ready,
             }
 
         # 补充 PathDiscover 发现的额外 Agent（可能没有 adapter）
@@ -251,6 +264,8 @@ class ConnectionDiagnostics:
                     "data_dir_found": data_dir is not None,
                     "data_dir_path": str(data_dir) if data_dir else None,
                     "hooks_installed": False,  # 无 adapter 无法验证 hooks
+                    "mcp_configured": False,
+                    "active_ready": False,
                 }
 
         return {
@@ -291,14 +306,18 @@ class ConnectionDiagnostics:
 
         total_agents = len(agents)
         hooked_agents = sum(1 for a in agents if a.hooks_installed)
+        mcp_agents = sum(1 for a in agents if a.mcp_configured)
+        active_agents = sum(1 for a in agents if a.active_ready)
 
         return {
-            "ready": memos.configured and wiki.exists and wiki.writable and hooked_agents > 0,
+            "ready": memos.configured and wiki.exists and wiki.writable and active_agents > 0,
             "memos": {"configured": memos.configured, "reachable": memos.reachable},
             "wiki": {"exists": wiki.exists, "writable": wiki.writable},
             "agents": {
                 "total": total_agents,
                 "hooked": hooked_agents,
+                "mcp": mcp_agents,
+                "active": active_agents,
                 "names": [a.name for a in agents if a.available],
             },
         }

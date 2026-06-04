@@ -16,6 +16,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from integrations.active import (
+    generated_wrapper,
+    openclaw_mcp_configured,
+    upsert_openclaw_mcp_server,
+    wrapper_uses_active_bridge,
+)
 from integrations.olympus import AgentAdapter, AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -106,6 +112,8 @@ class OpenClawAdapter(AgentAdapter):
         wrapper_path = data_dir / "mnemos_wrapper.py"
         if not db_path.exists() or not wrapper_path.exists():
             return False
+        if not wrapper_uses_active_bridge(wrapper_path):
+            return False
         try:
             with sqlite3.connect(str(db_path), timeout=10) as conn:
                 row = conn.execute(
@@ -115,6 +123,18 @@ class OpenClawAdapter(AgentAdapter):
                 return row is not None and row[0] == "true"
         except Exception:
             return False
+
+    def is_mcp_configured(self) -> bool:
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        return openclaw_mcp_configured(data_dir / "openclaw.json")
+
+    def install_mcp_server(self) -> bool:
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        return upsert_openclaw_mcp_server(data_dir / "openclaw.json")
 
     def install_hooks(self) -> bool:
         """安装 OpenClaw 的 session hooks"""
@@ -155,7 +175,8 @@ class OpenClawAdapter(AgentAdapter):
                 )
                 conn.commit()
 
-            wrapper_path.write_text(self._generate_wrapper_script(), encoding="utf-8")
+            wrapper_path.write_text(generated_wrapper(self.name), encoding="utf-8")
+            self.install_mcp_server()
             logger.info(f"[Typhon] OpenClaw hooks 已安装到 {db_path}")
             return True
         except Exception as e:

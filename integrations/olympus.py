@@ -117,6 +117,27 @@ class AgentAdapter(ABC):
         """
         return False
 
+    def install_mcp_server(self) -> bool:
+        """安装 Mnemos MCP server 配置。
+
+        hooks/wrappers 负责生命周期事件，MCP 负责让宿主 Agent 主动调用
+        preflight_inject、guard_check、wiki_search 等工具。默认返回 False，
+        子类按各自配置格式覆盖。
+        """
+        return False
+
+    def is_mcp_configured(self) -> bool:
+        """检查 Mnemos MCP server 是否已配置。"""
+        return False
+
+    def is_active_connection_installed(self) -> bool:
+        """检查主动接入是否就绪。
+
+        主动接入至少需要生命周期 hook/wrapper 和 MCP 工具配置同时存在。
+        被动采集不由此状态表示。
+        """
+        return self.is_hooks_installed() and self.is_mcp_configured()
+
 
 class AgentRegistry:
     """Agent 注册表 — 自动发现和管理所有适配器"""

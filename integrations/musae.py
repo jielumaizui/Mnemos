@@ -7,6 +7,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from integrations.active import (
+    generated_wrapper,
+    json_mcp_configured,
+    upsert_json_mcp_server,
+    wrapper_uses_active_bridge,
+)
 from integrations.olympus import AgentAdapter, AgentRegistry
 
 
@@ -108,9 +114,25 @@ class OpenCodeAdapter(AgentAdapter):
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             hooks = settings.get("hooks", {})
             wrapper_str = str(wrapper_path)
-            return wrapper_str in hooks.get("session_start", "") and wrapper_str in hooks.get("session_end", "")
+            return (
+                wrapper_str in hooks.get("session_start", "")
+                and wrapper_str in hooks.get("session_end", "")
+                and wrapper_uses_active_bridge(wrapper_path)
+            )
         except Exception:
             return False
+
+    def is_mcp_configured(self) -> bool:
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        return json_mcp_configured(data_dir / "settings.json")
+
+    def install_mcp_server(self) -> bool:
+        data_dir = self.get_data_dir()
+        if not data_dir:
+            return False
+        return upsert_json_mcp_server(data_dir / "settings.json")
 
     def install_hooks(self) -> bool:
         """安装 OpenCode 的 session hooks
@@ -133,7 +155,7 @@ class OpenCodeAdapter(AgentAdapter):
 
             # 2. 生成 wrapper 脚本
             wrapper_path = data_dir / "mnemos_wrapper.py"
-            wrapper_path.write_text(self._generate_wrapper_script(), encoding="utf-8")
+            wrapper_path.write_text(generated_wrapper(self.name), encoding="utf-8")
 
             # 3. 写入 hooks 配置
             if "hooks" not in settings:
@@ -149,12 +171,10 @@ class OpenCodeAdapter(AgentAdapter):
             )
 
             # 4. 同时写入 MCP 配置
-            if "mcpServers" not in settings:
+            from integrations.active import mcp_server_spec
+            if "mcpServers" not in settings or not isinstance(settings.get("mcpServers"), dict):
                 settings["mcpServers"] = {}
-            settings["mcpServers"]["mnemos"] = {
-                "command": python_cmd,
-                "args": [str(Path(__file__).parent / "memos_mcp_server.py")]
-            }
+            settings["mcpServers"]["mnemos"] = mcp_server_spec(python_cmd)
 
             settings_path.write_text(
                 json.dumps(settings, indent=2, ensure_ascii=False),
