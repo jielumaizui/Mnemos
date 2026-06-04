@@ -35,7 +35,7 @@ def mcp_server_spec(python_cmd: str | None = None, *, claude: bool = False) -> D
     """Return the stdio MCP server spec used by supported agents."""
     spec: Dict[str, Any] = {
         "command": python_cmd or sys.executable,
-        "args": [str(mnemos_cli_path()), "mcp", "serve"],
+        "args": [mnemos_cli_path().as_posix(), "mcp", "serve"],
     }
     if claude:
         spec = {"type": "stdio", **spec, "env": {}}
@@ -48,7 +48,7 @@ def opencode_mcp_server_spec(python_cmd: str | None = None) -> Dict[str, Any]:
         "type": "local",
         "command": [
             python_cmd or sys.executable,
-            str(mnemos_cli_path()),
+            mnemos_cli_path().as_posix(),
             "mcp",
             "serve",
         ],
@@ -173,7 +173,7 @@ def json_mcp_configured(path: Path, *, top_key: str = "mcpServers") -> bool:
     if not isinstance(spec, dict):
         return False
     args = spec.get("args") or []
-    return spec.get("command") and str(mnemos_cli_path()) in [str(a) for a in args]
+    return spec.get("command") and mnemos_cli_path().as_posix() in [str(a) for a in args]
 
 
 def upsert_opencode_config(path: Path, *, include_mcp: bool = True,
@@ -207,7 +207,7 @@ def opencode_mcp_configured(path: Path) -> bool:
     command = spec.get("command") or []
     if isinstance(command, str):
         command = [command]
-    return str(mnemos_cli_path()) in [str(a) for a in command]
+    return mnemos_cli_path().as_posix() in [str(a) for a in command]
 
 
 def opencode_policy_configured(path: Path) -> bool:
@@ -244,7 +244,7 @@ def openclaw_mcp_configured(path: Path) -> bool:
     except Exception:
         return False
     args = spec.get("args") or []
-    return spec.get("command") and str(mnemos_cli_path()) in [str(a) for a in args]
+    return spec.get("command") and mnemos_cli_path().as_posix() in [str(a) for a in args]
 
 
 def upsert_codex_mcp_server(path: Path) -> bool:
@@ -327,7 +327,7 @@ def yaml_mcp_configured(path: Path, *, top_key: str = "mcp_servers") -> bool:
     if not isinstance(spec, dict):
         return False
     args = spec.get("args") or []
-    return spec.get("command") and str(mnemos_cli_path()) in [str(a) for a in args]
+    return spec.get("command") and mnemos_cli_path().as_posix() in [str(a) for a in args]
 
 
 def upsert_kimi_hooks(config_path: Path, wrapper_path: Path) -> bool:
