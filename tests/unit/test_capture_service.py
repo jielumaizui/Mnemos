@@ -68,6 +68,7 @@ class TestCaptureQueue(unittest.TestCase):
         self.queue = CaptureQueue(db_path=str(self.db_path))
 
     def tearDown(self):
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def test_enqueue_and_dequeue(self):
@@ -205,11 +206,12 @@ class TestCaptureServiceDedup(unittest.TestCase):
         # 停止可能启动的 worker，防止线程泄漏
         if CaptureService._instance and CaptureService._instance.worker_pool:
             try:
-                CaptureService._instance.worker_pool.stop()
+                CaptureService._instance.worker_pool.close()
             except Exception:
                 pass
         CaptureService._instance = None
         CaptureService._initialized = False
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def _make_service(self):
@@ -326,6 +328,7 @@ class TestCaptureWorker(unittest.TestCase):
         _FAKE_CONFIG.data_dir.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def _make_engine(self):
@@ -462,6 +465,7 @@ class TestCaptureServiceSyncLogLookup(unittest.TestCase):
         _FAKE_CONFIG.data_dir.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def test_sync_log_records_memos_uids(self):
@@ -700,9 +704,10 @@ class TestSessionEndMarkerPriority(unittest.TestCase):
     def tearDown(self):
         if self._worker:
             try:
-                self._worker.stop()
+                self._worker.close()
             except Exception:
                 pass
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def test_worker_prioritizes_session_end(self):
@@ -750,6 +755,7 @@ class TestPerSourceConcurrency(unittest.TestCase):
         self.mock_client.save.return_value = Mock(uid="uid-1")
 
     def tearDown(self):
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def test_source_semaphore_limits_concurrency(self):
@@ -828,6 +834,7 @@ class TestDequeueFair(unittest.TestCase):
         self.queue = CaptureQueue(db_path=str(self.db_path))
 
     def tearDown(self):
+        self.queue.close()
         self.tmpdir.cleanup()
 
     def test_fair_dequeue_distributes_across_sources(self):
