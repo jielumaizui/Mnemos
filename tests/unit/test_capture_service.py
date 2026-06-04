@@ -328,7 +328,8 @@ class TestCaptureServiceDedup(unittest.TestCase):
         mock_client._sanitize = lambda x: x
         mock_client.save.return_value = Mock(uid="uid-1")
         with patch("core.sync_framework.sync_engine.get_config", return_value=fake_cfg):
-            engine = SyncEngine(client=mock_client, db_path=str(self.sync_db_path))
+            self.engine = SyncEngine(client=mock_client, db_path=str(self.sync_db_path))
+            engine = self.engine
 
         turn = Turn(
             turn_number=event["turn_number"],
@@ -877,13 +878,25 @@ class TestProducerOnlyMode(unittest.TestCase):
         CaptureService._initialized = False
 
     def tearDown(self):
-        if CaptureService._instance and CaptureService._instance.worker_pool:
+        if CaptureService._instance:
+            if CaptureService._instance.worker_pool:
+                try:
+                    CaptureService._instance.worker_pool.close()
+                except Exception:
+                    pass
+            if CaptureService._instance.queue:
+                try:
+                    CaptureService._instance.queue.close()
+                except Exception:
+                    pass
+        if getattr(self, 'engine', None):
             try:
-                CaptureService._instance.worker_pool.stop()
+                self.engine.close()
             except Exception:
                 pass
         CaptureService._instance = None
         CaptureService._initialized = False
+        time.sleep(0.5)
         self.tmpdir.cleanup()
 
     def test_start_worker_false_does_not_start_workers(self):
