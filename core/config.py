@@ -51,19 +51,19 @@ PERFORMANCE_TIERS: Dict[str, Dict[str, Any]] = {
         },
     },
     "default": {
-        "embedding": {"enabled": True, "use_rerank": False},
+        "embedding": {"enabled": True, "use_rerank": True},
         "capture": {"max_payload_bytes": 200000, "max_workers": 4},
         "distill": {"max_tasks_per_cycle": 5, "token_budget_total": 16000},
         "scheduler": {"worker_threads": 4},
     },
     "performance": {
-        "embedding": {"enabled": True, "use_rerank": False},
+        "embedding": {"enabled": True, "use_rerank": True},
         "capture": {"max_payload_bytes": 500000, "max_workers": 8},
         "distill": {"max_tasks_per_cycle": 10, "token_budget_total": 32000},
         "scheduler": {"worker_threads": 8},
     },
     "dev": {
-        "embedding": {"enabled": True, "use_rerank": False},
+        "embedding": {"enabled": True, "use_rerank": True},
         "capture": {"max_payload_bytes": 1048576, "max_workers": 8},
         "distill": {"max_tasks_per_cycle": 20, "token_budget_total": 64000},
         "scheduler": {"worker_threads": 8},
@@ -107,7 +107,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "settings_json_path": None,
         },
-        "mcp": {"enabled": False},
+        "mcp": {"enabled": True},
     },
     # === 评分层常量 ===
     "scoring": {
@@ -185,7 +185,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "services": {
             "capture_worker": True,
             # 默认启用受限增量扫描；性能由 sync.l1_scan_* 预算控制。
-            "l1_sync": False,
+            "l1_sync": True,
             "distill_merge": True,
             "heartbeat": True,
             "inbox_scanner": True,
@@ -279,7 +279,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "api_key": "",                 # 用户填写
         "embedding_model": "BAAI/bge-m3",
         "rerank_model": "BAAI/bge-reranker-v2-m3",
-        "use_rerank": False,           # 是否启用重排（通用版默认关闭）
+        "use_rerank": True,            # 是否启用重排（个人版默认开启）
         "ttl_days": 7,
         "similarity_threshold": 0.72,  # 语义相似度阈值（bge-m3 建议 0.72）
         "index_interval_hours": 24,    # 自动重建索引间隔
