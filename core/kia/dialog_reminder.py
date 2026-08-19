@@ -990,7 +990,6 @@ class DialogReminderQueue:
         principal: PrincipalEnvelope | None,
     ) -> List[ReminderEntry]:
         """Create host delivery commands without claiming host presentation."""
-        now = datetime.now(timezone.utc).isoformat()[:19]
         pushed: List[ReminderEntry] = []
         with self._conn() as conn:
             for rem in reminders:

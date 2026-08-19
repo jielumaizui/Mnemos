@@ -97,9 +97,9 @@ from core.kia.chronos import KnowledgeScheduler  # noqa: E402
 # 用户画像闭环系统
 from core.persona.psyche import get_signal_store, SessionSignal, log_session_signal  # noqa: E402
 from core.persona.daimon import SignalCollector  # noqa: E402
-from core.persona.pythia import PreferenceAnalyzer  # noqa: E402
+from core.persona.pythia import PreferenceAnalyzer  # noqa: E402,F401  # test patch anchor
 from core.persona.delphi import PersonaStore  # noqa: E402
-from core.persona.hamartia import BlindSpotProfileManager  # noqa: E402
+from core.persona.hamartia import BlindSpotProfileManager  # noqa: E402,F401  # test patch anchor
 from core.config import get_config  # noqa: E402
 from core.sync_framework.storage_backend import StorageError  # noqa: E402
 
@@ -509,8 +509,6 @@ def _run_cognitive_decision_flywheel(results: List[str]) -> None:
         # 加载用户画像并传入飞轮，启用画像驱动闭环
         profile, blindspot = None, None
         try:
-            from core.persona.delphi import PersonaStore
-
             profile, blindspot = PersonaStore().load_persona()
         except (OSError, ValueError, TypeError, ImportError, AttributeError, RuntimeError):
             logger.debug("[apollon] 加载画像失败，飞轮将使用默认画像", exc_info=True)

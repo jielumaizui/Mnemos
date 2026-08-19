@@ -117,10 +117,6 @@ class CognitiveConsolidator:
     ) -> dict[str, Any]:
         """Build a safe plan; consolidation itself never deletes Raw or writes Wiki."""
         limit = max(0, int(candidate_limit if candidate_limit is not None else self.options.candidate_limit))
-        purge_limit = max(
-            0,
-            int(raw_purge_limit if raw_purge_limit is not None else self.options.raw_purge_limit),
-        )
         run_id = _run_id()
         survival = (
             self.raw_store.refresh_survival_scores(limit=limit or None)

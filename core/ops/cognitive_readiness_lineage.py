@@ -397,7 +397,11 @@ def _presentation_delivery_outcome_metric(
         "delivery_event_hash",
         "receipt_hash",
     }
-    if not result["exists"] or not required_delivery <= set(delivery["columns"]) or not required_presentation <= set(presentation["columns"]):
+    if (
+        not result["exists"]
+        or not required_delivery <= set(delivery["columns"])
+        or not required_presentation <= set(presentation["columns"])
+    ):
         result["cold_start_state"] = "blocked"
         return result
 

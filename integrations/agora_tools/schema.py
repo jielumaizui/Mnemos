@@ -752,7 +752,8 @@ def list_tools(get_tool_category: Callable[[str], str]) -> Dict:
         },
         {
             "name": "persona_record_explicit_evidence",
-            "description": "仅将精确 canonical Raw 用户原话写入 Persona v2。请求必须选择 source_authority_id，并提供包含同一精确 span 的 source_messages；assistant、tool、外部材料一律拒绝。",
+            "description": "仅将精确 canonical Raw 用户原话写入 Persona v2。请求必须选择 source_authority_id，"
+            "并提供包含同一精确 span 的 source_messages；assistant、tool、外部材料一律拒绝。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -902,7 +903,8 @@ def list_tools(get_tool_category: Callable[[str], str]) -> Dict:
         },
         {
             "name": "build_cognitive_state",
-            "description": "读取 ACL 过滤后的 canonical CognitiveStateSnapshot。该工具只读；不可用状态会返回 typed not_initialized，不会初始化数据库。",
+            "description": "读取 ACL 过滤后的 canonical CognitiveStateSnapshot。该工具只读；"
+            "不可用状态会返回 typed not_initialized，不会初始化数据库。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

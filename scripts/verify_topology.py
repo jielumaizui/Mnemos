@@ -107,6 +107,7 @@ def main() -> int:
         "_source.py", "vaults.raw", "vaults.mnemos",
         "vaults.raw/vaults.mnemos", "configs/main.json",
     }
+
     def looks_like_repo_ref(tok: str) -> bool:
         if tok in NONFILE_EXACT:
             return False
@@ -379,7 +380,12 @@ def main() -> int:
 
     # 约数/下限断言：~800（±5%）、250+、600+、50+、50+
     approx_asserts = [
-        (r"core\+daemon\+integrations ~(\d+)", len([f for f in py if f.startswith(("core/", "daemon/", "integrations/"))]), 0.05, "core+daemon+integrations"),
+        (
+            r"core\+daemon\+integrations ~(\d+)",
+            len([f for f in py if f.startswith(("core/", "daemon/", "integrations/"))]),
+            0.05,
+            "core+daemon+integrations",
+        ),
         (r"(\d+)\+ 运维/审计/对账脚本", counted("scripts/"), None, "scripts 下限"),
         (r"(\d+)\+ 测试", counted("tests/"), None, "tests 下限"),
         (r"懒加载 (\d+)\+ 子命令", cli_count(), None, "CLI 懒加载下限"),

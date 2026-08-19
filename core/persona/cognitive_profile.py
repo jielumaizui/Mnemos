@@ -23,9 +23,9 @@ from core.persona.profile_assertion_schema import (
     REGISTRY_SQL,
     inspect_profile_assertion_schema,
 )
-from core.persona.profile_access_schema import ensure_cognitive_profile_access_schema
+from core.persona.profile_access_schema import ensure_cognitive_profile_access_schema  # noqa: F401
 from core.persona.profile_payload import build_profile_v2_payload, clamp_confidence
-from core.persona.profile_usage_repository import (
+from core.persona.profile_usage_repository import (  # noqa: F401
     ProfileUsageLog,
     ProfileUsageRepositoryMixin,
     _PROFILE_READ_PURPOSES,

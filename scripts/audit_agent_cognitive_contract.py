@@ -85,14 +85,38 @@ def audit() -> dict[str, Any]:
         if not condition:
             findings.append({"code": code, "message": message})
 
-    require(tuple(TARGET_AGENT_NAMES) == EXPECTED_HOSTS, "host_denominator_mismatch", "host-agent denominator is not exactly the eight COG-039 hosts")
-    require(REQUIRED_TOOLS <= workflow_tools, "workflow_contract_gap", "AgentKit does not require every COG-039 workflow tool")
+    require(
+        tuple(TARGET_AGENT_NAMES) == EXPECTED_HOSTS,
+        "host_denominator_mismatch",
+        "host-agent denominator is not exactly the eight COG-039 hosts",
+    )
+    require(
+        REQUIRED_TOOLS <= workflow_tools,
+        "workflow_contract_gap",
+        "AgentKit does not require every COG-039 workflow tool",
+    )
     require(REQUIRED_TOOLS <= schema_tools, "mcp_schema_gap", "COG-039 workflow tool is missing from MCP schema")
-    require(REQUIRED_TOOLS <= set(MCP_TOOL_POLICIES), "mcp_policy_gap", "COG-039 workflow tool is missing an authorization policy")
+    require(
+        REQUIRED_TOOLS <= set(MCP_TOOL_POLICIES),
+        "mcp_policy_gap",
+        "COG-039 workflow tool is missing an authorization policy",
+    )
     require(FACADE_METHODS <= facade_methods, "facade_contract_gap", "Facade lacks a required COG-039 method")
-    require("record_presentation" in router_methods, "presentation_owner_gap", "DeliveryRouter does not own presentation acknowledgement")
-    require(adapter_direct_domain_calls == 0, "agent_specific_domain_logic", "host adapters contain direct cognitive/delivery domain calls")
-    require(preflight_direct_delivery == 0, "direct_delivery_bypass", "PreflightBuilder bypasses the governed DeliveryRouter path")
+    require(
+        "record_presentation" in router_methods,
+        "presentation_owner_gap",
+        "DeliveryRouter does not own presentation acknowledgement",
+    )
+    require(
+        adapter_direct_domain_calls == 0,
+        "agent_specific_domain_logic",
+        "host adapters contain direct cognitive/delivery domain calls",
+    )
+    require(
+        preflight_direct_delivery == 0,
+        "direct_delivery_bypass",
+        "PreflightBuilder bypasses the governed DeliveryRouter path",
+    )
 
     static_ok = not findings
     return {
