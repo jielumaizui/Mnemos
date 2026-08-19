@@ -12,11 +12,11 @@ Wiki 文件名迁移脚本 — P1-2
 """
 
 import argparse
-import json
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 
 def _safe_filename(title: str, max_len: int = 80) -> str:
@@ -34,15 +34,15 @@ def _extract_title_from_page(path: Path) -> str:
     """从 Wiki 页面提取标题：优先 frontmatter 名称，其次 H1"""
     content = path.read_text(encoding="utf-8")
     # 尝试 frontmatter
-    fm_match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+    fm_match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
     if fm_match:
         fm_text = fm_match.group(1)
         for key in ("名称", "title", "Name"):
-            m = re.search(rf'^{key}:\s*(.+)$', fm_text, re.MULTILINE)
+            m = re.search(rf"^{key}:\s*(.+)$", fm_text, re.MULTILINE)
             if m:
                 return m.group(1).strip()
     # 尝试 H1
-    h1_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+    h1_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
     if h1_match:
         return h1_match.group(1).strip()
     # 回退到文件名 stem
@@ -51,6 +51,7 @@ def _extract_title_from_page(path: Path) -> str:
 
 def _update_wikilinks(content: str, rename_map: dict) -> str:
     """更新内容中的 [[旧名]] wikilink 为 [[新名]]"""
+
     def replacer(match):
         old_name = match.group(1)
         # 处理带别名的链接 [[旧名|显示文本]]
@@ -63,7 +64,8 @@ def _update_wikilinks(content: str, rename_map: dict) -> str:
             display = ""
         new_target = rename_map.get(link_target, link_target)
         return f"[[{new_target}{display}]]"
-    return re.sub(r'\[\[([^\]]+)\]\]', replacer, content)
+
+    return re.sub(r"\[\[([^\]]+)\]\]", replacer, content)
 
 
 def migrate_wiki_filenames(wiki_dir: Path, dry_run: bool = True) -> dict:
@@ -80,8 +82,11 @@ def migrate_wiki_filenames(wiki_dir: Path, dry_run: bool = True) -> dict:
 
     # 2. 收集所有页面和重命名映射
     md_files = list(wiki_dir.rglob("*.md"))
-    rename_map = {}  # 旧stem -> 新stem
-    file_ops = []    # (旧路径, 新路径, 新内容)
+    rename_map: Dict[str, str] = {}  # 旧stem -> 新stem
+    file_ops: List[Tuple[Path, Path, str]] = []  # (旧路径, 新路径, 新内容)
+
+    # 用于按目录检测目标文件名冲突
+    used_targets: set[Path] = set()
 
     for md_path in md_files:
         old_stem = md_path.stem
@@ -91,12 +96,17 @@ def migrate_wiki_filenames(wiki_dir: Path, dry_run: bool = True) -> dict:
         title = _extract_title_from_page(md_path)
         new_name = _safe_filename(title)
         new_stem = Path(new_name).stem
-        # 避免冲突：如果新名已存在，加序号
+        # 避免冲突：如果同目录下目标文件已存在（且不是当前文件本身），加序号
         counter = 1
         original_new_stem = new_stem
-        while new_stem in rename_map.values() or (wiki_dir / new_stem).with_suffix(".md").exists():
+        candidate_path = md_path.with_name(new_stem + ".md")
+        while candidate_path in used_targets or (
+            candidate_path.exists() and candidate_path.resolve() != md_path.resolve()
+        ):
             new_stem = f"{original_new_stem}-{counter}"
+            candidate_path = md_path.with_name(new_stem + ".md")
             counter += 1
+        used_targets.add(candidate_path)
         rename_map[old_stem] = new_stem
 
     # 3. 执行重命名和内容更新
@@ -112,7 +122,7 @@ def migrate_wiki_filenames(wiki_dir: Path, dry_run: bool = True) -> dict:
             # 更新 frontmatter：添加 aliases 和 mnemos_id
             if "aliases:" not in new_content:
                 # 在 frontmatter 后添加 aliases
-                fm_match = re.search(r'^(---\s*\n.*?\n---)', new_content, re.DOTALL)
+                fm_match = re.search(r"^(---\s*\n.*?\n---)", new_content, re.DOTALL)
                 if fm_match:
                     end = fm_match.end()
                     aliases_block = f"\naliases:\n  - [[{old_stem}]]\n"

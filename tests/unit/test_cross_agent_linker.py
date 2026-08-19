@@ -8,13 +8,11 @@ cross_agent_linker 单元测试
 - _make_relative_link 相对链接生成
 """
 
-import sys
 import tempfile
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 import unittest
+from pathlib import Path
+from unittest.mock import patch
+
 from core.kia.cross_agent_linker import (
     CrossAgentDivergenceDetector,
     CrossAgentLinker,
@@ -57,14 +55,8 @@ class TestCrossAgentLinker(unittest.TestCase):
 
     def test_extract_agent_from_path(self):
         """测试从路径提取 agent"""
-        self.assertEqual(
-            self.linker._extract_agent_from_path(self.claude_page),
-            "claude"
-        )
-        self.assertEqual(
-            self.linker._extract_agent_from_path(self.hermes_page),
-            "hermes"
-        )
+        self.assertEqual(self.linker._extract_agent_from_path(self.claude_page), "claude")
+        self.assertEqual(self.linker._extract_agent_from_path(self.hermes_page), "hermes")
 
     def test_link_exists_false(self):
         """链接不存在时返回 False"""
@@ -73,7 +65,7 @@ class TestCrossAgentLinker(unittest.TestCase):
     def test_link_exists_true(self):
         """链接已存在时返回 True"""
         content = self.claude_page.read_text(encoding="utf-8")
-        content += f"\n[[hermes/entities/Redis]]\n"
+        content += "\n[[hermes/entities/Redis]]\n"
         self.claude_page.write_text(content, encoding="utf-8")
         self.assertTrue(self.linker._link_exists(self.claude_page, self.hermes_page))
 
@@ -102,6 +94,16 @@ class TestCrossAgentLinker(unittest.TestCase):
         # 至少应该找到 hermes 的 Redis 页面
         self.assertGreaterEqual(len(actions), 1)
 
+    def test_link_after_distill_fallback_does_not_require_dna_engine(self):
+        """跨 Agent 关联兜底不应初始化 DNAEngine。"""
+        with patch(
+            "core.kia.genos.DNAEngine.__init__",
+            side_effect=AssertionError("DNAEngine should not be initialized"),
+        ):
+            actions = self.linker.link_after_distill(self.claude_page)
+
+        self.assertGreaterEqual(len(actions), 1)
+
     def test_vector_search_filters_other_workspaces(self):
         """向量检索按 workspace 过滤，并按 0.75 阈值建立双向链接"""
         vector_index = FakeVectorIndex(self.hermes_page)
@@ -110,7 +112,9 @@ class TestCrossAgentLinker(unittest.TestCase):
         actions = linker.link_after_distill(self.claude_page)
 
         self.assertEqual(len(actions), 2)
-        self.assertEqual(vector_index.calls[0]["filters"]["workspace"], ["hermes", "kimi", "codex", "gpt"])
+        self.assertEqual(
+            vector_index.calls[0]["filters"]["workspace"], ["hermes", "kimi", "codex", "gpt"]
+        )
         self.assertGreaterEqual(actions[0].similarity, 0.75)
 
     def test_extract_agent_from_frontmatter(self):

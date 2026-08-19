@@ -1,0 +1,368 @@
+{
+  "schema_version": "mnemos.cognitive_successor_design_adjudication_method_candidate.v3",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/design_adjudication_method_candidate",
+  "schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+    "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "artifact_id": "cognitive-successor-design-adjudication-method-candidate",
+  "artifact_status": "DESIGN_METHOD_CANDIDATE_NON_GOVERNING",
+  "method_key": "CONSTRAINT_FIRST_TYPED_EVIDENCE",
+  "method_instance_id": "METHOD-INSTANCE-CONSTRAINT-FIRST-TYPED-EVIDENCE-G1",
+  "generation": 1,
+  "supersedes": null,
+  "legacy_untyped_predecessor_context": {
+    "repository_commit": "7b72d0d6026693b8f81c12943a658c98f9358756",
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json",
+    "sha256": "sha256:faae3140925dac2de91c41fcd08a0397c7cdcd279dc35522c6ea8e6680c3afe4",
+    "git_blob_id": "92dc6b2c6753e59781707a486cb9a012edb230ec",
+    "hash_scope": "GIT_BLOB_AT_COMMIT_PATH_RAW_BYTES",
+    "observed_legacy_shape": "ARTIFACT_ID_PRESENT_METHOD_KEY_ABSENT_GENERATION_ABSENT_SUPERSEDES_NULL",
+    "lineage_edge_semantics": "HISTORICAL_UNTYPED_PREDECESSOR_CONTEXT_NOT_A_TYPED_GENERATION_OR_CURRENT_DAG_EDGE"
+  },
+  "bootstrap_protocol_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_bootstrap_protocol.candidate.json",
+    "sha256": "sha256:b5eec59c119e487f64015c1605ac636086e4976ca4c16fb47a74e67ab5ba0ddd",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "evidence_manifest_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+    "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "candidate_denominator_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_candidate_denominator.candidate.json",
+    "sha256": "sha256:8a27275454ce860617e23bbb755350d3a97473eeaf7a29d5ba38e2ee609eeee4",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "purpose": "Adjudicate successor-design claims without granting truth precedence to prior user directions, legacy contracts or behavior, preserved designs, current proposals, reviewers, agents, chronology, majority agreement or a scalar score; retain legitimate user value and authorization rights without converting them into empirical proof.",
+  "scope_boundary": {
+    "ticket": "COGNITIVE-SUCCESSOR-DECISION-001",
+    "included": "This candidate may adjudicate successor product semantics, architecture, denominators, engineering mechanisms, migration strategy and cutover design. The shared design-adjudication schema owns only Decision 001 method-bootstrap lifecycle artifacts. It is not the schema owner for all future constitution clauses or implementation evidence.",
+    "excluded": "This candidate does not adopt constitution clauses, implement the successor, execute legacy mutations, prove empirical claims, or authorize production effects.",
+    "legacy_operation_rule": "LEGACY_CONTRACTS_STILL_CONTROL_LEGACY_MUTATION_ONLY"
+  },
+  "hard_constraint_ids": {
+    "METHOD-HARD-001": true,
+    "METHOD-HARD-002": true,
+    "METHOD-HARD-003": true,
+    "METHOD-HARD-004": true,
+    "METHOD-HARD-005": true,
+    "METHOD-HARD-006": true,
+    "METHOD-HARD-007": true,
+    "METHOD-HARD-008": true,
+    "METHOD-HARD-009": true,
+    "METHOD-HARD-010": true,
+    "METHOD-HARD-011": true
+  },
+  "claim_kind_standing_map": {
+    "EMPIRICAL_CURRENT_STATE": "EMPIRICAL_EVIDENCE_STANDING",
+    "EMPIRICAL_CAUSAL_OR_COGNITIVE": "EMPIRICAL_EVIDENCE_STANDING",
+    "PREDICTIVE": "EMPIRICAL_EVIDENCE_STANDING",
+    "PRODUCT_VALUE": "PRODUCT_VALUE_OWNER_STANDING",
+    "SAFETY_PRIVACY_AGENCY_CONSTRAINT": "SAFETY_CONSTRAINT_STANDING",
+    "ARCHITECTURE_MECHANISM": "ARCHITECTURE_VALIDATION_STANDING",
+    "ENGINEERING_FEASIBILITY": "ARCHITECTURE_VALIDATION_STANDING",
+    "CAPABILITY_EQUIVALENCE": "MIGRATION_CONSERVATION_STANDING",
+    "MIGRATION_OR_CUTOVER_STRATEGY": "MIGRATION_CONSERVATION_STANDING",
+    "OPERATIONAL_AUTHORIZATION": "OPERATIONAL_AUTHORIZATION_STANDING"
+  },
+  "adjudication_algorithm": {
+    "FREEZE": "Bind the exact question, protocol, evidence snapshot, five-candidate denominator, identity boundary and any outcome-producing workloads before results.",
+    "CLASSIFY_CLAIMS": "Split mixed claims and bind every atomic claim kind to exactly one typed standing before adjudication.",
+    "RECONSTRUCT_ALL_CANDIDATES": "Use every strongest-fair candidate with support, refutation, limitations, dependencies and falsification conditions; status quo stays in the denominator.",
+    "APPLY_HARD_CONSTRAINTS": "Partition every protocol-owned hard constraint exactly once per candidate; FAIL or BLOCKING_UNKNOWN is non-compensable.",
+    "COMPARE_FEASIBLE_TRADEOFFS": "Use Pareto comparison only inside the proven feasible set; never scalarize UNKNOWN, TIE_SENSITIVE or INCOMPARABLE states.",
+    "ESCALATE_UNKNOWNS": "Choose the highest-discrimination research, prototype or fault test when material; otherwise preserve an explicit unresolved outcome.",
+    "MERGE_EVIDENCE_NOT_VOTES": "Detached reviewers merge findings, evidence and dependency clusters rather than counting identities or votes."
+  },
+  "quality_priority_policy": {
+    "activation_semantics": "REFERENCE_ONLY_POLICY_CANDIDATE; METHOD_ADOPTION_DOES_NOT_ACTIVATE_V2_CONST_015_016_OR_017; EACH_CLAUSE_REQUIRES_SEPARATE_ADJUDICATION_VERIFICATION_AND_AUTHORIZATION",
+    "clause_candidate_ids": {
+      "V2-CONST-015": true,
+      "V2-CONST-016": true,
+      "V2-CONST-017": true
+    },
+    "priority_order": "TIER_1_HARD_GATE_THEN_TIER_2_OUTCOME_EQUIVALENCE_THEN_TIER_3_COMPLEXITY_PARETO",
+    "tier_1_admissibility": {
+      "mode": "ZERO_GAP_NON_COMPENSABLE_HARD_GATE",
+      "required_dimensions": {
+        "FUNCTIONAL_CAPABILITY": "ZERO_FAIL_ZERO_UNKNOWN",
+        "COGNITIVE_ADEQUACY": "ZERO_FAIL_ZERO_UNKNOWN",
+        "SAFETY_PRIVACY_AGENCY": "ZERO_FAIL_ZERO_UNKNOWN",
+        "DATA_AND_EFFECT_CONSERVATION": "ZERO_FAIL_ZERO_UNKNOWN",
+        "FAILURE_RECOVERY_AND_IDEMPOTENCY": "ZERO_FAIL_ZERO_UNKNOWN",
+        "CONCURRENCY_AND_RESTART": "ZERO_FAIL_ZERO_UNKNOWN",
+        "ROLLBACK_AND_OPERATIONAL_REVERSIBILITY": "ZERO_FAIL_ZERO_UNKNOWN"
+      },
+      "unknown_semantics": "BLOCKING_NOT_ZERO"
+    },
+    "tier_2_performance_and_experience": {
+      "metric_profile_state": "UNFROZEN_BLOCKING_ANY_TIER_2_OR_CUTOVER_VERDICT",
+      "comparison_mode": "PER_METRIC_SLO_AND_NONINFERIORITY_THEN_MEANINGFUL_IMPROVEMENT_AND_PARETO",
+      "metric_contract_schema_ref": "#/$defs/metric_contract",
+      "approved_material_metric_set_binding": null,
+      "approved_scenario_cohort_coverage_binding": null,
+      "approved_baseline_registry_binding": null,
+      "approved_all_material_outcome_profile_binding": null,
+      "approved_cross_domain_guardrail_set_binding": null,
+      "approved_outcome_equivalence_result_binding": null,
+      "baseline_classes": {
+        "LEGACY_CERTIFYING_RELEASE": "Parity, performance and operational comparison against the exact approved legacy release.",
+        "HUMAN_ONLY": "Cognitive task outcome without AI assistance.",
+        "SYSTEM_ONLY": "Cognitive task outcome without user collaboration.",
+        "HUMAN_AI_JOINT": "Joint cognition outcome for complementarity and appropriate-reliance claims.",
+        "APPROVED_TASK_SPECIFIC": "A separately justified exact baseline for a scoped metric only."
+      },
+      "metric_denominator_rule": "EXECUTED_MATERIAL_METRIC_KEYS_MUST_EXACTLY_EQUAL_THE_APPROVED_SET; MISSING_EXTRA_DUPLICATE_OR_UNCOVERED_SCENARIO_COHORT_KEYS_BLOCK",
+      "all_material_outcome_denominator_rule": "THE_APPROVED_MATERIAL_METRIC_SET_MUST_PARTITION_EXACTLY_INTO_NONEMPTY_FINAL_PERFORMANCE_NONEMPTY_FINAL_USER_EXPERIENCE_AND_THE_COMPLETE_CROSS_DOMAIN_GUARDRAIL_SET_COVERING_COGNITIVE_SAFETY_PRIVACY_AGENCY_DATA_EFFECT_AND_RECOVERY_OUTCOMES; EXECUTED_KEYS_AND_RESULT_KEYS_MUST_EQUAL_THAT_UNION_EXACTLY",
+      "workload_freeze_fields": [
+        "workload_coverage_denominator",
+        "material_metric_set_root",
+        "scenario_cohort_coverage_root",
+        "baseline_registry_root_and_class",
+        "baseline_exact_root",
+        "distribution_and_scale",
+        "hardware_runtime_and_config",
+        "cold_and_warm_state",
+        "fault_schedule",
+        "cohort",
+        "sample_size",
+        "metric_direction_and_unit",
+        "slo_bounds",
+        "noninferiority_margin",
+        "equivalence_margin",
+        "meaningful_improvement_delta",
+        "normalized_candidate_minus_baseline_effect",
+        "effect_confidence_interval_method",
+        "multiple_comparison_policy"
+      ],
+      "performance_metrics": {},
+      "experience_metrics": {},
+      "cross_domain_guardrail_metrics": {},
+      "slice_complete_rule": "SLICE_TIER_1_ZERO_GAP_AND_EVERY_APPLICABLE_APPROVED_SLICE_METRIC_MEETS_SLO_AND_NONINFERIORITY; NO_GLOBAL_OR_BETTER_DOMAIN_CLAIM",
+      "final_cutover_better_domain_rule": "PERFORMANCE_AND_USER_EXPERIENCE_EACH_REQUIRE_AT_LEAST_ONE_PREDECLARED_MEANINGFUL_IMPROVEMENT_AND_ZERO_MATERIAL_REGRESSION",
+      "not_applicable_rule": "NOT_APPLICABLE_REQUIRES_INDEPENDENT_SCOPE_PROOF; FINAL_CUTOVER_PERFORMANCE_AND_USER_EXPERIENCE_DENOMINATORS_MUST_EACH_BE_NONEMPTY",
+      "outcome_equivalence_scope": "ALL_MATERIAL_COGNITIVE_SAFETY_PRIVACY_AGENCY_DATA_EFFECT_RECOVERY_PERFORMANCE_AND_USER_EXPERIENCE_OUTCOMES_REQUIRE_PREDECLARED_EQUIVALENCE; TIER_1_PASS_ALONE_IS_NOT_EQUIVALENCE",
+      "outcome_equivalence_rule": "ONLY_CANDIDATES_IN_THE_SAME_PREDECLARED_OUTCOME_EQUIVALENCE_CLASS_REACH_TIER_3",
+      "material_incomparability_exit": "PROTOTYPE_REQUIRED_OR_USER_VALUE_CHOICE_REQUIRED",
+      "simplicity_tie_break_forbidden": true
+    },
+    "tier_3_quality_preserving_simplicity": {
+      "complexity_profile_state": "UNFROZEN_BLOCKING_ANY_SIMPLICITY_OR_ELEGANCE_VERDICT",
+      "ranking_mode": "PARETO_ONLY_NO_SINGLE_ELEGANCE_SCORE",
+      "complexity_fact_schema_ref": "#/$defs/complexity_dimension",
+      "complexity_fact_contract_schema_ref": "#/$defs/complexity_fact_contract",
+      "approved_complexity_fact_denominator_binding": null,
+      "approved_complexity_fact_contract_set_binding": null,
+      "approved_change_scenario_binding": null,
+      "approved_required_seam_registry_binding": null,
+      "approved_cohesive_concern_owner_denominator_binding": null,
+      "implementation_comparison_or_saturation_binding": null,
+      "complexity_fact_results": {},
+      "complexity_fact_denominator_rule": "EXECUTED_COMPLEXITY_FACT_KEYS_AND_DENOMINATOR_MEMBERSHIP_PROOFS_MUST_EQUAL_THE_APPROVED_FACT_SET_EXACTLY; FINAL_ACCEPTANCE_REQUIRES_AT_LEAST_ONE_MATERIAL_IMPROVED_STATE_ZERO_MATERIAL_REGRESSED_OR_UNKNOWN_STATES_AND_NO_MISSING_EXTRA_OR_DUPLICATE_FACT",
+      "complexity_vector": {
+        "K_API": {
+          "definition": "Public operations, required fields and parameters, invariants, ordering edges and typed error modes exposed to callers.",
+          "fact_types": {
+            "PUBLIC_OPERATION_COUNT": "Count every externally callable operation in the approved caller denominator.",
+            "REQUIRED_PARAMETER_COUNT": "Count required request fields and parameters across approved public operations.",
+            "CALL_ORDER_EDGE_COUNT": "Count caller-visible temporal or ordering prerequisites.",
+            "PUBLIC_INVARIANT_COUNT": "Count caller-visible invariants that must be understood or preserved.",
+            "TYPED_ERROR_MODE_COUNT": "Count distinct public error and recovery modes.",
+            "CALLER_POLICY_REIMPLEMENTATION_COUNT": "Count policy decisions that callers must reproduce because the Interface failed to hide them."
+          },
+          "unit": "COUNT_PER_EXACT_APPROVED_PUBLIC_INTERFACE_AND_CALLER_SCENARIO_DENOMINATOR",
+          "denominator_rule": "ENUMERATE_EVERY_APPROVED_PUBLIC_OPERATION_CALLER_SCENARIO_INVARIANT_AND_ERROR_MODE; MISSING_OR_DUPLICATE_MEMBERS_BLOCK",
+          "threshold_policy": "PARETO_COMPARE_TYPED_FACTS_ONLY_AFTER_REQUIRED_INTERFACE_COVERAGE_EQUALS_THE_APPROVED_DENOMINATOR",
+          "measurement_obligation": "Reconstruct public operations, parameters, invariants, ordering edges and typed errors on the frozen caller scenarios.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        },
+        "K_AUTHORITY": {
+          "definition": "Duplicate schema, validator, state-machine, transaction and effect-owner gaps across the whole system.",
+          "fact_types": {
+            "DUPLICATE_SCHEMA_OWNER_GAP": "Count schema domains with more than one effective owner.",
+            "DUPLICATE_VALIDATOR_OWNER_GAP": "Count invariants validated by overlapping independent authorities.",
+            "DUPLICATE_STATE_MACHINE_OWNER_GAP": "Count lifecycle states transitioned by more than one authority.",
+            "DUPLICATE_TRANSACTION_OWNER_GAP": "Count atomic effects split across competing transaction owners.",
+            "DUPLICATE_EFFECT_OWNER_GAP": "Count external or durable effects with ambiguous ownership.",
+            "GOD_OWNER_CONCERN_COLLAPSE_COUNT": "Count owners that collapse independently changing cohesive concerns into one authority."
+          },
+          "unit": "COUNT_PER_EXACT_SCHEMA_VALIDATOR_STATE_TRANSACTION_EFFECT_AND_COHESIVE_CONCERN_DENOMINATOR",
+          "denominator_rule": "ENUMERATE_ALL_MATERIAL_AUTHORITIES_AND_COHESIVE_CONCERNS; MERGING_OWNERS_MUST_NOT_REMOVE_DENOMINATOR_MEMBERS",
+          "threshold_policy": "DUPLICATE_OWNER_GAPS_AND_GOD_OWNER_FLAGS_MUST_NOT_INCREASE; LOWER_COUNTS_ARE_COMPARABLE_ONLY_WITH_IDENTICAL_CONCERN_COVERAGE",
+          "measurement_obligation": "Detect duplicate or overlapping schema, validator, state-machine, transaction and effect owners without rewarding a god owner.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        },
+        "K_PATH": {
+          "definition": "Module, process, store, trust and effect-boundary crossings on frozen success, failure and recovery traces.",
+          "fact_types": {
+            "SUCCESS_BOUNDARY_CROSSING_COUNT": "Count justified module, process, store, trust and effect crossings on every approved success trace.",
+            "FAILURE_BOUNDARY_CROSSING_COUNT": "Count the same boundary classes on every approved failure trace.",
+            "RECOVERY_BOUNDARY_CROSSING_COUNT": "Count the same boundary classes on every approved recovery and restart trace.",
+            "TRUST_BOUNDARY_CROSSING_COUNT": "Count crossings that change source authority, privilege or confidentiality domain.",
+            "EFFECT_BOUNDARY_CROSSING_COUNT": "Count crossings that can create, mutate, publish or compensate a durable or external effect."
+          },
+          "unit": "COUNT_PER_EXACT_APPROVED_SUCCESS_FAILURE_RECOVERY_AND_RESTART_TRACE_DENOMINATOR",
+          "denominator_rule": "EXECUTE_EVERY_APPROVED_TRACE_AND_COUNT_EVERY_DECLARED_BOUNDARY_CLASS; UNEXECUTED_TRACES_BLOCK",
+          "threshold_policy": "REQUIRED_TRUST_EFFECT_AND_FAILURE_BOUNDARIES_CANNOT_BE_REMOVED; PARETO_COMPARE_ONLY_JUSTIFIED_CROSSING_COUNTS",
+          "measurement_obligation": "Replay the same frozen success, failure and recovery traces and count justified boundary crossings.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        },
+        "K_CHANGE": {
+          "definition": "Owners, public contracts, callers, tests, configuration, schema and migrations touched by frozen representative change scenarios.",
+          "fact_types": {
+            "TOUCHED_OWNER_COUNT": "Count distinct cohesive owners changed per approved change scenario.",
+            "PUBLIC_CONTRACT_CHANGE_COUNT": "Count public contract members changed per scenario.",
+            "CALLER_CHANGE_COUNT": "Count callers requiring semantic or source changes.",
+            "TEST_CHANGE_COUNT": "Count required tests changed or added without treating test deletion as improvement.",
+            "CONFIG_CHANGE_COUNT": "Count configuration contracts changed.",
+            "SCHEMA_CHANGE_COUNT": "Count durable schema domains changed.",
+            "MIGRATION_CHANGE_COUNT": "Count migration and rollback plans changed."
+          },
+          "unit": "COUNT_PER_EXACT_APPROVED_REPRESENTATIVE_CHANGE_SCENARIO_AND_COHESIVE_OWNER_DENOMINATOR",
+          "denominator_rule": "APPLY_EVERY_APPROVED_CHANGE_SCENARIO_TO_EVERY_IMPLEMENTATION_AND_RETAIN_IDENTICAL_REQUIRED_ASSET_COVERAGE",
+          "threshold_policy": "PARETO_COMPARE_FACT_VECTORS; DELETED_REQUIRED_TESTS_RUNBOOKS_OR_RECOVERY_PATHS_ARE_FAILURES_NOT_LOWER_COST",
+          "measurement_obligation": "Apply the same representative change scenarios and record every owner, contract, caller, test, configuration, schema and migration touched.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        },
+        "K_LIFECYCLE": {
+          "definition": "Configuration knobs, durable states, transitions, retries, recovery branches, manual runbook steps, compatibility obligations and critical dependencies.",
+          "fact_types": {
+            "CONFIG_KNOB_COUNT": "Count supported behavior-affecting configuration knobs.",
+            "DURABLE_STATE_COUNT": "Count durable lifecycle states.",
+            "TRANSITION_COUNT": "Count valid durable state transitions.",
+            "RETRY_BRANCH_COUNT": "Count retry decision branches.",
+            "RECOVERY_BRANCH_COUNT": "Count recovery, restore and compensation branches.",
+            "MANUAL_RUNBOOK_STEP_COUNT": "Count required operator steps across approved incidents.",
+            "COMPATIBILITY_OBLIGATION_COUNT": "Count active compatibility obligations.",
+            "CRITICAL_DEPENDENCY_COUNT": "Count critical runtime and recovery dependencies."
+          },
+          "unit": "COUNT_PER_EXACT_APPROVED_CONFIGURATION_STATE_TRANSITION_INCIDENT_AND_COMPATIBILITY_DENOMINATOR",
+          "denominator_rule": "ENUMERATE_THE_FULL_APPROVED_LIFECYCLE_INCLUDING_FAILURE_RESTORE_ROLLBACK_AND_EXPIRING_COMPATIBILITY_OBLIGATIONS",
+          "threshold_policy": "PARETO_COMPARE_ONLY_AFTER_ALL_REQUIRED_LIFECYCLE_PATHS_HAVE_EXECUTED_EVIDENCE_AND_NO_HIDDEN_STATE_OR_MANUAL_STEP_GAPS",
+          "measurement_obligation": "Reconstruct configuration, durable states, retries, recovery, runbook and compatibility obligations over the full lifecycle.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        },
+        "K_ABSTRACTION": {
+          "definition": "Unjustified seams, adapter contract gaps, pass-through modules, unrelated-change coupling, god-interface flags and expired compatibility items.",
+          "fact_types": {
+            "UNJUSTIFIED_SEAM_GAP": "Count seams lacking approved variation, trust, effect or failure-boundary evidence.",
+            "PASS_THROUGH_MODULE_COUNT": "Count layers that add no stable policy, ownership or boundary value.",
+            "UNRELATED_CHANGE_COUPLING_COUNT": "Count approved unrelated changes that force Interface modification.",
+            "GOD_INTERFACE_FLAG_COUNT": "Count Interfaces that expose multiple independently changing cohesive concerns.",
+            "EXPIRED_COMPATIBILITY_ITEM_COUNT": "Count compatibility items retained after expiry or remove-when satisfaction.",
+            "HIDDEN_COMPLEXITY_EXPORT_COUNT": "Count cases where removed internal structure reappears as caller policy, dynamic data shape or operational burden."
+          },
+          "unit": "COUNT_PER_EXACT_APPROVED_SEAM_INTERFACE_ADAPTER_COMPATIBILITY_AND_CHANGE_SCENARIO_DENOMINATOR",
+          "denominator_rule": "ENUMERATE_REQUIRED_AND_OPTIONAL_SEAMS_SEPARATELY; REMOVING_A_REQUIRED_SEAM_OR_EXPORTING_ITS_COMPLEXITY_CANNOT_SHRINK_THE_DENOMINATOR",
+          "threshold_policy": "UNJUSTIFIED_OR_EXPIRED_ITEMS_MUST_DECREASE_WITHOUT_INCREASING_GOD_INTERFACE_HIDDEN_EXPORT_OR_UNRELATED_CHANGE_FACTS",
+          "measurement_obligation": "Detect unjustified seams, pass-through layers, unrelated-change coupling, god interfaces, hidden complexity and expired compatibility items.",
+          "unknown_semantics": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO",
+          "direction": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"
+        }
+      },
+      "independent_assessment_rule": "ASSESS_SAME_CODE_CONFIG_SCHEMA_DATA_GENERATED_ASSET_DEPENDENCY_TEST_RUNBOOK_ROOTS_AND_FROZEN_CHANGE_SCENARIOS",
+      "missing_required_asset_semantics": "MISSING_REQUIRED_TEST_RUNBOOK_SEAM_OWNER_SCHEMA_DATA_OR_RECOVERY_ASSET_IS_FAIL_OR_UNKNOWN_NEVER_LOWER_COMPLEXITY",
+      "god_module_negative_oracles": {
+        "UNRELATED_CHANGE_FORCES_INTERFACE_CHANGE": {
+          "metric": "UNRELATED_CHANGE_INTERFACE_MUTATION_COUNT",
+          "comparator": "MUST_EQUAL",
+          "threshold": 0,
+          "violation_outcome": "FAIL_DEEP_MODULE_CLAIM"
+        },
+        "MULTIPLE_INDEPENDENT_STATE_OR_EFFECT_AUTHORITIES": {
+          "metric": "INDEPENDENT_AUTHORITY_COLLAPSE_COUNT",
+          "comparator": "MUST_EQUAL",
+          "threshold": 0,
+          "violation_outcome": "FAIL_DEEP_MODULE_CLAIM"
+        },
+        "REPRESENTATIVE_CHANGE_CROSSES_MOST_INTERNAL_OWNERS": {
+          "metric": "MAX_REPRESENTATIVE_LOCAL_CHANGE_OWNER_CROSSING_RATIO",
+          "comparator": "MUST_NOT_EXCEED",
+          "threshold": 0.5,
+          "violation_outcome": "FAIL_DEEP_MODULE_CLAIM"
+        },
+        "INDEPENDENT_CONCERNS_CANNOT_BE_TESTED_SEPARATELY": {
+          "metric": "UNSEPARABLE_COHESIVE_CONCERN_COUNT",
+          "comparator": "MUST_EQUAL",
+          "threshold": 0,
+          "violation_outcome": "FAIL_DEEP_MODULE_CLAIM"
+        }
+      },
+      "god_module_threshold_profile_binding": null,
+      "seam_admission_rule": {
+        "required_evidence": "VARIATION_OR_TRUST_OR_EFFECT_OR_FAILURE_BOUNDARY_WITH_OWNER_AND_STABLE_CONTRACT",
+        "required_seam_registry_rule": "EVERY_APPROVED_REQUIRED_SEAM_MUST_REMAIN_OR_HAVE_A_VERIFIED_EQUIVALENT_BOUNDARY",
+        "adapter_count_rule": "ONE_REAL_EXTERNAL_BOUNDARY_CAN_JUSTIFY_A_SEAM; TWO_WRAPPERS_DO_NOT_PROVE_ONE",
+        "replacement_obligation": "REPLACE_IMPLEMENTATION_BEHIND_THE_SAME_CONTRACT_WITHOUT_CALLER_REWRITE",
+        "conformance_fixture_obligation": "ALL_ADAPTERS_SHARE_ONE_EXECUTED_CONFORMANCE_SUITE",
+        "fault_fixture_obligation": "ALL_ADAPTERS_SHARE_CONTRACT_FAULT_FIXTURES_AND_ADD_ADAPTER_SPECIFIC_EXTERNAL_FAILURE_FIXTURES"
+      },
+      "local_code_quality_guardrails": {
+        "TYPED_ERROR_SEMANTICS": "Public errors and recovery obligations remain explicit and testable.",
+        "DUPLICATE_LOGIC": "Material duplicated decision, validation, retry or effect logic is measured and cannot hide behind lower file count.",
+        "PUBLIC_INTERFACE_CONFORMANCE_STABILITY": "Interface fixtures remain stable across implementation replacement.",
+        "READABILITY_AND_MAINTAINABILITY": "Independent review covers naming, cohesion, control flow and change-locality without using LOC as a sole oracle.",
+        "STATIC_AND_DYNAMIC_SAFETY": "Required static, dynamic, fault and recovery checks cannot be deleted to lower measured complexity."
+      },
+      "approved_local_guardrail_profile_binding": null,
+      "approved_local_guardrail_result_binding": null,
+      "local_guardrail_contract_schema_ref": "#/$defs/local_guardrail_result_contract",
+      "local_guardrail_results": {},
+      "local_guardrail_result_rule": "FINAL_ACCEPTANCE_REQUIRES_EXACTLY_THE_FIVE_APPROVED_LOCAL_GUARDRAIL_KEYS_AND_EACH_DERIVED_STATE_PASS; FAIL_OR_UNKNOWN_BLOCKS_AND_DELETED_OR_PARTIAL_ORACLES_CANNOT_LOWER_COMPLEXITY",
+      "pareto_incomparability_exit": "SIMPLICITY_UNRESOLVED_REQUIRES_NEW_MEASUREMENT_OR_PROTOTYPE; STYLE_OWNER_MAY_CHOOSE_ONLY_AFTER_ALL_MATERIAL_COMPLEXITY_FACTS_ARE_EQUIVALENT",
+      "comparison_cardinality_rule": "COMPARE_AT_LEAST_TWO_OUTCOME_EQUIVALENT_IMPLEMENTATIONS_OR_BIND_INDEPENDENT_CANDIDATE_SATURATION_EVIDENCE",
+      "final_implementation_quality_rule": "FINAL_ACCEPTED_IMPLEMENTATION_REQUIRES_AT_LEAST_ONE_PREDECLARED_MATERIAL_COMPLEXITY_FACT_IMPROVEMENT_AND_NO_MATERIAL_COMPLEXITY_REGRESSION_AGAINST_AN_APPROVED_OUTCOME_EQUIVALENT_IMPLEMENTATION_BASELINE_PLUS_ALL_NEGATIVE_ORACLES_AND_LOCAL_GUARDRAILS_PASS; OTHERWISE_SIMPLICITY_UNRESOLVED",
+      "compatibility_glue_rule": "ALLOW_ONLY_WITH_OWNER_EXPIRY_REMOVE_WHEN_AND_TELEMETRY"
+    },
+    "staged_applicability": {
+      "CAPABILITY_CLUSTER": "SLICE_COMPLETE_EQUALS_APPROVED_SLICE_TIER_1_ZERO_GAP_PLUS_APPLICABLE_APPROVED_METRICS_SLO_AND_NONINFERIORITY; NEVER_CLAIM_GLOBAL_CUTOVER_OR_REQUIRE_UNRELATED_UX_IMPROVEMENT",
+      "FINAL_CUTOVER": "FINAL_CUTOVER_EQUALS_FULL_TIER_1_ZERO_GAP_PLUS_NONEMPTY_EXACT_PERFORMANCE_AND_USER_EXPERIENCE_DENOMINATORS_EACH_WITH_MEANINGFUL_IMPROVEMENT_AND_ZERO_MATERIAL_REGRESSION_PLUS_TIER_3_APPROVED_OUTCOME_EQUIVALENT_IMPLEMENTATION_BASELINE_PARETO_IMPROVEMENT_AND_LOCAL_GUARDRAILS"
+    },
+    "risk_materiality_profiles": {
+      "LOW": "A reversible low-impact choice may share evidence and use a light fixture set, but cannot bypass an applicable hard gate or claim cutover.",
+      "MEDIUM": "A durable Interface or multi-owner change requires independent scenario review, representative failures and explicit rollback evidence.",
+      "HIGH": "Safety, data, cognition semantics, migration, external effects and cutover require detached challenge, full exact denominators and complete mutation coverage."
+    }
+  },
+  "independence_contract": {
+    "producer_may_adopt": false,
+    "challenger_role": "RECONSTRUCT_AND_ATTEMPT_TO_FALSIFY_WITHOUT_VOTING",
+    "finalizer_role": "SYNTHESIZE_A_NON_GOVERNING_FINAL_DECISION_CANDIDATE_FROM_FROZEN_INPUTS_AND_CHALLENGE",
+    "finalizer_must_not_be_producer_or_challenger": true,
+    "verifier_role": "RECOMPUTE_STRUCTURE_WITHOUT_DECIDING_EMPIRICAL_TRUTH",
+    "identity_evidence_required": true
+  },
+  "verifier_obligations": {
+    "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": "Recompute every declared SHA-256, including the ticket schema and dependency bundle members, from referenced whole-file raw bytes; never trust embedded or copied digest text.",
+    "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": "Rebuild the typed artifact DAG and exact dependency bundle; reject missing, extra, cyclic, stale, ambiguously rooted, role-mismatched, type-mismatched or key-mismatched dependencies; prove selected candidate, selected method, final method and bundle method identity equality; for typed method generation greater than one prove the predecessor has the same method key and exactly the preceding generation, while generation one has null typed supersedes and any legacy untyped predecessor remains context only.",
+    "CONSTRAINT_PARTITION_COMPLETENESS": "For every candidate, prove each protocol-owned hard-constraint key occurs exactly once across PASS, FAIL, BLOCKING_UNKNOWN, and NOT_APPLICABLE, verify every NOT_APPLICABLE justification, exclude every inadmissible candidate from the feasible set, and prove every frozen tradeoff axis assesses all five candidates exactly once.",
+    "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": "Verify producer, challenger, finalizer and verifier identities plus material dependency disclosures from bound identity evidence; declarations and reviewer counts do not prove independence, and required roles must be pairwise separated where declared.",
+    "LIFECYCLE_STATE_TRANSITION_VALIDITY": "Recompute the producer-to-challenger-to-final-candidate-to-dependency-bundle-to-post-final-verifier transition; structural eligibility requires challenger PASS, selected candidate feasible and non-dominated, zero FAIL, zero BLOCKING_UNKNOWN, zero unresolved required evidence gaps and unchanged exact bytes. A pre-authorization verifier must not claim to validate future authorization bytes.",
+    "QUALITY_POLICY_CONTRACT_DETERMINISM": "Recompute metric normalization, target-range distance, interval and margin ordering, exclusive state precedence, exact all-material outcome and cross-domain denominator equality, complexity-fact membership and effect states, and local-guardrail exact PASS semantics; any null, unfrozen, missing, extra, duplicate, stale, arithmetically inconsistent or non-single-valued quality input blocks the corresponding verdict."
+  },
+  "authorization_acceptance_obligations": {
+    "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": "Decode every authorization-stage artifact as UTF-8 with a duplicate-member-aware raw JSON loader that rejects duplicate object names before parsing; recompute authorization_text.exact_text_sha256 from the exact UTF-8 text; then recompute the exact authorization, ticket schema, final record, challenger report, structural verifier report, dependency bundle, selected method, principal, authentication evidence and recovery-boundary hashes from whole-file raw bytes.",
+    "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": "Prove the authorized method bytes and key equal the final selected method and dependency-bundle method, and that the authorization binds the same final, challenger, verifier and bundle bytes accepted by the lifecycle.",
+    "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": "Verify from bound external identity evidence that the principal is authenticated, currently authorized for the exact method-only scope and distinct from the detached authorization-acceptance gate actor.",
+    "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": "Verify the allowed action and authorized scope are exact, every prohibited action is present, the recovery boundary exists and is applicable, and no production, constitution-clause or legacy-runtime authority is implied.",
+    "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": "Parse calendar-valid RFC 3339 times; prove valid_from is earlier than expires_at; prove evaluated_at is within that interval using the bound trusted time source; prove the acceptance receipt valid_until does not exceed the authorization expires_at; and require every use to revalidate both the authorization and receipt windows."
+  },
+  "activation_rule": "EXACT_BYTES_SELECTED_BY_A_FINAL_ADOPT_RECORD_AND_A_POST_FINAL_STRUCTURAL_ELIGIBLE_REPORT_MAY_RECEIVE_EXACT_USER_AUTHORIZATION; THE_METHOD_REMAINS_NON_ACTIVE_UNTIL_A_POST_AUTHORIZATION_ACCEPTANCE_GATE_RECEIPT_IS_ACTIVATION_ELIGIBLE",
+  "schema_capability_boundary": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS",
+  "hash_policy": {
+    "algorithm": "SHA-256",
+    "byte_domain": "RAW_FILE_BYTES",
+    "normalization": "NONE",
+    "binding_granularity": "EXACT_WHOLE_FILE",
+    "embedded_self_hash": false,
+    "dependency_change_semantics": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"
+  }
+}

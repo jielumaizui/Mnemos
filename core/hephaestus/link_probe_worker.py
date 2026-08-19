@@ -20,11 +20,10 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse
@@ -33,14 +32,52 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from core.frontmatter import to_chinese_frontmatter
+from core.frontmatter import to_chinese_frontmatter, parse_frontmatter, write_frontmatter
 
 from core.config import get_config
+from core.cognitive.state_contract import sha256_json
+from core.db_utils import delete_older_than
+from core.trust.formal_markdown import (
+    TrustedMarkdownDecisionPolicy,
+    submit_or_write_markdown_with_decision,
+)
+from core.trust.models import sha256_text
 
 logger = logging.getLogger(__name__)
 
+LINK_PROBE_MARKDOWN_POLICY = TrustedMarkdownDecisionPolicy(
+    contract_id="project-contract:link-probe-frontmatter",
+    contract_revision_id="mnemos.link_probe_frontmatter.v1",
+    contract_text=(
+        "LinkProbeWorker may annotate one exact page preimage with only the exact "
+        "broken external links observed in its durable probe queue."
+    ),
+    source_namespace="link-probe-frontmatter",
+    producer="link-probe-worker",
+    producer_code_hash=sha256_json(
+        {
+            "module": "core.hephaestus.link_probe_worker",
+            "producer": "update_wiki_frontmatter",
+            "version": "mnemos.link_probe_frontmatter.v1",
+        }
+    ),
+    evaluator_id="link-probe-frontmatter-evaluator",
+    constraints=(
+        "Target, page preimage, URLs, HTTP outcomes, and rendered bytes remain exact.",
+        "Only durable broken-link observations may enter broken_links frontmatter.",
+    ),
+    approved_candidate_key="annotate_exact_broken_links",
+    approved_candidate_summary="Annotate the page with the exact observed broken links.",
+    rejected_candidate_key="retain_link_frontmatter",
+    rejected_candidate_summary="Retain the page when probe evidence or page bytes drift.",
+    approved_reason_code="link_probe_binding_verified",
+    rejected_reason_code="link_probe_binding_rejected",
+    committed_metric="link_probe_frontmatter_committed",
+    rejected_metric="unbound_link_probe_frontmatter_count",
+)
+
 # 排除的内部/私有地址模式
-_INTERNAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_INTERNAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}  # nosec B104: explicit localhost/private-host allowlist
 
 
 def _is_external_url(url: str) -> bool:
@@ -50,11 +87,17 @@ def _is_external_url(url: str) -> bool:
         if parsed.scheme not in ("http", "https"):
             return False
         hostname = parsed.hostname or ""
-        if hostname in _INTERNAL_HOSTS or hostname.startswith("192.168.") or hostname.startswith("10."):
+        if (
+            hostname in _INTERNAL_HOSTS
+            or hostname.startswith("192.168.")
+            or hostname.startswith("10.")
+        ):
             return False
         return True
-    except Exception:
-        logging.getLogger(__name__).warning(f"Caught unexpected error at link_probe_worker.py", exc_info=True)
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+        logging.getLogger(__name__).warning(
+            "Caught unexpected error at link_probe_worker.py", exc_info=True
+        )
         return False
 
 
@@ -71,10 +114,12 @@ class LinkProbeWorker:
         db_path: Optional[str] = None,
         timeout: int = DEFAULT_TIMEOUT,
         max_retries: int = MAX_RETRIES,
+        wiki_base: Optional[str | Path] = None,
     ):
         self.config = get_config()
-        self.db_path = Path(
-            db_path or (self.config.data_dir / "link_probe.db")
+        self.db_path = Path(db_path or (self.config.database_dir / "link_probe.db")).expanduser()
+        self.wiki_base = Path(
+            wiki_base if wiki_base is not None else self.config.wiki_dir
         ).expanduser()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
@@ -140,14 +185,17 @@ class LinkProbeWorker:
             return False
         try:
             with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT OR IGNORE INTO link_probe_queue (url, page_path, status)
                     VALUES (?, ?, 'pending')
-                """, (url, page_path))
+                """,
+                    (url, page_path),
+                )
                 conn.commit()
             return True
-        except Exception as e:
-            logger.debug(f"[LinkProbe] enqueue 失败 {url}: {e}")
+        except (sqlite3.Error, OSError) as e:
+            logger.debug("[LinkProbe] enqueue 失败 %s: %s", url, e, exc_info=True)
             return False
 
     def enqueue_from_content(self, content: str, page_path: str) -> int:
@@ -156,6 +204,7 @@ class LinkProbeWorker:
         返回成功入队数量。
         """
         import re
+
         urls = re.findall(r'https?://[^\s)\]\>"]+', content)
         count = 0
         for url in urls:
@@ -222,13 +271,16 @@ class LinkProbeWorker:
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
             cursor = conn.cursor()
             # 优先探测 pending，其次探测 retryable 但 retry_count < max_retries
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT id, url, retry_count FROM link_probe_queue
                 WHERE status IN ('pending', 'retryable')
                   AND retry_count < ?
                 ORDER BY status = 'pending' DESC, first_seen ASC
                 LIMIT ?
-            """, (self.max_retries, batch_size))
+            """,
+                (self.max_retries, batch_size),
+            )
             rows = cursor.fetchall()
 
         stats = {"probed": 0, "reachable": 0, "broken": 0, "retryable": 0, "errors": 0}
@@ -241,7 +293,7 @@ class LinkProbeWorker:
                     continue
                 retryable_handled += 1
                 # 指数退避：等待 2^retry_count 秒
-                time.sleep(self.BACKOFF_BASE ** retry_count)
+                time.sleep(self.BACKOFF_BASE**retry_count)
 
             status, http_status, error_msg = self.probe_single(url)
             stats["probed"] += 1
@@ -260,18 +312,21 @@ class LinkProbeWorker:
 
             # 更新数据库
             with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE link_probe_queue
                     SET status = ?, http_status = ?, probe_error = ?,
                         last_probed = ?, retry_count = ?
                     WHERE id = ?
-                """, (status, http_status, error_msg, now, new_retry_count, row_id))
+                """,
+                    (status, http_status, error_msg, now, new_retry_count, row_id),
+                )
                 conn.commit()
 
             # 极短间隔，避免被目标站限流
             time.sleep(0.2)
 
-        logger.info(f"[LinkProbe] 批次完成: {stats}")
+        logger.info("[LinkProbe] 批次完成: %s", stats)
         return stats
 
     # ---------- 查询接口 ----------
@@ -279,15 +334,23 @@ class LinkProbeWorker:
     def get_broken_links_for_page(self, page_path: str) -> List[Dict[str, Any]]:
         """获取某页面的失效链接列表"""
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT url, http_status, probe_error, last_probed
                 FROM link_probe_queue
                 WHERE page_path = ? AND status IN ('broken', 'timeout', 'error')
                 ORDER BY last_probed DESC
-            """, (page_path,))
+            """,
+                (page_path,),
+            )
             return [dict(r) for r in cursor.fetchall()]
+
+    def cleanup_older_than(self, days: int, dry_run: bool = False) -> int:
+        """清理/统计 first_seen 早于保留期限的链接探测队列记录。"""
+        with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            return delete_older_than(conn, "link_probe_queue", "first_seen", days, dry_run=dry_run)
 
     def get_pending_count(self) -> int:
         """待探测链接数量"""
@@ -296,7 +359,7 @@ class LinkProbeWorker:
             cursor.execute(
                 "SELECT COUNT(*) FROM link_probe_queue WHERE status IN ('pending', 'retryable')"
             )
-            return cursor.fetchone()[0]
+            return cursor.fetchone()[0]  # type: ignore[no-any-return]
 
     def get_stats(self) -> Dict[str, int]:
         """队列整体统计"""
@@ -308,27 +371,6 @@ class LinkProbeWorker:
             return {r[0]: r[1] for r in cursor.fetchall()}
 
     # ---------- 后台运行 ----------
-
-    def run(self, interval_seconds: int = 3600):
-        """
-        后台定时运行循环。
-
-        建议由 chronos / HephaestusWorker 定时触发，
-        而非独立线程（避免与 watchdog 重复）。
-        """
-        logger.info(f"[LinkProbe] 启动定时探测，间隔 {interval_seconds}s")
-        while True:
-            try:
-                pending = self.get_pending_count()
-                if pending > 0:
-                    logger.info(f"[LinkProbe] 待探测链接: {pending}")
-                    self.probe_batch(batch_size=50)
-                else:
-                    logger.debug("[LinkProbe] 无待探测链接")
-            except Exception as e:
-                logger.error(f"[LinkProbe] 批次探测异常: {e}")
-
-            time.sleep(interval_seconds)
 
     def run_once(self) -> Dict[str, Any]:
         """单次运行（适合 cron / launchd 调用）"""
@@ -355,23 +397,53 @@ class LinkProbeWorker:
 
         try:
             content = wiki_path.read_text(encoding="utf-8")
-            import re
-            frontmatter_match = re.match(r'^(---\s*\n)(.*?)\n(---\s*\n)', content, re.DOTALL)
-            if frontmatter_match:
-                import yaml
-                fm = yaml.safe_load(frontmatter_match.group(2)) or {}
-                fm["broken_links"] = [b["url"] for b in broken]
-                fm = to_chinese_frontmatter(fm)
-                fm_text = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
-                new_content = (
-                    frontmatter_match.group(1)
-                    + fm_text
-                    + "\n"
-                    + frontmatter_match.group(3)
-                    + content[frontmatter_match.end():]
-                )
-                wiki_path.write_text(new_content, encoding="utf-8")
-                return True
-        except Exception as e:
-            logger.debug(f"[LinkProbe] frontmatter 更新失败 {page_path}: {e}")
+            fm, body = parse_frontmatter(content)
+            if fm is None:
+                fm = {}
+            fm["broken_links"] = [b["url"] for b in broken]
+            fm = to_chinese_frontmatter(fm)
+            new_content = write_frontmatter(fm, body)
+            evidence_refs = [f"link_probe:{b['url']}" for b in broken[:5]]
+            submit_or_write_markdown_with_decision(
+                decision_policy=LINK_PROBE_MARKDOWN_POLICY,
+                decision_facts={
+                    "schema_version": "mnemos.link_probe_frontmatter_facts.v1",
+                    "broken_links": [
+                        {
+                            "url": item["url"],
+                            "http_status": item.get("http_status"),
+                            "probe_error": item.get("probe_error", ""),
+                            "last_probed": item.get("last_probed", ""),
+                        }
+                        for item in broken
+                    ],
+                },
+                decision_task=f"Annotate broken links for {wiki_path.name}",
+                decision_goal="Keep page link-health metadata aligned with durable probes.",
+                decision_created_at=datetime.now(timezone.utc).isoformat(),
+                wiki_base=self.wiki_base,
+                target_path=wiki_path,
+                content=new_content,
+                source="link_probe_worker",
+                actor="system",
+                evidence_refs=evidence_refs,
+                proposed_action="update_broken_link_frontmatter",
+                expected_existing_hash=sha256_text(content),
+                metadata={"broken_link_count": len(broken)},
+            )
+            return True
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+            logger.debug("[LinkProbe] frontmatter 更新失败 %s: %s", page_path, e, exc_info=True)
         return False
+
+
+def get_link_probe_worker(config=None) -> Optional["LinkProbeWorker"]:
+    """根据配置返回 LinkProbeWorker 实例；未启用或初始化失败时返回 None。"""
+    cfg = config or get_config()
+    if not cfg.get("features.enable_link_probe", False):
+        return None
+    try:
+        return LinkProbeWorker()
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+        logger.warning("[LinkProbe] Worker 初始化失败，链接探测功能已禁用", exc_info=True)
+        return None

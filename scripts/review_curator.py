@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 Background Review — Curator 合并编排器
 合并多个审查 Agent 的建议，去重、排序、生成 action 列表
@@ -10,7 +11,7 @@ import json
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Set, Tuple
+from typing import Any, List, Dict, Optional, cast
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -18,6 +19,7 @@ from collections import defaultdict
 @dataclass
 class CuratedItem:
     """合并后的审查项"""
+
     id: str
     severity: str
     dimension: str
@@ -36,19 +38,10 @@ class ReviewCurator:
     """审查 Curator"""
 
     # severity 权重
-    SEVERITY_WEIGHT = {
-        "critical": 100,
-        "warning": 50,
-        "info": 10
-    }
+    SEVERITY_WEIGHT = {"critical": 100, "warning": 50, "info": 10}
 
     # effort 成本因子（越低越优先）
-    EFFORT_COST = {
-        "xs": 0.5,
-        "s": 1.0,
-        "m": 2.0,
-        "l": 4.0
-    }
+    EFFORT_COST = {"xs": 0.5, "s": 1.0, "m": 2.0, "l": 4.0}
 
     # 模块优先级（核心模块优先修复）
     MODULE_PRIORITY = {
@@ -57,7 +50,7 @@ class ReviewCurator:
         "heat": 1.2,
         "expand": 1.2,
         "quality": 1.0,
-        "config": 1.4
+        "config": 1.4,
     }
 
     def __init__(self):
@@ -66,7 +59,7 @@ class ReviewCurator:
     def load_from_json(self, json_path: str) -> List[Dict]:
         """从 JSON 文件加载审查结果"""
         data = Path(json_path).read_text(encoding="utf-8")
-        return json.loads(data)
+        return cast(List[Dict], json.loads(data))
 
     def dedupe(self, findings: List[Dict]) -> List[Dict]:
         """去重：同一问题多个维度发现只保留最严重的一次"""
@@ -79,7 +72,7 @@ class ReviewCurator:
         result = []
         for key, group in groups.items():
             # 保留 severity 最高的一条
-            best = max(group, key=lambda x: self.SEVERITY_WEIGHT.get(x.get("severity", "info"), 0))
+            best = max(group, key=lambda x: self.SEVERITY_WEIGHT.get(str(x.get("severity", "info")), 0))
             # 合并 related_ids
             best["related_findings"] = [g["id"] for g in group if g["id"] != best["id"]]
             result.append(best)
@@ -91,39 +84,39 @@ class ReviewCurator:
         conflicts = defaultdict(list)
 
         # 冲突规则定义
-        conflict_rules = [
+        conflict_rules: List[Dict[str, Any]] = [
             # 规则1: 同一文件的同一个函数，一个建议拆分为小函数，另一个建议合并为大函数
             {
                 "name": "refactor_direction_conflict",
                 "check": lambda a, b: (
-                    a.get("file") == b.get("file") and
-                    "拆分" in a.get("suggestion", "") and
-                    "合并" in b.get("suggestion", "")
-                )
+                    a.get("file") == b.get("file")
+                    and "拆分" in a.get("suggestion", "")
+                    and "合并" in b.get("suggestion", "")
+                ),
             },
             # 规则2: 配置值冲突（一个建议调大，另一个建议调小）
             {
                 "name": "config_value_conflict",
                 "check": lambda a, b: (
-                    a.get("file") == b.get("file") and
-                    a.get("dimension") == "logic" and
-                    "调大" in a.get("suggestion", "") and
-                    "调小" in b.get("suggestion", "")
-                )
+                    a.get("file") == b.get("file")
+                    and a.get("dimension") == "logic"
+                    and "调大" in a.get("suggestion", "")
+                    and "调小" in b.get("suggestion", "")
+                ),
             },
             # 规则3: 命名冲突（同一实体两个不同的命名建议）
             {
                 "name": "naming_conflict",
                 "check": lambda a, b: (
-                    a.get("file") == b.get("file") and
-                    "重命名" in a.get("suggestion", "") and
-                    "重命名" in b.get("suggestion", "")
-                )
-            }
+                    a.get("file") == b.get("file")
+                    and "重命名" in a.get("suggestion", "")
+                    and "重命名" in b.get("suggestion", "")
+                ),
+            },
         ]
 
         for i, a in enumerate(findings):
-            for b in findings[i+1:]:
+            for b in findings[i + 1 :]:
                 for rule in conflict_rules:
                     if rule["check"](a, b):
                         conflicts[a["id"]].append(b["id"])
@@ -173,6 +166,40 @@ class ReviewCurator:
             groups[module].append(f)
         return dict(groups)
 
+    def _build_curated_items(
+        self, findings: List[Dict], conflicts: Dict[str, List[str]]
+    ) -> List[CuratedItem]:
+        """把排序后的 dict findings 固化为 CuratedItem 契约对象。"""
+        items = []
+        for finding in findings:
+            finding_id = str(finding.get("id", ""))
+            items.append(
+                CuratedItem(
+                    id=finding_id,
+                    severity=str(finding.get("severity", "info")),
+                    dimension=str(finding.get("dimension", "")),
+                    files=[str(finding.get("file", ""))],
+                    title=str(finding.get("title", "")),
+                    description=str(finding.get("description", "")),
+                    suggestion=str(finding.get("suggestion", "")),
+                    effort=str(finding.get("effort", "m")),
+                    module=self.classify_module(str(finding.get("file", ""))),
+                    priority_score=float(finding.get("priority_score", 0.0)),
+                    related_ids=list(finding.get("related_findings", [])),
+                    conflicts_with=conflicts.get(finding_id, []),
+                )
+            )
+        return items
+
+    def _attach_curated_contract_fields(self, findings: List[Dict]) -> None:
+        by_id = {item.id: item for item in self.items}
+        for finding in findings:
+            item = by_id.get(str(finding.get("id", "")))
+            if item is not None:
+                finding["priority_score"] = item.priority_score
+                finding["related_findings"] = item.related_ids
+                finding["conflicts_with"] = item.conflicts_with
+
     def generate_report(self, findings: List[Dict], conflicts: Dict[str, List[str]]) -> str:
         """生成 Markdown 报告"""
         now = datetime.now().isoformat()
@@ -190,41 +217,43 @@ class ReviewCurator:
             "---",
             "",
             "## 按模块分组",
-            ""
+            "",
         ]
 
         # 按模块分组
         groups = self.group_by_module(findings)
-        for module in sorted(groups.keys(), key=lambda m: sum(f.get("priority_score", 0) for f in groups[m]), reverse=True):
+        for module in sorted(
+            groups.keys(),
+            key=lambda m: sum(f.get("priority_score", 0) for f in groups[m]),
+            reverse=True,
+        ):
             module_findings = groups[module]
             lines.append(f"### {module.upper()} ({len(module_findings)} 项)")
             lines.append("")
 
             for f in module_findings:
-                emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(f.get("severity"), "⚪")
+                emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(
+                    str(f.get("severity", "")), "⚪"
+                )
                 lines.append(f"#### {emoji} {f.get('id')} | {f.get('title')}")
                 lines.append(f"- **文件**: `{f.get('file')}`")
                 lines.append(f"- **维度**: {f.get('dimension')}")
                 lines.append(f"- **优先级分**: {f.get('priority_score', 0)}")
                 lines.append(f"- **修复成本**: {f.get('effort', 'm')}")
-                if f.get('related_findings'):
+                if f.get("related_findings"):
                     lines.append(f"- **相关发现**: {', '.join(f['related_findings'])}")
-                if conflicts.get(f.get('id')):
-                    lines.append(f"- **冲突**: 与 {', '.join(conflicts[f['id']])} 冲突")
+                conflict_ids = f.get("conflicts_with") or conflicts.get(str(f.get("id", "")))
+                if conflict_ids:
+                    lines.append(f"- **冲突**: 与 {', '.join(conflict_ids)} 冲突")
                 lines.append("")
                 lines.append(f"**建议**: {f.get('suggestion', '无')}")
                 lines.append("")
 
         # Action Items
-        lines.extend([
-            "---",
-            "",
-            "## Action Items（按优先级排序）",
-            ""
-        ])
+        lines.extend(["---", "", "## Action Items（按优先级排序）", ""])
 
         for i, f in enumerate(findings[:20], 1):  # 只显示 Top 20
-            emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(f.get("severity"), "⚪")
+            emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(str(f.get("severity", "")), "⚪")
             lines.append(f"{i}. [{emoji}] `{f.get('id')}` {f.get('title')} ({f.get('effort')})")
 
         lines.append("")
@@ -236,9 +265,9 @@ class ReviewCurator:
     def _make_dedupe_key(self, finding: Dict) -> str:
         """生成去重键"""
         content = f"{finding.get('file')}:{finding.get('line_start', 0)}:{finding.get('title', '')}"
-        return hashlib.sha1(content.encode()).hexdigest()[:12]
+        return hashlib.sha1(content.encode(), usedforsecurity=False).hexdigest()[:12]
 
-    def curate(self, json_path: str, output_path: str = None) -> str:
+    def curate(self, json_path: str, output_path: Optional[str] = None) -> str:
         """主入口"""
         # 1. 加载
         findings = self.load_from_json(json_path)
@@ -255,6 +284,8 @@ class ReviewCurator:
 
         # 4. 排序
         findings = self.sort_findings(findings)
+        self.items = self._build_curated_items(findings, conflicts)
+        self._attach_curated_contract_fields(findings)
 
         # 5. 生成报告
         report = self.generate_report(findings, conflicts)
@@ -272,6 +303,7 @@ class ReviewCurator:
 def main():
     """CLI 入口"""
     import argparse
+
     parser = argparse.ArgumentParser(description="Background Review Curator")
     parser.add_argument("--input", "-i", required=True, help="审查 JSON 文件路径")
     parser.add_argument("--output", "-o", help="输出报告路径（默认 stdout）")

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 四分离学习系统（OpenClaw P7）
 
-维护 ~/.claude/learnings/ 下的三个文件：
+维护 get_config().data_dir / "learnings"（默认 ~/.mnemos/learnings/）下的三个文件：
 - CHANGELOG.md: 系统变更记录（Git commit 自动提取）
 - ERRORS.md: 错误模式库（触发式）
 - LEARNINGS.md: 经验总结（触发式 + 用户确认）
@@ -16,13 +17,11 @@ from __future__ import annotations
   python3 scripts/learning_system.py --detect-decision "文本"  # 检测决策语言
 """
 
-import os
 import sys
-import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict
 from core.config import get_config
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,8 +33,20 @@ LEARNINGS_PATH = LEARNINGS_DIR / "LEARNINGS.md"
 
 # 决策语言检测关键词（用于 AI 对话中触发 LEARNING 草稿）
 DECISION_KEYWORDS = [
-    "确定", "就这样", "按这个来", "决定", "选定", "选定", "采用",
-    "就用", "选", "定", "确认", "拍板", "定了", "就用这个",
+    "确定",
+    "就这样",
+    "按这个来",
+    "决定",
+    "选定",
+    "选定",
+    "采用",
+    "就用",
+    "选",
+    "定",
+    "确认",
+    "拍板",
+    "定了",
+    "就用这个",
 ]
 
 
@@ -61,13 +72,14 @@ def detect_decision_language(text: str) -> tuple[bool, str]:
 
 def extract_recent_git_commits(days: int = 7, max_count: int = 20) -> list[Dict]:
     """从 git log 提取最近 commit"""
-    since = (datetime.now() - __import__('datetime').timedelta(days=days)).strftime("%Y-%m-%d")
+    since = (datetime.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
     cmd = [
-        "git", "log",
+        "git",
+        "log",
         f"--since={since}",
         f"--max-count={max_count}",
         "--format=%H|%ci|%s",
-        "--no-merges"
+        "--no-merges",
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -79,13 +91,15 @@ def extract_recent_git_commits(days: int = 7, max_count: int = 20) -> list[Dict]
                 continue
             parts = line.split("|", 2)
             if len(parts) >= 3:
-                commits.append({
-                    "hash": parts[0][:8],
-                    "date": parts[1][:10],
-                    "message": parts[2].strip()
-                })
+                commits.append(
+                    {"hash": parts[0][:8], "date": parts[1][:10], "message": parts[2].strip()}
+                )
         return commits
-    except Exception:
+    # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
+    except (
+        OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError,
+        subprocess.SubprocessError
+    ):
         return []
 
 
@@ -130,8 +144,14 @@ def update_changelog():
     print(f"[Learning] CHANGELOG 已更新: +{len(new_entries)} 条")
 
 
-def add_error_entry(scene: str = "", symptom: str = "", root_cause: str = "",
-                    fix: str = "", prevention: str = "", related_file: str = ""):
+def add_error_entry(
+    scene: str = "",
+    symptom: str = "",
+    root_cause: str = "",
+    fix: str = "",
+    prevention: str = "",
+    related_file: str = "",
+):
     """添加错误条目到 ERRORS.md"""
     ensure_files()
     today = datetime.now().strftime("%Y-%m-%d")
@@ -166,8 +186,14 @@ def add_error_entry(scene: str = "", symptom: str = "", root_cause: str = "",
     print(f"[Learning] ERRORS 已添加: {keywords}")
 
 
-def add_learning_entry(question: str = "", options: str = "", decision: str = "",
-                       reason: str = "", expected: str = "", verification: str = ""):
+def add_learning_entry(
+    question: str = "",
+    options: str = "",
+    decision: str = "",
+    reason: str = "",
+    expected: str = "",
+    verification: str = "",
+):
     """添加学习条目到 LEARNINGS.md"""
     ensure_files()
     today = datetime.now().strftime("%Y-%m-%d")
@@ -225,6 +251,7 @@ def interactive_add_learning():
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Learning System (OpenClaw P7)")
     parser.add_argument("--changelog", action="store_true", help="从 git log 更新 CHANGELOG")
     parser.add_argument("--add-error", action="store_true", help="交互式添加错误条目")
@@ -248,10 +275,16 @@ def main():
     else:
         # 默认：更新 changelog + 显示统计
         ensure_files()
-        print(f"[Learning] 学习系统状态:")
-        for p, label in [(CHANGELOG_PATH, "CHANGELOG"), (ERRORS_PATH, "ERRORS"), (LEARNINGS_PATH, "LEARNINGS")]:
+        print("[Learning] 学习系统状态:")
+        for p, label in [
+            (CHANGELOG_PATH, "CHANGELOG"),
+            (ERRORS_PATH, "ERRORS"),
+            (LEARNINGS_PATH, "LEARNINGS"),
+        ]:
             lines = p.read_text(encoding="utf-8").splitlines()
-            count = sum(1 for l in lines if l.startswith("## ") and not l.startswith("## 格式"))
+            count = sum(
+                1 for line in lines if line.startswith("## ") and not line.startswith("## 格式")
+            )
             print(f"  {label}: {count} 条")
 
 

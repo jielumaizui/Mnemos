@@ -11,38 +11,73 @@ Time Capsule - 知识时间胶囊
 - 与推送系统联动（到期时主动提醒）
 - 用户可控：可调整提醒时间、标记已完成
 """
+
 # Aion — 永恒时间 — 时间胶囊，知识的封存与唤醒
 # 原模块: time_capsule.py
 
 
-
-import re
 import sqlite3
+import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional
-from dataclasses import dataclass, field
+from typing import Dict, Generator, List, Optional
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from core.config import get_config
-import logging
+
+
+def _parse_date(value: str) -> Optional[datetime]:
+    """解析日期字符串，支持多种常见格式。"""
+    if not value or not isinstance(value, str):
+        return None
+    value = value.strip()
+    formats = [
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d",
+        "%Y年%m月%d日",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+from core.config import get_config  # noqa: E402
+import logging  # noqa: E402
+
+# Constants extracted from magic numbers
+TIME_CAPSULE_AUTO_REMINDER_DAYS = 30
+TIME_CAPSULE_AUTO_REMINDER_DAYS_2 = 90
+TIME_CAPSULE_AUTO_REMINDER_DAYS_3 = 180
+TIME_CAPSULE_AUTO_REMINDER_DAYS_4 = 365
+TIME_CAPSULE_DURATION_BUCKET_WEEK_DAYS = 7
+DAYS_AHEAD_DAYS = 7
+TIME_CAPSULE_SNOOZE_REMINDER_CAPSULE_ID_DAYS = 7
+DUE_DAYS = 30
+DURATION_BUCKET_QUARTER_DAYS = 90
 
 logger = logging.getLogger(__name__)
 try:
     import yaml
 except ImportError:  # pragma: no cover
     yaml = None
-
+    logger.error("PyYAML 未安装，frontmatter 提取功能完全不可用，请执行: pip install pyyaml")
 
 
 @dataclass
 class CapsuleReminder:
     """提醒项"""
+
     capsule_id: int = 0
     page_path: str = ""
     page_title: str = ""
-    reminder_type: str = ""       # auto_expiry / auto_version / manual_review / periodic
-    scheduled_date: str = ""      # YYYY-MM-DD
-    reason: str = ""              # 提醒原因
-    status: str = "pending"       # pending / dismissed / completed / snoozed
+    reminder_type: str = ""  # auto_expiry / auto_version / manual_review / periodic
+    scheduled_date: str = ""  # YYYY-MM-DD
+    reason: str = ""  # 提醒原因
+    status: str = "pending"  # pending / dismissed / completed / snoozed
     created_at: str = ""
     completed_at: str = ""
 
@@ -52,21 +87,36 @@ class TimeCapsule:
 
     # 自动提醒规则（基于时效性）
     AUTO_REMINDER_DAYS = {
-        "版本绑定": [30, 60, 90],      # 30天、60天、90天提醒检查版本
-        "上下文相关": [90, 180],        # 90天、180天提醒验证是否仍然有效
-        "稳定": [365],                  # 1年提醒回顾
+        "版本绑定": [
+            TIME_CAPSULE_AUTO_REMINDER_DAYS,
+            60,
+            TIME_CAPSULE_AUTO_REMINDER_DAYS_2,
+        ],  # 30天、60天、90天提醒检查版本
+        "上下文相关": [
+            TIME_CAPSULE_AUTO_REMINDER_DAYS_2,
+            TIME_CAPSULE_AUTO_REMINDER_DAYS_3,
+        ],  # 90天、180天提醒验证是否仍然有效
+        "稳定": [TIME_CAPSULE_AUTO_REMINDER_DAYS_4],  # 1年提醒回顾
     }
 
-    def __init__(self, wiki_base: str = None, db_path: str = None,
-                 auto_reminder_days: Optional[Dict[str, List[int]]] = None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+    # 英文/中文 temporal_scope 别名映射（实际 wiki 中常见英文值）
+    TEMPORAL_SCOPE_ALIASES = {
+        "version-bound": "版本绑定",
+        "contextual": "上下文相关",
+        "stable": "稳定",
+        "permanent": "永久",
+    }
+
+    def __init__(
+        self,
+        wiki_base: str | None = None,
+        db_path: str | None = None,
+        auto_reminder_days: Optional[Dict[str, List[int]]] = None,
+    ):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
         self.excluded_dirs = {".git", ".obsidian", ".kg", "99-Reports", "07-Shadow", "__pycache__"}
         self.auto_reminder_days = auto_reminder_days or dict(self.AUTO_REMINDER_DAYS)
-        self.db_path = Path(db_path) if db_path else (
-            self.wiki_base / ".kg" / "capsule.db"
-        )
+        self.db_path = Path(db_path) if db_path else (self.wiki_base / ".kg" / "capsule.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -86,14 +136,30 @@ class TimeCapsule:
         CREATE INDEX IF NOT EXISTS idx_capsule_date ON capsules(scheduled_date);
         CREATE INDEX IF NOT EXISTS idx_capsule_status ON capsules(status);
         CREATE INDEX IF NOT EXISTS idx_capsule_page ON capsules(page_path);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_capsule_unique
+            ON capsules(page_path, scheduled_date, status)
+            WHERE status='pending';
         """
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(schema)
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
         conn = sqlite3.connect(str(self.db_path), timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+        conn.row_factory = sqlite3.Row  # noqa
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            yield conn
+        finally:
+            try:
+                if sys.exc_info()[0] is None:
+                    conn.commit()
+                else:
+                    conn.rollback()
+            finally:
+                conn.close()
 
     # ========== 自动提醒生成 ==========
 
@@ -108,6 +174,10 @@ class TimeCapsule:
         if not self.wiki_base.exists():
             return count
 
+        if yaml is None:
+            logger.error("PyYAML 未安装，无法解析 frontmatter，跳过自动提醒扫描")
+            return count
+
         for page in self._list_pages():
             try:
                 content = page.read_text(encoding="utf-8")
@@ -115,31 +185,39 @@ class TimeCapsule:
                 if not fm:
                     continue
 
-                temporal = self._fm_get(fm, "temporal_scope", "时效性", default="")
+                temporal_raw = self._fm_get(fm, "temporal_scope", "时效性", default="")
+                temporal = self._normalize_temporal_scope(temporal_raw)
                 created = self._fm_get(fm, "created_at", "创建日期", "created", default="")
+                # 缺失创建日期时，使用文件修改时间兜底
+                if not created and page.exists():
+                    created = datetime.fromtimestamp(page.stat().st_mtime).strftime("%Y-%m-%d")
                 version_tag = self._fm_get(fm, "version_tag", "版本标记", default="")
 
                 if temporal in self.auto_reminder_days and created:
+                    created_date = _parse_date(str(created))
+                    if not created_date:
+                        continue
                     for days in self.auto_reminder_days[temporal]:
-                        try:
-                            created_date = datetime.strptime(str(created), "%Y-%m-%d")
-                            reminder_date = created_date + timedelta(days=days)
+                        reminder_date = created_date + timedelta(days=days)
 
-                            # 只生成未来的提醒
-                            if reminder_date >= datetime.now():
-                                reason = f"{temporal} 知识已创建 {days} 天，建议检查是否仍然有效"
-                                if temporal == "版本绑定" and version_tag:
-                                    reason += f"（版本标记: {version_tag}）"
+                        # 只生成未来的提醒
+                        if reminder_date >= datetime.now():
+                            reason = f"{temporal} 知识已创建 {days} 天，建议检查是否仍然有效"
+                            if temporal == "版本绑定" and version_tag:
+                                reason += f"（版本标记: {version_tag}）"
 
-                                if self._add_reminder(
-                                    str(page), page.stem, "auto_expiry",
-                                    reminder_date.strftime("%Y-%m-%d"), reason
-                                ):
-                                    count += 1
-                        except ValueError:
-                            continue
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
+                            if self._add_reminder(
+                                str(page),
+                                page.stem,
+                                "auto_expiry",
+                                reminder_date.strftime("%Y-%m-%d"),
+                                reason,
+                            ):
+                                count += 1
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at aion.py", exc_info=True
+                )
                 continue
 
         return count
@@ -153,40 +231,58 @@ class TimeCapsule:
             pages.append(page)
         return pages
 
-    def _add_reminder(self, page_path: str, page_title: str,
-                      reminder_type: str, scheduled_date: str,
-                      reason: str) -> bool:
-        """添加提醒（避免重复）"""
+    def _add_reminder(
+        self, page_path: str, page_title: str, reminder_type: str, scheduled_date: str, reason: str
+    ) -> bool:
+        """添加提醒（避免重复），使用事务锁防止并发竞态"""
+        conn = None
         try:
-            with self._conn() as conn:
-                # 检查是否已存在相同提醒
-                existing = conn.execute(
-                    """SELECT id, reason FROM capsules
-                       WHERE page_path=? AND scheduled_date=?
-                       AND status='pending'""",
-                    (page_path, scheduled_date)
-                ).fetchone()
+            conn = sqlite3.connect(str(self.db_path), timeout=10, isolation_level=None)
+            conn.row_factory = sqlite3.Row  # noqa
+            conn.execute("BEGIN IMMEDIATE")
+            # 检查是否已存在相同提醒
+            existing = conn.execute(
+                """SELECT id, reason FROM capsules
+                   WHERE page_path=? AND scheduled_date=?
+                   AND status='pending'""",
+                (page_path, scheduled_date),
+            ).fetchone()
 
-                if existing:
-                    old_reason = existing["reason"] or ""
-                    if reason and reason not in old_reason:
-                        merged_reason = f"{old_reason}; {reason}" if old_reason else reason
-                        conn.execute(
-                            "UPDATE capsules SET reason=? WHERE id=?",
-                            (merged_reason, existing["id"])
-                        )
-                        conn.commit()
-                    return False
+            if existing:
+                old_reason = existing["reason"] or ""
+                if reason and reason not in old_reason:
+                    merged_reason = f"{old_reason}; {reason}" if old_reason else reason
+                    conn.execute(
+                        "UPDATE capsules SET reason=? WHERE id=?", (merged_reason, existing["id"])
+                    )
+                    conn.execute("COMMIT")
+                else:
+                    conn.execute("ROLLBACK")
+                conn.close()
+                return False
 
-                conn.execute(
-                    """INSERT INTO capsules
-                       (page_path, page_title, reminder_type, scheduled_date, reason)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (page_path, page_title, reminder_type, scheduled_date, reason)
-                )
-                conn.commit()
-                return True
+            conn.execute(
+                """INSERT INTO capsules
+                   (page_path, page_title, reminder_type, scheduled_date, reason)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (page_path, page_title, reminder_type, scheduled_date, reason),
+            )
+            conn.execute("COMMIT")
+            conn.close()
+            return True
         except sqlite3.Error:
+            if conn:
+                try:
+                    conn.execute("ROLLBACK")
+                except (sqlite3.Error, OSError):
+                    logging.getLogger(__name__).warning("Unexpected error", exc_info=True)
+                try:
+                    conn.close()
+                except (
+                    OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError,
+                    sqlite3.Error
+                ):
+                    logging.getLogger(__name__).warning("Unexpected error", exc_info=True)
             return False
 
     def generate_periodic_reminders(self, reference_date: Optional[datetime] = None) -> int:
@@ -196,21 +292,38 @@ class TimeCapsule:
         count = 0
 
         if ref.weekday() == 0:
-            if self._add_reminder("__periodic__/weekly", "每周知识回顾", "periodic", scheduled, "每周回顾：检查逾期和 7 天内到期知识"):
+            if self._add_reminder(
+                "__periodic__/weekly",
+                "每周知识回顾",
+                "periodic",
+                scheduled,
+                "每周回顾：检查逾期和 7 天内到期知识",
+            ):
                 count += 1
         if ref.day == 1:
-            if self._add_reminder("__periodic__/monthly", "每月知识回顾", "periodic", scheduled, "每月回顾：检查 30 天内到期知识"):
+            if self._add_reminder(
+                "__periodic__/monthly",
+                "每月知识回顾",
+                "periodic",
+                scheduled,
+                "每月回顾：检查 30 天内到期知识",
+            ):
                 count += 1
-            if ref.month in {1, 4, 7, 10}:
-                if self._add_reminder("__periodic__/quarterly", "季度知识回顾", "periodic", scheduled, "季度回顾：完整检查知识时效性"):
+            if ref.month in {1, 4, TIME_CAPSULE_DURATION_BUCKET_WEEK_DAYS, 10}:
+                if self._add_reminder(
+                    "__periodic__/quarterly",
+                    "季度知识回顾",
+                    "periodic",
+                    scheduled,
+                    "季度回顾：完整检查知识时效性",
+                ):
                     count += 1
 
         return count
 
     # ========== 手动提醒 ==========
 
-    def set_manual_reminder(self, page_path: str, days_from_now: int,
-                            reason: str = "") -> bool:
+    def set_manual_reminder(self, page_path: str, days_from_now: int, reason: str = "") -> bool:
         """
         手动设置提醒
 
@@ -226,13 +339,16 @@ class TimeCapsule:
         title = Path(page_path).stem
 
         return self._add_reminder(
-            page_path, title, "manual_review", scheduled,
-            reason or f"用户设置 {days_from_now} 天后回顾"
+            page_path,
+            title,
+            "manual_review",
+            scheduled,
+            reason or f"用户设置 {days_from_now} 天后回顾",
         )
 
     # ========== 查询提醒 ==========
 
-    def get_due_reminders(self, days_ahead: int = 7) -> List[CapsuleReminder]:
+    def get_due_reminders(self, days_ahead: int = DAYS_AHEAD_DAYS) -> List[CapsuleReminder]:
         """
         获取即将到期的提醒
 
@@ -251,7 +367,7 @@ class TimeCapsule:
                    WHERE scheduled_date <= ? AND scheduled_date >= ?
                    AND status = 'pending'
                    ORDER BY scheduled_date""",
-                (until, today)
+                (until, today),
             ).fetchall()
 
         return [self._row_to_reminder(row) for row in rows]
@@ -265,7 +381,7 @@ class TimeCapsule:
                 """SELECT * FROM capsules
                    WHERE scheduled_date < ? AND status = 'pending'
                    ORDER BY scheduled_date""",
-                (today,)
+                (today,),
             ).fetchall()
 
         return [self._row_to_reminder(row) for row in rows]
@@ -287,8 +403,8 @@ class TimeCapsule:
     def _publish_reminder_events(self, event_type: str, reminders) -> int:
         try:
             from core.mnemos_bus import publish_event
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+            logging.getLogger(__name__).warning("Caught unexpected error at aion.py", exc_info=True)
             return 0
 
         count = 0
@@ -309,13 +425,16 @@ class TimeCapsule:
             try:
                 publish_event(event_type, "aion", payload)
                 count += 1
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at aion.py", exc_info=True)
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at aion.py", exc_info=True
+                )
                 continue
         return count
 
-    def get_all_reminders(self, page_path: str = None,
-                          status: str = None) -> List[CapsuleReminder]:
+    def get_all_reminders(
+        self, page_path: str | None = None, status: str | None = None
+    ) -> List[CapsuleReminder]:
         """获取所有提醒"""
         query = "SELECT * FROM capsules WHERE 1=1"
         params = []
@@ -348,14 +467,16 @@ class TimeCapsule:
                     """UPDATE capsules
                        SET status='completed', completed_at=?
                        WHERE id=?""",
-                    (datetime.now().isoformat()[:19], capsule_id)
+                    (datetime.now().isoformat()[:19], capsule_id),
                 )
                 conn.commit()
                 return True
         except sqlite3.Error:
             return False
 
-    def snooze_reminder(self, capsule_id: int, days: int = 7) -> bool:
+    def snooze_reminder(
+        self, capsule_id: int, days: int = TIME_CAPSULE_SNOOZE_REMINDER_CAPSULE_ID_DAYS
+    ) -> bool:
         """推迟提醒"""
         new_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
         try:
@@ -364,7 +485,7 @@ class TimeCapsule:
                     """UPDATE capsules
                        SET scheduled_date=?, status='pending'
                        WHERE id=?""",
-                    (new_date, capsule_id)
+                    (new_date, capsule_id),
                 )
                 conn.commit()
                 return True
@@ -374,12 +495,9 @@ class TimeCapsule:
     def _update_status(self, capsule_id: int, status: str) -> bool:
         try:
             with self._conn() as conn:
-                conn.execute(
-                    "UPDATE capsules SET status=? WHERE id=?",
-                    (status, capsule_id)
-                )
+                cursor = conn.execute("UPDATE capsules SET status=? WHERE id=?", (status, capsule_id))
                 conn.commit()
-                return True
+                return cursor.rowcount > 0
         except sqlite3.Error:
             return False
 
@@ -387,7 +505,7 @@ class TimeCapsule:
 
     def generate_reminder_report(self) -> str:
         """生成提醒报告"""
-        due = self.get_due_reminders(days_ahead=30)
+        due = self.get_due_reminders(days_ahead=DUE_DAYS)
         overdue = self.get_overdue_reminders()
 
         lines = [
@@ -445,8 +563,8 @@ class TimeCapsule:
             if len(parts) >= 3:
                 try:
                     return yaml.safe_load(parts[1]) or {}
-                except Exception as e:
-                    logger.warning(f"忽略异常: {e}")
+                except (yaml.YAMLError, ValueError) as e:
+                    logger.warning("忽略异常: %s", e, exc_info=True)
         return {}
 
     @staticmethod
@@ -456,16 +574,28 @@ class TimeCapsule:
                 return fm.get(key)
         return default
 
+    @classmethod
+    def _normalize_temporal_scope(cls, value) -> str:
+        """把英文/中文 temporal_scope 归一化为内部中文键。"""
+        if not isinstance(value, str):
+            return ""
+        value = value.strip().lower()
+        return cls.TEMPORAL_SCOPE_ALIASES.get(value, value)  # type: ignore[no-any-return]
+
 
 # ========== 便捷函数 ==========
 
-def set_reminder(page_path: str, days: int = 90) -> bool:
+
+def set_reminder(page_path: str, days: int = DURATION_BUCKET_QUARTER_DAYS) -> bool:
     """便捷函数：为页面设置提醒"""
     capsule = TimeCapsule()
     return capsule.set_manual_reminder(page_path, days)
 
 
-def get_due() -> List[CapsuleReminder]:
+def get_due(
+    days_ahead: int = DAYS_AHEAD_DAYS,
+    wiki_base: str | None = None,
+) -> List[CapsuleReminder]:
     """便捷函数：获取到期提醒"""
-    capsule = TimeCapsule()
-    return capsule.get_due_reminders()
+    capsule = TimeCapsule(wiki_base=wiki_base) if wiki_base is not None else TimeCapsule()
+    return capsule.get_due_reminders(days_ahead=days_ahead)

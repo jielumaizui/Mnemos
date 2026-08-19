@@ -1,0 +1,272 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+exclude: "^(.venv|__pycache__|.git|.pytest_cache|.mypy_cache|build/|dist/|docs/demo)/"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
+  # Local hooks reuse the project's own venv tooling.
+  # Make sure you have run `pip install -e ".[dev]"` and are inside the venv.
+  - repo: local
+    hooks:
+      - id: flake8
+        name: flake8
+        entry: python -m flake8 --count
+        language: system
+        types: [python]
+        pass_filenames: true
+
+      - id: mypy-budget
+        name: mypy budget gate
+        entry: python scripts/mypy_budget.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: compileall
+        name: compileall
+        entry: python -m compileall -q core/ integrations/ daemon/ scripts/ mnemos_cli.py mnemos_daemon.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: check-bare-except
+        name: check bare except blocks
+        entry: python scripts/check_bare_except.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: maintainability-budget
+        name: maintainability ratchet and accepted-debt closure
+        entry: python scripts/check_maintainability_budget.py --closure
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: config-examples
+        name: config examples strict coverage
+        entry: python3 scripts/verify_config_examples.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: config-registry-closure
+        name: canonical config registry closure
+        entry: python3 scripts/audit_config_registry_closure.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: relation-evidence-schema-registry
+        name: relation evidence schema registry
+        entry: python3 scripts/audit_schema_registry.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-state-store-contract
+        name: cognitive state store contract
+        entry: python3 scripts/audit_cognitive_state_store.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-search-contract
+        name: cognitive search contract
+        entry: python3 scripts/audit_cognitive_search.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-projection-lifecycle
+        name: cognitive projection lifecycle
+        entry: python3 scripts/audit_cognitive_projection_lifecycle.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: belief-revision-lineage
+        name: belief revision lineage
+        entry: python3 scripts/audit_belief_revision_lineage.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: decision-trace-effects
+        name: decision trace effects
+        entry: python3 scripts/audit_decision_trace_effects.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: prediction-outcome-lineage
+        name: prediction outcome lineage
+        entry: python3 scripts/audit_prediction_outcome_lineage.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: feedback-attribution-closure
+        name: feedback attribution closure
+        entry: python3 scripts/audit_feedback_attribution.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: training-governance-static-contract
+        name: training governance static contract
+        entry: python3 scripts/audit_training_governance.py --static-only --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: phase3-cognitive-chain
+        name: phase3 cognitive chain
+        entry: python3 scripts/audit_phase3_cognitive_chain.py --static-only --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-calibration-lineage
+        name: cognitive calibration lineage
+        entry: python3 scripts/audit_cognitive_calibration_lineage.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognition-episode-event-dispatch
+        name: cognition episode event dispatch
+        entry: python3 scripts/audit_cognitive_event_dispatch.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: evidence-graph-direction
+        name: evidence graph direction
+        entry: python3 scripts/audit_evidence_graph_direction.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: check-tech-debt
+        name: check tech debt annotations
+        entry: python scripts/check_tech_debt_annotations.py core/ integrations/ daemon/ scripts/ mnemos_cli.py mnemos_daemon.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: docs-freshness-audit
+        name: docs freshness audit
+        entry: python3 scripts/audit_docs_freshness.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: document-asset-manifest-audit
+        name: document asset manifest audit
+        entry: python3 scripts/audit_document_asset_manifest.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: desktop-system-map-facts-audit
+        name: desktop system-map facts audit
+        entry: python3 scripts/audit_desktop_system_map_facts.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: docs-sensitive-info-audit
+        name: docs sensitive info audit
+        entry: python3 scripts/audit_docs_sensitive_info.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: repo-sensitive-literal-audit
+        name: repo sensitive literal audit
+        entry: python3 scripts/audit_repo_sensitive_literals.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: distill-response-budget
+        name: distill response budget audit
+        entry: python scripts/audit_distill_response_budget.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: distill-output-contract
+        name: distill output contract audit
+        entry: python scripts/audit_distill_output_contract.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-source-authority
+        name: cognitive source authority audit
+        entry: python scripts/audit_cognitive_source_authority.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cognitive-action-effect-closure
+        name: cognitive action effect closure audit
+        entry: python scripts/audit_cognitive_action_effects.py --strict --json
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: runtime-producer-consumer-closure
+        name: runtime producer/consumer closure audit
+        entry: python scripts/audit_runtime_producer_consumer_closure.py --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: check-zombie-code-policy
+        name: No Zombie Code accepted-debt closure
+        entry: python scripts/check_zombie_code_policy.py --closure
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: arch-dependency-graph
+        name: architecture dependency graph check
+        entry: python scripts/arch_dependency_graph.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: ci-ratchet
+        name: CI architecture governance and zero-vulture closure
+        entry: python scripts/ci_ratchet.py --closure --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: vulture
+        name: vulture dead code check
+        entry: python -m vulture --min-confidence 80 .
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: bandit
+        name: bandit security scan
+        entry: python -m bandit -r core/ integrations/ daemon/ scripts/ mnemos_cli.py mnemos_daemon.py -ll -ii
+        language: system
+        pass_filenames: false
+        always_run: true

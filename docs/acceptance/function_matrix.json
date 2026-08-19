@@ -1,0 +1,1939 @@
+{
+  "schema_version": "mnemos.function_matrix.v1",
+  "updated": "2026-07-23",
+  "status_values": {
+    "usable": "入口存在，行为有测试或可重复验收命令",
+    "partial": "入口或行为存在但覆盖、诊断或文档仍有缺口",
+    "experimental": "可试用但尚不作为稳定承诺",
+    "outdated": "历史承诺，后续应删除或迁移",
+    "removed": "已删除能力，不允许重新创建"
+  },
+  "features": [
+    {
+      "id": "ops.init",
+      "group": "6.1 基础运维功能",
+      "feature_name": "初始化和配置引导",
+      "user_entrypoints": [
+        "cli:init",
+        "cli:config"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/init.py",
+        "core/cli/commands/config.py",
+        "core/config.py"
+      ],
+      "data_dependencies": [
+        "~/.mnemos/configs/main.json",
+        "system environment",
+        "keyring/env secret references"
+      ],
+      "expected_input": "模型端点、Vault 路径、Agent hook 安装选择和配置键值修改",
+      "expected_output": "可保存的配置、部署验证结果和错误定位信息",
+      "data_landing": "~/.mnemos/configs/main.json and configured vault directories",
+      "success_standard": "初始化不会写明文 key；缺少必需模型端点或 Obsidian 时可诊断失败",
+      "failure_or_degradation": "配置缺失时退出非零或输出可操作修复建议",
+      "docs": [
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 mnemos_cli.py init --help",
+        "python3 mnemos_cli.py config --help"
+      ]
+    },
+    {
+      "id": "ops.install_lifecycle",
+      "group": "6.1 基础运维功能",
+      "feature_name": "产品级安装、升级、卸载和全量修复入口",
+      "user_entrypoints": [
+        "cli:setup",
+        "cli:upgrade plan",
+        "cli:upgrade apply",
+        "cli:uninstall --preserve-data",
+        "cli:doctor repair-all"
+      ],
+      "code_entrypoints": [
+        "core/setup/install_lifecycle.py",
+        "core/cli/commands/setup.py",
+        "mnemos_cli.py",
+        "scripts/audit_install_upgrade_contract.py",
+        "scripts/e2e_install_probe.py",
+        "scripts/e2e_upgrade_probe.py"
+      ],
+      "data_dependencies": [
+        "~/.mnemos/configs/main.json",
+        "mnemos/raw vault directories",
+        "migration plan",
+        "snapshot manifest",
+        "data ownership delete plan",
+        "action_ledger.db"
+      ],
+      "expected_input": "dry-run/apply/confirm flags, existing config/vault state, migration wrapper authorization",
+      "expected_output": "InstallLifecycleState with machine-readable step status, failure_reason, repair_action, backup_ref and ActionLedger reference",
+      "data_landing": "~/.mnemos/install_state.json and ~/.mnemos/action_ledger.db for applied setup/upgrade/uninstall operations",
+      "success_standard": "一个推荐入口覆盖安装、配置、验证、升级计划、备份前置、默认保留数据卸载和 doctor repair-all；purge-data 被 freeze/snapshot/confirm 契约阻断",
+      "failure_or_degradation": "缺配置、缺 Vault、未授权 wrapper migration 或 purge-data 未满足数据所有权条件时返回 structured failure_reason 和 repair_action",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/acceptance/ops_resilience_matrix.json"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_install_upgrade_contract.py --strict",
+        "python3 scripts/e2e_install_probe.py --tmp-home",
+        "python3 scripts/e2e_upgrade_probe.py --tmp-home --preserve-existing",
+        "python3 mnemos_cli.py setup --dry-run --json",
+        "python3 mnemos_cli.py upgrade plan --json",
+        "python3 -m pytest tests/unit/test_install_state_machine.py tests/integration/test_setup_upgrade_roundtrip.py -q"
+      ]
+    },
+    {
+      "id": "ops.health",
+      "group": "6.1 基础运维功能",
+      "feature_name": "系统健康、状态和性能体检",
+      "user_entrypoints": [
+        "cli:doctor",
+        "cli:doctor --cognitive-readiness",
+        "cli:health",
+        "cli:status",
+        "cli:perf",
+        "script:scripts/audit_cognitive_readiness.py"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/doctor.py",
+        "core/ops/health_check.py",
+        "daemon/instance_identity.py",
+        "daemon/instance_control.py",
+        "daemon/heartbeat.py",
+        "core/ops/cognitive_data_contract.py",
+        "core/ops/producer_consumer_ledger.py",
+        "scripts/health_check.py",
+        "core/ops/cognitive_readiness.py",
+        "core/cli/commands/status.py",
+        "core/cli/commands/perf.py",
+        "scripts/audit_cognitive_readiness.py",
+        "scripts/audit_data_interface_registry.py"
+      ],
+      "data_dependencies": [
+        "configuration",
+        "daemon heartbeat",
+        "SQLite databases",
+        "vault paths",
+        "model runtime metrics",
+        "optional multimodal endpoint configuration",
+        "distill JSON parse quality metrics",
+        "raw/wiki/KG/evidence graph/cognitive graph/recap/reminder/search feedback ledgers",
+        "wiki_metrics.page_metrics.page_role/source_refs",
+        "runtime producer/consumer ledger",
+        "cognitive_data_events/cognitive_data_consumptions/cognitive_data_reconciliations"
+      ],
+      "expected_input": "human/json flags and current runtime environment",
+      "expected_output": "健康报告、队列/数据库/Vault/模型配置状态、可选 checks.multimodal configured/skipped 状态、daemon active/historical service errors、daemon instance identity_match/commit/build/config/database/service provenance、runtime producer/consumer closure、cognitive data event registry/reconciliation summary、distill JSON parse quality、security permission/keyring warnings、strict health status(ok/warning/degraded/failed)、usable/strict_ok/strict_failures、认知就绪度四段缺口、source-required/source-exempt Wiki 来源预算、mnemos.learning_signal.v2 转化缺口、预算、scorecard 和机器可读 JSON",
+      "data_landing": "read-only report output; non-strict checks.cognitive_learning; optional ActionLedger cognitive_readiness_gap when --record-gaps is explicit",
+      "success_standard": "用户能区分 completely healthy、usable with warning、strict degraded 和 failed；heartbeat strict 成功必须同时满足当前 PID record、live OS process、runtime-code/config/database identity 和精确 35-service manifest，且启动成功前当前 instance heartbeat 已落盘；Amphora failed task、runtime producer/consumer orphan outputs/no-source consumers/item mismatches/dead letters、cognitive_data unregistered producer/consumer、consumed-without-event、duplicate-without-reconciliation 或 unexplained divergence 超预算、distill failed 超预算、high/critical recap pending 超预算、dialog reminder pending/active 超预算、当前 daemon service error、API/schema/storage/wiki/disk strict check 失败会进入 strict_failures；checks.multimodal 未配置时显示 skipped 和恢复动作但不进入 strict_failures，配置后显示 endpoint_status=configured；checks.distill_json_quality 能解释 direct/fallback/fixed/failed 解析路径、最终失败率和 24h 趋势，fallback 成功不写误导性 warning；checks.security 能解释敏感权限违规、keyring 不可用、mnemos.secret_inventory.v1 明文 secret-like 字段和 legacy credential 风险，并给出 repair_actions、keyring_status/keyring_risk_level/safe_but_not_best、env_fallback_accepted 或 keyring/keyref/env 迁移说明；checks.cognitive_learning 能解释 raw/search/feedback/reflection 到 observations、policy_patches/no_patch 证据和 cognitive_consolidation runs 的转化缺口；认知就绪度报告能解释来源、证据、消费者、行为反馈缺口，source-required knowledge 页必须有非空 source_refs，派生/系统/占位页必须通过 page_role 和 source_exempt_reasons 可见化，并在 --budget 模式超线失败",
+      "failure_or_degradation": "旧/损坏 heartbeat schema、PID reuse、PID↔heartbeat identity mismatch、空/缺 service manifest、runtime-code/config/database drift 或暂不可验证 live process 必须让 heartbeat strict degraded，不能靠 timestamp 新鲜伪装成功；依赖缺失、Amphora failed task、runtime producer/consumer 闭环预算超线、队列预算超线或 daemon active service error 时报告 degraded/failed；historical service error 标为 non-blocking；distill_json_quality/security/keyring/cognitive_learning/multimodal 属于非 strict warning/skipped，JSON 最终失败率超线只降为 warning 并保留结构化错误摘要，permission violations 必须有 chmod repair action，secret inventory plaintext findings 只输出路径/长度且会让 strict security audit 失败，keyring unavailable 必须有 keyring_error、keyring_status、safe_but_not_best、secret_inventory_plaintext_count 和 env_fallback_accepted；env fallback 未显式接受时必须给出 mnemos secrets doctor --accept-env-fallback 或 keyring 安装/授权动作；认知账本缺失时默认只读报告 warning，只有 --record-gaps 才写入缺口账本",
+      "docs": [
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 mnemos_cli.py health --json",
+        "python3 mnemos_cli.py secrets doctor --json",
+        "python3 scripts/audit_data_interface_registry.py --strict",
+        "python3 scripts/audit_runtime_producer_consumer_closure.py --strict",
+        "python3 mnemos_cli.py doctor --json",
+        "python3 -m pytest tests/unit/test_multimodal_config_optional.py -q",
+        "python3 scripts/audit_cognitive_readiness.py --json",
+        "python3 scripts/audit_cognitive_readiness.py --json --budget",
+        "python3 scripts/audit_cognitive_readiness.py --budget --record-gaps",
+        "python3 mnemos_cli.py doctor --cognitive-readiness --json",
+        "python3 -m pytest tests/unit/test_cognitive_readiness_audit.py -q",
+        "python3 -m pytest tests/unit/test_health_check_heartbeat.py tests/unit/test_health_check.py tests/unit/test_health_check_report.py tests/unit/test_config.py tests/unit/test_daemon_heartbeat.py -q",
+        "python3 scripts/audit_action_ledger.py --strict",
+        "python3 -m pytest tests/unit/test_health_check_heartbeat.py tests/unit/test_daemon_heartbeat.py tests/unit/test_db_init.py -q",
+        "python3 -m pytest tests/unit/test_daemon_instance_identity.py tests/unit/test_daemon_instance_control.py tests/integration/test_daemon_instance_identity.py -q"
+      ]
+    },
+    {
+      "id": "ops.local_gates",
+      "group": "6.1 基础运维功能",
+      "feature_name": "本地工程门禁与可维护性预算",
+      "user_entrypoints": [
+        "script:scripts/run_local_gates.py",
+        "script:scripts/check_maintainability_budget.py",
+        "script:scripts/check_zombie_code_policy.py",
+        "script:scripts/ci_ratchet.py",
+        "script:scripts/check_bare_except.py",
+        "script:scripts/audit_hardcoded_paths.py",
+        "script:scripts/audit_document_asset_manifest.py",
+        "script:scripts/audit_desktop_system_map_facts.py",
+        "script:scripts/audit_repo_sensitive_literals.py",
+        "script:scripts/audit_release_privacy_security.py",
+        "script:scripts/audit_distill_response_budget.py"
+      ],
+      "code_entrypoints": [
+        "scripts/run_local_gates.py",
+        "scripts/check_maintainability_budget.py",
+        "scripts/check_zombie_code_policy.py",
+        "scripts/ci_ratchet.py",
+        "scripts/check_bare_except.py",
+        "scripts/audit_hardcoded_paths.py",
+        "scripts/audit_document_asset_manifest.py",
+        "scripts/audit_model_call_ledger.py",
+        "docs/acceptance/document_asset_manifest.json",
+        "scripts/audit_desktop_system_map_facts.py",
+        "scripts/audit_repo_sensitive_literals.py",
+        "scripts/audit_release_privacy_security.py",
+        "scripts/audit_distill_response_budget.py",
+        "scripts/maintainability_budget.json",
+        "tests/unit/test_desktop_system_map_facts_audit.py",
+        "tests/unit/test_document_asset_manifest_audit.py",
+        "tests/unit/test_model_call_ledger_provider_boundaries.py",
+        "tests/unit/test_repo_sensitive_literals_audit.py",
+        "tests/unit/test_release_privacy_security_audit.py",
+        ".pre-commit-config.yaml",
+        ".github/workflows/ci.yml"
+      ],
+      "data_dependencies": [
+        "source tree AST",
+        "tracked repository text",
+        "maintainability v2 exact catch fingerprint registry and time-bounded acceptances",
+        "zombie v2 exact candidate acceptances with telemetry",
+        "zero vulture current/baseline closure",
+        "canonical tracked Markdown, prompt/schema, and Desktop asset manifest",
+        "Desktop system-map facts current_state contract",
+        "hardcoded path allowlist",
+        "tech debt annotations",
+        "local Python environment"
+      ],
+      "expected_input": "developer runs local gates or CI/pre-commit executes checks",
+      "expected_output": "development ratchet status and independent closure status for maintainability/zombie/vulture, complete document-asset coverage counts, plus pass/fail reports for flake8, mypy, compileall, bare except, docs/security/architecture and runtime gates",
+      "data_landing": "stdout JSON/human reports; maintainability v2 stores exact catch fingerprints and expiring acceptances, zombie v2 stores exact candidates and telemetry, CI baseline stores exact zero vulture state",
+      "success_standard": "development profile may pass only when every residual is exact, unexpired and current with release_eligible=false; every tracked Markdown, prompt/schema and Desktop asset must be classified and reviewed with unverified=0; parse failure, same-count replacement, stale improvement baseline, orphan/stale prompt, unclassified Desktop claim, expired acceptance, non-zero vulture or any normal engineering gate failure is blocking; strict full-score requires residual=0 and the required Desktop manifest gate",
+      "failure_or_degradation": "accepted maintainability/zombie debt remains visible and non-certifying; ordinary update cannot absorb new/changed risk, vulture non-zero cannot be rebaselined, and strict release closure fails until raw residual reaches zero",
+      "docs": [
+        "README.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/technical-debt.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/check_maintainability_budget.py --closure",
+        "python3 scripts/check_zombie_code_policy.py --closure",
+        "python3 scripts/ci_ratchet.py --closure --strict",
+        "python3 scripts/check_maintainability_budget.py --closure --strict --json",
+        "python3 scripts/check_zombie_code_policy.py --closure --strict --json",
+        "python3 scripts/audit_hardcoded_paths.py --strict",
+        "python3 scripts/audit_document_asset_manifest.py --strict --desktop-mode required --json",
+        "python3 scripts/audit_desktop_system_map_facts.py",
+        "python3 scripts/audit_repo_sensitive_literals.py --strict",
+        "python3 scripts/security_audit.py --strict --json",
+        "python3 scripts/audit_release_privacy_security.py --strict --json",
+        "python3 scripts/audit_distill_response_budget.py",
+        "python3 -m pytest tests/unit/test_maintainability_budget.py -q",
+        "python3 -m pytest tests/unit/test_desktop_system_map_facts_audit.py -q",
+        "python3 -m pytest tests/unit/test_document_asset_manifest_audit.py -q",
+        "python3 -m pytest tests/unit/test_repo_sensitive_literals_audit.py -q",
+        "python3 -m pytest tests/unit/test_release_privacy_security_audit.py -q",
+        "python3 scripts/run_local_gates.py"
+      ]
+    },
+    {
+      "id": "ops.audit_report_write_policy",
+      "group": "6.1 基础运维功能",
+      "feature_name": "审计报告只读默认与显式写入策略",
+      "user_entrypoints": [
+        "script:scripts/audit_orphan_modules.py",
+        "script:scripts/audit_orphan_modules.py --check",
+        "script:scripts/audit_orphan_modules.py --output docs/orphan-modules-report.md --apply"
+      ],
+      "code_entrypoints": [
+        "scripts/audit_orphan_modules.py",
+        "docs/orphan-modules-report.md",
+        "tests/unit/test_audit_orphan_modules.py"
+      ],
+      "data_dependencies": [
+        "source tree AST",
+        "committed orphan module report",
+        "ActionLedger database for explicit repo writes"
+      ],
+      "expected_input": "developer runs orphan module audit in read-only, check, or explicit report-write mode",
+      "expected_output": "stdout report by default; --check pass/fail without writes; --output outside repo writes file; repo-internal --output requires --apply and records ActionLedger",
+      "data_landing": "stdout by default; explicit --output target when requested; repo report remains docs/orphan-modules-report.md only after --apply",
+      "success_standard": "default run and --check do not change git status; repo-internal output without --apply is refused; explicit --output docs/orphan-modules-report.md --apply writes report and action ledger",
+      "failure_or_degradation": "stale report causes --check to return nonzero without modifying files; missing --apply for repo output returns nonzero and leaves the output path untouched",
+      "docs": [
+        "README.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/CHANGELOG.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_orphan_modules.py --check",
+        "python3 -m pytest tests/unit/test_audit_orphan_modules.py -q",
+        "python3 -m flake8 scripts/audit_orphan_modules.py tests/unit/test_audit_orphan_modules.py"
+      ]
+    },
+    {
+      "id": "ops.daemon_scheduler_db_vault",
+      "group": "6.1 基础运维功能",
+      "feature_name": "daemon、scheduler、DB、Vault 和 metrics 运维",
+      "user_entrypoints": [
+        "cli:daemon start",
+        "cli:daemon stop",
+        "cli:daemon status",
+        "cli:scheduler status",
+        "cli:scheduler list",
+        "cli:db maintenance",
+        "cli:vaults status",
+        "cli:vaults sync",
+        "cli:metrics scan",
+        "cli:raw-index status",
+        "cli:raw-index rebuild"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/daemon.py",
+        "core/cli/commands/db.py",
+        "core/cli/commands/metrics.py",
+        "core/cli/commands/raw_index.py",
+        "core/cli/commands/scheduler.py",
+        "core/cli/commands/vaults.py",
+        "daemon/heartbeat.py",
+        "daemon/instance_identity.py",
+        "daemon/instance_control.py",
+        "daemon/process_control.py",
+        "daemon/service_state.py",
+        "mnemos_daemon.py"
+      ],
+      "data_dependencies": [
+        "launchd/cron/Task Scheduler state",
+        "SQLite databases",
+        "mnemos/raw vault directories",
+        "wiki metrics ledger"
+      ],
+      "expected_input": "status/sync/maintenance flags",
+      "expected_output": "可信 daemon instance/status/stop 结果、调度状态、DB 维护结果、Vault 投影同步结果、metrics 扫描结果、raw_projection 恢复账本和 service error current/historical 状态",
+      "data_landing": "0600 daemon.pid identity、0600 daemon_heartbeat.json、runtime stdout, SQLite maintenance side effects, vault projection files",
+      "success_standard": "start 只在当前 heartbeat 落盘后成功；status/stop 绑定 PID start/boot/executable 与 runtime-code/config/database/service fingerprints；危险写入命令需要显式 apply/commit 语义或清晰说明；raw_projection 锁错误在后续成功/跳过运行后清错并写 ActionLedger",
+      "failure_or_degradation": "PID reuse、identity 不完整/漂移或 SIGTERM 后暂不可验证时 fail closed 且不向未验证进程发送信号；dirty vault、数据库锁或调度不可用时阻断或报告失败；历史已恢复锁错误不得继续伪装为当前失败",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdVaults tests/unit/test_mnemos_cli.py::TestCmdRawIndex tests/unit/test_mnemos_cli.py::TestCmdPerf tests/unit/test_mnemos_cli.py::TestCmdMetricsScan -q",
+        "python3 -m pytest tests/unit/test_mnemos_daemon.py::TestRawProjectionService tests/unit/test_daemon_service_state.py tests/unit/test_daemon_heartbeat.py tests/unit/test_health_check_heartbeat.py -q",
+        "python3 -m pytest tests/unit/test_daemon_instance_identity.py tests/unit/test_daemon_instance_control.py tests/unit/test_daemon_process_control.py tests/integration/test_daemon_instance_identity.py -q"
+      ]
+    },
+    {
+      "id": "ops.migration_backup_data_ownership",
+      "group": "6.1 基础运维功能",
+      "feature_name": "迁移、全局快照恢复和数据所有权",
+      "user_entrypoints": [
+        "cli:migrate status",
+        "cli:migrate plan",
+        "cli:migrate apply",
+        "cli:migrate rollback",
+        "cli:backup create",
+        "cli:backup list",
+        "cli:restore plan",
+        "cli:restore apply",
+        "cli:restore verify",
+        "cli:data inventory",
+        "cli:data export",
+        "cli:data freeze",
+        "cli:data delete"
+      ],
+      "code_entrypoints": [
+        "core/migrations/registry.py",
+        "core/migrations/model_call_ledger_migration.py",
+        "core/migrations/model_call_ledger_reconcile/",
+        "core/migrations/model_call_ledger_recovery.py",
+        "core/runtime_paths.py",
+        "core/telemetry/model_call_ledger/",
+        "core/telemetry/prompt_call_log.py",
+        "core/backup/snapshot_manager.py",
+        "core/privacy/data_ownership.py",
+        "core/cli/commands/migrate.py",
+        "core/cli/commands/backup.py",
+        "core/cli/commands/data.py",
+        "scripts/reconcile_model_call_ledger.py"
+      ],
+      "data_dependencies": [
+        "~/.mnemos/configs/main.json",
+        "SQLite databases",
+        "model_call_ledger.db and retired prompt-call SQLite owners",
+        "local SQLite migration backups, recovery hashes/locks, and sealed v3 recovery manifests",
+        "mnemos/raw vault directories",
+        "action_ledger.db",
+        "migrations.db",
+        "data_ownership.db"
+      ],
+      "expected_input": "migration id, snapshot reason/id, data scope, dry-run/apply/confirm flags; COG-018 apply additionally requires the reviewed execution_plan_hash and any explicitly reviewed legacy-discard disposition",
+      "expected_output": "MigrationPlan/MigrationLedgerRecord, SnapshotManifest/RestorePlan, DataExportManifest/DataFreezeRequest/DataDeleteRequest/DeletionProof; COG-018 emits a plan execution_plan_hash, a normal local SQLite backup and a public-safe recovery reference such as <MNEMOS_DIR>/..., then clean/noop or a typed blocked result",
+      "data_landing": "~/.mnemos/migrations.db, ~/.mnemos/backups/snapshots, ~/.mnemos/data_ownership.db and optional export manifests",
+      "success_standard": "迁移先 plan 后 apply 并记录备份/回滚；恢复先 plan 再 apply/verify；删除 apply 必须有 freeze、snapshot ref、确认和删除证明。COG-018 的非 clean apply 必须把 plan 的完全相等 execution_plan_hash 传入 wrapped migration，成功后 second plan 必须 clean/noop；恢复先验证 sealed v3 manifest，再由显式 apply 执行。sealed-v3、普通 SQLite backup/hash/lock 都是本地恢复正确性；独立 reconcile script 只读，direct --apply 不得替代注册 mutation。",
+      "failure_or_degradation": "wrapped legacy migration 默认 blocked；没有快照时 restore plan 返回 blocked；delete apply 缺 freeze/snapshot/confirm 时阻断。COG-018 在 daemon 仍运行、expected hash 缺失/不匹配、source drift、未审阅的 legacy discard、backup/integrity 失败、orphan/missing/tampered target/SQLite sidecar 或 legacy/tampered recovery manifest 时零写入 blocked；它不以 run root 猜测 entry attribution，direct script --apply 也没有 registry-issued capability。",
+      "docs": [
+        "README.md",
+        "docs/MODEL_CALL_LEDGER.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/acceptance/ops_resilience_matrix.json"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_migration_registry.py --strict",
+        "python3 scripts/audit_backup_recovery_contract.py --strict",
+        "python3 scripts/audit_data_ownership_contract.py --strict",
+        "python3 mnemos_cli.py migrate status --json",
+        "python3 mnemos_cli.py migrate plan --json",
+        "python3 mnemos_cli.py backup create --dry-run --json",
+        "python3 mnemos_cli.py restore plan latest --json",
+        "python3 mnemos_cli.py data inventory --json",
+        "python3 mnemos_cli.py data delete --dry-run --scope session:test --json",
+        "python3 -m pytest tests/unit/test_migration_registry.py tests/unit/test_model_call_ledger_migration_recovery.py tests/unit/test_reconcile_model_call_ledger.py tests/unit/test_model_call_ledger_provider_boundaries.py tests/unit/test_audit_model_call_ledger.py tests/unit/test_config_stale_key_migration.py tests/unit/test_snapshot_manager.py tests/unit/test_data_ownership_contract.py tests/integration/test_migrate_plan_apply_rollback.py tests/integration/test_backup_restore_roundtrip.py tests/integration/test_disaster_recovery_drill.py tests/integration/test_data_export_bundle.py tests/integration/test_data_delete_freeze_flow.py -q"
+      ]
+    },
+    {
+      "id": "agent.kit",
+      "group": "6.2 Agent 接入功能",
+      "feature_name": "Agent 检测、安装、doctor 和统一协议验收",
+      "user_entrypoints": [
+        "cli:agent list",
+        "cli:agent detect",
+        "cli:agent install",
+        "cli:agent doctor",
+        "cli:agent kit"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/agent.py",
+        "core/agent_kit/protocol.py",
+        "core/agent_kit/evidence.py",
+        "core/agent_kit/acceptance_contracts.py"
+      ],
+      "data_dependencies": [
+        "local Agent install evidence",
+        "MCP config",
+        "active policy",
+        "passive source registry"
+      ],
+      "expected_input": "optional agent name and --json/--no-probe flags",
+      "expected_output": "installed/full_power/degraded/not_installed status and repair actions",
+      "data_landing": "human/json conformance report and optional Agent config files",
+      "success_standard": "未安装目标跳过；已安装目标缺 active/MCP/policy/passive/full-fidelity 时明确 degraded",
+      "failure_or_degradation": "缺能力返回 degraded 和 repair action，不返回假满血",
+      "docs": [
+        "docs/acceptance/agent_acceptance_samples.md",
+        "docs/acceptance/raw_event_contract.md",
+        "docs/acceptance/distilled_knowledge_contract.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/verify_acceptance_contracts.py",
+        "python3 mnemos_cli.py agent kit --no-probe --json"
+      ]
+    },
+    {
+      "id": "capture.sync",
+      "group": "6.3 采集与同步功能",
+      "feature_name": "主动/被动采集、同步状态、失败重试和历史回填",
+      "user_entrypoints": [
+        "cli:sync status",
+        "cli:sync retry-failed",
+        "cli:sync backfill",
+        "cli:sync audit",
+        "mcp:capture_turn",
+        "mcp:capture_session",
+        "mcp:end_session",
+        "mcp:capture_status"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/sync.py",
+        "core/sync_framework/raw_event_store.py",
+        "core/sync_framework/sync_engine.py",
+        "core/sync_framework/capture_service.py",
+        "core/sync_framework/capture_handoff.py",
+        "core/pipeline_receipts.py",
+        "integrations/agora.py",
+        "scripts/reconcile_pipeline_receipts.py",
+        "scripts/reconcile_raw_revision_provenance.py",
+        "scripts/e2e_probe.py"
+      ],
+      "data_dependencies": [
+        "capture_queue.db",
+        "raw_events.db",
+        "sync_log.db",
+        "Agent native session stores"
+      ],
+      "expected_input": "turn/session payloads, source filters, audit/backfill options",
+      "expected_output": "queued capture events, immutable raw revision ids plus logical aliases, revision/span provenance, revision-aware Amphora handoff receipts, session-end receipts, sync_log rows, backend projection evidence, sync audit report and backfill task state",
+      "data_landing": "raw_events.db raw_turns/raw_turn_revisions/raw_provenance_edges/raw_provenance_gaps, capture_queue.db including capture_distillation_handoffs/session-end state, sync_log.db, distill_queue.db generations",
+      "success_standard": "增量、历史回填和失败重试幂等；同一 logical turn 的不同 bytes 追加 immutable revision，旧 revision 可回查；Capture/Amphora/Wiki 保存 revision+span，引用 edge 阻止 retention 删除；无法证明的历史页只登记 pending_rebuild gap；capture 只有在 source/session/input revision 匹配的 Amphora durable receipt 提交后才 done，批量/session end partial 必须可观察；E2E probe 在 canonical raw 模式必须证明 raw_events.db revision + sync_log row，外部 backend 模式必须证明非空 backend_uids 可反查；Wiki probe 绑定本次 session_id",
+      "failure_or_degradation": "derived/unbackfillable sources 标为 known_derived；入队失败或 receipt mismatch 保持 retryable/failed 且不得吞错；skipped_backend、空 backend_uids、仅有 sync_log.status=new 或仅写 raw store 都不能单独作为跨阶段 pass 证据",
+      "docs": [
+        "docs/acceptance/raw_event_contract.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_sync_backfill.py tests/unit/test_sync_engine.py tests/unit/test_agora.py -q",
+        "python3 -m pytest tests/unit/test_e2e_probe.py tests/acceptance/test_user_risk_acceptance.py -q",
+        "python3 scripts/e2e_probe.py --dry-run",
+        "python3 scripts/e2e_probe.py --real-api",
+        "python3 -m pytest tests/integration/test_capture_distill_receipts.py tests/integration/test_pipeline_receipt_reconciliation.py -q",
+        "python3 scripts/reconcile_pipeline_receipts.py",
+        "python3 -m pytest tests/integration/test_raw_revision_provenance_e2e.py tests/integration/test_reconcile_raw_revision_provenance.py -q",
+        "python3 scripts/reconcile_raw_revision_provenance.py --json"
+      ]
+    },
+    {
+      "id": "acceptance.wow_path_e2e",
+      "group": "6.2 验收与满分门禁",
+      "feature_name": "用户价值哇塞链路端到端验收",
+      "user_entrypoints": [
+        "script:e2e_wow_probe --dry-run",
+        "script:e2e_wow_probe --mock-llm",
+        "script:e2e_wow_probe --real-api",
+        "script:run_full_score_gates"
+      ],
+      "code_entrypoints": [
+        "scripts/e2e_wow_probe.py",
+        "scripts/run_full_score_gates.py",
+        "tests/e2e/test_wow_path.py",
+        "tests/unit/test_run_full_score_gates.py"
+      ],
+      "data_dependencies": [
+        "trusted user document",
+        "temporary Mnemos wiki",
+        "temporary producer_consumer_ledger.db",
+        "mock or real LLM endpoint"
+      ],
+      "expected_input": "first-user configuration state, optional multimodal state, a user-supplied trusted document, mock or real API mode",
+      "expected_output": "one-page wow report with user intervention count, Wiki page path, route status, behavior/intent fields, search hits, preflight reminders, auto-heal dry-run state and consumer ledger closure",
+      "data_landing": "temporary wiki page, temporary ActionLedger, temporary runtime producer/consumer ledger",
+      "success_standard": "mock mode proves config readiness, optional multimodal skip, 100MB trusted document gate, default distill, behavior/intent, Obsidian route, context search recall, preflight consumption, consumer ledger and auto-heal dry-run with user_intervention_count=0; real API mode fails if required model endpoints are not configured",
+      "failure_or_degradation": "missing Wiki page, missing behavior/intent, no route, no recall, no preflight reminder, non-closed consumer ledger, auto-heal blocking issue or user_intervention_count>0 fails the wow path and full-score E2E gate",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/e2e_wow_probe.py --dry-run",
+        "python3 scripts/e2e_wow_probe.py --mock-llm",
+        "python3 scripts/e2e_wow_probe.py --real-api",
+        "python3 -m pytest tests/e2e/test_wow_path.py tests/unit/test_run_full_score_gates.py -q"
+      ]
+    },
+    {
+      "id": "capture.ingest_events",
+      "group": "6.3 采集与同步功能",
+      "feature_name": "文件摄入和事件总线运维",
+      "user_entrypoints": [
+        "cli:ingest",
+        "cli:import",
+        "cli:events stats",
+        "cli:events cleanup",
+        "cli:events replay",
+        "cli:events archive-orphans"
+      ],
+      "code_entrypoints": [
+        "core/application/document_import_service.py",
+        "core/document_import.py",
+        "core/kia/knowledge_inbox.py",
+        "core/cli/commands/ingest.py",
+        "core/cli/commands/events.py",
+        "core/mnemos_bus.py"
+      ],
+      "data_dependencies": [
+        "local files",
+        "events.db",
+        "dead letter queue"
+      ],
+      "expected_input": "file/directory path, import mode parse|capture|distill|watch, event filters, cleanup/replay flags",
+      "expected_output": "trusted document import result with source path/hash/size, source flags, parse result, ingestion/handoff/projection status, stable document asset id, raw revision id, capture queue ref, immediate empty wiki paths, quality decision, routing result, event stats, dead-letter replay or cleanup results",
+      "data_landing": "canonical raw event store, capture queue/outbox, raw projection, Amphora, Wiki, action_ledger.db, events.db",
+      "success_standard": "import, document_process, FileIngestor and KnowledgeInbox share validation and a single canonical writer; default distill returns accepted/pending and converges through one outbox, capture is raw-only, parse-only is explicit, duplicate files reuse one revision/event/handoff, and event replay is bounded",
+      "failure_or_degradation": "bad/oversize files fail before capture; projection or Amphora failure leaves canonical raw accepted and exposes retryable pending without direct-save fallback, duplicate raw, deletion, or false synchronous success",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 mnemos_cli.py ingest --help",
+        "python3 mnemos_cli.py import README.md --mode distill --dry-run --json",
+        "python3 -m pytest tests/integration/test_document_ingest_unified.py tests/unit/test_knowledge_inbox.py -q",
+        "python3 mnemos_cli.py events stats --help"
+      ]
+    },
+    {
+      "id": "distill.pipeline",
+      "group": "6.4 蒸馏与知识生成功能",
+      "feature_name": "蒸馏队列、结构化输出、分片合并和 Wiki 写入",
+      "user_entrypoints": [
+        "cli:distill status",
+        "cli:distill drain",
+        "cli:distill audit",
+        "cli:distill backfill-metadata",
+        "cli:distill evidence-backfill",
+        "cli:distill actions",
+        "cli:distill retry-failed",
+        "cli:distill archive-failed",
+        "script:scripts/backfill_wiki_evidence.py",
+        "mcp:knowledge_distill"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/distill.py",
+        "core/ops/evidence_backfill.py",
+        "core/kia/amphora.py",
+        "core/hephaestus/distill_input_spec.py",
+        "core/hephaestus/distillation_contract.py",
+        "core/hephaestus/distillation_extractor.py",
+        "core/hephaestus/distillation_engine.py",
+        "core/hephaestus/distillation_text.py",
+        "core/hephaestus/wiki_builder.py",
+        "core/hephaestus/distillation_write_receipt.py",
+        "core/hephaestus/distillation_page_identity.py",
+        "core/pipeline_receipts.py",
+        "core/hephaestus/distill_action_router.py",
+        "core/hephaestus/fragment_merger.py",
+        "core/hephaestus/distillation_wiki_page.py",
+        "scripts/backfill_wiki_evidence.py"
+      ],
+      "data_dependencies": [
+        "distill_queue.db",
+        "distillation_chunks.db",
+        "raw events",
+        "LLM configuration",
+        "mnemos vault",
+        "wiki_metrics.db",
+        "knowledge_graph.db document_wiki_link/relation_evidence",
+        "distill_actions.db"
+      ],
+      "expected_input": "session id/messages or queued distillation tasks plus a pre-render immutable DistillInputSpec (source agent/session/event ids, completeness, visible-input hash, gate id and mode); visible code, commands, attachment placeholders and formatting remain lossless except explicit private-thinking exclusion with non-content metadata",
+      "expected_output": "typed distill_output_v4 root admission (canonical root/hash/judgment/input-spec/context binding), complete 19-field cognition_episode, canonical episode revision/event/projection outbox, structured distillation result, revision-aware terminal/nonterminal write receipt, routed action outcome, durable wiki page(s) or intentional-skip proof, KG/CognitiveGraph events, evidence backfill report, explicit retry/archive result for failed queue rows",
+      "data_landing": "producer_consumer_ledger.db canonical cognition_episode revisions/events/outbox, mnemos vault pages, knowledge graph databases, wiki_metrics page source refs, distill_actions.db action/knowledge action logs, 99-Reports/认知数据就绪度",
+      "success_standard": "普通写入必须通过与不可变 DistillInputSpec/CognitionExtractionContext 绑定的 distill_output_v4 根契约并保留 raw evidence trace；legal skip 必须同时具备 judgment=skip、fragments=[]、structured_output.distill_intent=skip、claims=[]、非空 skip_reason 和引用 source_event_ids 的 no_value_evidence，knowledge/skill 则必须有 admitted fragment、non-skip intent、claims、user_behavior_intent 与完整 19 字段 cognition_episode；known 必须绑定当前 chunk exact Raw span 和 admitted claim，unknown/not_applicable 不得夹带断言，situation/facts/scope 不得全 unknown；同一 Draft 2020-12 root validator 必须在首次输出 correction 前、每次 correction 后、携带完整 DistillInputSpec 的 checkpoint 保存/读取和正式写页前执行，canonical root/hash/judgment/structured-output binding 是正式写入证明；complete extract input 除显式 private thinking 外必须保留全部可见代码、命令、附件占位与格式，canonical builder 在极小总/单消息预算下仍不截断且只输出非内容 exclusion 元数据，超预算由 split_to_tokens 全量分块；检查点必须同时匹配 lossless chunk input、完整 DistillExecutionSpec、input_spec_hash 和 output admission，并输出 execution_spec_hash/prompt_hash/schema_hash/model_id/cache_hit/miss_reason/spec_diff_fields/input_spec_hash/output_contract_version/canonical_output_hash/output_judgment；任何 action/Wiki sink 前必须在唯一 CognitiveStateStore 原子提交 episode revision、event 与 wiki/knowledge_graph/cognitive_graph outbox，router 只接受可反查的 committed revision；Amphora/L1 只有 durable page 或 explicit intentional-skip terminal receipt 才能完成；create/update/merge/dispute/reinforce 必须经过 DistillActionRouter 并可从 action log 反查，其中 create_page 还必须持有 Engine 签发的 root/input hash 与 fragment object refs 绑定 capability；发布配置必须保持 structured_output_contract.enforce 与 action_router.enabled 均为 true；evidence-backfill 默认 dry-run且只把配置允许的强 evidence types 写入 source refs；failed Amphora 任务必须通过 retry-failed 或 archive-failed 显式闭环后才能离开 health failed budget",
+      "failure_or_degradation": "cleaner 代码头尾压缩、第 4+ shell 命令省略、可见格式/附件占位归一化、canonical head-tail/消息截断、WikiBuilder 固定字符前缀、模型猜测 source agent/event、裸空 fragments/claims 被当作 skip、非法根输出未 correction/失败即入库、旧/损坏检查点复用、缺失 root output/admission、input-spec/输出契约漂移、root/hash/fragment binding 不一致、缺失 backend checkpoint_identity、execution spec 变化仍 hit 或新 failed 覆盖旧 completed 均为失败，不能用 omission marker/提高阈值/伪造 checkpoint 版本冒充完整；低价值、缺 raw、冲突或不合法输出进入 fail/defer/dispute/audit，不自由写库；trusted proposal pending、partial、retry、intercept、空页面或 write failure 均保持非终态且不得标记 L1 distilled；低置信或高冲突 merge/update 只能进入 07-Shadow/08-Disputes；release 关闭 contract/router 或 failed 任务未重试/归档时 strict health 必须 degraded",
+      "docs": [
+        "docs/acceptance/distilled_knowledge_contract.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_distillation_engine.py tests/unit/test_distillation_contract.py tests/unit/test_distillation_chunked.py -q",
+        "python3 -m pytest tests/unit/test_distill_execution_spec.py tests/unit/test_chunk_checkpoint.py tests/integration/test_checkpoint_execution_spec.py tests/integration/test_reconcile_distill_execution_checkpoints.py -q",
+        "python3 scripts/audit_distill_output_contract.py --strict --json",
+        "python3 -m pytest tests/integration/test_lossless_distill_e2e.py tests/unit/test_wiki_builder_reconstruct.py -q",
+        "python3 -m pytest tests/unit/test_distill_action_router.py -q",
+        "python3 -m pytest tests/unit/test_evidence_backfill.py -q",
+        "python3 scripts/backfill_wiki_evidence.py --json",
+        "python3 mnemos_cli.py distill evidence-backfill --json",
+        "python3 mnemos_cli.py distill actions --json",
+        "python3 -m pytest tests/unit/test_amphora.py tests/unit/test_mnemos_cli.py::TestCmdDistill -q",
+        "python3 -m pytest tests/integration/test_distill_terminal_states.py tests/integration/test_pipeline_receipt_reconciliation.py -q"
+      ]
+    },
+    {
+      "id": "search.knowledge",
+      "group": "6.5 搜索与问答功能",
+      "feature_name": "Wiki、记忆、上下文感知搜索和问答",
+      "user_entrypoints": [
+        "cli:search",
+        "cli:wiki read",
+        "cli:wiki rebuild",
+        "mcp:wiki_search",
+        "mcp:wiki_read",
+        "mcp:wiki_build",
+        "mcp:memory_search",
+        "mcp:context_aware_search",
+        "script:scripts/audit_cognitive_search.py",
+        "script:scripts/reconcile_cognitive_search_state_headers.py",
+        "script:scripts/reconcile_cognitive_search_exclusions.py",
+        "script:scripts/reconcile_wiki_search_index.py"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/search.py",
+        "core/cli/commands/wiki.py",
+        "core/access_policy.py",
+        "core/agent_kit/authorization.py",
+        "core/app/context_search.py",
+        "core/app/context_search_authorization.py",
+        "core/cognitive/search.py",
+        "core/cognitive/search_state_headers.py",
+        "core/embeddings/index_manager.py",
+        "core/embeddings/index_persistence.py",
+        "core/ops/offline_migration_lock.py",
+        "core/app/question_answer_search.py",
+        "core/application/intelligence.py",
+        "integrations/agora.py"
+      ],
+      "data_dependencies": [
+        "mnemos vault",
+        "embedding index",
+        "relation index",
+        "producer_consumer_ledger.db cognition episodes and v4 immutable ACL header/binding projection",
+        "cognitive_graph.db",
+        "evidence_graph.db",
+        "cognitive_search_exclusions.db",
+        "wiki metrics",
+        "persona profile"
+      ],
+      "expected_input": "server-bound MCP principal plus query/page path, optional session/project narrowing, scope and limit",
+      "expected_output": "ACL-authorized fused Wiki/CognitiveState/CognitiveGraph/EvidenceGraph results with channel/object/current revision, match-offset snippet, matched field, source revision/span, ACL decision and query trace, or authorized answer snippets",
+      "data_landing": "read-only output plus search_sessions/wiki metrics side effects",
+      "success_standard": "四通道独立 oversample，ACL/purpose 在最终 top-k 前执行并 refill，application 暴露 typed cognition 前按 channel/object/current revision 二次授权；state 候选只读取 v4 small header/binding，binding ACL preimage/payload hash/identity 与 canonical revision 一致且正文仅在授权后 hydration；冻结 benchmark critical Recall@5=100%、Recall@10>=95%、MRR>=0.90、unauthorized=0、field/source/current trace gap=0；51/51 MCP tools 经过服务端 principal policy，caller 参数不能扩权",
+      "failure_or_degradation": "缺失/伪造/过期/撤销 capability、caller identity override、越权 project、ACL 缺失/冲突、stale/superseded revision 或未登记历史 exclusion 均 fail closed 且 handler/搜索副作用增量为 0；embedding/reranker 不可用时返回 degraded trace，不在读取路径隐式重建索引或调用 provider",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_cognitive_search.py --strict --json",
+        "python3 scripts/audit_cognitive_search.py --production --strict --json",
+        "python3 scripts/reconcile_cognitive_search_state_headers.py --json",
+        "python3 -m pytest tests/unit/cognitive/test_cognitive_search.py tests/unit/cognitive/test_search_state_headers.py tests/unit/test_audit_cognitive_search.py tests/unit/test_reconcile_cognitive_search_exclusions.py -q",
+        "python3 -m pytest tests/unit/test_context_search.py tests/unit/test_question_answer_search.py tests/unit/test_cli_search.py -q",
+        "python3 -m pytest tests/unit/test_mcp_principal_resolver.py tests/unit/test_mcp_tool_policy_registry.py tests/integration/test_mcp_authorization_boundary.py tests/integration/test_auth_before_side_effects.py tests/integration/test_wiki_read_authorization.py -q"
+      ]
+    },
+    {
+      "id": "wiki.quality",
+      "group": "6.5 搜索与问答功能",
+      "feature_name": "Wiki/Vault 数据质量合同、预算线和人工清单",
+      "user_entrypoints": [
+        "script:scripts/wiki_lint.py --summary --json",
+        "script:scripts/wiki_lint.py --summary --json --budget",
+        "script:scripts/wiki_lint.py --fix",
+        "script:scripts/audit_wiki_quality_contract.py --strict",
+        "cli:vaults audit-content"
+      ],
+      "code_entrypoints": [
+        "scripts/wiki_lint.py",
+        "scripts/audit_wiki_quality_contract.py",
+        "core/vaults/content_audit.py",
+        "core/system_contracts.py"
+      ],
+      "data_dependencies": [
+        "mnemos vault markdown pages",
+        "page frontmatter",
+        "internal wikilinks",
+        "action_ledger.db",
+        "mnemos scorecard contract"
+      ],
+      "expected_input": "vault markdown files, stale/stub thresholds and optional budget JSON",
+      "expected_output": "mnemos.wiki_quality.v1 summary with issue counts, lifecycle state mappings, budget owner/strategy lines, manual review samples, scorecard metrics and ActionLedger ref for auto-fix",
+      "data_landing": "stdout JSON/human summary; --fix updates Wiki frontmatter and records wiki_quality_fix in action_ledger.db",
+      "success_standard": "missing_meta/orphan/broken_link/stub 均映射到统一生命周期和 obsidian_experience scorecard；budget 模式可阻断超线；自动元数据修复必须有 ActionLedger 证据",
+      "failure_or_degradation": "旧 vault 或重建后仍有断链/孤岛/缺元数据时返回 needs_user/非零，并给出 owner、策略和人工确认样本；默认不写真实 vault",
+      "docs": [
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_wiki_quality_contract.py --strict",
+        "python3 scripts/wiki_lint.py --summary --json",
+        "python3 -m pytest tests/unit/test_wiki_lint.py tests/unit/vaults/test_content_audit.py -q"
+      ]
+    },
+    {
+      "id": "search.raw",
+      "group": "6.5 搜索与问答功能",
+      "feature_name": "Raw 历史会话搜索和 session 召回",
+      "user_entrypoints": [
+        "mcp:session_search"
+      ],
+      "code_entrypoints": [
+        "core/app/raw_search.py",
+        "core/application/storage.py",
+        "integrations/agora.py"
+      ],
+      "data_dependencies": [
+        "raw_index.db",
+        "raw vault projection",
+        "raw_events.db"
+      ],
+      "expected_input": "query/session_id/source/limit/access filter",
+      "expected_output": "ACL-authorized snippets fetched from immutable raw revisions, with revision/content hash and projection-candidate metadata",
+      "data_landing": "read-only canonical output plus logical raw access metrics",
+      "success_standard": "metadata-only header 在正文读取前完成权限过滤；投影只作已授权候选；旧/current revision UID 可稳定回查；投影截断、延迟或删除不影响 canonical hit",
+      "failure_or_degradation": "canonical raw DB 缺失显式失败；stale/missing index 不阻断 canonical search，也不在 MCP 请求里全量重建",
+      "docs": [
+        "docs/acceptance/raw_event_contract.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_raw_search.py tests/unit/test_storage_application.py tests/unit/test_agora.py -q",
+        "python3 -m pytest tests/integration/test_raw_search_canonical_fetch.py -q"
+      ]
+    },
+    {
+      "id": "mcp.kia_tools",
+      "group": "6.6 MCP 主动工具功能",
+      "feature_name": "Preflight、Guard、预测推送和反馈",
+      "user_entrypoints": [
+        "mcp:preflight_inject",
+        "mcp:guard_check",
+        "mcp:predictive_push",
+        "mcp:push_feedback",
+        "mcp:check_pending_recaps"
+      ],
+      "code_entrypoints": [
+        "core/application/kia.py",
+        "core/kia/prophasis.py",
+        "core/kia/teiresias.py",
+        "integrations/agora.py"
+      ],
+      "data_dependencies": [
+        "retrospective wiki pages",
+        "push history/penalty stores",
+        "dialog reminders"
+      ],
+      "expected_input": "task type, subtype, user message, topic/action and current context",
+      "expected_output": "preflight checklist, guard alert/no-alert, predictive push with emotion-aware reason and feedback outcome",
+      "data_landing": "KIA state databases, reminder/push feedback stores, optional outcome records",
+      "success_standard": "工具输出能改变 Agent 行为，并能记录接受/忽略/取消反馈",
+      "failure_or_degradation": "无相关知识时安静返回，不骚扰用户",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_preflight_builder.py tests/unit/test_teiresias.py tests/unit/test_teiresias_embedding.py tests/unit/test_agora.py -q"
+      ]
+    },
+    {
+      "id": "mcp.capture_memory_tools",
+      "group": "6.6 MCP 主动工具功能",
+      "feature_name": "MCP 采集、知识写入、文档处理和系统工具",
+      "user_entrypoints": [
+        "mcp:knowledge_ingest",
+        "mcp:document_process",
+        "mcp:wiki_write",
+        "mcp:health_check",
+        "mcp:self_diagnose",
+        "mcp:configure_wiki",
+        "mcp:detect_sources",
+        "mcp:knowledge_source_list"
+      ],
+      "code_entrypoints": [
+        "integrations/agora.py",
+        "integrations/agora_tools/schema.py",
+        "core/application/facade.py",
+        "core/application/document_import_service.py",
+        "core/document_import.py",
+        "core/application/memory.py",
+        "core/application/storage.py"
+      ],
+      "data_dependencies": [
+        "wiki vault",
+        "canonical raw event store",
+        "capture outbox",
+        "document files",
+        "source registry"
+      ],
+      "expected_input": "content, trusted user document file paths, document import mode, wiki paths, vault paths and health requests",
+      "expected_output": "audited manual Wiki/storage changes, single-owner document import receipt and system health report",
+      "data_landing": "mnemos vault, canonical raw event store, capture outbox, Amphora, Wiki and action_ledger.db where applicable",
+      "success_standard": "manual/direct writes remain explicit application entrypoints; document_process defaults to canonical raw plus asynchronous quality-gated distill, returns accepted/pending, and only parses when mode=parse or legacy write_to_wiki=false is explicit",
+      "failure_or_degradation": "bad input path or oversize document fails before capture; projection/Amphora/API failure preserves canonical raw with retryable status; health dependency failure returns a diagnostic without direct-write fallback",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_agora.py tests/unit/test_mcp_document_process.py tests/integration/test_document_ingest_unified.py -q"
+      ]
+    },
+    {
+      "id": "recap.reminder",
+      "group": "6.7 自动回顾、强制提醒、提醒策略",
+      "feature_name": "待复盘、对话提醒和手动提醒队列",
+      "user_entrypoints": [
+        "cli:reminder list",
+        "cli:reminder status",
+        "cli:reminder push",
+        "cli:reminder resolve",
+        "cli:reminder resolve --issue",
+        "cli:reminder dismiss",
+        "cli:reminder expire-stale",
+        "cli:recap list",
+        "cli:recap resolve",
+        "cli:recap dismiss",
+        "mcp:check_pending_recaps",
+        "mcp:recap_start",
+        "mcp:recap_submit",
+        "mcp:recap_finalize",
+        "mcp:recap_skip",
+        "mcp:recap_feedback",
+        "mcp:recap_status",
+        "mcp:recap_claim_owner"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/reminder.py",
+        "core/cli/commands/recap.py",
+        "core/kia/reminder_engine.py",
+        "core/kia/dialog_reminder.py",
+        "core/app/forced_retrospective.py",
+        "core/app/retrospective_session_manager.py",
+        "core/app/retrospective_store.py",
+        "core/app/retrospective_skip_event_store.py",
+        "core/app/recap_consumption.py",
+        "core/app/recap_feedback.py",
+        "core/app/retrospective_consumption_router.py",
+        "core/app/retrospective_completion.py",
+        "daemon/kia_services.py",
+        "integrations/agora.py"
+      ],
+      "data_dependencies": [
+        "dialog_reminder.db",
+        "recap task state",
+        "recap_task_events",
+        "retrospective_sessions",
+        "recap_skip_events",
+        "recap_consumption_plans",
+        "recap_consumption_commands/recap_consumption_receipts",
+        "recap_feedback_events/recap_correction_commands/recap_correction_receipts",
+        "recap_effect_states/recap_scheduler_corrections",
+        "reminder pages",
+        "06-Retrospectives/复盘 pages"
+      ],
+      "expected_input": "status filter, reminder id, issue id, recap task id, user context, three-question answers, confirmation, skip reason, close reason, feedback type/comment, latest supersedes_event_id and adaptive push limit",
+      "expected_output": "pending/pushed/resolved/dismissed/expired reminders, concise recap nudges, recap list/resolve/dismiss results, structured recap drafts, finalized Wiki pages, skip events, canonical target plans, per-target receipts and correction receipts",
+      "data_landing": "dialog_reminder.db; recap_tasks.db plan/command/receipt/correction/effect tables; policy_patches.db; user_signals.db; scorer database; reminder and 06-Retrospectives/复盘 pages",
+      "success_standard": "轻提醒/强提醒/关闭路径可区分；三问复盘只有 committed page、已落目标的 trusted proposal 且全部 required canonical target receipt committed/intentional_skip 后才可 consumed；未知 target 在 plan 接受前拒绝，alias 不重复 effect；跳过原因经 scheduler/scoring/persona 真实消费者改变后续；负反馈撤销/抑制/补偿全部 committed effect，冲突反馈精确 supersede 最新事件；partial/restart/duplicate 只重试缺失 receipt；high/critical pending recap 可批量 resolved/dismissed 且写事件；dialog reminder 支持完整生命周期",
+      "failure_or_degradation": "无强制项时只返回摘要，不打开外部应用；finalized 页面、proposal、required target receipt 或 correction receipt 缺失时保持 pending/partial/retryable 且 daemon 可恢复，不得报告 terminal；检索 correction DB 故障对 recap 候选 fail closed；high/critical recap pending 未闭环或 dialog reminder pending/active 超预算时 health queues strict check degraded",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_retrospective_workflow.py tests/unit/test_reminder_engine.py tests/unit/test_cli_reminder.py tests/unit/test_cli_recap.py tests/unit/test_dialog_reminder.py tests/unit/test_agora.py -q",
+        "python3 -m pytest tests/integration/test_recap_trusted_completion.py tests/integration/test_recap_consumption_runtime_e2e.py tests/integration/test_recap_feedback_correction.py -q",
+        "python3 -m pytest tests/unit/test_persona_signal_source_event.py tests/unit/test_reconcile_recap_consumption.py -q"
+      ]
+    },
+    {
+      "id": "persona.profile",
+      "group": "6.8 用户画像与知识画像",
+      "feature_name": "用户画像生成、校准、用户认知画像 v2、行为提示和知识画像影响",
+      "user_entrypoints": [
+        "cli:persona behavior-metrics",
+        "cli:persona daily-summary",
+        "cli:persona projects",
+        "cli:persona project-signals",
+        "cli:persona recent-signals",
+        "cli:calibrate",
+        "cli:feedback stats",
+        "cli:scorer status",
+        "cli:policy list",
+        "cli:policy commit",
+        "cli:policy rollback",
+        "mcp:persona_summary",
+        "mcp:persona_behavior_prompt",
+        "mcp:persona_behavior_metrics",
+        "mcp:persona_update",
+        "mcp:signal_collect"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/policy.py",
+        "core/kia/policy.py",
+        "core/application/persona.py",
+        "core/persona/psyche.py",
+        "core/persona/cognitive_profile.py",
+        "core/persona/behavior_tracker.py",
+        "core/persona/contextual_strategy.py",
+        "integrations/preflight_builder.py",
+        "core/app/context_search.py",
+        "core/hephaestus/prompt_builder.py",
+        "core/hephaestus/cognitive_value_gate.py",
+        "core/ops/auto_healing.py",
+        "core/kia/ixion.py",
+        "scripts/audit_persona_profile_contract.py",
+        "scripts/audit_persona_runtime_effectiveness.py",
+        "scripts/audit_blindspot_asset_boundaries.py",
+        "scripts/audit_phase5_failure_contracts.py",
+        "core/scoring/adaptive_scorer_v2.py"
+      ],
+      "data_dependencies": [
+        "user signals",
+        "profile_signals",
+        "profile_assertions",
+        "profile_assertion_revisions",
+        "profile_read_authorizations",
+        "profile_usage_outbox",
+        "profile_usage_log",
+        "persona databases",
+        "feedback/outcome stores",
+        "wiki metrics",
+        "adaptive_config.db/policy_shadow"
+      ],
+      "expected_input": "signals, calibration feedback, days window, policy experiment id and current context",
+      "expected_output": "persona summary with user_cognitive_profile_v2, behavior prompt, profile usage metrics, project candidate lists, raw/project-isolated signals, policy shadow manual commit/rollback state and updated scoring signals",
+      "data_landing": "persona/signal/scoring databases, profile_signals/profile_assertions/profile_assertion_revisions/profile_read_authorizations/profile_usage_outbox/profile_usage_log and adaptive_config.db",
+      "success_standard": "画像输出决策偏好、判断标准、交互契约、风险边界、负反馈、当前目标和认知飞轮输入；seeded structural contract 与 production-readonly effectiveness/boundary audit 分开签证，且 production 分母为零、schema 缺失或真实 effect 缺失均阻断 strict release；只有具备真实授权路由的 preflight、context search、persona behavior prompt 计入 effective consumer。每次 effect 必须消费绑定同一 server-resolved principal、project/session、consumer、purpose、exact assertion revision 与 ACL hash 的 sealed read token，再以 durable outbox 写 exact usage/effect receipt；未知、重复、缺失字段或 token/ACL/scope 漂移全部 fail closed。普通 SignalStore 打开只验证现有 canonical assertion/access/usage registry、schema hash、index、FK 与 head binding，缺库/旧 schema 必须 fail closed，不能建目录、DDL、ALTER 或 missing-table 自动初始化；显式迁移强制锁内 exact reviewed plan hash、唯一 O_EXCL backup generation、source/backup integrity+FK、逐语句 rollback、second apply zero-change 与 restore drill。runtime audit 以 token 签发时刻验证 historical temporal validity，允许之后正常 supersede 的历史 revision，但拒绝 future/unrelated/stale-at-read revision；before/after comparator 与 consumer 固定 target/kind/mapping 必须一致，context search 的 ranking hash、真实 rank delta、eligible candidate 与 matched assertion 集合必须可独立重算。DistillTask 在 server-resolved principal 或 sealed read decision 接入前保持 disabled，quality gate/auto-healing/cognitive flywheel 同样不得制造 usage effect。Phase 5 frozen negative contract 必须在绑定基线稳定失败、候选通过，并要求 baseline_failure_evidence_present=1、wrong_legacy_behavior_expected_by_runtime_test=0、old_production_caller_residual=0、static_green_production_red=0",
+      "failure_or_degradation": "画像缺失时返回默认策略或空 profile，不阻断主流程",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "partial",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_persona_alignment.py tests/unit/test_persona_contextual_strategy.py tests/unit/persona/test_behavior_tracker.py tests/unit/kia/test_policy.py tests/unit/test_mnemos_cli.py -q -k 'persona or behavior_tracker or force_commit or force_rollback or policy_commit or TestCmdPolicy'",
+        "python3 -m pytest tests/unit/test_user_cognitive_profile_v2.py tests/integration/test_profile_signal_assertion_usage_loop.py -q",
+        "python3 -m pytest tests/unit/test_reconcile_profile_assertion_revisions.py -q",
+        "python3 scripts/audit_persona_profile_contract.py --strict",
+        "python3 scripts/audit_persona_runtime_effectiveness.py --strict --json",
+        "python3 scripts/audit_blindspot_asset_boundaries.py --strict --json",
+        "python3 scripts/audit_phase5_failure_contracts.py --strict --json",
+        "python3 scripts/audit_runtime_producer_consumer_closure.py --strict"
+      ]
+    },
+    {
+      "id": "adaptive.policy_coverage",
+      "group": "6.8 自适应策略覆盖",
+      "feature_name": "全局自适应配置覆盖矩阵、运行时策略读取和回滚观测",
+      "user_entrypoints": [
+        "cli:status",
+        "cli:health",
+        "script:scripts/audit_adaptive_policy_matrix.py"
+      ],
+      "code_entrypoints": [
+        "core/kia/adaptive_config.py",
+        "core/kia/adaptive_policy_matrix.py",
+        "core/kia/policy.py",
+        "daemon/adaptive_service.py",
+        "core/ops/health_check.py",
+        "core/ops/cognitive_data_contract.py",
+        "core/ops/producer_consumer_ledger.py",
+        "scripts/audit_data_interface_registry.py",
+        "core/cli/commands/status.py"
+      ],
+      "data_dependencies": [
+        "adaptive_config.db/usage_metrics",
+        "adaptive_config.db/config_adaptation_log",
+        "adaptive_config.db/policy_shadow",
+        "distill_actions.db",
+        "raw_events.db",
+        "delivery_events.db",
+        "mnemos.db/search_sessions",
+        "rejected_documents"
+      ],
+      "expected_input": "EWMA usage metrics, active policy shadow rows, quality gate outcomes, raw completeness, document rejection count, search no-result rate, delivery feedback and intent low-confidence feedback",
+      "expected_output": "strict coverage matrix, 11 default adaptive rules, EffectivePolicy runtime values, status/health active_shadow count, metric_before/after and overdue rollback visibility",
+      "data_landing": "adaptive_config.db and producer_consumer_ledger.db runtime closure ledger plus cognitive data event/reconciliation tables used by daemon adaptive metric collection and strict health",
+      "success_standard": "自适应覆盖 distill、quality_gate、scoring、delivery、search、raw、document_process、intent 和 cognitive_decision；每个规则有输入信号、可调参数、读取入口、回滚指标和验收指标；没有 active shadow 时调用方配置仍优先",
+      "failure_or_degradation": "缺少覆盖域、规则、文档矩阵或消费者时 strict audit 失败；策略读取异常降级为调用方默认值；health/status 暴露 coverage_errors、active_shadow 和 overdue shadow",
+      "docs": [
+        "docs/AGENT_GUIDE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/ARCHITECTURE.md",
+        "docs/acceptance/adaptive_policy_matrix.json",
+        "docs/acceptance/adaptive_data_flows.json"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_adaptive_policy_matrix.py --strict",
+        "python3 scripts/audit_data_interface_registry.py --strict",
+        "python3 scripts/audit_runtime_producer_consumer_closure.py --strict",
+        "python3 -m pytest tests/unit/test_cognitive_data_event_contract.py tests/integration/test_cognitive_data_ledger_capture_to_distill.py tests/integration/test_duplicate_capture_consume_reconciliation.py -q",
+        "python3 -m pytest tests/unit/kia/test_adaptive_policy_matrix.py tests/unit/kia/test_adaptive_config_effective.py tests/unit/test_daemon_adaptive_service.py -q"
+      ]
+    },
+    {
+      "id": "context.predictive",
+      "group": "6.9 上下文感知与预测性知识推送",
+      "feature_name": "上下文搜索、preflight builder、预测推送和反馈调权",
+      "user_entrypoints": [
+        "mcp:context_aware_search",
+        "mcp:preflight_inject",
+        "mcp:predictive_push",
+        "mcp:push_feedback"
+      ],
+      "code_entrypoints": [
+        "core/app/context_search.py",
+        "integrations/preflight_builder.py",
+        "core/kia/teiresias.py",
+        "core/app/application_hub.py"
+      ],
+      "data_dependencies": [
+        "mnemos vault",
+        "KG",
+        "persona",
+        "push feedback/outcome stores"
+      ],
+      "expected_input": "current task/query/working directory and feedback action",
+      "expected_output": "ranked context, proactive push suggestion, emotion-aware threshold/reason and feedback-adjusted future behavior",
+      "data_landing": "search_sessions, push feedback/penalty stores, adaptive scorer samples",
+      "success_standard": "任务开始能主动给相关经验；反馈会影响后续推送",
+      "failure_or_degradation": "无高置信推送时不打扰；搜索降级有 query_trace",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_context_search.py tests/unit/test_preflight_builder.py tests/unit/test_teiresias.py tests/unit/test_teiresias_embedding.py -q"
+      ]
+    },
+    {
+      "id": "hidden.blindspot",
+      "group": "6.10 隐藏关系、盲区、暗知识替代能力",
+      "feature_name": "盲区检测、隐藏关系建议和旧暗知识替代",
+      "user_entrypoints": [
+        "cli:blindspot list",
+        "cli:blindspot status",
+        "cli:blindspot ignore",
+        "cli:blindspot resolve",
+        "cli:blindspot cleanup",
+        "cli:kg export-dataview",
+        "mcp:blindspot_check"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/blindspot.py",
+        "core/app/blindspot_discovery.py",
+        "core/cognitive/user_model_asset_store.py",
+        "scripts/reconcile_user_model_asset_stores.py",
+        "core/knowledge_form.py",
+        "scripts/plan_wiki_knowledge_form_reconciliation.py",
+        "scripts/reconcile_wiki_knowledge_forms.py",
+        "scripts/audit_blindspot_asset_boundaries.py",
+        "core/kia/hygieia.py",
+        "core/kia/knowledge_graph.py"
+      ],
+      "data_dependencies": [
+        "wiki vault",
+        "knowledge_graph.db",
+        "user_cognitive_blindspots.db",
+        "interaction_preferences.db",
+        "blindspot state"
+      ],
+      "expected_input": "query/topic/status filters and optional resolving page",
+      "expected_output": "blindspot records, ignore/resolve state, hidden relation suggestions and Obsidian Dataview query blocks",
+      "data_landing": "blindspot records and KG relation suggestions after confirmation",
+      "success_standard": "不恢复 core.dark_knowledge/core.quantum_entanglement；替代能力从 KG/Hygieia 提供。UserCognitiveBlindspot 与 InteractionPreference 两个独立 store 必须由一个 reviewed plan hash 和 migration generation 协调，在共享 offline lock 内通过 attached-database 原子 transaction 同时安装；唯一 backup generation、fresh-missing pre-state manifest、integrity/FK、crash recovery、restore drill 与 second apply zero-change 缺一即阻断。Wiki 知识形态 apply 必须强制 exact plan hash，在任何 backup/source write 前取得 offline lock，先生成 Wiki 外 staged after-image，再把 Markdown 与 projection ledger/events 作为同代提交；prepared/source_materialized/projection_committed 崩溃状态必须可恢复，source/projection generation mismatch 为零。六类知识形态 alias/display/entity-type 仅由 core/knowledge_form.py 定义，Unicode NFKC、casefold、中英文 alias 和“洞察”语料在 producer prompt/schema、renderer、migration plan 与 audit 间必须一致；knowledge_form_vocabulary_owner_count=1 且 producer_migration_consumer_normalization_drift=0",
+      "failure_or_degradation": "无足够证据时只提示盲区或建议，不自动写关系",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_blindspot_discovery.py tests/unit/test_knowledge_graph.py tests/unit/test_mnemos_cli.py -q -k 'export_dataview or blindspot'",
+        "python3 -m pytest tests/unit/test_user_model_asset_stores.py tests/unit/test_reconcile_user_model_asset_stores.py -q",
+        "python3 -m pytest tests/unit/test_reconcile_wiki_knowledge_forms.py tests/unit/test_reconcile_wiki_acl_projection.py -q",
+        "python3 -m pytest tests/unit/test_knowledge_form.py tests/unit/test_plan_wiki_knowledge_form_reconciliation.py tests/unit/test_audit_blindspot_asset_boundaries.py -q"
+      ]
+    },
+    {
+      "id": "trajectory.observation_reflection",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "观察、反思、反馈和认知轨迹",
+      "user_entrypoints": [
+        "cli:observe run",
+        "cli:observe search",
+        "cli:observe stats",
+        "cli:reflect on",
+        "cli:reflect manual",
+        "cli:reflect pending",
+        "cli:reflect feedback",
+        "cli:cognitive-graph stats",
+        "cli:cognitive-graph reconcile",
+        "cli:cognitive-graph ingest",
+        "mcp:observation_run",
+        "mcp:observation_search",
+        "mcp:reflect_on_input",
+        "mcp:reflect_manually",
+        "mcp:reflection_feedback",
+        "mcp:reflection_pending"
+      ],
+      "code_entrypoints": [
+        "core/kia/ariadne.py",
+        "core/cognitive/observation_engine.py",
+        "core/cognitive/sources.py",
+        "core/cognitive/calibration_lineage.py",
+        "core/cognitive/calibration_math.py",
+        "core/cognitive/calibration_record.py",
+        "core/cognitive/observation_calibration_schema.py",
+        "core/cognitive/wiki_exporter.py",
+        "core/sync_framework/raw_event_store.py",
+        "core/sync_framework/raw_provenance_store.py",
+        "core/ops/cognitive_readiness_lineage.py",
+        "core/cognitive/observation_index.py",
+        "core/application/observation.py",
+        "core/application/reflection.py",
+        "core/reflection/reflection_engine.py",
+        "core/reflection/consumers.py",
+        "core/cognitive_graph"
+      ],
+      "data_dependencies": [
+        "raw_events.db eligible current revisions (canonical)",
+        "Raw Vault v2 hash-parity compatibility audit (non-runtime fallback)",
+        "wiki sources",
+        "trail.db/page_stats",
+        "observations.db",
+        "producer_consumer_ledger.db calibration_record revisions and observation_index/wiki_projection outbox",
+        "reflections.db",
+        "policy_patches.db",
+        "cognitive_graph.db",
+        "feedback records"
+      ],
+      "expected_input": "text/query, full/since flags, feedback type and graph event data",
+      "expected_output": "objective observations with exact Raw current revision/span terminal provenance, committed replayable CalibrationRecord prior/posterior and extraction status/reason, PageTrail first/last access metadata, reflection insights, pending feedback, policy patch/no_patch evidence and graph reconciliation state",
+      "data_landing": "raw_events.db raw_provenance_edges/raw_provenance_gaps, observations.db verified or historical_unverified base measurement plus committed calibration binding/observation_source_cursors, producer_consumer_ledger.db typed calibration revisions/outbox/effect receipts, trail.db, reflections.db, policy_patches.db, cognitive_graph.db and projection pages",
+      "success_standard": "观察与反思能影响后续提醒、策略、PolicyPatchStore 或经验召回；正式 Observation 从 canonical Raw typed reader 取得 current revision，不能用 Markdown/path/logical event ID 代替；每个 eligible Raw 必须为 exact observation edge 或限定原因的 intentional_no_observation terminal；校准只计独立 Raw lineage cluster，同根派生来源去重且多根汇总不计票，prior/posterior 可从 committed input/spec/validator result 重算，相同 input/spec 重放同 revision，spec 变更 stale/supersede，全量/增量 Wiki 共用 calibration hash 并显示 observation/calibration/span/omission identity；增量 0 产出必须区分 no new material、no observations extracted 或 error，且 all_visible_raw_skipped 不得绿灯",
+      "failure_or_degradation": "canonical Raw 缺失、旧/损坏 identity contract、Observation calibration binding schema 非 canonical、historical_unverified base 被尝试校准或 projection parity mismatch 必须 fail closed，不能回退 Markdown/伪造 base/CalibrationRecord；无 canonical state store 时 verified Observation 保留 base confidence；LLM 不可用时能返回 prompt/empty insight without crashing；Observation 0 产出返回 status/reason/processed_items 而不是裸 0，extractor/persist failure 不推进 Raw cursor",
+      "docs": [
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_ariadne.py tests/unit/cognitive/test_canonical_raw_observation.py tests/unit/cognitive/test_observation_engine.py tests/unit/cognitive/test_calibration_record.py tests/unit/cognitive/test_calibration_lineage_audit.py tests/unit/test_cognitive_readiness_audit.py tests/unit/test_daemon_observation_service.py tests/unit/reflection/test_reflection_engine.py tests/unit/reflection/test_reflection_policy_patch_consumer.py tests/unit/test_cli_reflect_command.py -q",
+        "python3 scripts/audit_cognitive_calibration_lineage.py --strict --json"
+      ]
+    },
+    {
+      "id": "cognitive.consolidation",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "认知压缩、覆盖账本和受控 raw 遗忘",
+      "user_entrypoints": [
+        "script:scripts/plan_cognitive_consolidation.py"
+      ],
+      "code_entrypoints": [
+        "core/cognitive/consolidator.py",
+        "core/sync_framework/raw_event_store.py",
+        "scripts/plan_cognitive_consolidation.py"
+      ],
+      "data_dependencies": [
+        "raw_events.db",
+        "Raw Vault projection",
+        "mnemos vault method pages",
+        "knowledge_graph.db",
+        "cognitive_consolidation.db"
+      ],
+      "expected_input": "candidate limits, method page, freeze/apply, trusted proposal submit/reconcile and record-run flags",
+      "expected_output": "mnemos.cognitive_consolidation.v1 plan, frozen candidate revision/hash dispositions, trusted proposal receipt, and receipt-backed coverage only after lifecycle projection completion",
+      "data_landing": "cognitive_consolidation.db consolidation_runs/consolidation_trusted_pages/consolidation_coverage_receipts on explicit operations; Raw is never purged by this command; Wiki/KG candidates are report-only until trusted approval",
+      "success_standard": "每个候选必须有 exact revision/content hash terminal disposition；coverage 仅在 trusted page commit、page hash、逐候选 exact source ref、Wiki lifecycle mutation 和六类 consumer receipt 全部通过后写入；Wiki/KG/Raw 默认不物理删除",
+      "failure_or_degradation": "缺失/拒绝 trusted proposal、页面 hash 漂移、任一 source ref 或 projection receipt 缺失均不写 coverage；普通 dry-run 不创建 cognitive_consolidation.db；daemon 只重试已绑定 proposal，不能审批或删除 Raw",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_cognitive_consolidator.py -q",
+        "python3 scripts/plan_cognitive_consolidation.py --json --candidate-limit 2",
+        "python3 scripts/plan_cognitive_consolidation.py --json --candidate-limit 2 --record-run"
+      ]
+    },
+    {
+      "id": "cognitive.trust_scorer",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "信任评分、投递闸门和负证据账本",
+      "user_entrypoints": [
+        "mcp:predictive_push",
+        "mcp:push_feedback",
+        "internal:DistillActionRouter create_page/update_page/merge_into_page"
+      ],
+      "code_entrypoints": [
+        "core/cognitive/trust_scorer.py",
+        "core/application/intelligence.py",
+        "core/hephaestus/distill_action_router.py"
+      ],
+      "data_dependencies": [
+        "trust_decisions.db",
+        "distill_actions.db",
+        "push feedback",
+        "distill_output_v4 evidence refs"
+      ],
+      "expected_input": "create/update/merge claims with evidence refs, predictive push reminders, and principal-bound exact-event ignore/dismiss/inaccurate/outdated feedback",
+      "expected_output": "mnemos.trust_decisions.v1 extraction/merge/delivery trust decisions, scoped negative_evidence rows, MCP push payload trust_decision_id, shadow routing when merge trust fails",
+      "data_landing": "trust_decisions.db trust_decisions/negative_evidence; distill action result_detail trust_decision_id",
+      "success_standard": "每次 create_page 都有 extraction trust decision；每次主动 predictive_push 都有 trust decision；每次自动 update/merge 都有 merge trust decision；dismiss 不删除知识且不降低事实 trust；harmful 阻断同 subject 主动投递",
+      "failure_or_degradation": "trust gate 不可用时主动推送被取消；merge trust 不通过时只写 Shadow",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_knowledge_trust_scorer.py tests/unit/test_feedback_signal_router.py tests/unit/test_distill_action_router.py tests/integration/test_feedback_event_identity_e2e.py tests/integration/test_feedback_outbox_recovery.py -q"
+      ]
+    },
+    {
+      "id": "cognitive.policy_patch_store",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "策略补丁存储、注入和反馈抑制",
+      "user_entrypoints": [
+        "mcp:preflight_inject",
+        "mcp:guard_check",
+        "internal:recap/L5 lesson consumption",
+        "internal:ReflectionPolicyPatchConsumer"
+      ],
+      "code_entrypoints": [
+        "core/cognitive/policy_patch.py",
+        "core/app/retrospective_consumption_router.py",
+        "core/reflection/consumers.py",
+        "core/application/kia.py"
+      ],
+      "data_dependencies": [
+        "policy_patches.db",
+        "delivery_events.db",
+        "L4/L5 lessons",
+        "recap lessons",
+        "policy_patch.* config"
+      ],
+      "expected_input": "lesson summary/content or Reflection insight/shift with source_type/source_id, task_type/subtype, trigger, confidence, severity and evidence_refs",
+      "expected_output": "mnemos.policy_patches.v1 active policy patches, recap_consumption_outcomes policy_patch rows, policy_patch_feedback rows, preflight/guard policy_patches payloads and delivery decision rows",
+      "data_landing": "policy_patches.db policy_patches/policy_patch_feedback; recap_tasks.db recap_consumption_outcomes; KIA responses include policy_patches; guard/preflight delivery events remain in delivery_events.db",
+      "success_standard": "用户确认且具备明确 trigger 的 recap lesson 会在 RetrospectiveConsumptionRouter.route_after_finalize() 生成 policy patch 候选；高置信 Reflection insight/shift 会经 ReflectionPolicyPatchConsumer 生成候选；缺少 trigger 或置信度不足时只记录 skipped/missing_trigger 或 policy_patch_feedback:no_patch，不创建全局泛化 patch；策略补丁只通过 preflight/guard checklist 生效，不写宿主 system prompt；TTL、最低置信度和最大装载条数均来自 policy_patch.* 配置；dismiss/contradicted/harmful feedback 会抑制后续装载",
+      "failure_or_degradation": "PolicyPatchStore 不可用时 KIA 入口保留原功能并 debug 记录；低置信、过期或已 dismiss 的 patch 不注入",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_policy_patch_store.py tests/unit/test_kia_policy_patches.py tests/unit/test_retrospective_workflow.py tests/unit/test_kia_delivery_events.py tests/unit/reflection/test_reflection_policy_patch_consumer.py -q"
+      ]
+    },
+    {
+      "id": "cognitive.delivery_router",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "知识投递策略、预算和 outcome 账本",
+      "user_entrypoints": [
+        "mcp:predictive_push",
+        "mcp:push_feedback",
+        "mcp:preflight_inject",
+        "mcp:guard_check",
+        "mcp:check_pending_recaps",
+        "script:scripts/replay_delivery_decisions.py"
+      ],
+      "code_entrypoints": [
+        "core/cognitive/feedback_event.py",
+        "core/cognitive/delivery_router.py",
+        "core/scoring/feedback_persistence.py",
+        "core/application/intelligence.py",
+        "core/application/kia.py",
+        "core/kia/dialog_reminder.py",
+        "core/app/context_search.py",
+        "core/app/outcome_recorder.py",
+        "scripts/replay_delivery_decisions.py"
+      ],
+      "data_dependencies": [
+        "delivery_events.db",
+        "feedback_events/feedback_receipts",
+        "trust_decisions.db",
+        "push feedback",
+        "dialog_reminder.db",
+        "search_sessions",
+        "delivery.profile configuration"
+      ],
+      "expected_input": "delivery candidates plus exact delivery_event_id/topic/action feedback bound to server principal and project/session scope",
+      "expected_output": "mnemos.delivery_events.v1 decisions, mnemos.feedback_event.v1 append-only commands, required consumer receipts, idempotent effects, cognitive_outcomes, and terminal_status/effect_delta",
+      "data_landing": "delivery_events.db delivery_events/feedback_events/feedback_receipts/outcome_projection_receipts/cognitive_outcomes; idempotent projections in push_penalty, scorer, reflection, optimizer, feedback signal, and trust stores",
+      "success_standard": "反馈唯一绑定用户所见 delivery event；topic/latest fallback 不存在；required receipts 全 committed 才 complete；partial/failed/stale processing 可幂等恢复且重复提交不重复计数；silent preload 与预算/冷却语义保持不变",
+      "failure_or_degradation": "缺失/错误/未投递/错 principal 或 scope 的 event 在副作用前拒绝；consumer 异常返回 partial 和 retryable consumers，不得顶层 success；无法唯一绑定的历史信号保持 unknown",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_feedback_event_ledger.py tests/unit/test_knowledge_delivery_router.py tests/unit/test_feedback_signal_router.py tests/unit/test_application_hub.py tests/unit/test_outcome_recorder.py tests/unit/test_agora.py tests/integration/test_feedback_event_identity_e2e.py tests/integration/test_feedback_outbox_recovery.py -q",
+        "python3 scripts/replay_delivery_decisions.py --json"
+      ]
+    },
+    {
+      "id": "cognitive.verification_queue",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "受控求证队列与证据提案报告",
+      "user_entrypoints": [
+        "cli:verify plan",
+        "cli:verify run",
+        "scheduler:verification_queue"
+      ],
+      "code_entrypoints": [
+        "core/cognitive/verification_queue.py",
+        "core/cli/commands/verify.py",
+        "core/kia/chronos.py",
+        "core/resource_budget.py"
+      ],
+      "data_dependencies": [
+        "08-Disputes pages",
+        "blindspots.db",
+        "freshness stale pages",
+        "verification_queue.* config",
+        "ResourceBudget"
+      ],
+      "expected_input": "unresolved dispute records, active blindspots and stale freshness alerts with source evidence",
+      "expected_output": "mnemos.verification_report.v1 tasks with evidence_refs or verification_commands; optional verification_queue.db rows and data-dir report on --apply",
+      "data_landing": "verification_queue.db verification_queue/verification_runs only when apply is set; dry-run does not create the DB",
+      "success_standard": "每条结论都有来源证据或提议命令；CLI 默认 dry-run；apply 不修改代码或 Wiki 正文；Chronos 后台步骤受 ResourceBudget 约束并可 deferred",
+      "failure_or_degradation": "资源预算不足时返回 deferred/resource_budget 且不推进 Chronos last_run；来源模块失败时跳过该来源并保留其他来源报告",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_verification_queue.py tests/unit/test_resource_budget.py tests/unit/test_chronos.py -q",
+        "python3 mnemos_cli.py verify plan --json --limit 1",
+        "python3 mnemos_cli.py verify run --json --limit 1"
+      ]
+    },
+    {
+      "id": "evidence.artifact_uri_context",
+      "group": "6.11 知识轨迹、观察、反思",
+      "feature_name": "多模态 artifact evidence 标准化与蒸馏回链",
+      "user_entrypoints": [
+        "mcp:capture_turn",
+        "agent_kit:artifact_uri_context",
+        "distill_output_v4",
+        "wiki:来源追踪"
+      ],
+      "code_entrypoints": [
+        "core/evidence/artifact_uri.py",
+        "core/sync_framework/capture_service.py",
+        "core/hephaestus/distillation_contract.py",
+        "core/hephaestus/distillation_wiki_page.py",
+        "core/agent_kit/acceptance_contracts.py",
+        "prompts/distill/_output_schemas/extract.json",
+        "prompts/distill/extract/base.md"
+      ],
+      "data_dependencies": [
+        "raw_event metadata.artifact_refs",
+        "tool_results",
+        "attachments",
+        "reasoning_artifact_path",
+        "claims.evidence",
+        "Agent Kit acceptance samples"
+      ],
+      "expected_input": "turn payloads with tool results, attachments, reasoning artifact paths, full capture artifacts, or claim evidence that references artifacts",
+      "expected_output": "standard mnemos-artifact:// URIs in metadata.artifact_refs and optional claims.evidence artifact fields; Wiki evidence trace renders artifact summary links only",
+      "data_landing": "raw_events metadata.artifact_refs, distilled page frontmatter evidence_refs, 来源追踪正文 artifact summary link; no new DB schema",
+      "success_standard": "artifact URI 不包含本机绝对路径；artifact_uri 不能替代 source_event_id/quote；artifact_type 与 artifact_summary 随 URI 一起校验；Agent Kit 样本覆盖 artifact_uri_context",
+      "failure_or_degradation": "artifact evidence 无法标准化时保留 raw source_event_id/quote，并通过 completeness 或 contract issue 暴露缺口；Wiki 不嵌入大体量二进制或终端全文",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/acceptance/raw_event_contract.md",
+        "docs/acceptance/distilled_knowledge_contract.md",
+        "docs/acceptance/agent_acceptance_samples.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/evidence/test_artifact_uri.py tests/unit/test_distillation_contract.py tests/unit/test_frontmatter_contract.py tests/unit/test_acceptance_contracts.py tests/unit/test_capture_service.py::TestCaptureServiceDedup -q",
+        "python3 scripts/verify_acceptance_contracts.py"
+      ]
+    },
+    {
+      "id": "time.capsule",
+      "group": "6.12 时间胶囊",
+      "feature_name": "时间胶囊到期、逾期、忽略、完成、延后和报告",
+      "user_entrypoints": [
+        "cli:capsule list",
+        "cli:capsule due",
+        "cli:capsule overdue",
+        "cli:capsule dismiss",
+        "cli:capsule complete",
+        "cli:capsule snooze",
+        "cli:capsule report"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/capsule.py",
+        "core/kia/aion.py"
+      ],
+      "data_dependencies": [
+        "capsule.db",
+        "wiki page metadata",
+        "reminder state"
+      ],
+      "expected_input": "capsule id, page/status filters and snooze days",
+      "expected_output": "due/overdue capsule list, dismiss/completion/snooze result and reminder report",
+      "data_landing": "capsule.db and optional reminder/report output",
+      "success_standard": "到期/逾期/忽略/完成/延后语义清晰，并能与 reminder 联动",
+      "failure_or_degradation": "缺失 capsule id 或空队列返回可诊断消息",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdCapsule -q"
+      ]
+    },
+    {
+      "id": "projection.shadow",
+      "group": "6.13 影子页面",
+      "feature_name": "Shadow 页面同步和状态查看",
+      "user_entrypoints": [
+        "cli:shadow sync",
+        "cli:shadow status"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/shadow.py",
+        "core/kia/hecate.py"
+      ],
+      "data_dependencies": [
+        "mnemos vault pages",
+        "07-Shadow projection directory",
+        "moved path state"
+      ],
+      "expected_input": "page glob or status request",
+      "expected_output": "generated/updated shadow pages and shadow statistics",
+      "data_landing": "07-Shadow projection pages",
+      "success_standard": "shadow_for 有效，页面移动后引用可通过同步修正",
+      "failure_or_degradation": "源页缺失或路径不可解析时跳过并报告",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdShadow -q"
+      ]
+    },
+    {
+      "id": "governance.dispute",
+      "group": "6.14 仲裁争议",
+      "feature_name": "争议扫描、列出、解决、回滚、统计、权重和详情",
+      "user_entrypoints": [
+        "cli:dispute scan",
+        "cli:dispute list",
+        "cli:dispute resolve",
+        "cli:dispute rollback-context",
+        "cli:dispute stats",
+        "cli:dispute weights",
+        "cli:dispute show"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/dispute.py",
+        "core/app/dispute_resolver.py",
+        "core/app/dispute_scorer.py"
+      ],
+      "data_dependencies": [
+        "mnemos vault pages",
+        "knowledge_graph.db",
+        "dispute pages/state"
+      ],
+      "expected_input": "page path, resolution choice, optional context and weight overrides",
+      "expected_output": "dispute pages, scoring details, applied resolution and rollback context",
+      "data_landing": "08-Disputes pages, original wiki pages, dispute state databases",
+      "success_standard": "冲突可发现、可读、可解决；回滚安全且可审计",
+      "failure_or_degradation": "未知页面或无冲突时返回 no-op，不改原页",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_dispute_resolver.py tests/unit/test_cli_dispute.py -q"
+      ]
+    },
+    {
+      "id": "governance.freshness_entropy",
+      "group": "6.15 新鲜度、熵、压力测试、版本",
+      "feature_name": "新鲜度、熵减、压力测试、版本和外链探测",
+      "user_entrypoints": [
+        "cli:freshness list",
+        "cli:freshness refresh",
+        "cli:freshness refresh-all",
+        "cli:entropy scan",
+        "cli:entropy auto-fix",
+        "cli:stress run",
+        "cli:stress status",
+        "cli:version list",
+        "cli:version diff",
+        "cli:version restore",
+        "cli:version create",
+        "cli:version scan-all",
+        "cli:link-probe run",
+        "cli:link-probe status",
+        "mcp:freshness_check"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/freshness.py",
+        "core/cli/commands/entropy.py",
+        "core/cli/commands/stress.py",
+        "core/cli/commands/version.py",
+        "core/cli/commands/link_probe.py",
+        "core/app/freshness_refresh_worker.py",
+        "core/kia/eris.py",
+        "core/kia/genos.py",
+        "core/kia/stress_test.py"
+      ],
+      "data_dependencies": [
+        "wiki pages",
+        "freshness metadata",
+        "entropy reports",
+        "DNA fingerprints",
+        "version snapshots",
+        "link probe queue"
+      ],
+      "expected_input": "status/page filters, refresh target, stress limits and version ids",
+      "expected_output": "stale/fresh state, entropy suggestions, DNA clusters, stress findings, version diff/restore and link status",
+      "data_landing": "wiki metadata, reports, version store and link probe state",
+      "success_standard": "老化/混乱/风险可发现，可解释，可回滚",
+      "failure_or_degradation": "外部链接或 LLM 不可用时标记 pending/error，不删除知识",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_cli_freshness.py tests/unit/test_cli_entropy.py tests/unit/test_genos.py tests/unit/test_stress_test.py tests/unit/test_link_probe_worker.py -q"
+      ]
+    },
+    {
+      "id": "governance.golden_benchmark",
+      "group": "6.15 新鲜度、熵、压力测试、版本",
+      "feature_name": "可重复认知质量 Golden Benchmark",
+      "user_entrypoints": [
+        "script:scripts/audit_golden_benchmark_contract.py",
+        "script:scripts/run_golden_benchmark.py"
+      ],
+      "code_entrypoints": [
+        "core/benchmarks/golden.py",
+        "scripts/audit_golden_benchmark_contract.py",
+        "scripts/run_golden_benchmark.py",
+        "benchmarks/golden/manifest.json"
+      ],
+      "data_dependencies": [
+        "synthetic golden fixtures",
+        "deterministic mock LLM/embedding/reranker/multimodal provider",
+        "committed scorecard baseline"
+      ],
+      "expected_input": "fixed manifest samples and --mock-llm strict run",
+      "expected_output": "mnemos_benchmark_scorecard.json, temporary wiki pages, persona delta, sample status trace and ActionLedger consumption proof",
+      "data_landing": "caller-provided output directory or hermetic MNEMOS_RUN_ARTIFACTS_DIR/golden; no shared latest directory is deleted or reused",
+      "success_standard": "不联网、不调用真实模型、不读取当前用户个人数据；每条样本都有质量门结果、认知资产/拒绝原因、消费者、搜索/preflight 期望和 scorecard 贡献",
+      "failure_or_degradation": "缺少显式 output_dir/run-owned artifacts、输出目录非空、manifest/baseline/schema 缺失或分数低于阈值时 strict 失败；baseline 对比出现退化时 trend_comparison 标出 regression",
+      "docs": [
+        "README.md",
+        "docs/OPS_MANUAL.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 scripts/audit_golden_benchmark_contract.py --strict",
+        "python3 scripts/run_golden_benchmark.py --strict --mock-llm",
+        "python3 -m pytest tests/unit/test_golden_benchmark_contract.py tests/integration/test_golden_benchmark_pipeline.py -q"
+      ]
+    },
+    {
+      "id": "reports.system",
+      "group": "6.16 报告系统",
+      "feature_name": "周报、画像报告、审计报告和健康报告",
+      "user_entrypoints": [
+        "cli:report generate",
+        "cli:doctor",
+        "cli:health",
+        "mcp:health_check"
+      ],
+      "code_entrypoints": [
+        "core/cli/commands/report.py",
+        "core/cli/commands/doctor.py",
+        "core/ops/health_check.py",
+        "core/app/weekly_report.py"
+      ],
+      "data_dependencies": [
+        "wiki metrics",
+        "persona data",
+        "health check state",
+        "audit sources"
+      ],
+      "expected_input": "report command or health/doctor flags",
+      "expected_output": "readable and actionable report with source-backed findings",
+      "data_landing": "99-Reports pages or stdout JSON/human reports",
+      "success_standard": "报告引用真实数据并推动复盘、修复或行为调整",
+      "failure_or_degradation": "缺 source DB/table 时不写假报告，只返回诊断",
+      "docs": [
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdReport tests/unit/test_health_check_report.py tests/unit/test_health_check.py tests/unit/test_weekly_report.py -q"
+      ]
+    },
+    {
+      "id": "ops.config_strict_doctor",
+      "group": "6.1 基础运维功能",
+      "feature_name": "配置/secret/磁盘预算 strict doctor",
+      "user_entrypoints": [
+        "cli:doctor",
+        "cli:doctor config --strict --json",
+        "cli:secrets doctor --json",
+        "cli:distill status",
+        "cli:migrate apply config.stale_keys.v1 --json",
+        "script:scripts/repair_sqlite_disk_budget.py --dry-run",
+        "script:scripts/e2e_probe.py --dry-run --no-api",
+        "script:scripts/audit_release_privacy_security.py --strict",
+        "script:scripts/auto_setup.py --yes --preserve-config"
+      ],
+      "code_entrypoints": [
+        "core/ops/config_audit.py",
+        "core/llm_config.py",
+        "core/privacy/secret_inventory.py",
+        "core/ops/keyring_doctor.py",
+        "core/privacy/redaction.py",
+        "core/cli/commands/doctor.py",
+        "core/cli/commands/secrets.py",
+        "core/cli/commands/distill.py",
+        "mnemos_cli.py",
+        "core/migrations/registry.py",
+        "scripts/health_check.py",
+        "scripts/security_audit.py",
+        "scripts/audit_release_privacy_security.py",
+        "scripts/e2e_probe.py",
+        "scripts/auto_setup.py",
+        "scripts/setup_model_endpoints.py",
+        "scripts/verify_installation.py",
+        "tests/unit/test_redaction.py",
+        "tests/unit/test_mnemos_cli.py",
+        "tests/unit/test_verify_installation.py",
+        "tests/unit/test_config_audit.py",
+        "tests/unit/test_health_check.py",
+        "tests/unit/test_security_audit.py",
+        "tests/unit/test_release_privacy_security_audit.py",
+        "tests/unit/test_e2e_probe.py",
+        "tests/unit/test_keyring_doctor.py",
+        "tests/unit/test_mnemos_cli.py::TestCmdSecrets",
+        "tests/unit/test_auto_setup.py",
+        "tests/unit/test_multimodal_config_optional.py",
+        "tests/unit/test_migration_registry.py",
+        "tests/unit/test_config_stale_key_migration.py",
+        "core/ops/sqlite_disk_budget.py",
+        "scripts/repair_sqlite_disk_budget.py",
+        "tests/unit/test_sqlite_disk_budget.py"
+      ],
+      "data_dependencies": [
+        "~/.mnemos/configs/main.json",
+        "~/.mnemos/config_audit.json",
+        "~/.mnemos/migrations.db",
+        "~/.mnemos/sqlite_disk_budget_state.json",
+        "environment/keyring/keyref secret references",
+        "storage.disk_budget",
+        "storage.retention_days",
+        "daemon.services"
+      ],
+      "expected_input": "operator or release agent runs strict config doctor, health, disk budget dry-run, and release privacy/security audit after setup, config, privacy, retention, migration, daemon, secret-source, or disk-budget changes",
+      "expected_output": "mnemos.config_audit.v1 JSON with required model endpoint status, optional multimodal endpoint status, security.secret_inventory status, security.keyring mnemos.keyring_doctor.v1 evidence, storage.disk_budget config status, path checks, stale config migration status, retention, daemon, permission checks, artifact path and redacted evidence for API URLs, local paths, and key sources; mnemos.sqlite_disk_budget.v1 appears in health; mnemos.security_audit.v2 provides typed blocking/warning findings with derived counts/status/ok/exit; shareable doctor, distill status, and E2E dry-run diagnostics are redacted by default; mnemos.release_privacy_security.v1 validates and aggregates strict config/security/docs/repo/diagnostic findings for release blocking",
+      "data_landing": "~/.mnemos/config_audit.json, ~/.mnemos/sqlite_disk_budget_state.json, and optional MigrationLedger rows in ~/.mnemos/migrations.db",
+      "success_standard": "strict report ok=true, required_failed empty, LLM/embedding/reranker configured through env/keyring/keyref references, optional multimodal may be configured or optional without failing strict, stale config keys absent, sensitive config file remains 0600, security.secret_inventory evidence has plaintext_count=0, security.keyring evidence exposes env_fallback_accepted and safe_but_not_best without leaking secret values, storage.disk_budget config is present, checks.sqlite_disk_budget reports mnemos.sqlite_disk_budget.v1 with no over-budget WAL/temp/snapshot/raw_events findings, and default doctor text plus health/config/verify/distill status/E2E dry-run reports contain no plaintext API key/token/secret values, real API URLs, local absolute paths, or unredacted key source identifiers",
+      "failure_or_degradation": "missing required model endpoint, plaintext secret-like config found by mnemos.secret_inventory.v1, stale top-level memos config, invalid retention, missing storage.disk_budget config, disabled required daemon service, missing vault path, permission violation, or SQLite disk budget overrun returns nonzero with repair_action; keyring unavailable stays non-strict but must provide mnemos.keyring_doctor.v1 guidance and require explicit env fallback acceptance before treating env as accepted; absent multimodal is optional and must not fail strict",
+      "docs": [
+        "README.md",
+        "CONTRIBUTING.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/ARCHITECTURE.md",
+        "docs/CHANGELOG.md",
+        "docs/audits/public_release_checklist.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_redaction.py tests/unit/test_config_audit.py tests/unit/test_sqlite_disk_budget.py tests/unit/test_mnemos_cli.py::TestCmdDoctor tests/unit/test_mnemos_cli.py::TestCmdSecrets tests/unit/test_keyring_doctor.py tests/unit/test_verify_installation.py tests/unit/test_db_init.py::test_health_report_exposes_schema_bootstrap_status tests/unit/test_multimodal_config_optional.py tests/unit/test_auto_setup.py::test_required_model_configs_reuse_global_siliconflow_key tests/unit/test_auto_setup.py::test_step_e2e_uses_readonly_no_api_probe tests/unit/test_migration_registry.py tests/unit/test_config_stale_key_migration.py -q",
+        "python3 mnemos_cli.py doctor config --strict --json",
+        "python3 mnemos_cli.py secrets doctor --json",
+        "python3 mnemos_cli.py health --json",
+        "python3 scripts/repair_sqlite_disk_budget.py --dry-run",
+        "python3 scripts/verify_installation.py --json",
+        "python3 scripts/security_audit.py --strict --json",
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdDistill tests/unit/test_e2e_probe.py tests/unit/test_release_privacy_security_audit.py -q",
+        "python3 scripts/audit_release_privacy_security.py --strict --json",
+        "python3 scripts/auto_setup.py --yes --preserve-config",
+        "python3 scripts/audit_function_matrix.py"
+      ],
+      "validation": [
+        "python3 scripts/repair_sqlite_disk_budget.py --dry-run"
+      ],
+      "tests": []
+    },
+    {
+      "id": "ops.hermetic_validation_boundary",
+      "group": "6.1 基础运维功能",
+      "feature_name": "测试、门禁与诊断 Hermetic 状态边界",
+      "user_entrypoints": [
+        "script:scripts/run_tests.py quick|integration|system|heavy|full",
+        "script:scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json",
+        "script:scripts/run_full_score_gates.py"
+      ],
+      "code_entrypoints": [
+        "core/ops/hermetic_run.py",
+        "core/runtime_environment.py",
+        "core/ops/config_scope.py",
+        "scripts/audit_gate_hermeticity.py",
+        "scripts/run_tests.py",
+        "scripts/run_full_score_gates.py",
+        "tests/conftest.py"
+      ],
+      "data_dependencies": [
+        "unique empty sandbox root",
+        "allowlisted non-secret process environment",
+        "explicit real-api credential opt-in",
+        "high-risk formal state signatures",
+        "repository git status"
+      ],
+      "expected_input": "named test/gate suite and an absent or empty output root; CI system tests select the OS-neutral system layer",
+      "expected_output": "mnemos.hermetic_run_environment.v1 manifest and mnemos.gate_hermeticity_audit.v1 report with sandbox_root, environment_hash, outside_write_count, formal_state_diff, repo_state_diff and per-command evidence",
+      "data_landing": "all HOME/Mnemos/database/wiki/XDG/temp/pycache/artifact/log/report paths under one sandbox_root",
+      "success_standard": "every owned path is inside sandbox_root; default credential set is empty; diagnostics are read-only; outside_write_count=0; formal_state_diff=[]; repo_state_diff=[]; CI Linux/macOS/Windows system tests use the same argv runner without shell-specific temp/env syntax; all selected commands have accepted return codes",
+      "failure_or_degradation": "nonempty/reused roots, unimplemented profiles, path escape, formal/repo mutation, missing explicit hermetic environment, hidden credential inheritance or command failure return nonzero; formal runtime backlog remains a separate runtime truth and is never cleared to make the boundary green",
+      "docs": [
+        "AGENTS.md",
+        "README.md",
+        "README-en.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/OPS_MANUAL.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_hermetic_run_environment.py tests/unit/test_gate_hermeticity_audit.py tests/unit/test_config_scope.py tests/unit/test_read_only_cli_boundaries.py -q",
+        "python3 scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json --output-dir /tmp/mnemos-diagnostics-hermetic",
+        "python3 scripts/run_tests.py quick",
+        "python3 scripts/audit_function_matrix.py"
+      ]
+    },
+    {
+      "id": "ops.relation_evidence_schema_registry",
+      "group": "6.1 基础运维功能",
+      "feature_name": "relation_evidence 单一 schema authority 与显式迁移",
+      "user_entrypoints": [
+        "script:scripts/reconcile_relation_evidence_schema.py --json",
+        "script:scripts/reconcile_relation_evidence_schema.py --apply --backup-dir <dir> --json",
+        "script:scripts/audit_schema_registry.py --strict --json"
+      ],
+      "code_entrypoints": [
+        "core/kia/relation_evidence_schema.py",
+        "core/kia/knowledge_graph.py",
+        "core/kia/relation_manager.py",
+        "scripts/reconcile_relation_evidence_schema.py",
+        "scripts/audit_schema_registry.py",
+        "scripts/run_local_gates.py",
+        "scripts/run_full_score_gates.py",
+        "tests/unit/test_relation_evidence_schema_migration.py"
+      ],
+      "data_dependencies": [
+        "knowledge_graph.db relations",
+        "knowledge_graph.db relation_evidence",
+        "knowledge_graph.db mnemos_schema_registry",
+        "SQLite verified backup"
+      ],
+      "expected_input": "fresh database or one of the two recognized prior relation_evidence schemas; explicit apply requires a stopped daemon, zero NULL/blank evidence_type rows, and a backup directory",
+      "expected_output": "mnemos.relation_evidence_schema.v1 report with classification, semantic DDL hash, registry version/hash, columns/notnull/default/pk, foreign key, index, row/null counts, migration_required, backup integrity and row-count preservation",
+      "data_landing": "canonical relation_evidence table plus mnemos_schema_registry component row in knowledge_graph.db; apply backup in the caller-selected backup directory",
+      "success_standard": "exactly one production DDL owner; both constructor orders yield the same canonical hash; existing constructors validate before all other DDL; actual columns/defaults/FK/index hash equals registry; row count and integrity are preserved; unknown or ambiguous rows never receive guessed values",
+      "failure_or_degradation": "unregistered prior schema, old RelationManager defaults, NULL/blank evidence_type, missing index, damaged/stale registry, unknown columns/FK/index or hash mismatch blocks writers and strict gates with an explicit reconciliation action; migration exceptions roll back and retain the verified backup",
+      "docs": [
+        "AGENTS.md",
+        "README.md",
+        "README-en.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/CHANGELOG.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_relation_evidence_schema_migration.py tests/unit/test_relation_manager.py tests/unit/test_knowledge_graph.py -q",
+        "python3 scripts/reconcile_relation_evidence_schema.py --json",
+        "python3 scripts/audit_schema_registry.py --strict --json",
+        "python3 scripts/audit_test_suite_denominator.py --strict --json",
+        "python3 scripts/run_tests.py quick",
+        "python3 scripts/audit_function_matrix.py"
+      ]
+    },
+    {
+      "id": "ops.full_score_strict_gate",
+      "group": "6.1 基础运维功能",
+      "feature_name": "满分总验收 strict gate",
+      "user_entrypoints": [
+        "script:scripts/run_full_score_gates.py --strict --real-api",
+        "script:scripts/run_full_score_gates.py --strict --only health.strict",
+        "script:scripts/run_full_score_gates.py --json",
+        "script:scripts/verify_full_score_certificate.py <report>",
+        "script:scripts/audit_test_suite_denominator.py --strict --json"
+      ],
+      "code_entrypoints": [
+        "core/ops/hermetic_run.py",
+        "scripts/run_full_score_gates.py",
+        "scripts/verify_full_score_certificate.py",
+        "scripts/audit_test_suite_denominator.py",
+        "scripts/audit_document_asset_manifest.py",
+        "docs/acceptance/document_asset_manifest.json",
+        "docs/acceptance/phase5_required_full_score_gates.json",
+        "scripts/audit_schema_registry.py",
+        "scripts/audit_persona_runtime_effectiveness.py",
+        "scripts/audit_blindspot_asset_boundaries.py",
+        "scripts/audit_phase5_failure_contracts.py",
+        "docs/acceptance/phase5_baseline_failure_evidence.json",
+        "scripts/run_cognitive_behavior_scenarios.py",
+        "scripts/audit_gate_hermeticity.py",
+        "tests/unit/test_run_full_score_gates.py",
+        "tests/unit/test_verify_full_score_certificate.py",
+        "tests/unit/test_test_suite_denominator.py",
+        "tests/unit/test_document_asset_manifest_audit.py",
+        "tests/unit/test_run_cognitive_behavior_scenarios.py"
+      ],
+      "data_dependencies": [
+        "pytest quick/integration/heavy suites",
+        "run_local_gates sub-gates",
+        "mnemos health JSON",
+        "security audit",
+        "release privacy/security audit",
+        "E2E probe output",
+        "config example coverage",
+        "cognitive readiness report",
+        "wiki quality report",
+        "golden benchmark scorecard",
+        "contract audit scripts",
+        "hermetic run manifest",
+        "canonical 62-gate manifest and certificate receipts, including the independently declared Phase 5 production-readonly and frozen failure-contract gates",
+        "480-file pytest layer denominator",
+        "70/23/25 document asset manifest denominator",
+        "registered relation_evidence schema hash",
+        "cognitive behavior execution receipt"
+      ],
+      "expected_input": "developer or release agent runs the full strict real-api release gate from a clean committed worktree without only/skip selectors; non-release smoke runs may use selectors but are non-certifying",
+      "expected_output": "mnemos.full_score_gates.v2 JSON/Markdown, mnemos.full_score_gate_manifest.v1 expected/selected/executed/omitted sets, full Git/clean state, per-gate receipts and stdout/stderr hashes, release_eligible decision and independent verifier result",
+      "data_landing": "/tmp/mnemos-full-score-gates/<timestamp>/ by default, or an absent/empty explicit --output-dir used as the sandbox_root; all reports/logs/run state remain under that root",
+      "success_standard": "canonical 62-gate expected=selected=executed, omitted=[], clean full Git commit, all required receipts pass including schema.relation_evidence.strict, the independently declared contracts.persona_runtime_effectiveness, contracts.blindspot_asset_boundaries and contracts.phase5_failure_contracts gates, three quality zero-closure gates, docs.asset_manifest.strict required Desktop profile, contracts.cognitive_action_effects, contracts.cognitive_calibration_lineage, contracts.cognitive_event_dispatch, contracts.evidence_graph_direction, contracts.cognitive_search and model_call_ledger.static, health strict is fully ok, run_environment outside_write_count=0/formal_state_diff=[], certificate and every stdout/stderr hash verify, certifying=true and release_eligible=true",
+      "failure_or_degradation": "strict real-api only/skip, unknown/empty selectors, dirty worktree, legacy v1, partial/mock run, manifest/receipt/artifact tamper, timeout, omitted gate, required failure, nonempty root or formal-state mutation are non-certifying/nonzero; diagnostic partial may exit 0 only with release_eligible=false",
+      "docs": [
+        "README.md",
+        "docs/AGENT_GUIDE.md",
+        "docs/OPS_MANUAL.md",
+        "docs/ARCHITECTURE.md",
+        "docs/CHANGELOG.md"
+      ],
+      "status": "usable",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_run_full_score_gates.py tests/unit/test_verify_full_score_certificate.py tests/unit/test_test_suite_denominator.py tests/unit/test_run_cognitive_behavior_scenarios.py -q",
+        "python3 scripts/audit_test_suite_denominator.py --strict --json",
+        "python3 scripts/audit_document_asset_manifest.py --strict --desktop-mode required --json",
+        "python3 scripts/audit_model_call_ledger.py --json",
+        "python3 scripts/run_cognitive_behavior_scenarios.py --json",
+        "python3 scripts/audit_phase5_failure_contracts.py --strict --json",
+        "python3 scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json --output-dir /tmp/mnemos-diagnostics-hermetic",
+        "python3 scripts/run_full_score_gates.py --strict --output-dir /tmp/mnemos-full-score-gates-issue14-smoke --only health.strict,security.release_privacy,config.examples.strict",
+        "python3 scripts/audit_function_matrix.py"
+      ]
+    }
+  ]
+}

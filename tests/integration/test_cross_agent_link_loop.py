@@ -10,9 +10,6 @@ P2-3 长链路测试 — 跨 Agent 关联链路
 断言目标：双向链接被注入、frontmatter 被更新、相似度阈值被遵守。
 """
 
-from pathlib import Path
-from unittest.mock import patch
-
 import pytest
 
 
@@ -66,7 +63,9 @@ class TestCrossAgentLinkLoop:
         assert isinstance(actions, list)
         # 应发现 redis.md 和 caching.md 之间的相似关系
         targets = [str(a.to_page) for a in actions]
-        assert any("caching" in t.lower() for t in targets), f"Expected caching in targets: {targets}"
+        assert any(
+            "caching" in t.lower() for t in targets
+        ), f"Expected caching in targets: {targets}"
 
     def test_bidirectional_link_injected(self, multi_agent_wiki):
         from core.kia.cross_agent_linker import CrossAgentLinker
@@ -107,6 +106,4 @@ class TestCrossAgentLinkLoop:
         for action in actions:
             from_agent = linker._extract_agent_from_path(action.from_page)
             to_agent = linker._extract_agent_from_path(action.to_page)
-            assert from_agent != to_agent, (
-                f"跨 Agent 链接要求 from={from_agent} != to={to_agent}"
-            )
+            assert from_agent != to_agent, f"跨 Agent 链接要求 from={from_agent} != to={to_agent}"

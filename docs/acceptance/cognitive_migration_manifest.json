@@ -1,0 +1,717 @@
+{
+  "discovery": "scripts reconciliation/migrate/rebuild/replay/backfill/repair/project/recompact entrypoints",
+  "migration_count": 101,
+  "migrations": [
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "migrate",
+      "release_blocking": true,
+      "runner_path": "core/cli/commands/migrate.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "belief_migration",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/belief_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "decision_trace_migration",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/decision_trace_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "decision_trace_migration_runtime",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/decision_trace_migration_runtime.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "feedback_history_migration",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/feedback_history_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "feedback_migration_barrier",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/feedback_migration_barrier.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "prediction_history_migration",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/prediction_history_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "state_migration_candidate",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/state_migration_candidate.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "training_history_migration",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/training_history_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "training_migration_barrier",
+      "release_blocking": true,
+      "runner_path": "core/cognitive/training_migration_barrier.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "amphora_source_span_migration",
+      "release_blocking": true,
+      "runner_path": "core/kia/amphora_source_span_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "__init__",
+      "release_blocking": true,
+      "runner_path": "core/migrations/__init__.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "cognitive_state_registration",
+      "release_blocking": true,
+      "runner_path": "core/migrations/cognitive_state_registration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "model_call_ledger_migration",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "__init__",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/__init__.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "backup",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/backup.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "cleanup",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/cleanup.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "cli",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/cli.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "contracts",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/contracts.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "executor",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/executor.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "inventory",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/inventory.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "planner",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/planner.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "runtime",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_reconcile/runtime.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "model_call_ledger_recovery",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_recovery.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "model_call_ledger_recovery_evidence",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_recovery_evidence.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "model_call_ledger_recovery_restore",
+      "release_blocking": true,
+      "runner_path": "core/migrations/model_call_ledger_recovery_restore.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "registry",
+      "release_blocking": true,
+      "runner_path": "core/migrations/registry.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "offline_migration_lock",
+      "release_blocking": true,
+      "runner_path": "core/ops/offline_migration_lock.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "migration",
+      "release_blocking": true,
+      "runner_path": "core/telemetry/model_call_ledger/migration.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "agent_source_raw_reconciliation_cli",
+      "release_blocking": true,
+      "runner_path": "scripts/agent_source_raw_reconciliation_cli.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "attest_agent_source_capture",
+      "release_blocking": true,
+      "runner_path": "scripts/attest_agent_source_capture.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "audit_blindspot_asset_boundaries",
+      "release_blocking": true,
+      "runner_path": "scripts/audit_blindspot_asset_boundaries.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "audit_orphan_modules",
+      "release_blocking": true,
+      "runner_path": "scripts/audit_orphan_modules.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "audit_vulture_whitelist",
+      "release_blocking": true,
+      "runner_path": "scripts/audit_vulture_whitelist.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "backfill_kg",
+      "release_blocking": true,
+      "runner_path": "scripts/backfill_kg.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "backfill_raw_event_store",
+      "release_blocking": true,
+      "runner_path": "scripts/backfill_raw_event_store.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "backfill_wiki_evidence",
+      "release_blocking": true,
+      "runner_path": "scripts/backfill_wiki_evidence.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "clean_release_artifacts",
+      "release_blocking": true,
+      "runner_path": "scripts/clean_release_artifacts.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "init_wiki_state_db",
+      "release_blocking": true,
+      "runner_path": "scripts/init_wiki_state_db.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "maintain_capture_retention",
+      "release_blocking": true,
+      "runner_path": "scripts/maintain_capture_retention.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "migrate_db",
+      "release_blocking": true,
+      "runner_path": "scripts/migrate_db.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "migrate_vault_layout",
+      "release_blocking": true,
+      "runner_path": "scripts/migrate_vault_layout.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "migrate_wiki_filenames",
+      "release_blocking": true,
+      "runner_path": "scripts/migrate_wiki_filenames.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "phase0_governance_inventory",
+      "release_blocking": true,
+      "runner_path": "scripts/phase0_governance_inventory.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "plan_cognitive_consolidation",
+      "release_blocking": true,
+      "runner_path": "scripts/plan_cognitive_consolidation.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "project_raw_vault",
+      "release_blocking": true,
+      "runner_path": "scripts/project_raw_vault.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "rebuild_obsidian_index",
+      "release_blocking": true,
+      "runner_path": "scripts/rebuild_obsidian_index.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "rebuild_wiki_projection_state",
+      "release_blocking": true,
+      "runner_path": "scripts/rebuild_wiki_projection_state.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "recompact_raw_vault",
+      "release_blocking": true,
+      "runner_path": "scripts/recompact_raw_vault.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_access_metadata",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_access_metadata.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_action_ledger",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_action_ledger.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_agent_source_raw_capture",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_agent_source_raw_capture.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_agent_sync_cursor_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_agent_sync_cursor_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_amphora_source_spans",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_amphora_source_spans.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_belief_revision_candidates",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_belief_revision_candidates.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_blindspot_asset_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_blindspot_asset_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_calibration_provenance",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_calibration_provenance.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_capture_queue_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_capture_queue_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognition_episode_projections",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognition_episode_projections.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_action_effects",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_action_effects.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_action_target_states",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_action_target_states.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_projection_lifecycle",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_projection_lifecycle.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_search_exclusions",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_search_exclusions.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_search_state_headers",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_search_state_headers.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_cognitive_state_store",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_cognitive_state_store.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_decision_trace_history",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_decision_trace_history.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_demo_fixture_leaks",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_demo_fixture_leaks.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_distill_execution_checkpoints",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_distill_execution_checkpoints.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_distill_runtime_receipts",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_distill_runtime_receipts.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_entropy_report_frontmatter",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_entropy_report_frontmatter.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_feedback_attribution_history",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_feedback_attribution_history.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_material_effect_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_material_effect_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_model_call_ledger",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_model_call_ledger.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_observation_calibration_state",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_observation_calibration_state.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_observation_provenance_edges",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_observation_provenance_edges.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_opencode_cross_session_raw",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_opencode_cross_session_raw.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_operational_incidents",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_operational_incidents.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_phase3_training_admission_intakes",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_phase3_training_admission_intakes.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_pipeline_receipts",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_pipeline_receipts.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_policy_patch_triggers",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_policy_patch_triggers.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_prediction_history",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_prediction_history.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_profile_assertion_revisions",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_profile_assertion_revisions.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_raw_event_identity_aliases",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_raw_event_identity_aliases.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_raw_event_identity_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_raw_event_identity_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_raw_index_paths",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_raw_index_paths.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_raw_projection_backups",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_raw_projection_backups.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_raw_revision_provenance",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_raw_revision_provenance.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_recap_consumption",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_recap_consumption.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_relation_evidence_schema",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_relation_evidence_schema.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_sync_event_handoffs",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_sync_event_handoffs.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_training_governance_history",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_training_governance_history.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_user_model_asset_stores",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_user_model_asset_stores.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_wiki_acl_projection",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_wiki_acl_projection.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_wiki_knowledge_forms",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_wiki_knowledge_forms.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_wiki_projections",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_wiki_projections.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_wiki_quality",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_wiki_quality.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "reconcile_wiki_search_index",
+      "release_blocking": true,
+      "runner_path": "scripts/reconcile_wiki_search_index.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "refactor_magic_numbers",
+      "release_blocking": true,
+      "runner_path": "scripts/refactor_magic_numbers.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "repair_sqlite_disk_budget",
+      "release_blocking": true,
+      "runner_path": "scripts/repair_sqlite_disk_budget.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "replay_delivery_decisions",
+      "release_blocking": true,
+      "runner_path": "scripts/replay_delivery_decisions.py",
+      "status": "UNREGISTERED"
+    },
+    {
+      "apply_requires_exact_authorization": true,
+      "migration_id": "replay_distillation_failure",
+      "release_blocking": true,
+      "runner_path": "scripts/replay_distillation_failure.py",
+      "status": "UNREGISTERED"
+    }
+  ],
+  "parent_root_id": "COG-046",
+  "release_eligible": false,
+  "schema_version": "mnemos.cognitive_migration_manifest.v1",
+  "unregistered_count": 101
+}

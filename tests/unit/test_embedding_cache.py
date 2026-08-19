@@ -60,6 +60,20 @@ class TestEmbeddingCache:
         assert results[2] == [3.0]
         assert missing == [1]
 
+    def test_batch_duplicate_texts_share_one_cached_embedding(self, cache):
+        cache.set("same context", [1.0, 2.0])
+
+        results, missing = cache.get_batch(
+            ["same context", "uncached", "same context"]
+        )
+
+        assert results == [[1.0, 2.0], None, [1.0, 2.0]]
+        assert missing == [1]
+
+        duplicate_misses, missing = cache.get_batch(["new context", "new context"])
+        assert duplicate_misses == [None, None]
+        assert missing == [0, 1]
+
     def test_invalidate_model(self, cache):
         cache.set("x", [1.0], model_version="old-model")
         cache.set("y", [2.0], model_version="old-model")
@@ -77,3 +91,37 @@ class TestEmbeddingCache:
         assert stats["total_entries"] == 3
         assert stats["by_model"]["m1"] == 2
         assert stats["by_model"]["m2"] == 1
+
+    def test_subject_delete_globally_flushes_unattributable_cache_with_receipt(self, cache):
+        """Content-hash cache cannot prove narrow ownership, so it must flush."""
+
+        cache.set("deleted subject embedding", [1.0])
+        cache.set("unrelated embedding", [2.0])
+        result = EmbeddingCache.delete_subject_scope(
+            db_path=cache.db_path,
+            request_id="delete-cache-test",
+            scope_kind="session",
+            scope_value_hash="a" * 64,
+        )
+
+        assert result == {
+            "status": "applied",
+            "target_count": 2,
+            "receipt_count": 1,
+            "deleted_entry_count": 2,
+            "after_entry_count": 0,
+            "verified": True,
+            "mode": "global_unattributable_cache_flush",
+        }
+        assert cache.get("deleted subject embedding") is None
+        assert cache.get("unrelated embedding") is None
+        assert cache.get_stats()["total_entries"] == 0
+
+        retry = EmbeddingCache.delete_subject_scope(
+            db_path=cache.db_path,
+            request_id="delete-cache-test",
+            scope_kind="session",
+            scope_value_hash="a" * 64,
+        )
+        assert retry["status"] == "existing"
+        assert retry["verified"] is True

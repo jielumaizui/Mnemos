@@ -19,35 +19,88 @@ import hashlib
 import json
 import logging
 import sqlite3
-import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.config import get_config
+from core.cognitive.state_contract import sha256_json
+from core.trust.formal_markdown import (
+    TrustedMarkdownDecisionPolicy,
+    submit_or_write_markdown_with_decision,
+)
+from core.trust.models import sha256_text
 
 logger = logging.getLogger(__name__)
+
+ISSUE_PIPELINE_MARKDOWN_POLICY = TrustedMarkdownDecisionPolicy(
+    contract_id="project-contract:issue-pipeline-markdown",
+    contract_revision_id="mnemos.issue_pipeline_markdown.v1",
+    contract_text=(
+        "IssuePipeline may write only the exact Wiki link or dispute page selected "
+        "for one exact registered issue and its reviewed remediation facts."
+    ),
+    source_namespace="issue-pipeline-markdown",
+    producer="issue-pipeline",
+    producer_code_hash=sha256_json(
+        {
+            "module": "core.kia.issue_pipeline",
+            "producers": ["AutoFixExecutor._add_wiki_link", "DisputePageGenerator.generate"],
+            "version": "mnemos.issue_pipeline_markdown.v1",
+        }
+    ),
+    evaluator_id="issue-pipeline-markdown-evaluator",
+    constraints=(
+        "Issue identity, type, target, related page, preimage, and output remain exact.",
+        "The mutation may not resolve or suppress an issue beyond the selected action.",
+    ),
+    approved_candidate_key="apply_exact_issue_markdown_action",
+    approved_candidate_summary="Apply the exact reviewed issue-pipeline Markdown action.",
+    rejected_candidate_key="retain_issue_markdown_state",
+    rejected_candidate_summary="Retain the Wiki state when issue facts or bytes drift.",
+    approved_reason_code="issue_markdown_binding_verified",
+    rejected_reason_code="issue_markdown_binding_rejected",
+    committed_metric="issue_markdown_action_committed",
+    rejected_metric="unbound_issue_markdown_action_count",
+)
+
+
+def _issue_decision_facts(issue: "Issue") -> dict[str, object]:
+    return {
+        "schema_version": "mnemos.issue_pipeline_decision_facts.v1",
+        "issue_id": issue.issue_id,
+        "source_module": issue.source_module,
+        "issue_type": issue.issue_type,
+        "severity": issue.severity,
+        "status": issue.status,
+        "page_path": issue.page_path,
+        "related_pages": list(issue.related_pages),
+        "description": issue.description,
+        "suggestion": issue.suggestion,
+    }
 
 
 # ========== 数据类 ==========
 
+
 @dataclass
 class Issue:
     """知识问题"""
-    issue_id: str = ""              # issue-{hash}
-    source_module: str = ""         # "entropy" / "immune"
-    issue_type: str = ""            # "delete_duplicate" / "conflict" / "outdated" ...
-    severity: str = "low"           # critical / high / medium / low / info
-    status: str = "detected"        # detected / auto_fixed / pending / resolved / ignored
-    page_path: str = ""             # 主页面路径
+
+    issue_id: str = ""  # issue-{hash}
+    source_module: str = ""  # "entropy" / "immune"
+    issue_type: str = ""  # "delete_duplicate" / "conflict" / "outdated" ...
+    severity: str = "low"  # critical / high / medium / low / info
+    status: str = "detected"  # detected / auto_fixed / pending / resolved / ignored
+    page_path: str = ""  # 主页面路径
     related_pages: List[str] = field(default_factory=list)
     description: str = ""
     suggestion: str = ""
     detected_at: str = ""
     resolved_at: str = ""
-    resolved_by: str = ""           # "auto" / "user" / "system"
+    resolved_by: str = ""  # "auto" / "user" / "system"
     resolution_action: str = ""
     resolution_notes: str = ""
     ignore_rule_id: str = ""
@@ -101,6 +154,7 @@ class Issue:
 @dataclass
 class FixResult:
     """自动修复结果"""
+
     success: bool = False
     skipped: bool = False
     reason: str = ""
@@ -112,11 +166,12 @@ class FixResult:
 @dataclass
 class IgnoreRule:
     """忽略规则"""
+
     rule_id: str = ""
     issue_type: str = ""
     page_pattern: str = ""
     reason: str = ""
-    expires_at: str = ""            # ISO 格式或空字符串表示永久
+    expires_at: str = ""  # ISO 格式或空字符串表示永久
     created_by: str = "user"
     created_at: str = ""
 
@@ -203,9 +258,9 @@ class IssueRegistry:
     统一管理熵减引擎和知识免疫发现的问题。
     """
 
-    def __init__(self, db_path: str = None):
-        self.db_path = Path(db_path) if db_path else (
-            get_config().data_dir / "issue_pipeline.db"
+    def __init__(self, db_path: str | None = None):
+        self.db_path = (
+            Path(db_path) if db_path else (get_config().database_dir / "issue_pipeline.db")
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -217,7 +272,7 @@ class IssueRegistry:
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=10)
-        conn.row_factory = sqlite3.Row
+        conn.row_factory = sqlite3.Row  # noqa
         return conn
 
     def register(self, issue: Issue) -> Tuple[str, bool]:
@@ -232,7 +287,7 @@ class IssueRegistry:
 
         # 检查忽略规则
         if self.is_ignored(issue):
-            logger.debug(f"问题被忽略规则过滤: {issue.issue_id}")
+            logger.debug("问题被忽略规则过滤: %s", issue.issue_id)
             return issue.issue_id, False
 
         with self._conn() as conn:
@@ -253,7 +308,7 @@ class IssueRegistry:
                         (issue.detected_at, issue.issue_id),
                     )
                     conn.commit()
-                    logger.info(f"问题回归，重新打开: {issue.issue_id}")
+                    logger.info("问题回归，重新打开: %s", issue.issue_id)
                     return issue.issue_id, True
                 # 已存在且未解决 → 更新时间
                 conn.execute(
@@ -278,7 +333,7 @@ class IssueRegistry:
                 d,
             )
             conn.commit()
-            logger.info(f"新问题注册: {issue.issue_id} [{issue.severity}] {issue.issue_type}")
+            logger.info("新问题注册: %s [%s] %s", issue.issue_id, issue.severity, issue.issue_type)
             return issue.issue_id, True
 
     def update_status(
@@ -316,10 +371,10 @@ class IssueRegistry:
 
     def list_issues(
         self,
-        status: str = None,
-        severity: str = None,
-        page_path: str = None,
-        source_module: str = None,
+        status: str | None = None,
+        severity: str | None = None,
+        page_path: str | None = None,
+        source_module: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> List[Issue]:
@@ -351,8 +406,8 @@ class IssueRegistry:
                             ELSE 5
                         END,
                         detected_at DESC
-                    LIMIT ? OFFSET ?"""
-        params.extend([limit, offset])
+                    LIMIT ? OFFSET ?"""  # nosec B608
+        params.extend([limit, offset])  # type: ignore[list-item]
 
         with self._conn() as conn:
             rows = conn.execute(query, params).fetchall()
@@ -384,8 +439,15 @@ class IssueRegistry:
                 """INSERT OR REPLACE INTO issue_ignore_rules
                    (rule_id, issue_type, page_pattern, reason, expires_at, created_by, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (rule.rule_id, rule.issue_type, rule.page_pattern, rule.reason,
-                 rule.expires_at or None, rule.created_by, rule.created_at),
+                (
+                    rule.rule_id,
+                    rule.issue_type,
+                    rule.page_pattern,
+                    rule.reason,
+                    rule.expires_at or None,
+                    rule.created_by,
+                    rule.created_at,
+                ),
             )
             conn.commit()
         return rule.rule_id
@@ -436,11 +498,12 @@ class IssueRegistry:
         """生成问题唯一 ID"""
         pages = sorted([issue.page_path] + issue.related_pages)
         raw = f"{issue.source_module}:{issue.issue_type}:{':'.join(pages)}"
-        h = hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+        h = hashlib.md5(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
         return f"issue-{h}"
 
 
 # ========== AutoFixExecutor ==========
+
 
 class AutoFixExecutor:
     """自动修复执行器
@@ -450,9 +513,9 @@ class AutoFixExecutor:
 
     def __init__(
         self,
-        registry: IssueRegistry = None,
-        wiki_base: Path = None,
-        backup_dir: Path = None,
+        registry: IssueRegistry | None = None,
+        wiki_base: Path | None = None,
+        backup_dir: Path | None = None,
     ):
         self.registry = registry
         self.wiki_base = wiki_base or get_config().wiki_dir
@@ -491,8 +554,8 @@ class AutoFixExecutor:
                 )
 
             return FixResult(success=True, backup_id=backup_id, action=action)
-        except Exception as e:
-            logger.warning(f"自动修复失败 {issue.issue_id}: {e}")
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            logger.warning("自动修复失败 %s: %s", issue.issue_id, e)
             self._rollback(backup_id)
             self._log_fix(issue, False, backup_id, "", str(e))
             return FixResult(success=False, backup_id=backup_id, error=str(e))
@@ -513,12 +576,13 @@ class AutoFixExecutor:
         elif action == "discover_relations":
             return self._discover_relations(issue)
 
-        raise ValueError(f"未实现的自动修复动作: {action}")
+        raise ValueError(f"不支持的自动修复动作: {action}")
 
     def _add_relation(self, issue: Issue) -> str:
         """在知识图谱中建立关系"""
         try:
             from core.kia.knowledge_graph import KnowledgeGraph
+
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
             # related_pages 中应该包含两个页面
             pages = issue.related_pages
@@ -528,8 +592,8 @@ class AutoFixExecutor:
                 added = kg.apply_discovered(rels, min_confidence=0.7)
                 return f"add_relation:{added}"
             return "add_relation:0"
-        except Exception as e:
-            raise RuntimeError(f"建立关系失败: {e}")
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            raise RuntimeError(f"建立关系失败: {e}") from e
 
     def _add_wiki_link(self, issue: Issue) -> str:
         """在页面末尾添加 [[相关页面]] 引用"""
@@ -549,13 +613,34 @@ class AutoFixExecutor:
         if f"[[{ref_page}]]" in content:
             return "add_wiki_link:already_exists"
 
-        target_page.write_text(content + link_line, encoding="utf-8")
+        evidence_refs = [f"issue:{issue.issue_id}"]
+        submit_or_write_markdown_with_decision(
+            decision_policy=ISSUE_PIPELINE_MARKDOWN_POLICY,
+            decision_facts={
+                **_issue_decision_facts(issue),
+                "selected_action": "add_wiki_link",
+                "ref_page": ref_page,
+            },
+            decision_task=f"Add reviewed Wiki link for issue {issue.issue_id}",
+            decision_goal="Apply the exact low-risk link remediation selected for the issue.",
+            decision_created_at=datetime.now(timezone.utc).isoformat(),
+            wiki_base=self.wiki_base,
+            target_path=target_page,
+            content=content + link_line,
+            source="issue_pipeline",
+            actor="system",
+            evidence_refs=evidence_refs,
+            proposed_action="add_wiki_link",
+            expected_existing_hash=sha256_text(content),
+            metadata={"ref_page": ref_page, "issue_type": issue.issue_type},
+        )
         return f"add_wiki_link:{ref_page}"
 
     def _discover_relations(self, issue: Issue) -> str:
         """调用知识图谱自动发现关系"""
         try:
             from core.kia.knowledge_graph import KnowledgeGraph
+
             kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
             page = Path(issue.page_path)
             if not page.exists():
@@ -563,19 +648,23 @@ class AutoFixExecutor:
             rels = kg.discover_relations(page)
             added = kg.apply_discovered(rels, min_confidence=0.5)
             return f"discover_relations:{added}"
-        except Exception as e:
-            raise RuntimeError(f"关系发现失败: {e}")
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            raise RuntimeError(f"关系发现失败: {e}") from e
 
     def _create_backup(self, issue: Issue) -> str:
         """创建备份，返回备份标识"""
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_id = f"{issue.issue_id}_{ts}"
 
-        # 备份涉及的页面文件
+        # 备份涉及的页面文件，文件名中保留相对路径以避免同名冲突
         for page in [issue.page_path] + issue.related_pages:
             p = Path(page)
             if p.exists():
-                backup_file = self.backup_dir / f"{backup_id}_{p.name}"
+                try:
+                    rel_part = p.relative_to(self.wiki_base).as_posix().replace("/", "__")
+                except ValueError:
+                    rel_part = p.name
+                backup_file = self.backup_dir / f"{backup_id}_{rel_part}"
                 backup_file.write_bytes(p.read_bytes())
 
         return backup_id
@@ -586,16 +675,16 @@ class AutoFixExecutor:
             return
         for backup_file in self.backup_dir.glob(f"{backup_id}_*"):
             try:
-                # 从备份文件名中提取原始文件名
-                original_name = backup_file.name[len(backup_id) + 1:]
-                # 查找匹配的原始文件（基于 stem）
-                for page_file in self.wiki_base.rglob("*.md"):
-                    if page_file.name == original_name:
-                        page_file.write_bytes(backup_file.read_bytes())
-                        logger.info(f"回滚备份: {page_file}")
-                        break
-            except Exception as e:
-                logger.warning(f"回滚失败 {backup_file}: {e}")
+                # 从备份文件名中提取原始相对路径（__ 替换回 /）
+                encoded_rel = backup_file.name[len(backup_id) + 1 :]
+                rel_path = encoded_rel.replace("__", "/")
+                page_file = self.wiki_base / rel_path
+                if page_file.exists():
+                    page_file.write_bytes(backup_file.read_bytes())
+                    logger.info("回滚备份: %s", page_file)
+                    continue
+            except (OSError, UnicodeError, ValueError, TypeError) as e:
+                logger.warning("回滚失败 %s: %s", backup_file, e, exc_info=True)
 
     def _log_fix(self, issue: Issue, success: bool, backup_id: str, action: str, error: str = ""):
         """记录自动修复日志"""
@@ -606,13 +695,21 @@ class AutoFixExecutor:
                 """INSERT INTO auto_fix_log
                    (issue_id, issue_type, page_path, action, success, backup_id, error_message)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (issue.issue_id, issue.issue_type, issue.page_path, action,
-                 success, backup_id, error),
+                (
+                    issue.issue_id,
+                    issue.issue_type,
+                    issue.page_path,
+                    action,
+                    success,
+                    backup_id,
+                    error,
+                ),
             )
             conn.commit()
 
 
 # ========== 人工确认：争议页面生成器 ==========
+
 
 class DisputePageGenerator:
     """争议页面生成器
@@ -623,7 +720,7 @@ class DisputePageGenerator:
 
     REPORTS_DIR = "99-Reports"
 
-    def __init__(self, wiki_base: Path = None):
+    def __init__(self, wiki_base: Path | None = None):
         self.wiki_base = wiki_base or get_config().wiki_dir
         self.reports_dir = self.wiki_base / self.REPORTS_DIR
         self.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -640,9 +737,28 @@ class DisputePageGenerator:
         page_path = self.reports_dir / filename
 
         lines = self._build_content(issue)
-        page_path.write_text("\n".join(lines), encoding="utf-8")
+        rendered_content = "\n".join(lines)
+        evidence_refs = [f"issue:{issue.issue_id}"]
+        submit_or_write_markdown_with_decision(
+            decision_policy=ISSUE_PIPELINE_MARKDOWN_POLICY,
+            decision_facts={
+                **_issue_decision_facts(issue),
+                "selected_action": "create_issue_dispute_page",
+            },
+            decision_task=f"Create dispute page for issue {issue.issue_id}",
+            decision_goal="Expose the exact unresolved issue for explicit adjudication.",
+            decision_created_at=datetime.now(timezone.utc).isoformat(),
+            wiki_base=self.wiki_base,
+            target_path=page_path,
+            content=rendered_content,
+            source="issue_pipeline",
+            actor="system",
+            evidence_refs=evidence_refs,
+            proposed_action="create_issue_dispute_page",
+            metadata={"issue_type": issue.issue_type, "severity": issue.severity},
+        )
 
-        logger.info(f"争议页面生成: {page_path}")
+        logger.info("争议页面生成: %s", page_path)
         return page_path
 
     def _build_content(self, issue: Issue) -> List[str]:
@@ -653,7 +769,7 @@ class DisputePageGenerator:
             "---",
             f"issue_type: {issue.issue_type}",
             f"severity: {issue.severity}",
-            f"status: pending",
+            "status: pending",
             f"source_module: {issue.source_module}",
             f"detected_at: {issue.detected_at}",
             f"page_path: {issue.page_path}",
@@ -677,19 +793,21 @@ class DisputePageGenerator:
         if not issue.related_pages:
             lines.append("- 无")
 
-        lines.extend([
-            "",
-            "## 请裁决",
-            "",
-            "- [ ] 已解决（按系统建议处理）",
-            "- [ ] 忽略此问题",
-            "- [ ] 需要更多信息",
-            "",
-            "## 备注",
-            "",
-            "_（在此记录你的裁决理由）_",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 请裁决",
+                "",
+                "- [ ] 已解决（按系统建议处理）",
+                "- [ ] 忽略此问题",
+                "- [ ] 需要更多信息",
+                "",
+                "## 备注",
+                "",
+                "_（在此记录你的裁决理由）_",
+                "",
+            ]
+        )
         return lines
 
     def parse_resolution(self, page_path: Path) -> Optional[Dict]:
@@ -726,18 +844,19 @@ class DisputePageGenerator:
 
 # ========== 便捷函数 ==========
 
-def get_issue_registry(db_path: str = None) -> IssueRegistry:
+
+def get_issue_registry(db_path: str | None = None) -> IssueRegistry:
     """获取 IssueRegistry 单例"""
     return IssueRegistry(db_path=db_path)
 
 
-def get_auto_fix_executor(registry: IssueRegistry = None) -> AutoFixExecutor:
+def get_auto_fix_executor(registry: IssueRegistry | None = None) -> AutoFixExecutor:
     """获取 AutoFixExecutor 单例"""
     if registry is None:
         registry = get_issue_registry()
     return AutoFixExecutor(registry=registry)
 
 
-def get_dispute_generator(wiki_base: Path = None) -> DisputePageGenerator:
+def get_dispute_generator(wiki_base: Path | None = None) -> DisputePageGenerator:
     """获取 DisputePageGenerator 单例"""
     return DisputePageGenerator(wiki_base=wiki_base)

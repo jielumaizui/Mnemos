@@ -1,0 +1,120 @@
+{
+  "schema_version": "mnemos.phase1_cog008_review_baseline_failure_evidence.v2",
+  "root_id": "COG-008",
+  "supersession": {
+    "record_type": "typed_sensitive_path_redaction",
+    "historical_ledger_record": "phase1_cog008_deep_review_repair_20260726",
+    "historical_commit": "57404c80e44a3d1934ee2fa7dc3fb61086e7e23d",
+    "historical_path": "docs/acceptance/phase1_cog008_review_baseline_failure_evidence.json",
+    "historical_sha256": "02c30175c6734e44eedcf5c94464def71fca79cb9e9d7bf957d7c4f6e0f8ebed",
+    "changed_fields": [
+      "schema_version",
+      "execution_boundary.runtime"
+    ],
+    "semantic_equivalence": "The historical Git blob remains the immutable v1 evidence. This v2 projection changes only the schema marker and machine-local runtime spelling; selected nodes, oracle blobs, execution outcomes, mutation kills, and claim boundary are byte-equivalent after canonical normalization."
+  },
+  "baseline_commit": "f4e7d75b0a012cbd42be13519ab6d1f2303332cf",
+  "baseline_commit_role": "fixed pre-review checkout containing 9aeb8d34 but not this repair",
+  "execution_boundary": {
+    "runtime": ".venv/bin/python",
+    "worktree": "detached temporary git worktree",
+    "network": false,
+    "real_api": false,
+    "production_data": false,
+    "daemon_operation": false
+  },
+  "oracle_materialization": [
+    {
+      "path": "tests/unit/test_hephaestus_worker.py",
+      "git_blob_oid": "b050e89d3e9418d3346937e04bc1dfd67784acb9",
+      "sha256": "7b2c198fc5744fc4aa25d6f2612b6ee1ba8976cc3895907a1eb3905e708609fe"
+    },
+    {
+      "path": "tests/unit/test_cognitive_state_schema_migration.py",
+      "git_blob_oid": "e7d17f822683aef68da204eb6fd3e1ccaf3e0287",
+      "sha256": "6125eebbe5dc6148037963fbf6e2822828c8906301f426d2f5f414fa39c0a16a"
+    },
+    {
+      "path": "tests/unit/test_runtime_producer_consumer_ledger.py",
+      "git_blob_oid": "f1bfda614344c1f0391cd69d2019466200acf7a8",
+      "sha256": "32c4e26f9b4d37f6302bbe58500cd8dc82a998b8118564bfcf6f5a6803dab9e1"
+    }
+  ],
+  "replay_contract": {
+    "steps": [
+      "create a detached temporary worktree at baseline_commit",
+      "materialize each exact oracle blob at its path and verify sha256",
+      "run selected_nodes with the repository virtualenv",
+      "require exit_code=1 and the exact baseline failed/passed node sets"
+    ],
+    "selected_nodes": [
+      "tests/unit/test_hephaestus_worker.py::test_real_worker_failure_records_terminal_on_task_retry_exhaustion",
+      "tests/unit/test_hephaestus_worker.py::test_terminal_receipt_survives_failed_archive_side_effect",
+      "tests/unit/test_hephaestus_worker.py::test_real_worker_respects_task_level_retry_budget_before_dead_letter",
+      "tests/unit/test_hephaestus_worker.py::test_worker_never_signs_failed_terminal_when_queue_failure_was_not_committed",
+      "tests/unit/test_cognitive_state_schema_migration.py::test_v4_to_v5_upgrade_preserves_coupled_search_projection",
+      "tests/unit/test_cognitive_state_schema_migration.py::test_v4_to_v5_coupled_projection_failure_rolls_back_every_object",
+      "tests/unit/test_cognitive_state_schema_migration.py::test_reconcile_cli_backs_up_and_preserves_coupled_v4_search_projection",
+      "tests/unit/test_runtime_producer_consumer_ledger.py::test_failed_generation_rejects_later_success_terminal_without_dual_receipts",
+      "tests/unit/test_runtime_producer_consumer_ledger.py::test_snapshot_exposes_preexisting_dual_terminal_pair_as_degraded"
+    ]
+  },
+  "baseline_execution": {
+    "executed_at": "2026-07-26T02:09:51+08:00",
+    "exit_code": 1,
+    "pytest_summary": "9 failed, 1 passed in 1.31s",
+    "failed_nodes": [
+      "tests/unit/test_hephaestus_worker.py::test_real_worker_failure_records_terminal_on_task_retry_exhaustion",
+      "tests/unit/test_hephaestus_worker.py::test_terminal_receipt_survives_failed_archive_side_effect",
+      "tests/unit/test_hephaestus_worker.py::test_real_worker_respects_task_level_retry_budget_before_dead_letter",
+      "tests/unit/test_hephaestus_worker.py::test_worker_never_signs_failed_terminal_when_queue_failure_was_not_committed[unmatched]",
+      "tests/unit/test_hephaestus_worker.py::test_worker_never_signs_failed_terminal_when_queue_failure_was_not_committed[exception]",
+      "tests/unit/test_cognitive_state_schema_migration.py::test_v4_to_v5_upgrade_preserves_coupled_search_projection",
+      "tests/unit/test_cognitive_state_schema_migration.py::test_reconcile_cli_backs_up_and_preserves_coupled_v4_search_projection",
+      "tests/unit/test_runtime_producer_consumer_ledger.py::test_failed_generation_rejects_later_success_terminal_without_dual_receipts",
+      "tests/unit/test_runtime_producer_consumer_ledger.py::test_snapshot_exposes_preexisting_dual_terminal_pair_as_degraded"
+    ],
+    "passed_nodes": [
+      "tests/unit/test_cognitive_state_schema_migration.py::test_v4_to_v5_coupled_projection_failure_rolls_back_every_object"
+    ]
+  },
+  "candidate_execution": {
+    "exit_code": 0,
+    "pytest_summary": "10 passed in 0.77s"
+  },
+  "real_defect_kills": [
+    {
+      "operator_id": "skip_failed_terminal_on_retry_exhaustion",
+      "killed_by": "test_real_worker_failure_records_terminal_on_task_retry_exhaustion"
+    },
+    {
+      "operator_id": "hardcode_worker_retry_budget_instead_of_task_budget",
+      "killed_by": "test_real_worker_respects_task_level_retry_budget_before_dead_letter"
+    },
+    {
+      "operator_id": "sign_failed_terminal_when_queue_transition_did_not_commit",
+      "killed_by": "test_worker_never_signs_failed_terminal_when_queue_failure_was_not_committed"
+    },
+    {
+      "operator_id": "drop_committed_terminal_when_secondary_archive_fails",
+      "killed_by": "test_terminal_receipt_survives_failed_archive_side_effect"
+    },
+    {
+      "operator_id": "leave_search_projection_bound_to_stage_v4_tables",
+      "killed_by": "test_v4_to_v5_upgrade_preserves_coupled_search_projection"
+    },
+    {
+      "operator_id": "apply_coupled_v4_upgrade_without_verified_operator_backup",
+      "killed_by": "test_reconcile_cli_backs_up_and_preserves_coupled_v4_search_projection"
+    },
+    {
+      "operator_id": "allow_consumed_after_dead_letter_for_same_generation",
+      "killed_by": "test_failed_generation_rejects_later_success_terminal_without_dual_receipts"
+    },
+    {
+      "operator_id": "collapse_conflicting_terminal_receipts_in_snapshot",
+      "killed_by": "test_snapshot_exposes_preexisting_dual_terminal_pair_as_degraded"
+    }
+  ],
+  "claim_boundary": "This is replayable hermetic code evidence against the fixed historical checkout. It is not live migration, backlog reconciliation, production effect, readiness, or release evidence."
+}

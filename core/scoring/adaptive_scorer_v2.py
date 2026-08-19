@@ -1,125 +1,157 @@
 # -*- coding: utf-8 -*-
-"""
-AdaptiveScorerV2 — 自适应评分引擎 V2（完整实现）
-
-ADR-016 修复清单：
-  1. _bayesian_update 使用显式 P(E|~H)
-  2. 训练标签来自 ground_truth_signals（外部真实信号），禁止自举
-  3. 使用 partial_fit 增量更新，不覆盖已有模型
-  4. EWMA 更新模型内部参数
-  5. _extract_features 返回 content 键
-
-数据流：
-  评分 → scorer_training_queue → 等待延迟信号 → ground_truth_signals
-                                              ↑
-  用户反馈/搜索命中/页面访问/盲区检测 ──────────┘
-              ↓
-  chronos 每小时 → process_training_queue → partial_fit
-              ↓
-  保存到 scorer_models
-"""
+"""Rule-first scorer with a COG-048 governed-model activation boundary."""
 
 from __future__ import annotations
 
-import hashlib
-import io
-import json
 import logging
-import pickle
 import sqlite3
-import sys
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NoReturn, Optional, Tuple
 
 from core.config import get_config
-
-# 模型 schema 版本（加载时校验，不匹配则拒绝加载）
-_SCHEMA_VERSION = "v2.1"
-
-# V2 子模块
-from core.scoring.beta_bayesian import BetaBayesianFusion
-from core.scoring.fallback import ScorerFallback
-from core.scoring.lightweight_nb import LightweightComplementNB
+from core.scoring.model_call_boundary import (
+    SubjectScope,
+    embed_for_adaptive_score,
+)
+from core.db_utils import sqlite_conn
+from core.kia.policy import get_effective_policy
+from core.scoring.adaptive_scorer_support import (  # noqa: F401
+    FeedbackV2,
+    GroundTruth,
+    ScoreCardV2,
+    ScorerFeatureMixin,
+    SklearnPartialFitNB,
+)
 
 logger = logging.getLogger(__name__)
 
+LEGACY_TRAINING_ERROR = "training_admission_receipt_required"
+
+
+def _reject_retired_training(operation: str) -> NoReturn:
+    raise PermissionError(f"{LEGACY_TRAINING_ERROR}:{operation}")
+
+
+_MODEL_SERIALIZATION = "json"
+
+# V2 子模块
+from core.scoring.bayesian_scorer import BayesianScorer  # noqa: E402
+from core.scoring.fallback import ScorerFallback  # noqa: E402
+from core.scoring.subject_provenance import ensure_scoring_subject_provenance_schema  # noqa: E402
+
 # sklearn 可选导入（标准环境）
 try:
-    from sklearn.naive_bayes import ComplementNB
+    pass
+
     _SKLEARN_AVAILABLE = True
 except ImportError:
     _SKLEARN_AVAILABLE = False
 
-# 六域规则评分器（用于特征提取和规则先验）
-from core.scoring.scorers.distill_scorer import DistillScorer
-from core.scoring.scorers.kg_scorer import KGScorer
-from core.scoring.scorers.memos_scorer import MemosQualityScorer
-from core.scoring.scorers.ops_scorer import OpsScorer
-from core.scoring.scorers.profile_scorer import ProfileScorer
-from core.scoring.scorers.sync_scorer import SyncScorer
+# 从 V1 迁移过来的规则辅助函数（不再依赖 V1 scorer 类）
+from core.scoring import rule_helpers  # noqa: E402
+
+# Constants extracted from magic numbers
+ADAPTIVE_SCORER_V2_WARM_THRESHOLD = 30
+ADAPTIVE_SCORER_V2_DURATION_BUCKET_MONTH_DAYS = 30
+ADAPTIVE_SCORER_V2_DURATION_BUCKET_WEEK_DAYS = 7
 
 
-# ==================== 数据模型 ====================
+class GovernedBinaryCentroid:
+    """Runtime adapter for one repeatedly verified governed model artifact."""
 
-@dataclass(frozen=True)
-class ScoreCardV2:
-    """V2 评分卡"""
-    scores: Dict[str, float]
-    confidences: Dict[str, float]
-    features: Dict[str, Any]
-    model_version: str
-    timestamp: datetime = field(default_factory=datetime.now)
+    def __init__(self, governance: Any, principal: Any, snapshot: Any):
+        self._governance = governance
+        self._principal = principal
+        self._run_revision_id = str(snapshot.run_revision_id)
+        self._model_id = str(snapshot.model_id)
+        self._model_blob_hash = str(snapshot.model_blob_hash)
+        blob = dict(snapshot.model_blob)
+        self._feature_names = tuple(str(value) for value in blob["feature_names"])
+        self._negative = tuple(float(value) for value in blob["negative_centroid"])
+        self._positive = tuple(float(value) for value in blob["positive_centroid"])
+
+    def predict_proba(self, rows: List[Mapping[str, Any]]) -> List[Dict[int, float]]:
+        """Score rows only while the exact governed artifact remains current."""
+
+        current = self._governance.load_applied_model(
+            self._run_revision_id,
+            self._principal,
+        )
+        if current.model_id != self._model_id or current.model_blob_hash != self._model_blob_hash:
+            raise RuntimeError("governed scorer model changed after activation")
+        result: List[Dict[int, float]] = []
+        for row in rows:
+            vector = tuple(float(row.get(name, 0.0)) for name in self._feature_names)
+            negative_distance = sum(
+                (value - center) ** 2 for value, center in zip(vector, self._negative)
+            )
+            positive_distance = sum(
+                (value - center) ** 2 for value, center in zip(vector, self._positive)
+            )
+            total = negative_distance + positive_distance
+            positive_probability = 0.5 if total == 0 else negative_distance / total
+            result.append({0: 1.0 - positive_probability, 1: positive_probability})
+        return result
 
 
-@dataclass(frozen=True)
-class FeedbackV2:
-    """V2 反馈信号"""
-    session_id: str
-    dimension: str
-    expected: float
-    actual: float
-    features: Dict[str, Any]
-    source: str = "manual"
-    timestamp: datetime = field(default_factory=datetime.now)
+def _parse_feature_frontmatter_yaml(source: str) -> Dict[str, Any]:
+    import yaml
 
-
-@dataclass(frozen=True)
-class GroundTruth:
-    """外部真实信号"""
-    session_id: str
-    signal_type: str
-    label: int
-    confidence: float = 1.0
-    latency_hours: int = 0
+    return yaml.safe_load(source) or {}
 
 
 # ==================== AdaptiveScorerV2（完整实现） ====================
 
-class AdaptiveScorerV2:
+
+class AdaptiveScorerV2(ScorerFeatureMixin):
     """自适应评分引擎 V2"""
+
+    _parse_frontmatter_yaml = staticmethod(_parse_feature_frontmatter_yaml)
 
     # 三阶段阈值
     COLD_THRESHOLD = 0
-    WARM_THRESHOLD = 30
+    WARM_THRESHOLD = ADAPTIVE_SCORER_V2_WARM_THRESHOLD
     HOT_THRESHOLD = 200
 
-    # 维度 → 规则评分器类
+    # 维度注册表的 value 已停用，只保留当前调用方所需的 key。
     _SCORER_MAP = {
-        "memos": MemosQualityScorer,
-        "sync": SyncScorer,
-        "distill": DistillScorer,
-        "kg": KGScorer,
-        "profile": ProfileScorer,
-        "ops": OpsScorer,
+        "sync": None,
+        "distill": None,
+        "kg": None,
+        "profile": None,
+        "ops": None,
+        "falsify": None,
+        "evolve": None,
+        "heat": None,
+        "predictive_delivery": None,
+    }
+
+    _DIMENSION_ALIASES = {
+        "l1": "l1_storage",
+        "session_quality": "l1_storage",
+        "memory_quality": "l1_storage",
+        "capture_quality": "l1_storage",
+        "engagement": "profile",
+        "persona": "profile",
+        "user_profile": "profile",
+        "correction_pattern": "ops",
+        "error_pattern": "ops",
+        "health": "ops",
+        "distill_complete": "distill",
+        "distill_skip": "distill",
+        "knowledge_distilled": "distill",
+        "knowledge_graph": "kg",
+        "relation_quality": "kg",
     }
 
     def __init__(
         self,
         domain: str = "mnemos",
-        config: Dict[str, Any] = None,
+        config: Dict[str, Any] | None = None,
         db_path: Optional[str] = None,
+        *,
+        governance_state_store: Any = None,
+        governance_principal: Any = None,
     ):
         self.domain = domain
         self.config = self._load_config(config)
@@ -127,29 +159,84 @@ class AdaptiveScorerV2:
         # 真正调用配置校验，仅记录警告不阻塞初始化
         cfg_errors = self.validate_scorer_config(self.config)
         if cfg_errors:
-            logger.warning(f"[ScorerV2] Config validation warnings: {cfg_errors}")
+            logger.warning("[ScorerV2] Config validation warnings: %s", cfg_errors)
 
-        self.db_path = Path(db_path) if db_path else (get_config().data_dir / "mnemos.db")
+        self.db_path = Path(db_path) if db_path else (get_config().database_dir / "mnemos.db")
+        self._governance_state_store = governance_state_store
+        self._governance_principal = governance_principal
 
         self._mode = "cold"
-        self._models: Dict[str, Any] = {}          # dimension → model
+        self._models: Dict[str, Any] = {}  # dimension → model
         self._model_versions: Dict[str, str] = {}
-        self._bayesian = BetaBayesianFusion(list(self._SCORER_MAP.keys()))
+        self._governed_rule_weights: Dict[str, Dict[str, Any]] = {}
+        self._governed_effect_bindings: Dict[str, Tuple[Any, Any, str]] = {}
+        # l1_storage 有独立规则先验，必须注册到贝叶斯融合器中，否则会被当作未知维度忽略规则先验。
+        bayesian_cfg = self.config.get("bayesian", {})
+        self._bayesian = BayesianScorer(
+            dimensions=list(self._SCORER_MAP.keys()) + ["l1_storage"],
+            db_path=self.db_path,
+            prior_alpha=bayesian_cfg.get("alpha_prior", 1.0),
+            prior_beta=bayesian_cfg.get("beta_prior", 1.0),
+            neg_likelihood=bayesian_cfg.get("explicit_neg_likelihood", 0.3),
+            rule_weight_cold=bayesian_cfg.get("rule_weight_cold", 3.0),
+            rule_weight_hot=bayesian_cfg.get("rule_weight_hot", 0.5),
+            persistent=False,
+        )
         self._fallback = ScorerFallback()
+        self._confidence_window: List[float] = []  # [P2-21] embedding 条件计算的置信度窗口
+        self._embedding_index_manager = None  # [P1-31] 懒加载缓存
 
-        # 加载已有模型（逐维度隔离，单维度失败不阻塞其他维度）
-        self._load_all_models()
+        # Pre-COG-048 scorer/Bayesian rows are historical-only after cutover.
 
-    @staticmethod
-    def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-        """深度合并两个字典：override 递归覆盖 base 的同名键。"""
-        result = base.copy()
-        for key, val in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(val, dict):
-                result[key] = AdaptiveScorerV2._deep_merge(result[key], val)
-            else:
-                result[key] = val
-        return result
+    @classmethod
+    def ensure_tables(cls, db_path: Optional[str] = None) -> None:
+        """Initialize only the operational search-session schema.
+
+        COG-048 intentionally does not create any pre-cutover training, model, or
+        Bayesian table.  Historical instances are migration inputs only.
+        """
+        db = Path(db_path) if db_path else (get_config().database_dir / "mnemos.db")
+        try:
+            with sqlite_conn(str(db)) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                # search_sessions：搜索会话追踪（点击/忽略信号采集）
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS search_sessions (
+                        id INTEGER PRIMARY KEY,
+                        session_id TEXT NOT NULL UNIQUE,
+                        query TEXT,
+                        result_paths TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        clicked_path TEXT,
+                        clicked_at TEXT,
+                        opened_path TEXT,
+                        opened_at TEXT,
+                        ignored_at TEXT,
+                        outcome_status TEXT DEFAULT '',
+                        outcome_at TEXT
+                    )
+                """
+                )
+                search_columns = {
+                    str(row[1]) for row in conn.execute("PRAGMA table_info(search_sessions)")
+                }
+                if "opened_path" not in search_columns:
+                    conn.execute("ALTER TABLE search_sessions ADD COLUMN opened_path TEXT")
+                if "opened_at" not in search_columns:
+                    conn.execute("ALTER TABLE search_sessions ADD COLUMN opened_at TEXT")
+                if "ignored_at" not in search_columns:
+                    conn.execute("ALTER TABLE search_sessions ADD COLUMN ignored_at TEXT")
+                if "outcome_status" not in search_columns:
+                    conn.execute(
+                        "ALTER TABLE search_sessions ADD COLUMN outcome_status TEXT DEFAULT ''"
+                    )
+                if "outcome_at" not in search_columns:
+                    conn.execute("ALTER TABLE search_sessions ADD COLUMN outcome_at TEXT")
+                ensure_scoring_subject_provenance_schema(conn)
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning("[ScorerV2] ensure_tables failed: %s", e, exc_info=True)
 
     @staticmethod
     def _load_config(user_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -157,17 +244,20 @@ class AdaptiveScorerV2:
         defaults = {
             "backend": "standard" if _SKLEARN_AVAILABLE else "lightweight",
             "training": {
-                "min_samples_per_dimension": 20,
+                "min_samples_per_dimension": get_effective_policy().get(
+                    "scoring.min_samples_per_dimension", 20
+                ),
                 "min_confidence": 0.7,
                 "max_queue_size": 500,
-                "retention_days": 30,
+                "retention_days": ADAPTIVE_SCORER_V2_DURATION_BUCKET_MONTH_DAYS,
             },
             "bayesian": {
                 "alpha_prior": 1.0,
                 "beta_prior": 1.0,
                 "explicit_neg_likelihood": 0.3,
+                # [P2-23] 规则权重使用 cold→hot 的指数衰减曲线，
+                # 不再使用阶梯式的 warm 阈值。
                 "rule_weight_cold": 3.0,
-                "rule_weight_warm": 1.5,
                 "rule_weight_hot": 0.5,
             },
             "fallback": {
@@ -175,13 +265,16 @@ class AdaptiveScorerV2:
                 "degrade_to_rule": True,
             },
             "persistence": {
-                "format": "joblib",
+                "format": _MODEL_SERIALIZATION,
                 "max_versions": 5,
                 "auto_save_after_training": True,
             },
             "dimensions": {
-                "memos": True, "sync": True, "distill": True,
-                "kg": True, "profile": True, "ops": True,
+                "sync": True,
+                "distill": True,
+                "kg": True,
+                "profile": True,
+                "ops": True,
             },
         }
 
@@ -189,18 +282,21 @@ class AdaptiveScorerV2:
         yaml_config = {}
         try:
             import yaml
+
             cfg_path = Path(__file__).parents[2] / "config" / "scorer.yaml"
             if cfg_path.exists():
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     loaded = yaml.safe_load(f) or {}
                     yaml_config = loaded.get("scorer", {})
-        except Exception:
-            pass
+        except ImportError:
+            logger.debug("[adaptive_scorer_v2] ImportError suppressed", exc_info=True)
 
         # 三层深度合并：defaults < yaml < user
         merged = AdaptiveScorerV2._deep_merge(defaults, yaml_config)
         if user_config:
             merged = AdaptiveScorerV2._deep_merge(merged, user_config)
+        if merged.get("backend") == "standard" and not _SKLEARN_AVAILABLE:
+            merged["backend"] = "lightweight"
         return merged
 
     @staticmethod
@@ -226,24 +322,62 @@ class AdaptiveScorerV2:
 
     # ── 核心评分接口 ──
 
-    def score(self, item: Any, dimensions: List[str]) -> ScoreCardV2:
+    def score(
+        self,
+        item: Any,
+        dimensions: List[str],
+        *,
+        subject_scope: SubjectScope | None = None,
+    ) -> ScoreCardV2:
         """
-        多维度评分：特征提取 → 规则先验 → ML 似然 → 贝叶斯后验。
+        多维度评分：特征提取 → 规则先验 → [P2-21] embedding 条件计算 → ML 似然 → 贝叶斯后验。
+
+        ``subject_scope`` is required before visible user-derived content may
+        reach the optional embedding provider.  A direct ``Path`` input is
+        itself a durable asset identity and may therefore derive a ``path``
+        scope; bare text and dicts deliberately do not receive a generic
+        scorer fallback.  System-owned content must likewise be declared by
+        its owning caller with an explicit ``("source", owner)`` scope.
         """
         features = self._extract_features(item)
+        embedding_subject_scope = self._resolve_embedding_subject_scope(item, subject_scope)
         scores: Dict[str, float] = {}
         confidences: Dict[str, float] = {}
+        rule_results: Dict[str, Tuple[str, float, float]] = {}
+
+        # 将外部/历史别名统一为内部维度名，避免规则先验和 ML 模型找不到分支。
+        dim_norm_map = {dim: self.normalize_dimension(dim) for dim in dimensions}
+
+        # 1. 规则先验（全维度预计算，用于判断是否需要 embedding）
+        for dim in dimensions:
+            norm_dim = dim_norm_map[dim]
+            rule_prior, rule_conf = self._rule_score(norm_dim, item, features)
+            rule_results[dim] = (norm_dim, rule_prior, rule_conf)
+
+        # [P2-21] 对低置信度样本（bottom 20%）计算 embedding 相似度
+        rule_confs = [rc for _, _, rc in rule_results.values()]
+        if self._should_compute_embedding(rule_confs) and embedding_subject_scope is not None:
+            emb_sim = self._compute_embedding_similarity(
+                features.get("content", ""),
+                subject_scope=embedding_subject_scope,
+            )
+            if emb_sim is not None:
+                features["embedding_sim_to_high_quality"] = emb_sim
+                # embedding 特征可能影响规则先验，重新计算
+                for dim in dimensions:
+                    norm_dim = dim_norm_map[dim]
+                    rule_prior, rule_conf = self._rule_score(norm_dim, item, features)
+                    rule_results[dim] = (norm_dim, rule_prior, rule_conf)
 
         for dim in dimensions:
-            # 1. 规则先验
-            rule_prior, rule_conf = self._rule_score(dim, item, features)
+            norm_dim, rule_prior, rule_conf = rule_results[dim]
 
             # 2. ML 似然（带降级保护）
-            ml_like, ml_conf = self._ml_score(dim, features)
+            ml_like, ml_conf = self._ml_score(norm_dim, features)
 
             # 3. 贝叶斯融合
             post, post_conf = self._bayesian.fuse(
-                dimension=dim,
+                dimension=norm_dim,
                 rule_prior=rule_prior,
                 ml_likelihood=ml_like,
                 ml_confidence=ml_conf,
@@ -251,7 +385,16 @@ class AdaptiveScorerV2:
             scores[dim] = post
             confidences[dim] = post_conf
 
-        version = self._model_versions.get(dimensions[0], "v2-rule-only") if not self._models else "v2-ml"
+        if self._models:
+            dim_versions = []
+            for dim in dimensions:
+                if dim in self._models:
+                    dim_versions.append(f"{dim}=ml")
+                else:
+                    dim_versions.append(f"{dim}=rule")
+            version = "v2:" + ",".join(dim_versions)
+        else:
+            version = "v2-rule-only"
         return ScoreCardV2(
             scores=scores,
             confidences=confidences,
@@ -259,16 +402,51 @@ class AdaptiveScorerV2:
             model_version=version,
         )
 
-    def feedback(self, fb: FeedbackV2) -> None:
-        """接收反馈，写入 ground_truth 和训练队列"""
-        self._insert_ground_truth(
-            session_id=fb.session_id,
-            signal_type="user_feedback",
-            label=1 if fb.expected >= 0.5 else 0,
-            confidence=abs(fb.expected - fb.actual),
+    def feedback(self, fb: FeedbackV2) -> Dict[str, Any]:
+        """Reject reaction or caller-score promotion into training."""
+
+        del fb
+        _reject_retired_training("feedback")
+
+    def apply_governed_run(self, run_revision_id: str) -> str:
+        """Activate one exact current governed run after full receipt validation."""
+
+        from core.cognitive.state_store import CognitiveStateStore
+        from core.cognitive.training_governance import TrainingGovernanceStore
+
+        if not isinstance(self._governance_state_store, CognitiveStateStore):
+            raise PermissionError("training_admission_receipt_required:governance_state_store")
+        if self._governance_principal is None:
+            raise PermissionError("training_admission_receipt_required:governance_principal")
+        governance = TrainingGovernanceStore(
+            self._governance_state_store,
+            database_dir=self.db_path.parent,
         )
-        self._insert_training_queue(fb)
-        logger.debug(f"[ScorerV2] Feedback recorded for session={fb.session_id}")
+        snapshot = governance.load_applied_model(
+            str(run_revision_id or ""),
+            self._governance_principal,
+        )
+        if snapshot.dimension != "predictive_delivery":
+            raise ValueError("unknown governed scorer dimension")
+        self._models[snapshot.dimension] = GovernedBinaryCentroid(
+            governance,
+            self._governance_principal,
+            snapshot,
+        )
+        prior = self._bayesian.priors[snapshot.dimension]
+        prior.alpha = float(snapshot.bayesian_prior["alpha"])
+        prior.beta = float(snapshot.bayesian_prior["beta"])
+        prior.total_samples = int(snapshot.bayesian_prior["total_samples"])
+        prior.last_updated = str(snapshot.bayesian_prior.get("artifact_hash") or "")
+        self._governed_rule_weights[snapshot.dimension] = dict(snapshot.rule_optimizer)
+        self._governed_effect_bindings[snapshot.dimension] = (
+            governance,
+            self._governance_principal,
+            snapshot.run_revision_id,
+        )
+        self._model_versions[snapshot.dimension] = snapshot.model_id
+        self._mode = "hot"
+        return snapshot.model_id
 
     @classmethod
     def enqueue_training_sample(
@@ -279,241 +457,41 @@ class AdaptiveScorerV2:
         expected_score: float,
         source: str,
         db_path: Optional[str] = None,
-    ) -> None:
-        """将真实用户行为样本写入 scorer_training_queue，同时写入弱 ground_truth。
+        subject_provenance: Mapping[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Reject the retired caller-labelled queue and weak-ground-truth writer."""
 
-        Args:
-            session_id: 会话/行为标识
-            dimension: 评分维度（distill/kg/sync/profile/ops/memos）
-            features: 特征字典
-            expected_score: 期望得分（0-1，越高表示越正向）
-            source: 样本来源标识
-            db_path: 数据库路径（默认 ~/.mnemos/mnemos.db）
-        """
-        db = Path(db_path) if db_path else (get_config().data_dir / "mnemos.db")
-        try:
-            with sqlite3.connect(str(db)) as conn:
-                conn.execute("""
-                    INSERT INTO scorer_training_queue
-                        (session_id, dimension, features_json, priority, earliest_train_at, status)
-                    VALUES (?, ?, ?, ?, ?, 'pending')
-                """, (
-                    session_id,
-                    dimension,
-                    json.dumps(features, ensure_ascii=False, default=str),
-                    int(max(0.0, min(1.0, expected_score)) * 10),
-                    (datetime.now() + timedelta(hours=0)).isoformat(),
-                ))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] enqueue_training_sample (queue) failed: {e}")
-            return
-
-        # 同时写入弱 ground_truth，确保训练时能匹配到标签
-        # 与 queue 分开事务，避免 ground_truth schema 约束导致 queue 回滚
-        try:
-            with sqlite3.connect(str(db)) as conn:
-                label = 1 if expected_score >= 0.5 else 0
-                conn.execute("""
-                    INSERT OR REPLACE INTO ground_truth_signals
-                        (profile_id, session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    session_id, session_id, dimension, str(label), max(0.1, min(1.0, expected_score)), 0,
-                    datetime.now().isoformat(),
-                ))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] enqueue_training_sample (ground_truth) failed: {e}")
-
-        logger.debug(
-            f"[ScorerV2] Training sample enqueued: "
-            f"session={session_id}, dim={dimension}, source={source}"
-        )
+        del cls, session_id, dimension, features, expected_score
+        del source, db_path, subject_provenance
+        _reject_retired_training("enqueue_training_sample")
 
     # ── 批量训练接口 ──
 
     def process_training_queue(self, dimension: Optional[str] = None) -> int:
-        """
-        处理训练队列，返回本次训练的样本数。
-        """
-        ready_count = self._count_ready_samples(dimension)
-        if ready_count < 20:
-            logger.info(
-                f"[ScorerV2] Training skipped: only {ready_count} ready samples "
-                f"(need ≥20 to start first training)"
-            )
-            return 0
+        """Reject the retired pre-COG-048 queue trainer."""
 
-        # 按维度分组训练
-        dims = [dimension] if dimension else list(self._SCORER_MAP.keys())
-        total_trained = 0
-        for dim in dims:
-            trained = self._train_dimension(dim)
-            total_trained += trained
-
-        logger.info(f"[ScorerV2] Training completed: {total_trained} samples across {len(dims)} dimensions")
-        return total_trained
+        del dimension
+        _reject_retired_training("process_training_queue")
 
     # ── 模型管理 ──
 
-    def save_model(self, dimension: str, note: Optional[str] = None) -> str:
-        """将模型序列化到 scorer_models 表（带安全元数据）。"""
-        model = self._models.get(dimension)
-        if model is None:
-            raise ValueError(f"No model loaded for dimension={dimension}")
+    def save_model(
+        self,
+        dimension: str,
+        note: Optional[str] = None,
+        train_samples: Optional[int] = None,
+        source_refs: Tuple[Tuple[str, str], ...] = (),
+    ) -> str:
+        """Reject arbitrary or pre-COG-048 model persistence."""
 
-        version = datetime.now().strftime("%Y%m%d-%H%M%S")
-        blob = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
-
-        # 元数据：用于加载时安全校验
-        meta = json.dumps({
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "sklearn_version": self._sklearn_version(),
-            "model_class": type(model).__name__,
-            "note": note,
-        })
-        blob_hash = hashlib.sha256(blob).hexdigest()
-
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.execute("""
-                    INSERT INTO scorer_models
-                        (dimension, model_version, model_type, model_blob, model_hash,
-                         train_samples, is_active, created_at, meta_json)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-                """, (
-                    dimension,
-                    version,
-                    "sklearn_complement_nb" if _SKLEARN_AVAILABLE else "lightweight_nb",
-                    blob,
-                    blob_hash,
-                    getattr(model, "n_features_in_", 0) if _SKLEARN_AVAILABLE else len(model.to_dict()),
-                    datetime.now().isoformat(),
-                    meta,
-                ))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] save_model failed: {e}")
-            raise
-
-        self._model_versions[dimension] = version
-        logger.info(f"[ScorerV2] Model saved: {dimension}@{version}")
-        return version
-
-    @staticmethod
-    def _sklearn_version() -> str:
-        """返回当前 sklearn 版本，未安装返回 'none'。"""
-        try:
-            import sklearn
-            return sklearn.__version__
-        except Exception:
-            return "none"
+        del dimension, note, train_samples, source_refs
+        _reject_retired_training("save_model")
 
     def load_model(self, dimension: str, version: Optional[str] = None) -> Any:
-        """
-        从 scorer_models 表加载模型（带安全护栏）。
+        """Reject pre-cutover model identity; use apply_governed_run(revision_id)."""
 
-        校验项：
-          1. schema_version 匹配（防止跨版本加载不兼容模型）
-          2. SHA256 hash 匹配（防止 blob 损坏/篡改）
-          3. Python 主版本一致（pickle 跨大版本不安全）
-          4. sklearn 版本一致（sklearn 模型跨版本可能不兼容）
-
-        任何校验失败 → 静默返回 None，不阻塞评分流程。
-        """
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                if version:
-                    row = conn.execute("""
-                        SELECT model_blob, model_type, model_hash, meta_json
-                        FROM scorer_models
-                        WHERE dimension = ? AND model_version = ?
-                    """, (dimension, version)).fetchone()
-                else:
-                    row = conn.execute("""
-                        SELECT model_blob, model_type, model_hash, meta_json
-                        FROM scorer_models
-                        WHERE dimension = ? AND is_active = 1
-                        ORDER BY created_at DESC LIMIT 1
-                    """, (dimension,)).fetchone()
-
-                if not row:
-                    logger.debug(f"[ScorerV2] No model found for {dimension}")
-                    return None
-
-                blob, model_type, stored_hash, meta_json = row
-
-                # 1. hash 校验
-                if stored_hash and hashlib.sha256(blob).hexdigest() != stored_hash:
-                    logger.warning(f"[ScorerV2] Hash mismatch for {dimension}, refusing load")
-                    return None
-
-                # 2. 元数据校验
-                if meta_json:
-                    try:
-                        meta = json.loads(meta_json)
-                    except json.JSONDecodeError:
-                        meta = {}
-
-                    # schema 版本
-                    if meta.get("schema_version") != _SCHEMA_VERSION:
-                        logger.warning(
-                            f"[ScorerV2] Schema mismatch for {dimension}: "
-                            f"stored={meta.get('schema_version')} expected={_SCHEMA_VERSION}"
-                        )
-                        return None
-
-                    # Python 主版本
-                    py_ver = meta.get("python_version", "")
-                    current_major = f"{sys.version_info.major}.{sys.version_info.minor}"
-                    if py_ver and not py_ver.startswith(current_major):
-                        logger.warning(
-                            f"[ScorerV2] Python version mismatch for {dimension}: "
-                            f"stored={py_ver} current={current_major}"
-                        )
-                        return None
-
-                    # sklearn 版本（仅当当前有 sklearn 时检查）
-                    sk_ver = meta.get("sklearn_version", "none")
-                    if sk_ver != "none" and _SKLEARN_AVAILABLE:
-                        current_sk = self._sklearn_version()
-                        if sk_ver != current_sk:
-                            logger.warning(
-                                f"[ScorerV2] sklearn version mismatch for {dimension}: "
-                                f"stored={sk_ver} current={current_sk}"
-                            )
-                            return None
-
-                # 3. pickle 反序列化（隔离异常）
-                try:
-                    model = pickle.loads(blob)
-                except Exception as e:
-                    logger.warning(f"[ScorerV2] pickle deserialization failed for {dimension}: {e}")
-                    return None
-
-                self._models[dimension] = model
-                self._model_versions[dimension] = version or "latest"
-                logger.info(f"[ScorerV2] Model loaded: {dimension} ({model_type})")
-                return model
-        except Exception as e:
-            logger.warning(f"[ScorerV2] load_model failed: {e}")
-            return None
-
-    def rollback_model(self, dimension: str, version: str) -> None:
-        """回滚到指定版本"""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.execute("""
-                UPDATE scorer_models SET is_active = 0 WHERE dimension = ?
-            """, (dimension,))
-            conn.execute("""
-                UPDATE scorer_models SET is_active = 1
-                WHERE dimension = ? AND model_version = ?
-            """, (dimension, version))
-            conn.commit()
-        self.load_model(dimension, version)
-        logger.info(f"[ScorerV2] Model rolled back: {dimension} -> {version}")
+        del dimension, version
+        _reject_retired_training("load_model")
 
     # ── ground_truth 写入点 ──
 
@@ -526,226 +504,249 @@ class AdaptiveScorerV2:
         confidence: float = 1.0,
         latency_hours: int = 0,
         db_path: Optional[Path] = None,
+        subject_provenance: Mapping[str, Any] | None = None,
     ) -> None:
-        db = db_path or (get_config().data_dir / "mnemos.db")
-        try:
-            with sqlite3.connect(str(db)) as conn:
-                # 先删除旧记录（避免 UNIQUE 约束缺失导致的 ON CONFLICT 失败）
-                conn.execute("""
-                    DELETE FROM ground_truth_signals
-                    WHERE session_id = ? AND signal_type = ?
-                """, (session_id, signal_type))
+        """Reject caller-provided labels without a canonical admission receipt."""
 
-                # 检测表是否有 profile_id 列（兼容旧测试表结构）
-                has_profile_id = False
-                try:
-                    cursor = conn.execute("PRAGMA table_info(ground_truth_signals)")
-                    columns = {row[1] for row in cursor.fetchall()}
-                    has_profile_id = "profile_id" in columns
-                except Exception:
-                    pass
-
-                if has_profile_id:
-                    conn.execute("""
-                        INSERT INTO ground_truth_signals
-                            (profile_id, session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        session_id, session_id, signal_type, str(label), confidence, latency_hours,
-                        datetime.now().isoformat(),
-                    ))
-                else:
-                    conn.execute("""
-                        INSERT INTO ground_truth_signals
-                            (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        session_id, signal_type, str(label), confidence, latency_hours,
-                        datetime.now().isoformat(),
-                    ))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] ground_truth insert failed: {e}")
+        del cls, session_id, signal_type, label, confidence
+        del latency_hours, db_path, subject_provenance
+        _reject_retired_training("insert_ground_truth")
 
     # ── 内部方法 ──
 
-    # ── frontmatter 数值归一化 ──
+    # ── [P2-21] 特征提取 helper 方法 ──
 
-    @staticmethod
-    def _normalize_frontmatter_value(
-        val: Any, key: str = "", clamp_0_1: bool = True
+    def _extract_kg_features(
+        self, content: str, item_path: Optional[Path], features: Dict[str, Any]
+    ) -> None:
+        """提取知识图谱特征（~6维）"""
+        features["kg_entity_density"] = 0.0
+        features["kg_relation_out_count"] = 0
+        features["kg_relation_in_count"] = 0
+        features["kg_relation_richness"] = 0.0
+        features["kg_connectivity_score"] = 0.0
+        features["kg_avg_relation_strength"] = 0.0
+
+        try:
+            from core.kia.knowledge_graph import KnowledgeGraph
+
+            page_id = None
+            if item_path:
+                try:
+                    page_id = str(
+                        item_path.expanduser()
+                        .resolve(strict=False)
+                        .relative_to(Path(get_config().wiki_dir).expanduser().resolve(strict=False))
+                    )
+                except ValueError:
+                    page_id = None
+
+            if page_id:
+                kg = KnowledgeGraph(initialize=False, read_only=True)
+                out_rels = kg.get_relations(page=page_id, min_confidence=0.0)
+                in_rels = kg.get_incoming_relations(page=page_id, min_confidence=0.0)
+
+                features["kg_relation_out_count"] = len(out_rels)
+                features["kg_relation_in_count"] = len(in_rels)
+
+                all_rels = list(out_rels) + list(in_rels)
+                if all_rels:
+                    unique_types = set(getattr(r, "relation_type", None) for r in all_rels)
+                    features["kg_relation_richness"] = len(
+                        [t for t in unique_types if t is not None]
+                    ) / max(len(all_rels), 1)
+                    strengths = [
+                        getattr(r, "strength", 0.0) for r in all_rels if hasattr(r, "strength")
+                    ]
+                    if strengths:
+                        features["kg_avg_relation_strength"] = sum(strengths) / len(strengths)
+
+                # 关联度：邻居数量
+                cluster = kg.get_related_cluster(page=page_id, depth=1, min_strength=0.3)
+                features["kg_connectivity_score"] = min(1.0, len(cluster) / 20.0)
+
+            # 实体密度：从内容中的 [[link]] 推断
+            wiki_links = content.count("[[")
+            words = len(content.split())
+            if words > 0:
+                features["kg_entity_density"] = min(1.0, wiki_links * 10.0 / words)
+
+        except ImportError:
+            logger.debug("[adaptive_scorer_v2] ImportError suppressed", exc_info=True)
+
+    def _compute_embedding_similarity(
+        self,
+        content: str,
+        *,
+        subject_scope: SubjectScope | None = None,
     ) -> Optional[float]:
-        """
-        将 frontmatter 值归一化为 [0, 1] 浮点数。
-
-        处理多种输入形态：
-          - 字符串枚举："hot"→0.9, "warm"→0.6, "cold"→0.3
-          - 字符串数字："0.8" → 0.8, "100" → 1.0
-          - 0-100 分值：自动检测并 /100 归一化
-          - 已经是 0-1 浮点：直接保留
-          - 布尔值：True→1.0, False→0.0
-          - 其他/无法解析：返回 None（调用方取默认）
-        """
-        if val is None:
+        """计算内容与历史高质量内容的平均 embedding 余弦相似度"""
+        if not content or len(content) < 20 or subject_scope is None:
             return None
 
-        # 布尔值
-        if isinstance(val, bool):
-            return 1.0 if val else 0.0
+        try:
+            from core.embeddings.siliconflow_client import get_embedding_client
+            from core.embeddings.index_manager import EmbeddingIndexManager
 
-        # 已经是数值
-        if isinstance(val, (int, float)):
-            # 排除 bool 子类（上面已处理）
-            fval = float(val)
-            # 检测 0-100 分值（常见 frontmatter 习惯）
-            if key in ("heat", "quality_score", "confidence", "priority"):
-                if fval > 1.0:
-                    fval = fval / 100.0
-            if clamp_0_1:
-                fval = max(0.0, min(1.0, fval))
-            return fval
+            client = get_embedding_client()
 
-        # 字符串处理
-        if isinstance(val, str):
-            s = val.strip().lower()
-            # 枚举值
-            ENUM_MAP = {"hot": 0.9, "warm": 0.6, "cold": 0.3,
-                        "high": 0.85, "medium": 0.55, "low": 0.25,
-                        "critical": 0.95, "normal": 0.5}
-            if s in ENUM_MAP:
-                return ENUM_MAP[s]
-            # 百分比字符串
-            if s.endswith("%"):
-                try:
-                    return max(0.0, min(1.0, float(s[:-1]) / 100.0))
-                except ValueError:
-                    return None
-            # 纯数字字符串
-            try:
-                fval = float(s)
-                if key in ("heat", "quality_score", "confidence", "priority") and fval > 1.0:
-                    fval = fval / 100.0
-                return max(0.0, min(1.0, fval)) if clamp_0_1 else fval
-            except ValueError:
+            # 获取当前内容 embedding（截断控制成本）
+            current_vec = embed_for_adaptive_score(
+                client,
+                content[:2000],
+                get_config(),
+                subject_scope=subject_scope,
+            )
+            if not current_vec:
                 return None
 
-        return None
+            # 从索引中获取相似的高质量内容（复用缓存的索引管理器）
+            if self._embedding_index_manager is None:
+                self._embedding_index_manager = EmbeddingIndexManager()  # type: ignore[assignment]
+            idx = self._embedding_index_manager
+            # type: ignore[attr-defined]
+            similar = idx.search(  # type: ignore[attr-defined]
+                content[:200],
+                top_k=5,
+                similarity_threshold=0.5,
+                subject_scope=subject_scope,
+            )
 
-    def _extract_features(self, item: Any) -> Dict[str, Any]:
-        """从 item 提取特征字典（frontmatter 数值已归一化到 [0,1]）"""
-        features: Dict[str, Any] = {"_domain": self.domain}
+            if not similar:
+                return None
 
-        # 统一提取 content 和 frontmatter
-        content = ""
-        frontmatter: Dict[str, Any] = {}
-        if isinstance(item, dict):
-            content = item.get("content", "")
-            frontmatter = item.get("frontmatter", {})
-            features["_source"] = "dict"
-        elif isinstance(item, str):
-            content = item
-            features["_source"] = "str"
-        elif isinstance(item, Path):
-            try:
-                text = item.read_text(encoding="utf-8", errors="ignore")
-                # 简单 frontmatter 提取
-                if text.startswith("---"):
-                    parts = text.split("---", 2)
-                    if len(parts) >= 3:
-                        try:
-                            import yaml
-                            frontmatter = yaml.safe_load(parts[1]) or {}
-                            content = parts[2]
-                        except Exception:
-                            content = text
-                else:
-                    content = text
-            except Exception:
-                content = ""
-            features["_source"] = "path"
+            similarities = []
+            for _path, sim in similar:
+                if sim > 0.3:
+                    similarities.append(sim)
 
-        features["content"] = content
-        features["content_len"] = len(content)
-        features["content_words"] = len(content.split())
-        features["has_frontmatter"] = bool(frontmatter)
-        features["frontmatter_keys"] = list(frontmatter.keys())
-        features["_frontmatter"] = frontmatter
+            if similarities:
+                return sum(similarities) / len(similarities)  # type: ignore[no-any-return]
 
-        # 简单元数据特征
-        features["has_code_block"] = "```" in content
-        features["has_table"] = "|" in content and "\n|" in content
-        features["header_count"] = content.count("# ")
-        features["link_count"] = content.count("[[")
+            return None
 
-        # frontmatter 数值特征（经归一化到 [0,1]）
-        for key in ["heat", "quality_score", "confidence", "priority"]:
-            val = frontmatter.get(key)
-            norm = self._normalize_frontmatter_value(val, key=key)
-            if norm is not None:
-                features[f"fm_{key}"] = norm
-
-        return features
+        # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ImportError,
+            AttributeError,
+            RuntimeError,
+            sqlite3.Error,
+        ):
+            return None
 
     def _rule_score(self, dim: str, item: Any, features: Dict[str, Any]) -> Tuple[float, float]:
         """
-        基于 frontmatter/内容特征的简单启发式规则先验。
+        基于 frontmatter/内容特征的启发式规则先验。
 
-        不调用 V1 的六域 scorer（避免循环依赖和 EventBus 阻塞），
-        直接利用已提取的 features 计算先验得分。
+        V1 五域 scorer 中真正有价值的规则已迁移到 core.scoring.rule_helpers，
+        这里直接调用；不再依赖 V1 scorer 类，避免循环依赖和 EventBus 阻塞。
         所有 frontmatter 数值已通过 _extract_features 归一化到 [0,1]。
         """
+        dim = self.normalize_dimension(dim)
         fm = features.get("_frontmatter", {})
         content = features.get("content", "")
-        words = features.get("content_words", 0)
+        features.get("content_words", 0)
 
-        # 通用特征映射到各维度先验
-        if dim == "memos":
-            # 使用已归一化的特征；若不存在则回退到原始值再做一次归一化
-            heat = features.get("fm_heat",
-                self._normalize_frontmatter_value(fm.get("heat"), "heat") or 0.5)
-            quality = features.get("fm_quality_score",
-                self._normalize_frontmatter_value(fm.get("quality_score"), "quality_score") or 0.5)
-            # clamp 确保 [0,1]
-            heat = max(0.0, min(1.0, float(heat)))
-            quality = max(0.0, min(1.0, float(quality)))
-            return (heat * 0.5 + quality * 0.5), 0.4
+        if dim == "predictive_delivery":
+            artifact = self._refresh_governed_aux_effects(dim)
+            if artifact is not None:
+                weights = artifact["weights"]
+                bias = float(artifact["bias"])
+                adjustment = sum(
+                    float(weights[name]) * (float(features.get(name, 0.5)) - 0.5)
+                    for name in artifact["feature_names"]
+                )
+                score = max(0.0, min(1.0, bias + adjustment * 0.5))
+                confidence = min(1.0, 0.5 + int(artifact["sample_count"]) / 200.0)
+                return score, confidence
 
-        elif dim == "sync":
-            # 同步紧迫度：内容越短越可能是待同步片段
-            urgency = 1.0 - min(1.0, words / 500)
-            return urgency, 0.3
+        if dim == "sync":
+            # 同步紧迫度：V1 SyncScorer 的 urgency 规则（崩溃/异常/故障关键词）
+            score = rule_helpers.sync_urgency_score(content)
+            return score, 0.3
 
         elif dim == "distill":
-            # 蒸馏价值：有代码块/表格的内容更有蒸馏价值
-            has_code = features.get("has_code_block", False)
-            has_table = features.get("has_table", False)
-            score = 0.5 + (0.2 if has_code else 0) + (0.15 if has_table else 0)
-            return min(1.0, score), 0.4
+            # 蒸馏价值：V1 DistillScorer 的完整 RuleScorer 评分
+            score = rule_helpers.distill_value_score(content)
+            return score, 0.4
+
+        elif dim == "falsify":
+            # 可证伪性：V1 DistillScorer._falsify_rule
+            score = rule_helpers.falsifiability_score(content)
+            return score, 0.35
+
+        elif dim == "evolve":
+            # 进化潜力：V1 DistillScorer._evolve_rule
+            score = rule_helpers.evolution_score(content)
+            return score, 0.35
+
+        elif dim == "heat":
+            # 热度预测：V1 DistillScorer._heat_rule
+            score = rule_helpers.heat_score(content, has_code=features.get("has_code_block", False))
+            return score, 0.35
 
         elif dim == "kg":
-            # 知识图谱关联度：链接越多关联度越高
+            # 知识图谱关联度：链接数 + V1 relation_confidence 规则
             links = features.get("link_count", 0)
-            score = min(1.0, 0.3 + links * 0.1)
+            link_score = min(1.0, 0.3 + links * 0.1)
+            relation_score = rule_helpers.relation_confidence_score(content)
+            score = 0.6 * link_score + 0.4 * relation_score
             return score, 0.3
 
         elif dim == "profile":
-            # 画像匹配：有行为标签的内容匹配度更高
+            # 画像匹配：行为模式 + 标签丰富度
+            behavior = rule_helpers.profile_behavior_score(
+                content, has_code=features.get("has_code_block", False)
+            )
             tags = fm.get("tags", [])
-            score = min(1.0, 0.4 + len(tags) * 0.1)
+            tag_bonus = min(0.3, len(tags) * 0.05)
+            score = min(1.0, behavior + tag_bonus)
             return score, 0.3
 
         elif dim == "ops":
-            # 运维异常：内容中包含错误关键词
-            error_keywords = ["error", "fail", "timeout", "crash", "exception"]
-            lower = content.lower()
-            hits = sum(1 for k in error_keywords if k in lower)
-            score = min(1.0, 0.2 + hits * 0.15)
+            # 运维异常：V1 OpsScorer._anomaly_rule 的 richer keyword set
+            score = rule_helpers.ops_anomaly_score(content)
             return score, 0.35
+
+        elif dim == "l1_storage":
+            # L1 存储质量：基于 frontmatter heat 和 quality_score
+            heat = features.get("fm_heat", 0.5)
+            qscore = features.get("fm_quality_score", 0.5)
+            score = min(1.0, 0.5 + heat * 0.22 + qscore * 0.25)
+            return score, 0.4
 
         return 0.5, 0.3  # 默认先验
 
+    def _refresh_governed_aux_effects(self, dimension: str) -> Dict[str, Any] | None:
+        binding = self._governed_effect_bindings.get(dimension)
+        if binding is None:
+            return None
+        governance, principal, run_revision_id = binding
+        try:
+            snapshot = governance.load_applied_model(run_revision_id, principal)
+        except (OSError, PermissionError, RuntimeError, TypeError, ValueError):
+            self._models.pop(dimension, None)
+            self._model_versions.pop(dimension, None)
+            self._governed_rule_weights.pop(dimension, None)
+            self._governed_effect_bindings.pop(dimension, None)
+            self._bayesian.priors[dimension] = self._bayesian._fresh_prior()
+            return None
+        prior = self._bayesian.priors[dimension]
+        prior.alpha = float(snapshot.bayesian_prior["alpha"])
+        prior.beta = float(snapshot.bayesian_prior["beta"])
+        prior.total_samples = int(snapshot.bayesian_prior["total_samples"])
+        prior.last_updated = str(snapshot.bayesian_prior.get("artifact_hash") or "")
+        artifact = dict(snapshot.rule_optimizer)
+        self._governed_rule_weights[dimension] = artifact
+        return artifact
+
     def _ml_score(self, dim: str, features: Dict[str, Any]) -> Tuple[float, float]:
         """调用 ML 模型获取似然（带降级保护）"""
+        dim = self.normalize_dimension(dim)
         model = self._models.get(dim)
         if model is None:
             return 0.5, 0.0  # 未训练
@@ -756,7 +757,9 @@ class AdaptiveScorerV2:
         try:
             # 将特征字典扁平化为 sparse 特征
             sparse_feat = self._features_to_sparse(features)
-            if _SKLEARN_AVAILABLE and hasattr(model, "predict_proba"):
+            if type(model).__name__ in ("SklearnPartialFitNB", "Pipeline") and hasattr(
+                model, "predict_proba"
+            ):
                 proba = model.predict_proba([sparse_feat])[0]
                 # 二分类：proba[1] 是正类概率
                 ml_like = float(proba[1]) if len(proba) > 1 else float(proba[0])
@@ -769,125 +772,41 @@ class AdaptiveScorerV2:
 
             self._fallback.reset_failure(dim)
             return ml_like, ml_conf
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, ArithmeticError) as e:
             self._fallback._record_failure(dim)
-            logger.debug(f"[ScorerV2] ML scoring failed for {dim}: {e}")
+            if isinstance(model, GovernedBinaryCentroid):
+                self._models.pop(dim, None)
+                self._model_versions.pop(dim, None)
+                self._governed_rule_weights.pop(dim, None)
+                self._governed_effect_bindings.pop(dim, None)
+                self._bayesian.priors[dim] = self._bayesian._fresh_prior()
+            logger.debug("[ScorerV2] ML scoring failed for %s: %s", dim, e, exc_info=True)
             return 0.5, 0.0
 
-    def _train_dimension(self, dim: str) -> int:
-        """训练单个维度的模型"""
-        # 1. 获取训练样本
-        samples = self._get_training_samples(dim)
-        if len(samples) < 20:
-            return 0
-
-        X = [s["features"] for s in samples]
-        y = [s["label"] for s in samples]
-
-        # 2. 训练模型
-        try:
-            if _SKLEARN_AVAILABLE:
-                model = ComplementNB()
-                # sklearn 需要 dense 矩阵或特定格式；这里简化处理
-                # 将 sparse dict 转为统一长度的 list
-                X_dense = [self._features_to_dense(f) for f in X]
-                model.fit(X_dense, y)
-            else:
-                model = LightweightComplementNB()
-                model.fit(X, y)
-
-            self._models[dim] = model
-
-            # 3. 更新 Beta 先验
-            for lbl in y:
-                self._bayesian.update_from_ground_truth(dim, lbl)
-
-            # 4. 保存模型
-            version = self.save_model(dim, note=f"auto_train_{len(y)}samples")
-            self._model_versions[dim] = version
-
-            # 5. 标记队列为已训练
-            self._mark_queue_trained(dim)
-
-            logger.info(f"[ScorerV2] {dim} trained with {len(y)} samples -> {version}")
-            return len(y)
-        except Exception as e:
-            logger.warning(f"[ScorerV2] Training failed for {dim}: {e}")
-            return 0
-
-    def _get_training_samples(self, dim: str) -> List[Dict]:
-        """从 scorer_training_queue + ground_truth_signals 获取训练样本"""
-        samples = []
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                # 获取待训练队列
-                rows = conn.execute("""
-                    SELECT session_id, features_json FROM scorer_training_queue
-                    WHERE status = 'pending' AND dimension = ?
-                    ORDER BY earliest_train_at
-                    LIMIT 500
-                """, (dim,)).fetchall()
-
-                for session_id, feat_json in rows:
-                    # 查询 ground_truth 标签（优先匹配同 dimension）
-                    gt = conn.execute("""
-                        SELECT signal_value, confidence FROM ground_truth_signals
-                        WHERE session_id = ? AND signal_type = ?
-                    """, (session_id, dim)).fetchone()
-
-                    # 回退：同 session 任意 ground_truth（兼容旧数据）
-                    if not gt:
-                        gt = conn.execute("""
-                            SELECT signal_value, confidence FROM ground_truth_signals
-                            WHERE session_id = ?
-                        """, (session_id,)).fetchone()
-
-                    if gt:
-                        features = json.loads(feat_json) if feat_json else {}
-                        samples.append({
-                            "session_id": session_id,
-                            "features": features,
-                            "label": int(gt[0]),
-                            "confidence": gt[1],
-                        })
-        except Exception as e:
-            logger.warning(f"[ScorerV2] _get_training_samples failed: {e}")
-        return samples
-
-    def _mark_queue_trained(self, dim: str) -> None:
-        """将已训练样本标记为 completed"""
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.execute("""
-                    UPDATE scorer_training_queue
-                    SET status = 'completed'
-                    WHERE dimension = ? AND status = 'pending'
-                """, (dim,))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] _mark_queue_trained failed: {e}")
-
     def _load_all_models(self) -> None:
-        """初始化时逐维度加载活跃模型；单维度失败不阻塞其他维度。"""
-        for dim in self._SCORER_MAP.keys():
-            # load_model 内部已包含完整异常隔离和校验
-            loaded = self.load_model(dim)
-            if loaded is None:
-                logger.debug(f"[ScorerV2] No valid model for {dim}, will run in rule-only mode")
+        """Pre-cutover model loading is retired; governed runs use an exact API."""
+
+        _reject_retired_training("load_all_models")
 
     def _features_to_sparse(self, features: Dict[str, Any]) -> Dict[str, float]:
         """将特征字典转为 sparse 数值特征（用于预测）"""
-        sparse: Dict[str, float] = {}
+        sparse: Dict[str, float] = {"__bias__": 1.0}
         for k, v in features.items():
-            if isinstance(v, (int, float)):
-                sparse[k] = float(v)
-            elif isinstance(v, bool):
+            if isinstance(v, bool):
                 sparse[k] = 1.0 if v else 0.0
+            elif isinstance(v, (int, float)):
+                sparse[k] = float(v)
             elif isinstance(v, str) and k == "content":
                 # 简单词频特征
                 words = v.lower().split()
                 for w in words:
                     sparse[f"word_{w}"] = sparse.get(f"word_{w}", 0.0) + 1.0
+            elif isinstance(v, str) and v:
+                sparse[f"{k}={v[:80]}"] = 1.0
+            elif isinstance(v, (list, tuple, set)):
+                for item in v:
+                    if isinstance(item, (str, int, float, bool)):
+                        sparse[f"{k}={str(item)[:80]}"] = 1.0
         return sparse
 
     def _features_to_dense(self, features: Dict[str, Any]) -> List[float]:
@@ -897,66 +816,61 @@ class AdaptiveScorerV2:
         keys = sorted(sparse.keys())
         return [sparse.get(k, 0.0) for k in keys]
 
+    def refresh_bayesian_priors_from_ground_truth(
+        self,
+        dimensions: Optional[List[str]] = None,
+    ) -> Dict[str, int]:
+        """Reject Bayesian reconstruction from historical caller labels."""
+
+        del dimensions
+        _reject_retired_training("refresh_bayesian_priors_from_ground_truth")
+
     # ── 已有内部方法（保留） ──
 
-    def _insert_ground_truth(self, session_id: str, signal_type: str,
-                             label: int, confidence: float = 1.0) -> None:
-        self.insert_ground_truth(
-            session_id=session_id,
-            signal_type=signal_type,
-            label=label,
-            confidence=confidence,
-            db_path=self.db_path,
-        )
-
-    def _insert_training_queue(self, fb: FeedbackV2) -> None:
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                conn.execute("""
-                    INSERT INTO scorer_training_queue
-                        (session_id, dimension, features_json, priority, earliest_train_at, status)
-                    VALUES (?, ?, ?, ?, ?, 'pending')
-                """, (
-                    fb.session_id,
-                    fb.dimension,
-                    json.dumps(fb.features, ensure_ascii=False, default=str),
-                    10,
-                    (datetime.now() + timedelta(hours=0)).isoformat(),
-                ))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[ScorerV2] training_queue insert failed: {e}")
-
     def _count_ready_samples(self, dimension: Optional[str] = None) -> int:
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                now = datetime.now().isoformat()
-                if dimension:
-                    row = conn.execute("""
-                        SELECT COUNT(*) FROM scorer_training_queue
-                        WHERE status = 'pending' AND earliest_train_at <= ? AND dimension = ?
-                    """, (now, dimension)).fetchone()
-                    # 同时统计 ground_truth_signals
-                    gt_row = conn.execute("""
-                        SELECT COUNT(*) FROM ground_truth_signals
-                        WHERE signal_type = ?
-                    """, (dimension,)).fetchone()
-                else:
-                    row = conn.execute("""
-                        SELECT COUNT(*) FROM scorer_training_queue
-                        WHERE status = 'pending' AND earliest_train_at <= ?
-                    """, (now,)).fetchone()
-                    gt_row = conn.execute("""
-                        SELECT COUNT(*) FROM ground_truth_signals
-                    """).fetchone()
-                return (row[0] if row else 0) + (gt_row[0] if gt_row else 0)
-        except Exception:
-            logger.warning(f"Unexpected error in adaptive_scorer_v2.py", exc_info=True)
+        """Count current admitted governed samples without pre-cutover rows."""
+
+        normalized = self.normalize_dimension(dimension or "predictive_delivery")
+        if normalized != "predictive_delivery" or not self.db_path.is_file():
             return 0
+        try:
+            with sqlite3.connect(
+                f"file:{self.db_path.resolve(strict=True)}?mode=ro",
+                uri=True,
+            ) as conn:
+                from core.scoring.training_schema import inspect_training_schema
+
+                if not inspect_training_schema(conn).ok:
+                    return 0
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM governed_training_samples AS sample
+                    WHERE sample.dimension='predictive_delivery'
+                      AND (
+                        SELECT action.action_type
+                        FROM governed_training_sample_actions AS action
+                        WHERE action.sample_id=sample.sample_id
+                        ORDER BY action.created_at DESC, action.action_id DESC
+                        LIMIT 1
+                      )='admit'
+                    """
+                ).fetchone()
+                return int(row[0]) if row else 0
+        except (OSError, RuntimeError, sqlite3.Error):
+            return 0
+
+    def _count_signal_samples(self, domain: Optional[str] = None) -> int:
+        """Count only governed samples for the first supported dimension."""
+
+        dim = self.normalize_dimension(domain or self.domain)
+        if dim != "predictive_delivery":
+            return 0
+        return self._count_ready_samples(dim)
 
     def _update_mode(self) -> None:
         """根据样本数更新冷启动阶段"""
-        total = self._count_ready_samples()
+        total = self._count_signal_samples()
         if total < self.WARM_THRESHOLD:
             self._mode = "cold"
         elif total < self.HOT_THRESHOLD:
@@ -969,8 +883,14 @@ class AdaptiveScorerV2:
         return {
             "domain": self.domain,
             "mode": self._mode,
+            "mode_thresholds": {
+                "cold": self.COLD_THRESHOLD,
+                "warm": self.WARM_THRESHOLD,
+                "hot": self.HOT_THRESHOLD,
+            },
             "models_loaded": list(self._models.keys()),
             "ready_samples": self._count_ready_samples(),
+            "signal_samples": self._count_signal_samples(),
             "db_path": str(self.db_path),
             "version": "v2-full",
             "sklearn": _SKLEARN_AVAILABLE,

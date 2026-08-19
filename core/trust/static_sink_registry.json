@@ -1,0 +1,1118 @@
+{
+  "schema_version": "mnemos.trusted_sink_registry.v1",
+  "entries": {
+    "core/access_policy.py::ACLReconciler._apply_plan::shutil.copy2::1a5bb1982bb8::1": {
+      "category": "backup",
+      "owner": "access_policy",
+      "target_class": "acl_reconciliation_preimage",
+      "expires": "never",
+      "reason": "copy every planned Markdown preimage into the explicit recovery directory before the first ACL source replacement"
+    },
+    "core/access_policy.py::ACLReconciler._atomic_write_text::unlink::c1130a05a237::1": {
+      "category": "manual_repair",
+      "owner": "access_policy",
+      "target_class": "acl_atomic_temporary_cleanup",
+      "expires": "never",
+      "reason": "remove only an uncommitted ACL reconciliation temporary file after the atomic replace helper fails"
+    },
+    "core/agent_kit/shadow_eval.py::run_agent_shadow_eval::write_text::e4bbd33cb575::1": {
+      "category": "artifact",
+      "owner": "agent_kit",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: agent shadow eval artifact"
+    },
+    "core/app/application_signal_service.py::ApplicationSignalService.write_report::atomic_write_text::dc752d46420c::1": {
+      "category": "report",
+      "owner": "app",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: application signal report"
+    },
+    "core/app/dispute_scorer.py::AdaptiveWeightLearner._save_weights::write_text::64d3486226a5::1": {
+      "category": "system_state",
+      "owner": "app",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: dispute scorer state"
+    },
+    "core/app/dispute_scorer.py::AdaptiveWeightLearner.record_feedback::open_write::890d6dbe33d7::1": {
+      "category": "system_state",
+      "owner": "app",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: dispute scorer state"
+    },
+    "core/app/dispute_scorer.py::DisputeScorer.reset_weights::unlink::7555d6021c16::1": {
+      "category": "system_state",
+      "owner": "app",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: dispute scorer state"
+    },
+    "core/app/dispute_scorer.py::DisputeScorer.save_weights_to_state::write_text::a591f573ac57::1": {
+      "category": "system_state",
+      "owner": "app",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: dispute scorer state"
+    },
+    "core/trust/knowledge_vault_writer.py::KnowledgeVaultWriter._restore_markdown_target::atomic_write_text::c5ec75faa141::1": {
+      "category": "backup",
+      "owner": "trust",
+      "target_class": "knowledge_vault_atomic_rollback",
+      "expires": "never",
+      "reason": "restore the exact preimage only when the paired native-store commit fails"
+    },
+    "core/trust/knowledge_vault_writer.py::KnowledgeVaultWriter._restore_markdown_target::unlink::5471ebe71063::1": {
+      "category": "backup",
+      "owner": "trust",
+      "target_class": "knowledge_vault_atomic_rollback",
+      "expires": "never",
+      "reason": "remove only the newly written target while rolling back a failed paired commit"
+    },
+    "core/app/weekly_report.py::WeeklyReportGenerator.generate_weekly_report::write_text::26bb8fb2753e::1": {
+      "category": "report",
+      "owner": "app",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: weekly report"
+    },
+    "core/backup/snapshot_manager.py::_copy_snapshot_payload::shutil.copy2::be8e9b07ce0e::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "snapshot_payload",
+      "expires": "never",
+      "reason": "copy one declared non-SQLite source into an explicit recovery snapshot"
+    },
+    "core/backup/snapshot_manager.py::MnemosSnapshotManager.create::shutil.rmtree::1a95f017f986::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "invalid_snapshot_cleanup",
+      "expires": "never",
+      "reason": "remove only the newly created incomplete snapshot after manifest validation fails"
+    },
+    "core/backup/snapshot_manager.py::MnemosSnapshotManager.create::write_bytes::33b9c4125b0a::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "snapshot_manifest",
+      "expires": "never",
+      "reason": "write the body-free recovery manifest inside its dedicated snapshot directory"
+    },
+    "core/backup/snapshot_manager.py::MnemosSnapshotManager.create::write_text::7743b5c267ab::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "snapshot_manifest_checksum",
+      "expires": "never",
+      "reason": "write the integrity checksum paired with one recovery snapshot manifest"
+    },
+    "core/backup/snapshot_manager.py::MnemosSnapshotManager.prune_expired_data_delete_snapshots::shutil.rmtree::f511eebc1a09::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "expired_data_delete_snapshot",
+      "expires": "never",
+      "reason": "explicit apply removes only validated data-delete snapshots after retention expiry"
+    },
+    "core/backup/snapshot_manager.py::MnemosSnapshotManager.restore_apply::shutil.copy2::2a5fc185afcf::1": {
+      "category": "backup",
+      "owner": "backup",
+      "target_class": "backup",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: backup/snapshot output"
+    },
+    "core/benchmarks/golden.py::_write_wiki_asset::write_text::cfde8da68cc2::1": {
+      "category": "test_fixture",
+      "owner": "benchmarks",
+      "target_class": "test_fixture",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: benchmark fixture output"
+    },
+    "core/benchmarks/golden.py::run_golden_benchmark::write_text::2d1deab18c6f::1": {
+      "category": "test_fixture",
+      "owner": "benchmarks",
+      "target_class": "test_fixture",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: benchmark fixture output"
+    },
+    "core/benchmarks/golden.py::run_golden_benchmark::write_text::5c8cb01a4fe5::1": {
+      "category": "test_fixture",
+      "owner": "benchmarks",
+      "target_class": "test_fixture",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: benchmark fixture output"
+    },
+    "core/benchmarks/golden.py::run_golden_benchmark::write_text::7be58c439a60::1": {
+      "category": "test_fixture",
+      "owner": "benchmarks",
+      "target_class": "test_fixture",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: benchmark fixture output"
+    },
+    "core/cli/commands/agent.py::_check_event_dir_writable::unlink::0dbde75702ac::1": {
+      "category": "diagnostic",
+      "owner": "cli",
+      "target_class": "diagnostic",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: agent kit test file"
+    },
+    "core/cli/commands/agent.py::_check_event_dir_writable::write_text::3b0fa4ab3552::1": {
+      "category": "diagnostic",
+      "owner": "cli",
+      "target_class": "diagnostic",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: agent kit test file"
+    },
+    "core/cli/commands/entropy.py::_write_report::write_text::fd8c2c1bac3d::1": {
+      "category": "report",
+      "owner": "cli",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: entropy report"
+    },
+    "core/cli/commands/immune.py::_write_report::write_text::f1f1f686df44::1": {
+      "category": "report",
+      "owner": "cli",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: immune report"
+    },
+    "core/cli/commands/proposal.py::_content_from_args::unlink::807eb60e6d9a::1": {
+      "category": "artifact",
+      "owner": "cli",
+      "target_class": "temporary_editor_file",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/cli/commands/sync.py::_write_backfill_status::write_text::3b248245c911::1": {
+      "category": "system_state",
+      "owner": "cli",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: sync CLI state"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::backup_projection_files::open_write::ed6472f13aed::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "calibration_projection_backup",
+      "expires": "never",
+      "reason": "copy one reviewed Observation projection into a private recovery backup"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::backup_projection_files::unlink::860046848219::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "incomplete_projection_backup",
+      "expires": "never",
+      "reason": "remove only a newly reserved incomplete projection backup after copy failure"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::backup_sqlite_databases::unlink::860046848219::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "incomplete_sqlite_backup",
+      "expires": "never",
+      "reason": "remove only a newly reserved SQLite backup after backup or integrity failure"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::restore_backups::path.replace::7178ea15c5e0::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "calibration_projection_rollback",
+      "expires": "never",
+      "reason": "atomically restore the exact reviewed projection preimage after migration failure"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::restore_backups::unlink::7fefbda294c3::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "rollback_new_source_cleanup",
+      "expires": "never",
+      "reason": "remove only a source that did not exist before the failed migration"
+    },
+    "core/cognitive/calibration_reconcile_backup.py::restore_backups::unlink::ee13bae97ba1::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "rollback_temporary_cleanup",
+      "expires": "never",
+      "reason": "remove only an incomplete temporary rollback file after restore failure"
+    },
+    "core/cognitive/cognition_episode_reconciliation.py::_remove_sqlite_family::unlink::f9a3ba744a08::1": {
+      "category": "backup",
+      "owner": "cognition_episode_reconciliation",
+      "target_class": "cognition_episode_reconciliation_restore_cleanup",
+      "expires": "never",
+      "reason": "explicit apply rollback removes only the exact live SQLite family immediately before verified backup restore, or a target proven absent by the bound pre-migration manifest"
+    },
+    "core/cognitive/cognition_episode_reconciliation.py::_write_backups::write_text::98cea0ec9948::1": {
+      "category": "backup",
+      "owner": "cognition_episode_reconciliation",
+      "target_class": "cognition_episode_reconciliation_backup_manifest",
+      "expires": "never",
+      "reason": "explicit apply writes one non-Markdown manifest inside the user-selected backup directory, binding inventory and per-database snapshot hashes"
+    },
+    "core/cognitive/decision_trace_migration.py::_write_restore_manifest::unlink::b8c47fe2d4c6::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "decision_trace_restore_manifest_failed_write_cleanup",
+      "expires": "never",
+      "reason": "remove only the incomplete restore manifest after its exclusive write fails"
+    },
+    "core/cognitive/decision_trace_migration.py::apply_decision_trace_history_migration::unlink::18cb7fa83d5a::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "decision_trace_restore_manifest_transaction_rollback",
+      "expires": "never",
+      "reason": "remove only the uncommitted restore manifest when the paired migration transaction rolls back"
+    },
+    "core/cognitive/feedback_history_migration.py::_restore_sqlite_backup::unlink::ef066a67d37d::1": {
+      "category": "backup",
+      "owner": "cognitive_feedback_history_migration",
+      "target_class": "verified_restore_staging_cleanup",
+      "expires": "never",
+      "reason": "remove only the private staged SQLite restore inode after atomic replacement or failed validation"
+    },
+    "core/cognitive/observation_store.py::ObservationIndex.rebuild_from_sources::write_bytes::bc6168891a1e::1": {
+      "category": "backup",
+      "owner": "cognitive",
+      "target_class": "observation_index_backup",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/cognitive/verification_queue.py::VerificationQueue._write_report::atomic_write_text::9a7dcf77e7b2::1": {
+      "category": "report",
+      "owner": "cognitive",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: verification report"
+    },
+    "core/config_persistence.py::write_config_file::atomic_write_text::8f31a5e14603::1": {
+      "category": "config",
+      "owner": "config",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: runtime config save"
+    },
+    "core/diagnostics.py::ConnectionDiagnostics._probe_directory_writable::unlink::f6bdee44797c::1": {
+      "category": "diagnostic",
+      "owner": "diagnostics",
+      "target_class": "diagnostic",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: diagnostic temp write"
+    },
+"core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::shutil.copy2::b7cb0f8b2683::1": {
+      "category": "backup",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_preimage",
+      "expires": "never",
+      "reason": "copy each committed index artifact to its transaction-scoped rollback preimage before replacing either generation member"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::unlink::2109e82cd7e4::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_manifest",
+      "expires": "never",
+      "reason": "remove the committed recovery manifest only after both index generation artifacts and directory metadata are durable"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::unlink::42ac8c808cd1::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_backup_cleanup",
+      "expires": "never",
+      "reason": "remove transaction-scoped index preimages only after the committed generation manifest verifies both replacement artifacts"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::unlink::8224cdb20894::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_obsolete_backend_artifact",
+      "expires": "never",
+      "reason": "remove the stale HNSW cache member when an explicit rebuild commits a memory-backend generation"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::unlink::de071d22241d::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_stage_cleanup",
+      "expires": "never",
+      "reason": "remove only transaction-scoped uncommitted generation stage files when preparation fails before a recovery manifest exists"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._persist_index_generation::unlink::fc18c45516b8::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_backup_cleanup",
+      "expires": "never",
+      "reason": "remove only transaction-scoped backup artifacts when generation preparation fails before a recovery manifest exists"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::shutil.copy2::a846accfbe26::1": {
+      "category": "backup",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_rollback",
+      "expires": "never",
+      "reason": "copy a hash-verified transaction preimage to a private restore stage before atomically rolling back an interrupted index generation"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::1cc7406e6c3a::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_committed_stage_cleanup",
+      "expires": "never",
+      "reason": "remove a transaction stage only after a committed generation verifies the durable target hashes"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::1cc7406e6c3a::2": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_rollback_stage_cleanup",
+      "expires": "never",
+      "reason": "remove a transaction stage only after the previous complete index generation has been restored and fsynced"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::860046848219::1": {
+      "category": "backup",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_rollback",
+      "expires": "never",
+      "reason": "remove only a target proven absent in the prior generation while rolling back an interrupted two-artifact commit"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::98887c487f88::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_committed_backup_cleanup",
+      "expires": "never",
+      "reason": "remove transaction preimages only after a committed index generation matches the manifest hashes"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::98887c487f88::2": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_rollback_backup_cleanup",
+      "expires": "never",
+      "reason": "remove transaction preimages only after rollback restores and fsyncs the previous complete index generation"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::a05706e85628::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_restore_stage_cleanup",
+      "expires": "never",
+      "reason": "remove only a private restore stage after its atomic rollback replacement succeeds or fails"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::b8c47fe2d4c6::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_manifest",
+      "expires": "never",
+      "reason": "remove a committed manifest after both generation artifacts verify and all transaction artifacts are cleaned"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._recover_persisted_generation::unlink::b8c47fe2d4c6::2": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_generation_manifest",
+      "expires": "never",
+      "reason": "remove a prepared manifest only after the previous generation is restored, verified, and transaction artifacts are cleaned"
+    },
+    "core/embeddings/index_manager.py::EmbeddingIndexManager._save_hnsw_index::unlink::ee13bae97ba1::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_atomic_stage_cleanup",
+      "expires": "never",
+      "reason": "remove only the UUID-scoped HNSW temporary artifact after atomic cache persistence completes or fails"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._save_meta::unlink::ee13bae97ba1::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_atomic_stage_cleanup",
+      "expires": "never",
+      "reason": "remove only the UUID-scoped metadata temporary artifact after atomic cache persistence completes or fails"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._write_generation_manifest::unlink::ee13bae97ba1::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_manifest_stage_cleanup",
+      "expires": "never",
+      "reason": "remove only the UUID-scoped recovery-manifest stage after atomic manifest persistence completes or fails"
+    },
+    "core/embeddings/index_persistence.py::EmbeddingIndexPersistenceMixin._write_json_artifact::unlink::de071d22241d::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_failed_artifact_cleanup",
+      "expires": "never",
+      "reason": "remove only the newly reserved JSON artifact when its durable write fails before publication"
+    },
+    "core/embeddings/relation_manager.py::RelationEmbeddingManager._save_index_atomic::path.replace::da9d3b7b6391::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_cache",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/embeddings/relation_manager.py::RelationEmbeddingManager.flush::path.replace::da9d3b7b6391::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_cache",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/embeddings/relation_manager.py::RelationEmbeddingManager.remove_relation_context::unlink::6c123316d2cb::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_cache",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/embeddings/relation_manager.py::RelationEmbeddingManager.repair_persistent_index::unlink::6c123316d2cb::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_cache",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/embeddings/relation_manager.py::RelationEmbeddingManager.rebuild_persistent_index::unlink::6c123316d2cb::1": {
+      "category": "cache",
+      "owner": "embeddings",
+      "target_class": "embedding_index_cache",
+      "expires": "never",
+      "reason": "remove only the stale persisted relation ANN cache after the canonical SQLite relation-vector denominator reaches zero"
+    },
+    "core/hephaestus/distill_action_router.py::DistillActionRouter._backup_page::shutil.copy2::195d5dff610c::1": {
+      "category": "backup",
+      "owner": "hephaestus",
+      "target_class": "distill_action_backup",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/hephaestus/distill_action_reconciliation.py::backup_database::unlink::860046848219::1": {
+      "category": "backup",
+      "owner": "hephaestus",
+      "target_class": "failed_cognitive_action_backup",
+      "expires": "never",
+      "reason": "delete only the just-created backup when its SQLite integrity check fails"
+    },
+    "core/hephaestus/distill_action_reconciliation.py::migrate_historical_database::atomic_write_text::822c864a7ab0::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "legacy_cognitive_action_projection",
+      "expires": "never",
+      "reason": "optional non-formal projection of the canonical SQLite artifact payload"
+    },
+    "core/hephaestus/distill_action_router.py::DistillActionRouter._log_cognitive_actions::atomic_write_text::822c864a7ab0::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "cognitive_action_artifact",
+      "expires": "never",
+      "reason": "optional non-formal projection of the canonical SQLite command artifact"
+    },
+    "core/hephaestus/distill_action_router.py::DistillActionRouter._write_shadow::atomic_write_text::8233c6207d2f::1": {
+      "category": "shadow",
+      "owner": "hephaestus",
+      "target_class": "distill_action_shadow",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/hephaestus/distillation_errors.py::generate_distillation_error_report::atomic_write_text::8cf06e8ef414::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: error report artifact"
+    },
+    "core/hephaestus/distillation_failure.py::cleanup_failed_distill::unlink::9068645a11dc::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: failed distill artifact"
+    },
+    "core/hephaestus/distillation_failure.py::cleanup_failed_distill::unlink::9068645a11dc::2": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: failed distill artifact"
+    },
+    "core/hephaestus/distillation_failure.py::save_failed_distill::atomic_write_text::641855335546::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: failed distill artifact"
+    },
+    "core/hephaestus/document_processor.py::DocumentProcessor._process_excel_fallback::unlink::8d2c8c835b7d::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: document processing metadata"
+    },
+    "core/hephaestus/document_processor.py::DocumentProcessor.save_to_rejected::shutil.copy2::a4474025e7c1::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: document processing metadata"
+    },
+    "core/hephaestus/document_processor.py::DocumentProcessor.save_to_rejected::write_text::86b5c73cdcca::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: document processing metadata"
+    },
+    "core/hephaestus/table_artifacts.py::DocumentTableArtifactStore.record::open_write::bee57f28896f::1": {
+      "category": "artifact",
+      "owner": "hephaestus",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: document table replay artifact"
+    },
+    "core/hephaestus/wiki_builder.py::_log::open_write::047b92e53ddf::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "wiki_builder_log",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/hephaestus/wiki_builder.py::_log::open_write::3f06d77f9eae::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/hephaestus/wiki_builder.py::_write_moc::write_text::81509aea02c8::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/hephaestus/wiki_builder.py::_write_retrospective::write_text::f0f7d0ffba91::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/hephaestus/wiki_builder.py::update_index_md::write_text::df76188be351::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/hephaestus/wiki_rebuild.py::backup_page::shutil.copy2::196ee0f3f85b::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: rebuild report"
+    },
+    "core/hephaestus/wiki_rebuild.py::rebuild_single_page::unlink::3f8e59d939e5::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: rebuild report"
+    },
+    "core/hephaestus/wiki_rebuild.py::run_selective_rebuild::write_text::0c05557cd09d::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: rebuild report"
+    },
+    "core/hephaestus/wiki_rebuild.py::run_selective_rebuild::write_text::7a9b779859c7::1": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: rebuild report"
+    },
+    "core/hephaestus/wiki_rebuild.py::run_selective_rebuild::write_text::7a9b779859c7::2": {
+      "category": "report",
+      "owner": "hephaestus",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: rebuild report"
+    },
+    "core/jsonl_rotation.py::cleanup_jsonl_archives::unlink::437f8227c2e2::1": {
+      "category": "system_state",
+      "owner": "jsonl_rotation",
+      "target_class": "rotating_jsonl_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/jsonl_rotation.py::cleanup_jsonl_archives::unlink::d0dfadb4a3de::1": {
+      "category": "system_state",
+      "owner": "jsonl_rotation",
+      "target_class": "rotating_jsonl_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/jsonl_rotation.py::rotate_jsonl::shutil.move::3816eccfb4b9::1": {
+      "category": "system_state",
+      "owner": "jsonl_rotation",
+      "target_class": "rotating_jsonl_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/jsonl_rotation.py::rotate_jsonl::shutil.move::4a3476051334::1": {
+      "category": "system_state",
+      "owner": "jsonl_rotation",
+      "target_class": "rotating_jsonl_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/jsonl_rotation.py::rotate_jsonl::unlink::437f8227c2e2::1": {
+      "category": "system_state",
+      "owner": "jsonl_rotation",
+      "target_class": "rotating_jsonl_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/kia/amphora_source_span_migration.py::apply_source_span_migrations::secure_remove_regular_file::105cd85d2f06::1": {
+      "category": "artifact",
+      "owner": "kia",
+      "target_class": "uncommitted_amphora_source_span_messages",
+      "expires": "never",
+      "reason": "remove only a receipt-bound canonical message created by this source-span transaction when its SQLite commit did not succeed"
+    },
+    "core/kia/amphora_provenance_support.py::_backup_historical_provenance_object::secure_publish_immutable_bytes::1b8b85072696::1": {
+      "category": "backup",
+      "owner": "kia",
+      "target_class": "amphora_provenance_messages_backup",
+      "expires": "never",
+      "reason": "publish the exact no-follow reviewed legacy messages preimage and return its ownership receipt inside a new private object-level migration backup"
+    },
+    "core/kia/amphora_provenance_support.py::_backup_historical_provenance_object::secure_publish_immutable_text::d5ffbb13c565::1": {
+      "category": "backup",
+      "owner": "kia",
+      "target_class": "amphora_provenance_backup_manifest",
+      "expires": "never",
+      "reason": "immutably publish the hash-bound manifest and return its ownership receipt for a normalized SQLite and messages object backup"
+    },
+    "core/kia/amphora_provenance_reconciliation.py::reconcile_historical_task_provenance::secure_remove_regular_file::a5de79c0a596::1": {
+      "category": "artifact",
+      "owner": "kia",
+      "target_class": "uncommitted_amphora_provenance_messages",
+      "expires": "never",
+      "reason": "remove only the exact receipt-bound canonical messages artifact when its migration transaction did not commit"
+    },
+    "core/kia/amphora.py::cleanup_old::secure_remove_regular_file::90dd4f967fee::1": {
+      "category": "artifact",
+      "owner": "kia",
+      "target_class": "distillation_task_payload",
+      "expires": "never",
+      "reason": "remove only a terminal task payload whose immutable message revision and durable cleanup intent were revalidated"
+    },
+    "core/kia/ananke.py::VersionTimeTravel._save_index::write_text::49598e17591b::1": {
+      "category": "shadow",
+      "owner": "kia",
+      "target_class": "shadow",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: shadow/snapshot output"
+    },
+    "core/kia/ananke.py::VersionTimeTravel.restore::write_text::beab1491b67c::1": {
+      "category": "shadow",
+      "owner": "kia",
+      "target_class": "shadow",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: shadow/snapshot output"
+    },
+    "core/kia/ananke.py::VersionTimeTravel.snapshot::write_text::0c759fc3ae7c::1": {
+      "category": "shadow",
+      "owner": "kia",
+      "target_class": "shadow",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: shadow/snapshot output"
+    },
+    "core/kia/charon.py::ConnectModule._store_entities::write_text::5dbb76dd520d::1": {
+      "category": "system_state",
+      "owner": "kia",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/kia/cross_agent_linker.py::CrossAgentLinker.link_after_distill_for_fragment::unlink::b8f18759e4ce::1": {
+      "category": "artifact",
+      "owner": "kia",
+      "target_class": "temporary_fragment_probe",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/kia/epimetheus.py::AutoRetrospective.write_dashboard::write_text::81509aea02c8::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: audit report"
+    },
+    "core/kia/hecate.py::ShadowPageManager._write_shadow::unlink::bbf4e339d7a5::1": {
+      "category": "shadow",
+      "owner": "kia",
+      "target_class": "shadow",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: shadow page output"
+    },
+    "core/kia/hecate.py::ShadowPageManager._write_shadow::write_text::c60d5d4748fd::1": {
+      "category": "shadow",
+      "owner": "kia",
+      "target_class": "shadow",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: shadow page output"
+    },
+    "core/kia/issue_pipeline.py::AutoFixExecutor._create_backup::write_bytes::f7053c98c319::1": {
+      "category": "backup",
+      "owner": "kia",
+      "target_class": "autofix_rollback_backup",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/kia/issue_pipeline.py::AutoFixExecutor._rollback::write_bytes::803b52394154::1": {
+      "category": "manual_repair",
+      "owner": "kia",
+      "target_class": "autofix_transaction_rollback",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._move_to_failed::shutil.move::81225d56daa2::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._move_to_failed::write_text::940ec09eea5b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_document_file::shutil.move::a5e1bc2fd72b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_ebook_as_text::shutil.move::a5e1bc2fd72b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_ebook_file::shutil.move::a5e1bc2fd72b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_image_file::shutil.move::9bd4b2893f2c::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_image_file::shutil.move::d335c35e763a::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._process_text_file::shutil.move::a5e1bc2fd72b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._store_multimodal_extraction::shutil.move::a5e1bc2fd72b::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor._write_multimodal_task::write_text::89e4a6857955::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/knowledge_inbox.py::KnowledgeInboxProcessor.generate_report::write_text::a844f9297e7c::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: knowledge inbox report/task artifact"
+    },
+    "core/kia/prophasis.py::PreFlightInjector.mark_checklist_used::write_text::d53e5e26c6c4::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: analysis output"
+    },
+    "core/kia/proteus.py::IterationTracker._update_active_links::write_text::f5fc3cc09e04::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: analysis report"
+    },
+    "core/kia/proteus.py::IterationTracker.scan_and_report::write_text::1f19abb0d1d6::1": {
+      "category": "report",
+      "owner": "kia",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: analysis report"
+    },
+    "core/migrations/registry.py::MigrationRegistry._backup_config_json::shutil.copy2::e951b2790aaa::1": {
+      "category": "config",
+      "owner": "migrations",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: migration backup/config output"
+    },
+    "core/migrations/registry.py::MigrationRegistry._backup_config_json::write_text::4175c54970e0::1": {
+      "category": "config",
+      "owner": "migrations",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: migration backup/config output"
+    },
+    "core/ops/offline_schema_plan.py::_remove_sqlite_scope::secure_remove_regular_file::8dadebd65d00::1": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_private_artifact_cleanup",
+      "expires": "never",
+      "reason": "remove only a private SQLite backup or restore stage whose exact path family was created by the current offline schema transaction"
+    },
+    "core/ops/offline_schema_plan.py::backup_sqlite_database::secure_publish_immutable_bytes::e1799aed4818::1": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_sqlite_backup",
+      "expires": "never",
+      "reason": "reserve one collision-safe private SQLite backup target before copying and validating the reviewed database preimage"
+    },
+    "core/ops/offline_schema_plan.py::restore_sqlite_database::secure_publish_immutable_bytes::ffe5c6e02799::1": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_restore_stage",
+      "expires": "never",
+      "reason": "reserve one private restore stage before copying and validating the exact reviewed SQLite backup"
+    },
+    "core/ops/offline_schema_plan.py::restore_sqlite_database::secure_remove_regular_file::6b0e340e614b::1": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_absent_preimage_rollback",
+      "expires": "never",
+      "reason": "remove only the exact identity-bound database created by a failed bootstrap when the reviewed preimage was absent"
+    },
+    "core/ops/offline_schema_plan.py::restore_sqlite_database::secure_remove_regular_file::80b60cd9a261::1": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_restore_sidecar_cleanup",
+      "expires": "never",
+      "reason": "remove only SQLite sidecars left beside an identity-bound target while restoring an absent reviewed preimage"
+    },
+    "core/ops/offline_schema_plan.py::restore_sqlite_database::secure_remove_regular_file::80b60cd9a261::2": {
+      "category": "backup",
+      "owner": "offline_schema_plan",
+      "target_class": "offline_schema_restore_sidecar_cleanup",
+      "expires": "never",
+      "reason": "remove only SQLite sidecars left beside the exact target after atomic replacement from a verified restore stage"
+    },
+    "core/ops/config_audit.py::write_config_audit_artifact::write_text::9d1b09ef10f0::1": {
+      "category": "report",
+      "owner": "ops",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: config audit report"
+    },
+    "core/ops/durable_io.py::normalize_private_sqlite_copy::unlink::fed775457f8e::1": {
+      "category": "manual_repair",
+      "owner": "ops",
+      "target_class": "private_sqlite_copy_sidecar_cleanup",
+      "expires": "never",
+      "reason": "remove only regular private SQLite sidecars after journal normalization and before durability validation"
+    },
+    "core/ops/hermetic_run.py::HermeticRunEnvironment._write_manifest::atomic_write_text::55c57eaadc11::1": {
+      "category": "artifact",
+      "owner": "ops",
+      "target_class": "artifact",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/ops/hermetic_run.py::HermeticRunEnvironment.create::atomic_write_text::244327555454::1": {
+      "category": "config",
+      "owner": "ops",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/ops/runtime_flow_telemetry.py::RuntimeFlowTelemetry.drain_outbox::unlink::a7eb7761993b::1": {
+      "category": "system_state",
+      "owner": "ops",
+      "target_class": "runtime_flow_outbox",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/ops/runtime_flow_telemetry.py::_atomic_replace_outbox::unlink::ee13bae97ba1::1": {
+      "category": "system_state",
+      "owner": "ops",
+      "target_class": "runtime_flow_outbox",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/ops/sqlite_disk_budget.py::_write_state::write_text::a95ba602108e::1": {
+      "category": "system_state",
+      "owner": "ops",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: SQLite disk budget state"
+    },
+    "core/ops/sqlite_disk_budget.py::repair_sqlite_disk_budget::unlink::9068645a11dc::1": {
+      "category": "system_state",
+      "owner": "ops",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: SQLite disk budget state"
+    },
+    "core/persona/calibration_cli.py::_save_calibration::unlink::f19fe4921107::1": {
+      "category": "system_state",
+      "owner": "persona",
+      "target_class": "persona_calibration_state",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    },
+    "core/persona/calibration_cli.py::_save_calibration::write_text::c61dedc9a8f6::1": {
+      "category": "system_state",
+      "owner": "persona",
+      "target_class": "system_state",
+      "expires": "never",
+      "reason": "reviewed legacy inline classification migrated to exact sink registry"
+    },
+    "core/privacy/data_ownership.py::DataOwnershipManager.export::write_text::df922cf5b6ac::1": {
+      "category": "report",
+      "owner": "privacy",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: ownership report export"
+    },
+    "core/reflection/consumers.py::KIAExperienceConsumer._flush_experiences::open_write::7cca6dd12144::1": {
+      "category": "report",
+      "owner": "reflection",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: reflection export/report"
+    },
+    "core/reflection/consumers.py::PersonaSignalConsumer._flush_signals::open_write::7cca6dd12144::1": {
+      "category": "report",
+      "owner": "reflection",
+      "target_class": "report",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: reflection export/report"
+    },
+    "core/setup/install_lifecycle.py::InstallLifecycleManager._write_state::write_text::48a55e1a81a8::1": {
+      "category": "config",
+      "owner": "setup",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: setup/install config"
+    },
+    "core/setup/vault_layout.py::init_mnemos_vault::write_text::443766d218ce::1": {
+      "category": "config",
+      "owner": "setup",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: setup/install config"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_cleanup_stale_snapshot_dirs_locked::shutil.rmtree::e6a604f7fbaf::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "abandoned_native_snapshot_generation_cleanup",
+      "expires": "never",
+      "reason": "remove only an owner-verified abandoned private native snapshot generation while holding the shared cleanup lock"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_create_registered_snapshot_root::shutil.rmtree::02bbdb226849::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "unregistered_native_snapshot_generation_cleanup",
+      "expires": "never",
+      "reason": "remove only the newly created private snapshot root when its controller owner marker could not be published"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_create_registered_snapshot_root::shutil.rmtree::02bbdb226849::2": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "unregistered_native_snapshot_generation_cleanup",
+      "expires": "never",
+      "reason": "remove only the newly created private snapshot root when owner registration fails after marker publication"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_write_snapshot_owner_marker::unlink::ee13bae97ba1::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "native_snapshot_owner_marker_temporary_cleanup",
+      "expires": "never",
+      "reason": "remove only the uncommitted private owner-marker temporary after publication success or failure"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_snapshot_native_sources_once::shutil.rmtree::02bbdb226849::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "failed_native_snapshot_generation_cleanup",
+      "expires": "never",
+      "reason": "remove only the current registered private snapshot generation when collection or verification fails"
+    },
+    "core/sync_framework/native_artifact_bounded_parse.py::_write_bounded_parse_spool::open_write::25d319a0f0e8::1": {
+      "category": "artifact",
+      "owner": "sync_framework",
+      "target_class": "bounded_native_parse_spool",
+      "expires": "never",
+      "reason": "child-only parser writes bounded NDJSON into one private mkstemp spool used solely to construct the immutable native inventory"
+    },
+    "core/sync_framework/native_artifact_bounded_parse.py::_write_bounded_parse_failure::open_write::801e2eed12db::1": {
+      "category": "artifact",
+      "owner": "sync_framework",
+      "target_class": "bounded_native_parse_failure_evidence",
+      "expires": "never",
+      "reason": "child-only parser writes one content-free typed failure record into its private precreated parse spool"
+    },
+    "core/sync_framework/native_artifact_inventory.py::_copy_snapshot_artifact::unlink::b2d74a9109c4::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "uncommitted_native_snapshot_artifact_cleanup",
+      "expires": "never",
+      "reason": "remove only the newly created private snapshot artifact and its private SQLite sidecars when its copy or validation did not complete"
+    },
+    "core/sync_framework/native_artifact_bounded_parse.py::bounded_parse_sources::shutil.rmtree::c56d23455276::1": {
+      "category": "manual_repair",
+      "owner": "sync_framework",
+      "target_class": "bounded_native_parse_generation_cleanup",
+      "expires": "never",
+      "reason": "remove only the private parser spool generation in the parent finally block after success, rejection, or worker failure"
+    },
+    "core/vaults/link_audit.py::repair_broken_wikilinks::atomic_write_text::83af60acf73e::1": {
+      "category": "manual_repair",
+      "owner": "vaults",
+      "target_class": "manual_repair",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: explicit vault repair command"
+    },
+    "core/vaults/link_audit.py::repair_vault_absolute_wikilinks::atomic_write_text::83af60acf73e::1": {
+      "category": "manual_repair",
+      "owner": "vaults",
+      "target_class": "manual_repair",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: explicit vault repair command"
+    },
+    "core/vaults/obsidian_registry.py::ensure_vault_recognized::write_text::206a2899777f::1": {
+      "category": "config",
+      "owner": "vaults",
+      "target_class": "config",
+      "expires": "never",
+      "reason": "reviewed exact callsite migrated from legacy classification: vault registry config"
+    },
+    "core/vaults/placement_audit.py::repair_identical_duplicate_basenames::shutil.move::8363629a0cf7::1": {
+      "category": "manual_repair",
+      "owner": "vaults",
+      "target_class": "explicit_vault_placement_repair",
+      "expires": "never",
+      "reason": "reviewed exact non-formal or explicit recovery callsite"
+    }
+  }
+}

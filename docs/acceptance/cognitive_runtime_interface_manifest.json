@@ -1,0 +1,134 @@
+{
+  "schema_version": "mnemos.cognitive_runtime_interface_manifest.v1",
+  "updated": "2026-07-12",
+  "purpose": "Phase 0 independent denominator for COG-046. A declaration, static call, or receipt alone never proves a target effect.",
+  "required_release_gate": {
+    "gate_id": "cognitive_production_effectiveness",
+    "runner_path": "scripts/audit_runtime_cognitive_interfaces.py",
+    "runner_symbol": "audit_runtime_cognitive_interfaces",
+    "activation_root": "COG-042",
+    "phase_0_status": "contract_locked_deferred"
+  },
+  "interfaces": [
+    {
+      "interface_id": "capture_service_turn",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/sync_framework/capture_service.py", "symbol": "CaptureService.capture_turn", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/sync_framework/capture_service.py", "symbol": "CaptureService.capture_turn", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "canonical_raw_capture", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "capture_queue", "contract": "raw_event_then_queue_commit_with_reciprocal_receipt"}
+    },
+    {
+      "interface_id": "capture_queue_event",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/sync_framework/capture_service.py", "symbol": "CaptureService.capture_turn", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/sync_framework/capture_worker.py", "symbol": "CaptureWorker._process_dynamic_batch", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "capture_queue", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "capture_worker", "contract": "canonical_raw_commit_before_worker_consumption"}
+    },
+    {
+      "interface_id": "sync_engine_turn",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [
+        {"path": "core/sync_framework/sync_engine.py", "symbol": "SyncEngine._persist_single_turn", "call": "record_synced_turn"},
+        {"path": "core/ops/cognitive_pipeline_receipts.py", "symbol": "record_synced_turn", "call": "record_cognitive_data_event"}
+      ],
+      "consumer_anchors": [{"path": "core/ops/cognitive_pipeline_receipts.py", "symbol": "record_synced_turn", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "canonical_synced_turn", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "amphora_and_persona", "contract": "raw_backed_handoff_and_persona_effect_receipts"}
+    },
+    {
+      "interface_id": "file_ingestor_document",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/sync_framework/file_ingestor.py", "symbol": "FileIngestor.ingest_file", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/application/document_import_service.py", "symbol": "DocumentImportService.import_document", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "trusted_document_raw", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "document_import", "contract": "canonical_raw_document_and_handoff_receipt"}
+    },
+    {
+      "interface_id": "document_processor_document",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/application/document_import_service.py", "symbol": "DocumentImportService.import_document", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/hephaestus/distillation_engine.py", "symbol": "DistillationEngine.process", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "canonical_document_revision", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "distillation", "contract": "raw_revision_to_distillation_terminal_receipt"}
+    },
+    {
+      "interface_id": "amphora_distill_task",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/kia/amphora.py", "symbol": "enqueue_with_receipt", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/hephaestus_worker.py", "symbol": "HephaestusWorker.process_one_task", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "amphora_task_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "distill_worker", "contract": "task_input_revision_to_terminal_effect_receipt"}
+    },
+    {
+      "interface_id": "event_bus_event",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/mnemos_bus.py", "symbol": "EventBus.publish", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/mnemos_bus.py", "symbol": "EventBus._dispatch_event", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "event_bus_ledger", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "event_bus_consumers", "contract": "event_consumer_pair_effect_receipt"}
+    },
+    {
+      "interface_id": "reflection_record",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/reflection/reflection_store.py", "symbol": "ReflectionStore.save_record", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/cognitive/policy_patch.py", "symbol": "PolicyPatchStore.propose", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "reflection_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "policy_and_preflight", "contract": "reflection_to_policy_or_noop_effect_receipt"}
+    },
+    {
+      "interface_id": "adaptive_scoring_sample",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/scoring/adaptive_scorer_v2.py", "symbol": "AdaptiveScorerV2.feedback", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/app/context_search_authorization.py", "symbol": "ContextSearchAuthorizationMixin.rerank_authorized", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "adaptive_scoring_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "ranker", "contract": "prior_prediction_and_mature_outcome_effect_receipt"}
+    },
+    {
+      "interface_id": "distill_action",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/hephaestus/distill_action_router.py", "symbol": "DistillActionRouter.route", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "core/cognitive/observation_store.py", "symbol": "ObservationStore.save", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "distill_action_ledger", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "cognitive_target_store", "contract": "action_before_after_hash_and_reciprocal_effect_receipt"}
+    },
+    {
+      "interface_id": "cognition_asset_commit",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/hephaestus/cognition_asset_store.py", "symbol": "CognitionAssetStore.commit_asset", "call": "_build_asset_payload"}],
+      "consumer_anchors": [{"path": "core/hephaestus/distillation_write_receipt.py", "symbol": "_persist_skill_cognition", "call": "commit_asset"}],
+      "eligible_event_denominator": {"owner": "cognition_asset_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "cognition_asset_consumers", "contract": "asset_commit_to_projection_or_proposal_before_after_hash_and_reciprocal_receipt"}
+    },
+    {
+      "interface_id": "cognitive_state_revision",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/application/cognitive_state.py", "symbol": "CognitiveStateApplication._commit", "call": "commit"}],
+      "consumer_anchors": [{"path": "core/application/cognitive_state.py", "symbol": "CognitiveStateApplication._ensure_outcome_projection_receipt", "call": "record_effect_receipt"}],
+      "eligible_event_denominator": {"owner": "cognitive_state_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "cognitive_state_consumers", "contract": "typed_revision_to_target_before_after_hash_and_reciprocal_receipt"}
+    },
+    {
+      "interface_id": "persona_profile_signal",
+      "runtime_required": true,
+      "evidence_mode": "runtime_receipt",
+      "producer_anchors": [{"path": "core/persona/cognitive_profile.py", "symbol": "CognitiveProfileRepository.record_signal", "call": "record_cognitive_data_event"}],
+      "consumer_anchors": [{"path": "integrations/preflight_builder.py", "symbol": "build_persona_section", "call": "record_cognitive_data_consumed"}],
+      "eligible_event_denominator": {"owner": "persona_signal_store", "positive_event_required": true, "unknown_allowed": false},
+      "target_effect_oracle": {"owner": "persona_consumers", "contract": "scoped_assertion_counterfactual_effect_receipt"}
+    }
+  ]
+}

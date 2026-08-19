@@ -20,20 +20,23 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DegradationEvent:
     """降级事件记录"""
+
     dimension: str
-    reason: str                      # 降级原因
-    rule_score: float                # 规则评分兜底值
-    ml_error: Optional[str] = None   # ML 异常信息
+    reason: str  # 降级原因
+    rule_score: float  # 规则评分兜底值
+    ml_error: Optional[str] = None  # ML 异常信息
     timestamp: datetime = field(default_factory=datetime.now)
 
 
 class ScorerFallback:
     """评分降级管理器"""
 
+    MAX_EVENTS = 1000
+
     def __init__(self):
         self._events: list = []
         self._consecutive_failures: Dict[str, int] = {}
-        self._max_consecutive = 3       # 连续失败 3 次后锁定降级
+        self._max_consecutive = 3  # 连续失败 3 次后锁定降级
 
     @contextmanager
     def guard(
@@ -45,7 +48,7 @@ class ScorerFallback:
         降级保护上下文管理器。
 
         用法：
-            with fallback.guard("memos", lambda: rule_scorer.score(item)) as score_fn:
+            with fallback.guard("quality", lambda: rule_scorer.score(item)) as score_fn:
                 result = score_fn()  # 尝试 ML 评分
         """
         ml_failed = False
@@ -56,29 +59,37 @@ class ScorerFallback:
             nonlocal ml_failed, ml_error
             try:
                 return ml_fn()
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, TypeError, ArithmeticError) as e:
                 ml_failed = True
                 ml_error = str(e)
                 self._record_failure(dimension)
                 logger.warning(
-                    f"[ScorerFallback] {dimension} ML failed, "
-                    f"falling back to rule={rule_score:.3f}: {e}"
+                    "[ScorerFallback] %s ML failed, falling back to rule=%.3f: %s",
+                    dimension,
+                    rule_score,
+                    e,
+                    exc_info=True,
                 )
                 return rule_score
 
         yield _try_ml
 
         if ml_failed:
-            self._events.append(DegradationEvent(
-                dimension=dimension,
-                reason="ml_exception",
-                rule_score=rule_score,
-                ml_error=ml_error,
-            ))
+            self._events.append(
+                DegradationEvent(
+                    dimension=dimension,
+                    reason="ml_exception",
+                    rule_score=rule_score,
+                    ml_error=ml_error,
+                )
+            )
+            # 防止事件列表无限增长
+            if len(self._events) > self.MAX_EVENTS:
+                self._events = self._events[-self.MAX_EVENTS :]
 
     def should_degrade(self, dimension: str) -> bool:
         """判断是否应降级（连续失败过多）"""
-        return self._consecutive_failures.get(dimension, 0) >= self._max_consecutive
+        return self._consecutive_failures.get(dimension, 0) >= self._max_consecutive  # type: ignore[no-any-return]  # noqa: E501
 
     def reset_failure(self, dimension: str) -> None:
         """重置失败计数（ML 恢复成功时调用）"""

@@ -2,10 +2,10 @@
 """
 P1-2 长链路测试 — 同步链路
 
-链路：FakeAgentSource → SyncEngine → fake MemosClient
+链路：FakeAgentSource → SyncEngine → mock StorageBackend
       → sync_log 记录 → distill_status=pending
 
-策略：临时 SQLite sync_log，mock MemosClient HTTP 调用，
+策略：临时 SQLite sync_log，mock StorageBackend HTTP 调用，
       FakeAgentSource 从内存解析 turns。
 断言目标：sync_log 字段完整、去重生效、噪声过滤。
 """
@@ -13,7 +13,7 @@ P1-2 长链路测试 — 同步链路
 import json
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from unittest.mock import MagicMock
 from dataclasses import dataclass
 
@@ -23,8 +23,11 @@ import pytest
 @dataclass
 class FakeAgentSource:
     """测试用的 AgentSource 实现。"""
-    _name: str = "test_agent"
-    _model_tag: str = "test"
+
+    # Exercise the real source-support contract instead of bypassing it with
+    # an undeclared synthetic source name.
+    _name: str = "codex"
+    _model_tag: str = "codex"
     _turns: List[dict] = None
 
     @property
@@ -40,15 +43,18 @@ class FakeAgentSource:
 
     def parse_turns(self, session_path: Path):
         from core.sync_framework.agent_source import Turn
+
         turns = []
         if self._turns:
             for t in self._turns:
-                turns.append(Turn(
-                    turn_number=t["turn_number"],
-                    user_content=t.get("user_content", ""),
-                    assistant_content=t.get("assistant_content", ""),
-                    timestamp=t.get("timestamp"),
-                ))
+                turns.append(
+                    Turn(
+                        turn_number=t["turn_number"],
+                        user_content=t.get("user_content", ""),
+                        assistant_content=t.get("assistant_content", ""),
+                        timestamp=t.get("timestamp"),
+                    )
+                )
         return turns
 
     def on_session_start(self, session_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,26 +89,23 @@ class TestSyncEngineLoop:
             lambda *args, **kwargs: None,
         )
 
-        # mock MemosClient 避免真实 HTTP
+        # mock StorageBackend 避免真实 HTTP
         mock_client = MagicMock()
         mock_result = MagicMock()
         mock_result.uid = "memo-123"
         mock_result.id = 123
-        mock_client.save.return_value = mock_result
-        mock_client.save_long_content.return_value = [
-            MagicMock(uid="memo-001", id=1),
-            MagicMock(uid="memo-002", id=2),
-        ]
-        mock_client._sanitize = lambda content: content  # 脱敏直接透传
+        mock_client.save.return_value = [mock_result]
+        mock_client._sanitize = lambda content: content  # 脱敏直接透传  # noqa
 
         engine = SyncEngine(
-            client=mock_client,
+            backend=mock_client,
             db_path=str(sync_db),
         )
         return engine, mock_client
 
     def _make_session_info(self, tmp_path, session_id: str, turns: List[dict]):
         from core.sync_framework.agent_source import SessionInfo
+
         # 写入一个假的会话文件
         source_path = tmp_path / f"{session_id}.json"
         source_path.write_text(json.dumps(turns), encoding="utf-8")
@@ -116,8 +119,18 @@ class TestSyncEngineLoop:
         engine, mock_client = self._make_engine(sync_db, monkeypatch)
 
         turns = [
-            {"turn_number": 1, "user_content": "Hello", "assistant_content": "world", "timestamp": "2024-01-01T00:00:00Z"},
-            {"turn_number": 2, "user_content": "How are you?", "assistant_content": "Fine thanks", "timestamp": "2024-01-01T00:01:00Z"},
+            {
+                "turn_number": 1,
+                "user_content": "Hello",
+                "assistant_content": "world",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+            {
+                "turn_number": 2,
+                "user_content": "How are you?",
+                "assistant_content": "Fine thanks",
+                "timestamp": "2024-01-01T00:01:00Z",
+            },
         ]
         source = FakeAgentSource(_turns=turns)
         session_info = self._make_session_info(tmp_path, "sess-sync-001", turns)
@@ -129,24 +142,30 @@ class TestSyncEngineLoop:
 
         # sync_log 应有 2 条记录
         with sqlite3.connect(str(sync_db)) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             rows = conn.execute(
-                "SELECT session_id, turn_number, status, distill_status, memos_uids FROM sync_log WHERE session_id=?",
+                "SELECT session_id, turn_number, status, distill_status, backend_uids FROM sync_log WHERE session_id=?",  # noqa: E501
                 ("sess-sync-001",),
             ).fetchall()
             assert len(rows) == 2
             assert rows[0]["status"] in ("new", "updated")
             assert rows[0]["distill_status"] == "pending"
-            assert rows[0]["memos_uids"]  # 不应为空
+            assert rows[0]["backend_uids"] is not None
+            assert json.loads(rows[0]["backend_uids"]) == []
 
-        # MemosClient 被调用
-        assert mock_client.save.called or mock_client.save_long_content.called
+        # raw_projection 默认接管 raw vault 写入，SyncEngine 不再重复调用 StorageBackend.save
+        assert not mock_client.save.called
 
     def test_dedup_skips_same_content(self, sync_db, tmp_path, monkeypatch):
         engine, _ = self._make_engine(sync_db, monkeypatch)
 
         turns = [
-            {"turn_number": 1, "user_content": "same", "assistant_content": "content", "timestamp": "2024-01-01T00:00:00Z"},
+            {
+                "turn_number": 1,
+                "user_content": "same",
+                "assistant_content": "content",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
         ]
         source = FakeAgentSource(_turns=turns)
         session_info = self._make_session_info(tmp_path, "sess-dedup", turns)
@@ -163,8 +182,18 @@ class TestSyncEngineLoop:
         engine, mock_client = self._make_engine(sync_db, monkeypatch)
 
         turns = [
-            {"turn_number": 1, "user_content": "ok", "assistant_content": "", "timestamp": "2024-01-01T00:00:00Z"},
-            {"turn_number": 2, "user_content": "嗯", "assistant_content": "", "timestamp": "2024-01-01T00:01:00Z"},
+            {
+                "turn_number": 1,
+                "user_content": "ok",
+                "assistant_content": "",
+                "timestamp": "2024-01-01T00:00:00Z",
+            },
+            {
+                "turn_number": 2,
+                "user_content": "嗯",
+                "assistant_content": "",
+                "timestamp": "2024-01-01T00:01:00Z",
+            },
         ]
         source = FakeAgentSource(_turns=turns)
         session_info = self._make_session_info(tmp_path, "sess-noise", turns)

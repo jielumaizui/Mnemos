@@ -1,0 +1,188 @@
+[
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._flywheel_predicate",
+    "module": "core.persona.psyche",
+    "reason": "Defers persona subsystem import until predicate is evaluated."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._register_event_handlers",
+    "module": "core.mnemos_bus",
+    "reason": "Breaks chronos <-> event bus load-order cycle."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_banner_task_scanner",
+    "module": "core.kia.dialog_reminder",
+    "reason": "Defers dialog reminder import until banner scanner step runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_dialog_reminder_cleanup",
+    "module": "core.kia.dialog_reminder",
+    "reason": "Defers dialog reminder import until cleanup step runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_forced_retrospective",
+    "module": "core.app.forced_retrospective",
+    "reason": "Defers app-level forced retrospective import until step runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_graph_build",
+    "module": "core.kia.knowledge_graph",
+    "reason": "Defers knowledge graph import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_heat_map",
+    "module": "core.wiki_metrics",
+    "reason": "Defers wiki metrics import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_issue_pipeline",
+    "module": "core.kia.issue_pipeline",
+    "reason": "Defers issue pipeline import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_kia_module",
+    "module": "core.import_guard",
+    "reason": "Loads the import guard only for dynamic KIA module execution."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_kia_module",
+    "module": "importlib",
+    "reason": "Dynamic module loading by name; not a static dependency."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_knowledge_profile",
+    "module": "core.kia.metis",
+    "reason": "Defers Metis profile subsystem import until the scheduled profile task runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_raw_survival_refresh",
+    "module": "core.config",
+    "reason": "Defers config read until raw survival refresh runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_raw_survival_refresh",
+    "module": "core.sync_framework.raw_event_store",
+    "reason": "Defers raw-event store import until survival refresh needs database access."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_raw_survival_refresh",
+    "module": "psutil",
+    "reason": "Optional startup-delay check; scheduler can continue when psutil is unavailable."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_skill_flywheel",
+    "module": "core.kia.ixion",
+    "reason": "Defers kia/ixion import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_verification_queue",
+    "module": "core.cognitive.verification_queue",
+    "reason": "Defers verification queue import until the scheduled verification step runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._run_weekly_report",
+    "module": "core.app.weekly_report",
+    "reason": "Defers weekly report import until report step runs."
+  },
+  {
+    "file": "core/kia/chronos_builtin_steps.py",
+    "function": "ChronosBuiltinStepMixin._verification_queue_cron",
+    "module": "core.config",
+    "reason": "Defers config read until verification queue cron expression is requested."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler.__init__",
+    "module": "core.config",
+    "reason": "Defers config read until a default database path is actually required."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._resource_budget_deferrals",
+    "module": "core.resource_budget",
+    "reason": "Defers resource-budget subsystem import until scheduler budget checks run."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._run_connect_worker",
+    "module": "core.kia.charon",
+    "reason": "Defers charon import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._run_knowledge_evolution",
+    "module": "core.hephaestus.evolution_tracker",
+    "reason": "Defers evolution tracker import until evolution step runs."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._run_knowledge_evolution",
+    "module": "core.kia.proteus",
+    "reason": "Defers proteus import to avoid circular dependency at module load time."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_message_exchanged",
+    "module": "core.kia.aegis",
+    "reason": "Defers aegis import for message-exchanged event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_page_created",
+    "module": "core.kia.charon",
+    "reason": "Defers charon import for event-triggered connect cycle."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_page_modified",
+    "module": "core.app.freshness_refresh_worker",
+    "reason": "Defers freshness refresh worker import for event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_page_modified",
+    "module": "core.config",
+    "reason": "Defers config read for page-modified event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_page_modified",
+    "module": "core.frontmatter",
+    "reason": "Defers frontmatter parsing import for event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_page_modified",
+    "module": "core.kia.proteus",
+    "reason": "Defers proteus import for page-modified event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler._trigger_session_start",
+    "module": "core.kia.dike",
+    "reason": "Defers dike import for session-start event handler."
+  },
+  {
+    "file": "core/kia/chronos.py",
+    "function": "KnowledgeScheduler.register_all_default_steps",
+    "module": "core.config",
+    "reason": "Defers config read for default wiki_base resolution."
+  }
+]

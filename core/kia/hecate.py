@@ -17,21 +17,28 @@ Shadow Page - 知识影子页面系统
 - 查询基于页面标题+关键词自动生成，无需人工编写
 - 结果自动分类整理，支持快速浏览
 """
+
 # Hecate — 幽冥女神 — 影子页面，知识的对偶与镜像
 # 原模块: shadow_page.py
 
 
-
+import hashlib
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from core.config import get_config
+from core.vaults.naming import shadow_projection_stem
 import logging
+
+# Constants extracted from magic numbers
+OUTPUT_SECONDS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +51,11 @@ except ImportError:  # pragma: no cover
 @dataclass
 class SearchResult:
     """搜索结果"""
+
     title: str
     url: str
     snippet: str = ""
-    source: str = ""           # tavily / fallback
+    source: str = ""  # tavily / fallback
     category: str = "general"  # official / community / news / blog / social
     published_date: str = ""
     relevance_score: float = 0.0
@@ -56,11 +64,12 @@ class SearchResult:
 @dataclass
 class ShadowPage:
     """影子页面"""
-    shadow_for: str            # 原页面路径
+
+    shadow_for: str  # 原页面路径
     search_date: str
     queries_used: List[str] = field(default_factory=list)
     sources: List[SearchResult] = field(default_factory=list)
-    content: str = ""          # 生成的 Markdown 内容
+    content: str = ""  # 生成的 Markdown 内容
 
 
 class ShadowPageManager:
@@ -71,45 +80,94 @@ class ShadowPageManager:
     # 来源域名分类
     CATEGORY_MAP = {
         "official": [
-            "docs.", "documentation.", "developer.", "api.",
-            "github.com", "gitlab.com",
-            "apache.org", "python.org", "mozilla.org",
-            "microsoft.com", "google.com", "cloud.google",
-            "aws.amazon.com", "azure.microsoft.com",
-            "kubernetes.io", "docker.com",
+            "docs.",
+            "documentation.",
+            "developer.",
+            "api.",
+            "github.com",
+            "gitlab.com",
+            "apache.org",
+            "python.org",
+            "mozilla.org",
+            "microsoft.com",
+            "google.com",
+            "cloud.google",
+            "aws.amazon.com",
+            "azure.microsoft.com",
+            "kubernetes.io",
+            "docker.com",
         ],
         "community": [
-            "stackoverflow.com", "stackexchange.com",
-            "reddit.com", "news.ycombinator.com",
-            "discuss.", "forum.", "community.",
+            "stackoverflow.com",
+            "stackexchange.com",
+            "reddit.com",
+            "news.ycombinator.com",
+            "discuss.",
+            "forum.",
+            "community.",
             "github.com/discussions",
         ],
         "blog": [
-            "medium.com", "dev.to", "hashnode.com",
-            "substack.com", "blog.",
-            "juejin.cn", "segmentfault.com", "csdn.net",
+            "medium.com",
+            "dev.to",
+            "hashnode.com",
+            "substack.com",
+            "blog.",
+            "juejin.cn",
+            "segmentfault.com",
+            "csdn.net",
         ],
         "social": [
-            "zhihu.com", "xiaohongshu.com", "douyin.com",
-            "weixin.qq.com", "mp.weixin.qq.com",
-            "twitter.com", "x.com", "linkedin.com",
+            "zhihu.com",
+            "xiaohongshu.com",
+            "douyin.com",
+            "weixin.qq.com",
+            "mp.weixin.qq.com",
+            "twitter.com",
+            "x.com",
+            "linkedin.com",
         ],
         "news": [
-            "techcrunch.com", "theverge.com", "arstechnica.com",
-            "36kr.com", "pingwest.com", "solidot.org",
+            "techcrunch.com",
+            "theverge.com",
+            "arstechnica.com",
+            "36kr.com",
+            "pingwest.com",
+            "solidot.org",
         ],
     }
 
-    def __init__(self, wiki_base: str = None, fallback_search=None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+    def __init__(self, wiki_base: str | None = None, fallback_search=None):
+        if wiki_base:
+            self.wiki_base = Path(wiki_base).expanduser()
+        else:
+            cfg_dir = get_config().wiki_dir
+            self.wiki_base = Path(cfg_dir) if not isinstance(cfg_dir, Path) else cfg_dir
         self.shadow_dir = self.wiki_base / self.SHADOW_DIR_NAME
-        self.excluded_dirs = {self.SHADOW_DIR_NAME, "99-Reports", ".git", ".obsidian", ".kg", "__pycache__"}
+        self.excluded_dirs = {
+            self.SHADOW_DIR_NAME,
+            "00-Inbox",
+            "99-Reports",
+            ".git",
+            ".obsidian",
+            ".kg",
+            "__pycache__",
+            "L2.4-KG",
+            "L3-Observations",
+            "L4-Reflections",
+            "L5-Feedback",
+            "08-Reminders",
+            "08-Disputes",
+            "L3-Observations/immune",  # 知识免疫报告是系统内部报告，不需要外部搜索 shadow
+            "06-Retrospectives/entropy",
+        }
         self.shadow_dir.mkdir(parents=True, exist_ok=True)
         self.fallback_search = fallback_search  # 可选: Callable[[str, int], List[SearchResult]]
+        self._kg = None  # 延迟初始化 KnowledgeGraph
         if yaml is None:
-            logger.warning("PyYAML 未安装，frontmatter 提取功能将不可用。请执行: pip install pyyaml")
+            logger.warning(
+                "PyYAML 未安装，frontmatter 提取功能将不可用。请执行: pip install pyyaml"
+            )
 
     # ========== 查询生成 ==========
 
@@ -124,8 +182,8 @@ class ShadowPageManager:
 
         try:
             content = page_path.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"读取页面失败 {page_path}: {e}")
+        except (OSError, IOError) as e:
+            logger.warning("读取页面失败 %s: %s", page_path, e)
             return []
 
         fm = self._extract_frontmatter(content)
@@ -145,7 +203,7 @@ class ShadowPageManager:
         # 查询3：核心概念 + 最新
         concepts = self._get_keywords(fm, "核心概念")
         if concepts:
-            queries.append(f"{' '.join(concepts[:2])} 最新进展 2026")
+            queries.append(f"{' '.join(concepts[:2])} 最新进展 {datetime.now().year}")
 
         # 查询4：场景标签 + 最佳实践
         scenarios = self._get_keywords(fm, "场景标签")
@@ -168,6 +226,126 @@ class ShadowPageManager:
 
     # ========== 搜索执行 ==========
 
+    def _try_fallback(self, query: str, max_results: int) -> List[SearchResult]:
+        """当 Tavily 不可用时回退到宿主 agent 搜索工具。"""
+        if self.fallback_search:
+            logger.info("回退到宿主 agent 搜索工具")
+            return self.fallback_search(query, max_results)  # type: ignore[no-any-return]
+        return []
+
+    def _get_kg(self):
+        """延迟初始化 KnowledgeGraph。"""
+        if self._kg is None:
+            try:
+                from core.kia.knowledge_graph import KnowledgeGraph
+
+                self._kg = KnowledgeGraph()
+            except (ImportError, OSError, RuntimeError, ValueError, TypeError, sqlite3.Error) as e:
+                logger.warning("KnowledgeGraph 初始化失败: %s", e)
+        return self._kg
+
+    def _local_kg_search(self, query: str, max_results: int = 5) -> List[SearchResult]:
+        """基于本地知识图谱的降级搜索：查找与查询词相关的实体和关系。"""
+        kg = self._get_kg()
+        if kg is None:
+            return []
+        connect = getattr(kg, "_conn", None)
+        if not callable(connect):
+            logger.warning("本地 KG 不满足连接接口，跳过降级搜索")
+            return []
+
+        try:
+            with connect() as conn:
+                # 1. 查找名称匹配的实体
+                like = f"%{query}%"
+                rows = conn.execute(
+                    """SELECT uid, name, entity_type, source_page, quality_score, confidence
+                       FROM entities
+                       WHERE name LIKE ? OR source_page LIKE ?
+                       ORDER BY quality_score * confidence DESC
+                       LIMIT ?""",
+                    (like, like, max_results * 2),
+                ).fetchall()
+
+                entity_names = {row["name"] for row in rows}
+                if not entity_names:
+                    return []
+
+                # 2. 查找与这些实体相关的关系
+                placeholders = ",".join("?" * len(entity_names))
+                rel_rows = conn.execute(
+                    f"""SELECT source, target, relation_type, strength, confidence, context
+                        FROM relations
+                        WHERE source IN ({placeholders}) OR target IN ({placeholders})
+                        ORDER BY strength * confidence DESC
+                        LIMIT ?""",  # nosec B608: internally generated ? placeholders
+                    tuple(entity_names) * 2 + (max_results * 3,),
+                ).fetchall()
+
+            results = []
+            seen = set()
+            for row in rel_rows:
+                other = row["target"] if row["source"] in entity_names else row["source"]
+                key = (row["source"], row["target"], row["relation_type"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                source_page = ""
+                for er in rows:
+                    if er["name"] == other:
+                        source_page = er["source_page"] or ""
+                        break
+                url = (
+                    source_page
+                    if source_page and source_page.startswith("/")
+                    else f"#local-{other}"
+                )
+                snippet = (
+                    row["context"] or f"{row['source']} --{row['relation_type']}--> {row['target']}"
+                )
+                results.append(
+                    SearchResult(
+                        title=f"KG: {row['source']} → {row['target']}",
+                        url=url,
+                        snippet=snippet[:300],
+                        source="local_kg",
+                        category="community",
+                        relevance_score=row["strength"] * row["confidence"],
+                    )
+                )
+                if len(results) >= max_results:
+                    break
+            return results
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            logger.warning("本地 KG 搜索失败 query=%s: %s", query, e)
+            return []
+
+    def _local_wiki_search(self, page_path: Path, max_results: int = 5) -> List[SearchResult]:
+        """基于本地 Wiki 链接的降级搜索：找到相关页面和双向链接。"""
+        try:
+            content = page_path.read_text(encoding="utf-8")
+            # 提取 [[Page Name]] 双向链接
+            links = re.findall(r"\[\[([^\]]+)\]\]", content)
+            results = []
+            for link in links[:max_results]:
+                link_path = self.wiki_base / f"{link}.md"
+                if link_path.exists():
+                    snippet = link_path.read_text(encoding="utf-8").replace("\n", " ")[:150]
+                    results.append(
+                        SearchResult(
+                            title=f"Wiki: {link}",
+                            url=str(link_path),
+                            snippet=snippet,
+                            source="local_wiki",
+                            category="community",
+                            relevance_score=0.7,
+                        )
+                    )
+            return results
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError) as e:
+            logger.warning("本地 Wiki 搜索失败 %s: %s", page_path, e)
+            return []
+
     def search_tavily(self, query: str, max_results: int = 5) -> List[SearchResult]:
         """
         使用 tavily-search 进行搜索
@@ -175,69 +353,90 @@ class ShadowPageManager:
         需要 tvly CLI 已安装并登录。
         当 Tavily 不可用时，自动调用 fallback_search（如宿主 agent 注入的搜索工具）。
         """
-        results = []
         if not shutil.which("tvly"):
             logger.warning("tvly CLI 未安装")
-            if self.fallback_search:
-                logger.info("回退到宿主 agent 搜索工具")
-                return self.fallback_search(query, max_results)
-            return results
+            return self._try_fallback(query, max_results)
 
         try:
+            safe_max = max(1, min(max_results, 20))  # S22: clamp to [1, 20]
             cmd = [
-                "tvly", "search", query,
-                "--max-results", str(max_results),
+                "tvly",
+                "search",
+                "--max-results",
+                str(safe_max),
                 "--json",
+                "--",           # S22: end-of-options, prevents query being parsed as option
+                query,
             ]
-            output = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
-            )
+            output = subprocess.run(cmd, capture_output=True, text=True, timeout=OUTPUT_SECONDS)
             if output.returncode != 0:
-                logger.warning(f"tavily 搜索失败: {output.stderr.strip()}")
-                if self.fallback_search:
-                    logger.info("回退到宿主 agent 搜索工具")
-                    return self.fallback_search(query, max_results)
-                return results
+                logger.warning("tavily 搜索失败: %s", output.stderr.strip())
+                return self._try_fallback(query, max_results)
 
+            results = []
             data = json.loads(output.stdout)
             for item in data.get("results", []):
                 url = item.get("url", "")
-                results.append(SearchResult(
-                    title=item.get("title", "无标题"),
-                    url=url,
-                    snippet=item.get("content", "")[:300],
-                    source="tavily",
-                    category=self._classify_url(url),
-                    relevance_score=item.get("score", 0.5),
-                ))
+                results.append(
+                    SearchResult(
+                        title=item.get("title", "无标题"),
+                        url=url,
+                        snippet=item.get("content", "")[:300],
+                        source="tavily",
+                        category=self._classify_url(url),
+                        published_date=(
+                            item.get("published_date")
+                            or item.get("publishedDate")
+                            or item.get("published_at")
+                            or item.get("date")
+                            or ""
+                        ),
+                        relevance_score=item.get("score", 0.5),
+                    )
+                )
+            return results
         except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
-            logger.warning(f"tavily 搜索异常 query={query!r}: {e}")
-            if self.fallback_search:
-                logger.info("回退到宿主 agent 搜索工具")
-                return self.fallback_search(query, max_results)
+            logger.warning("tavily 搜索异常 query=%s: %s", query, e, exc_info=True)
+            return self._try_fallback(query, max_results)
 
-        return results
-
-    def search_all(self, queries: List[str],
-                   use_tavily: bool = True) -> List[SearchResult]:
+    def search_all(
+        self, queries: List[str], use_tavily: bool = True, page_path: Optional[Path] = None
+    ) -> List[SearchResult]:
         """
-        执行搜索，合并去重结果
+        执行搜索，合并去重结果。当 Tavily 和外部 fallback 都不可用时，
+        自动降级到本地知识图谱和本地 Wiki 链接搜索。
 
         Args:
             queries: 查询列表
             use_tavily: 是否使用 tavily（为 False 时仍尝试 fallback_search）
+            page_path: 当前页面路径，用于本地 Wiki 链接搜索
 
         Returns:
             去重后的搜索结果列表
         """
         all_results = []
+        has_external_results = False
 
         for query in queries:
             if use_tavily:
-                all_results.extend(self.search_tavily(query))
+                results = self.search_tavily(query)
+                if results:
+                    has_external_results = True
+                all_results.extend(results)
             elif self.fallback_search:
                 # 显式禁用 tavily 时，直接调用 fallback
-                all_results.extend(self.fallback_search(query, 5))
+                results = self.fallback_search(query, 5)
+                if results:
+                    has_external_results = True
+                all_results.extend(results)
+
+        # 无外部结果时，启用内置本地降级搜索
+        if not has_external_results:
+            logger.info("无外部搜索结果，启用本地 KG/Wiki 降级搜索")
+            for query in queries:
+                all_results.extend(self._local_kg_search(query))
+            if page_path:
+                all_results.extend(self._local_wiki_search(page_path))
 
         # 按 URL 去重，保留相关性更高的
         url_map: Dict[str, SearchResult] = {}
@@ -249,19 +448,18 @@ class ShadowPageManager:
                 url_map[result.url] = result
 
         # 按相关性排序
-        sorted_results = sorted(
-            url_map.values(),
-            key=lambda x: x.relevance_score,
-            reverse=True
-        )
+        sorted_results = sorted(url_map.values(), key=lambda x: x.relevance_score, reverse=True)
 
         return sorted_results
 
     # ========== 影子页面生成 ==========
 
-    def create_shadow(self, page_path: Path,
-                      search_results: List[SearchResult] = None,
-                      auto_search: bool = True) -> Optional[ShadowPage]:
+    def create_shadow(
+        self,
+        page_path: Path,
+        search_results: List[SearchResult] | None = None,
+        auto_search: bool = True,
+    ) -> Optional[ShadowPage]:
         """
         为 Wiki 页面创建影子页面
 
@@ -281,7 +479,7 @@ class ShadowPageManager:
 
         # 获取搜索结果
         if search_results is None and auto_search:
-            search_results = self.search_all(queries)
+            search_results = self.search_all(queries, page_path=page_path)
 
         if not search_results:
             return None
@@ -303,22 +501,28 @@ class ShadowPageManager:
 
         return shadow
 
-    def _generate_markdown(self, page_path: Path, shadow: ShadowPage,
-                           categorized: Dict[str, List[SearchResult]]) -> str:
+    def _generate_markdown(
+        self, page_path: Path, shadow: ShadowPage, categorized: Dict[str, List[SearchResult]]
+    ) -> str:
         """生成影子页面的 Markdown 内容"""
         title = self._extract_title(page_path.read_text(encoding="utf-8")) or page_path.stem
 
         lines = [
             "---",
-            f"shadow_for: \"{shadow.shadow_for}\"",
+            f'shadow_for: "{shadow.shadow_for}"',
             f"search_date: {shadow.search_date}",
             f"sources_count: {len(shadow.sources)}",
+            f"source_count: {len(shadow.sources)}",
+            f"sources: {json.dumps([item.url for item in shadow.sources], ensure_ascii=False)}",
+            f"evidence_level: {'multiple' if len(shadow.sources) > 1 else 'single'}",
+            "knowledge_stage: P2",
+            "status: active",
             f"queries_used: {json.dumps(shadow.queries_used, ensure_ascii=False)}",
             "---",
             "",
             f"# Shadow: {title}",
             "",
-            f"> 影子页面自动生成，包含外部相关信息。",
+            "> 影子页面自动生成，包含外部相关信息。",
             f"> - 最后更新: {shadow.search_date}",
             f"> - 来源数: {len(shadow.sources)}",
             f"> - 搜索查询: {', '.join(shadow.queries_used)}",
@@ -339,34 +543,61 @@ class ShadowPageManager:
                 continue
 
             cat_title = category_titles.get(category, category)
-            lines.extend([
-                f"## {cat_title}",
-                "",
-            ])
+            lines.extend(
+                [
+                    f"## {cat_title}",
+                    "",
+                ]
+            )
 
             for result in results[:8]:  # 每类最多 8 条
                 lines.append(f"- [{result.title}]({result.url})")
                 if result.snippet:
                     snippet = result.snippet.replace("\n", " ")[:150]
                     lines.append(f"  - {snippet}...")
+                if result.published_date:
+                    lines.append(f"  - 发布日期: {result.published_date}")
                 lines.append("")
 
         # 添加相关性排序的完整列表
-        lines.extend([
-            "## 全部来源（按相关性排序）",
-            "",
-        ])
+        lines.extend(
+            [
+                "## 全部来源（按相关性排序）",
+                "",
+            ]
+        )
         for i, result in enumerate(shadow.sources[:20], 1):
-            lines.append(f"{i}. [{result.title}]({result.url}) — `{result.source}` ({result.relevance_score:.2f})")
+            published = (
+                f" · {result.published_date}"
+                if result.published_date
+                else ""
+            )
+            lines.append(
+                f"{i}. [{result.title}]({result.url}) — `{result.source}` ({result.relevance_score:.2f}){published}"  # noqa: E501
+            )
 
         lines.append("")
         return "\n".join(lines)
 
+    def _shadow_path(self, page_path: Path) -> Path:
+        rel = page_path.relative_to(self.wiki_base)
+        return self.shadow_dir / f"{shadow_projection_stem(rel.as_posix())}.shadow.md"
+
+    def _previous_shadow_path(self, page_path: Path) -> Path:
+        rel = page_path.relative_to(self.wiki_base)
+        suffix = hashlib.md5(str(rel).encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+        return self.shadow_dir / f"{page_path.stem}_{suffix}.shadow.md"
+
     def _write_shadow(self, page_path: Path, shadow: ShadowPage):
-        """写入影子页面文件"""
-        shadow_filename = f"{page_path.stem}.shadow.md"
-        shadow_path = self.shadow_dir / shadow_filename
+        """写入影子页面文件（使用相对路径短投影 ID 避免同名文件覆盖）。"""
+        shadow_path = self._shadow_path(page_path)
         shadow_path.write_text(shadow.content, encoding="utf-8")
+        legacy_path = self._previous_shadow_path(page_path)
+        if legacy_path != shadow_path and legacy_path.exists():
+            try:
+                legacy_path.unlink()
+            except OSError:
+                logger.debug("删除旧 shadow 文件失败: %s", legacy_path, exc_info=True)
 
     def sync_shadow(self, page_path: Path) -> Optional[ShadowPage]:
         """同步更新影子页面（重新搜索）"""
@@ -374,7 +605,11 @@ class ShadowPageManager:
 
     def get_shadow(self, page_path: Path) -> Optional[ShadowPage]:
         """获取已存在的影子页面"""
-        shadow_path = self.shadow_dir / f"{page_path.stem}.shadow.md"
+        shadow_path = self._shadow_path(page_path)
+        if not shadow_path.exists():
+            legacy_path = self._previous_shadow_path(page_path)
+            if legacy_path.exists():
+                shadow_path = legacy_path
         if not shadow_path.exists():
             return None
 
@@ -387,8 +622,8 @@ class ShadowPageManager:
                 queries_used=fm.get("queries_used", []),
                 content=content,
             )
-        except Exception as e:
-            logger.warning(f"读取影子页面失败 {shadow_path}: {e}")
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError) as e:
+            logger.warning("读取影子页面失败 %s: %s", shadow_path, e)
             return None
 
     def list_shadows(self) -> List[Path]:
@@ -397,45 +632,79 @@ class ShadowPageManager:
             return []
         return list(self.shadow_dir.glob("*.shadow.md"))
 
-    def remove_shadow(self, page_path: Path) -> bool:
-        """删除影子页面"""
-        shadow_path = self.shadow_dir / f"{page_path.stem}.shadow.md"
-        if shadow_path.exists():
-            shadow_path.unlink()
-            return True
-        return False
+    def _sync_one_page(self, page: Path) -> Tuple[str, Optional[ShadowPage]]:
+        """同步单页影子页面，返回状态与 ShadowPage。"""
+        try:
+            existing = self.get_shadow(page)
+            shadow = self.sync_shadow(page)
+            if shadow:
+                return ("updated" if existing else "created"), shadow
+            return "failed", None
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as e:
+            logger.warning("同步影子页面失败 %s: %s", page, e)
+            return "failed", None
 
-    def sync_all_inbox(self, page_pattern: str = "*.md") -> Dict[str, int]:
-        """同步所有影子页面（chronos 兼容性别名）。"""
-        return self.batch_sync(page_pattern)
-
-    def batch_sync(self, page_pattern: str = "*.md") -> Dict[str, int]:
+    def batch_sync(
+        self,
+        page_pattern: str = "*.md",
+        max_workers: int = 4,
+        per_page_timeout: Optional[int] = 60,
+        max_pages: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         批量同步影子页面
 
         Returns:
-            {created: N, updated: N, failed: N}
+            {status: ok/error, created: N, updated: N, failed: N, total: N}
         """
-        stats = {"created": 0, "updated": 0, "failed": 0}
+        stats = {"created": 0, "updated": 0, "failed": 0, "total": 0}
 
         if not self.wiki_base.exists():
-            return stats
+            return {**stats, "status": "ok"}
 
-        for page in self._list_pages(page_pattern):
+        pages = self._list_pages(page_pattern)
+        if max_pages is None:
             try:
-                existing = self.get_shadow(page)
-                shadow = self.sync_shadow(page)
-                if shadow:
-                    if existing:
-                        stats["updated"] += 1
-                    else:
-                        stats["created"] += 1
+                max_pages = int(get_config().get("shadow_projection.max_pages_per_batch", 50))
+            except (TypeError, ValueError):
+                max_pages = 50
+        if max_pages and max_pages > 0:
+            pages = pages[:max_pages]
+        stats["total"] = len(pages)
+        if not pages:
+            return {**stats, "status": "ok"}
+
+        def _sync_with_timeout(page: Path) -> Tuple[str, Optional[ShadowPage]]:
+            if per_page_timeout:
+                # 在单页级别用 signal/thread 简单超时
+                import threading
+
+                result_container = [None]
+
+                def _run():
+                    result_container[0] = self._sync_one_page(page)
+
+                t = threading.Thread(target=_run)
+                t.start()
+                t.join(timeout=per_page_timeout)
+                if t.is_alive():
+                    logger.warning("同步影子页面超时 %s", page)
+                    return "failed", None
+                return result_container[0] or ("failed", None)
+            return self._sync_one_page(page)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_sync_with_timeout, page): page for page in pages}
+            for future in as_completed(futures):
+                status, _ = future.result()
+                if status in stats:
+                    stats[status] += 1
                 else:
                     stats["failed"] += 1
-            except Exception as e:
-                logger.warning(f"同步影子页面失败 {page}: {e}")
-                stats["failed"] += 1
 
+        total_processed = stats["created"] + stats["updated"] + stats["failed"]
+        failed_rate = stats["failed"] / max(total_processed, 1)
+        stats["status"] = "error" if failed_rate > 0.5 else "ok"  # type: ignore[assignment]
         return stats
 
     def _list_pages(self, page_pattern: str = "*.md") -> List[Path]:
@@ -443,6 +712,13 @@ class ShadowPageManager:
         for page in self.wiki_base.rglob(page_pattern):
             rel_parts = page.relative_to(self.wiki_base).parts
             if any(part in self.excluded_dirs or part.startswith(".") for part in rel_parts):
+                continue
+            # 排除指定子路径前缀（如系统内部报告目录）
+            rel_str = "/".join(rel_parts)
+            if any(
+                rel_str.startswith(excluded.replace("\\", "/") + "/")
+                for excluded in self.excluded_dirs
+            ):
                 continue
             if page.name.endswith(".shadow.md"):
                 continue
@@ -461,8 +737,8 @@ class ShadowPageManager:
             if len(parts) >= 3:
                 try:
                     return yaml.safe_load(parts[1]) or {}
-                except Exception as e:
-                    logger.warning(f"忽略异常: {e}")
+                except (yaml.YAMLError, ValueError) as e:
+                    logger.warning("忽略异常: %s", e, exc_info=True)
         return {}
 
     @staticmethod
@@ -476,18 +752,25 @@ class ShadowPageManager:
         """获取指定层的关键词"""
         keywords = frontmatter.get("关键词", {})
         if isinstance(keywords, dict):
-            return keywords.get(layer, [])
+            return keywords.get(layer, [])  # type: ignore[no-any-return]
         return []
 
     @classmethod
     def _classify_url(cls, url: str) -> str:
-        """根据 URL 分类来源"""
+        """根据 URL 分类来源。
+
+        优先匹配更具体的模式（含路径），避免 ``github.com/discussions``
+        被 ``github.com`` 误分类为 official。
+        """
         url_lower = url.lower()
+        best_match = ("general", 0)
         for category, patterns in cls.CATEGORY_MAP.items():
             for pattern in patterns:
                 if pattern in url_lower:
-                    return category
-        return "general"
+                    # 更长/更具体的模式优先
+                    if len(pattern) > best_match[1]:
+                        best_match = (category, len(pattern))
+        return best_match[0]
 
     @staticmethod
     def _categorize_results(results: List[SearchResult]) -> Dict[str, List[SearchResult]]:
@@ -505,44 +788,34 @@ class ShadowPageManager:
         return categorized
 
 
-# ========== 便捷函数 ==========
-
-def create_shadow_for_page(page_path: str, wiki_base: str = None) -> Optional[ShadowPage]:
-    """便捷函数：为单个页面创建影子"""
-    manager = ShadowPageManager(wiki_base=wiki_base)
-    return manager.create_shadow(Path(page_path))
-
-
-def sync_all_shadows(wiki_base: str = None) -> Dict[str, int]:
-    """便捷函数：同步所有影子页面"""
-    manager = ShadowPageManager(wiki_base=wiki_base)
-    return manager.batch_sync()
-
-
 # ========== 前提条件变化检测（MVP） ==========
+
 
 @dataclass
 class DecisionDependency:
     """决策依赖条件"""
-    dep_type: str              # library_feature / data_volume / cost_budget / team_capability
-    raw_text: str = ""         # 原始匹配文本
-    entity: str = ""           # 依赖实体（如库名）
-    condition: str = ""        # 条件描述（如"不支持 SSL"）
+
+    dep_type: str  # library_feature / data_volume / cost_budget / team_capability
+    raw_text: str = ""  # 原始匹配文本
+    entity: str = ""  # 依赖实体（如库名）
+    condition: str = ""  # 条件描述（如"不支持 SSL"）
     supported_at_decision: bool = False  # 决策时该条件是否成立
 
 
 @dataclass
 class ValidationResult:
     """验证结果"""
+
     status_changed: bool = False
     current_status: bool = False
-    evidence: str = ""         # 验证来源 URL
+    evidence: str = ""  # 验证来源 URL
     confidence: float = 0.0
 
 
 @dataclass
 class PremiseChange:
     """前提条件变化"""
+
     dependency: DecisionDependency
     old_status: bool
     new_status: bool
@@ -558,8 +831,14 @@ class LibraryFeatureValidator:
 
     # 检测正面信号的关键词
     POSITIVE_SIGNALS = [
-        "now supports", "added support", "从 v", "since v",
-        "已支持", "新增支持", "开始支持", "现已支持",
+        "now supports",
+        "added support",
+        "从 v",
+        "since v",
+        "已支持",
+        "新增支持",
+        "开始支持",
+        "现已支持",
     ]
 
     def check(self, dep: DecisionDependency, search_func=None) -> ValidationResult:
@@ -584,7 +863,7 @@ class LibraryFeatureValidator:
                 manager = ShadowPageManager()
                 results = manager.search_tavily(query, max_results=5)
             else:
-                results = search_func(query)
+                results = search_func(query, max_results=5)
 
             for r in results:
                 snippet = r.snippet.lower()
@@ -597,8 +876,8 @@ class LibraryFeatureValidator:
                     )
 
             return ValidationResult(status_changed=False)
-        except Exception as e:
-            logger.warning(f"库特性验证失败 {dep.entity}: {e}")
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+            logger.warning("库特性验证失败 %s: %s", dep.entity, e)
             return ValidationResult(status_changed=False)
 
 
@@ -613,13 +892,20 @@ class PremiseValidator:
     # 使用 re.ASCII 确保 \w 只匹配 ASCII，避免误匹配中文字符
     DEPENDENCY_PATTERNS = {
         "library_feature": [
-            re.compile(r"([a-z0-9][a-z0-9\-\.]*[a-z0-9])\s*(?:库|package|library)?.*不?支持\s*([\w\-]+)", re.I),
+            re.compile(
+                r"([a-z0-9][a-z0-9\-\.]*[a-z0-9])\s*(?:库|package|library)?.*不?支持\s*([\w\-]+)",
+                re.I | re.ASCII,
+            ),
             re.compile(r"([\w\-]+)\s+(?:v?\d+\.\d+).*之前?.*不?支持", re.I | re.ASCII),
         ],
     }
 
-    def __init__(self, wiki_base: Path = None):
-        self.wiki_base = wiki_base or get_config().wiki_dir
+    def __init__(self, wiki_base: Path | None = None):
+        if wiki_base:
+            self.wiki_base = wiki_base
+        else:
+            cfg_dir = get_config().wiki_dir
+            self.wiki_base = Path(cfg_dir) if not isinstance(cfg_dir, Path) else cfg_dir
 
     def extract_dependencies(self, content: str) -> List[DecisionDependency]:
         """从页面内容中提取决策依赖条件"""
@@ -628,18 +914,38 @@ class PremiseValidator:
         for dep_type, patterns in self.DEPENDENCY_PATTERNS.items():
             for pattern in patterns:
                 for match in pattern.finditer(content):
-                    entity = match.group(1) if match.lastindex >= 1 else ""
-                    condition = match.group(2) if match.lastindex >= 2 else ""
+                    # type: ignore[operator]
+                    entity = match.group(1) if match.lastindex >= 1 else ""  # type: ignore[operator]  # noqa: E501
+                    # type: ignore[operator]
+                    condition = match.group(2) if match.lastindex >= 2 else ""  # type: ignore[operator]  # noqa: E501
                     raw_text = match.group(0)
-                    # 简单推断：包含"不支持"则为 False，"支持"则为 True
-                    supported = "不支持" not in raw_text and "not support" not in raw_text.lower()
-                    dependencies.append(DecisionDependency(
-                        dep_type=dep_type,
-                        raw_text=raw_text,
-                        entity=entity,
-                        condition=condition,
-                        supported_at_decision=supported,
-                    ))
+                    raw_lower = raw_text.lower()
+                    # 保守推断：必须明确看到支持信号，且不含否定信号，才认为 True
+                    positive = any(
+                        p in raw_lower
+                        for p in ("支持", "已支持", "supported", "supports", "enable", "enabled")
+                    )
+                    negative = any(
+                        n in raw_lower
+                        for n in (
+                            "不支持",
+                            "not support",
+                            "does not support",
+                            "not supported",
+                            "未支持",
+                            "不支持",
+                        )
+                    )
+                    supported = positive and not negative
+                    dependencies.append(
+                        DecisionDependency(
+                            dep_type=dep_type,
+                            raw_text=raw_text,
+                            entity=entity,
+                            condition=condition,
+                            supported_at_decision=supported,
+                        )
+                    )
 
         return dependencies
 
@@ -657,13 +963,13 @@ class PremiseValidator:
         if not p.exists():
             p = self.wiki_base / page_path
         if not p.exists():
-            logger.warning(f"页面不存在，跳过前提验证: {page_path}")
+            logger.warning("页面不存在，跳过前提验证: %s", page_path)
             return []
 
         try:
             content = p.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.warning(f"读取页面失败 {page_path}: {e}")
+        except (OSError, IOError) as e:
+            logger.warning("读取页面失败 %s: %s", page_path, e)
             return []
 
         dependencies = self.extract_dependencies(content)
@@ -676,18 +982,51 @@ class PremiseValidator:
         for dep in dependencies:
             result = validator.check(dep)
             if result.status_changed and dep.supported_at_decision != result.current_status:
-                changes.append(PremiseChange(
-                    dependency=dep,
-                    old_status=dep.supported_at_decision,
-                    new_status=result.current_status,
-                    evidence=result.evidence,
-                    confidence=result.confidence,
-                ))
+                changes.append(
+                    PremiseChange(
+                        dependency=dep,
+                        old_status=dep.supported_at_decision,
+                        new_status=result.current_status,
+                        evidence=result.evidence,
+                        confidence=result.confidence,
+                    )
+                )
 
         if changes:
-            logger.info(f"页面 {page_path} 检测到 {len(changes)} 个前提条件变化")
+            logger.info("页面 %s 检测到 %s 个前提条件变化", page_path, len(changes))
 
         return changes
+
+    @staticmethod
+    def format_change_report(changes: List[PremiseChange]) -> str:
+        """Format premise changes for user-facing diagnostics."""
+        if not changes:
+            return "未检测到前提条件变化。"
+
+        def status_label(value: bool) -> str:
+            return "支持" if value else "不支持"
+
+        lines = ["# 前提条件变化报告", ""]
+        for idx, change in enumerate(changes, 1):
+            dep = change.dependency
+            lines.append(f"## {idx}. {dep.entity or '未知依赖'}")
+            if dep.condition:
+                lines.append(f"- 条件: {dep.condition}")
+            if dep.raw_text:
+                lines.append(f"- 原始前提: {dep.raw_text}")
+            lines.append(
+                f"- 状态变化: {status_label(change.old_status)} -> {status_label(change.new_status)}"
+            )
+            lines.append(f"- 置信度: {change.confidence:.2f}")
+            if change.evidence:
+                lines.append(f"- 证据: {change.evidence}")
+            lines.append("")
+
+        return "\n".join(lines).rstrip()
+
+    def validate_premises_report(self, page_path: str) -> str:
+        """Validate a page and return a formatted premise-change report."""
+        return self.format_change_report(self.validate_premises(page_path))
 
     def validate_batch(self, page_pattern: str = "*.md") -> Dict[str, List[PremiseChange]]:
         """

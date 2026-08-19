@@ -1,0 +1,529 @@
+{
+  "schema_version": "mnemos.golden_benchmark.v1",
+  "scorecard_schema_version": "mnemos.scorecard.v1",
+  "provider": "mnemos.deterministic_benchmark_provider.v1",
+  "manifest_path": "benchmarks/golden/manifest.json",
+  "sample_count": 5,
+  "scores": {
+    "engineering_score": 100,
+    "cognitive_maturity_score": 100,
+    "wow_path_score": 100,
+    "quality_gate_score": 100,
+    "consumer_closure_score": 100,
+    "total_score": 100
+  },
+  "thresholds": {
+    "min_engineering_score": 100,
+    "min_cognitive_maturity_score": 100,
+    "min_wow_path_score": 100,
+    "min_quality_gate_score": 100,
+    "min_consumer_closure_score": 100,
+    "min_total_score": 100
+  },
+  "sample_results": [
+    {
+      "sample_id": "asyncio_gather_memory_regression",
+      "categories": [
+        "raw_conversation",
+        "incident"
+      ],
+      "quality_decision": {
+        "decision_id": "qd-golden-asyncio_gather_memory_regression",
+        "subject": "golden_benchmark:asyncio_gather_memory_regression",
+        "decision": "accept",
+        "reason_codes": [
+          "incident_has_root_cause",
+          "evidence_refs_present"
+        ],
+        "evidence_refs": [
+          "benchmarks/golden/manifest.json#/asyncio_gather_memory_regression"
+        ],
+        "risk_level": "low",
+        "confidence": 0.96,
+        "auto_fixable": false,
+        "next_action": "write_wiki_and_preflight",
+        "schema_version": "mnemos.quality_decision.v1"
+      },
+      "assets": [
+        {
+          "asset_id": "benchmark:asyncio_gather_memory_regression:0",
+          "asset_type": "distill_claim",
+          "source_refs": [
+            "benchmark://session/asyncio_gather_memory_regression"
+          ],
+          "evidence_refs": [
+            "benchmark://raw/asyncio_gather_memory_regression"
+          ],
+          "confidence": 0.96,
+          "privacy_level": "document",
+          "status": "verified",
+          "consumers": [
+            "wiki_builder",
+            "context_aware_search",
+            "preflight_inject"
+          ],
+          "revision_policy": "distill_output_v4 relation_to_existing",
+          "last_used_at": null,
+          "supersedes": [],
+          "contradicts": [],
+          "schema_version": "mnemos.cognitive_asset.v1"
+        },
+        {
+          "asset_id": "benchmark:asyncio_gather_memory_regression:1",
+          "asset_type": "wiki_page",
+          "source_refs": [
+            "benchmark://session/asyncio_gather_memory_regression"
+          ],
+          "evidence_refs": [
+            "benchmark://wiki/asyncio_gather_memory_regression"
+          ],
+          "confidence": 0.93,
+          "privacy_level": "wiki_page",
+          "status": "produced",
+          "consumers": [
+            "context_aware_search",
+            "preflight_inject",
+            "obsidian_ui"
+          ],
+          "revision_policy": "frontmatter revision + source_refs required",
+          "last_used_at": null,
+          "supersedes": [],
+          "contradicts": [],
+          "schema_version": "mnemos.cognitive_asset.v1"
+        }
+      ],
+      "written_pages": [
+        "wiki/03-Tech/asyncio_gather_memory_regression-distill_claim.md",
+        "wiki/03-Tech/asyncio_gather_memory_regression-wiki_page.md"
+      ],
+      "persona_delta": {
+        "cognitive.rigor": 0.04,
+        "value.correctness": 0.03
+      },
+      "consumer_results": [
+        {
+          "consumer": "wiki_builder",
+          "consumed": true
+        },
+        {
+          "consumer": "context_aware_search",
+          "consumed": true
+        },
+        {
+          "consumer": "preflight_inject",
+          "consumed": true
+        }
+      ],
+      "search_ranking": [
+        "asyncio_bounded_concurrency",
+        "bounded_concurrency_runbook"
+      ],
+      "search_ok": true,
+      "preflight_hits": [
+        "asyncio gather",
+        "bounded concurrency"
+      ],
+      "preflight_ok": true,
+      "status": "verified",
+      "status_trace": [
+        {
+          "step": "capture",
+          "status": "captured"
+        },
+        {
+          "step": "quality_gate",
+          "status": "accept"
+        },
+        {
+          "step": "distill",
+          "status": "verified"
+        },
+        {
+          "step": "consume",
+          "status": "consumed"
+        }
+      ],
+      "provider_trace": {
+        "llm": "mnemos.deterministic_benchmark_provider.v1",
+        "embedding": {
+          "provider": "mnemos.deterministic_benchmark_provider.v1",
+          "dimensions": 8,
+          "checksum": 3.635294
+        },
+        "reranker": "mnemos.deterministic_benchmark_provider.v1",
+        "multimodal": "mock-multimodal:asyncio_gather_memory_regression:summary"
+      },
+      "errors": []
+    },
+    {
+      "sample_id": "trusted_document_decision_record",
+      "categories": [
+        "user_document",
+        "decision"
+      ],
+      "quality_decision": {
+        "decision_id": "qd-golden-trusted_document_decision_record",
+        "subject": "golden_benchmark:trusted_document_decision_record",
+        "decision": "accept",
+        "reason_codes": [
+          "trusted_user_document",
+          "decision_has_validation"
+        ],
+        "evidence_refs": [
+          "benchmarks/golden/manifest.json#/trusted_document_decision_record"
+        ],
+        "risk_level": "low",
+        "confidence": 0.94,
+        "auto_fixable": false,
+        "next_action": "write_decision_asset",
+        "schema_version": "mnemos.quality_decision.v1"
+      },
+      "assets": [
+        {
+          "asset_id": "benchmark:trusted_document_decision_record:0",
+          "asset_type": "cognitive_decision_asset",
+          "source_refs": [
+            "benchmark://trusted_document/config_migration_decision"
+          ],
+          "evidence_refs": [
+            "benchmark://doc/config_migration_decision"
+          ],
+          "confidence": 0.94,
+          "privacy_level": "policy",
+          "status": "verified",
+          "consumers": [
+            "cognitive_decision_flywheel",
+            "future_skill_derivation"
+          ],
+          "revision_policy": "canonical term migration from Skill flywheel",
+          "last_used_at": null,
+          "supersedes": [],
+          "contradicts": [],
+          "schema_version": "mnemos.cognitive_asset.v1"
+        }
+      ],
+      "written_pages": [
+        "wiki/04-Concepts/trusted_document_decision_record-cognitive_decision_asset.md"
+      ],
+      "persona_delta": {
+        "value.reliability": 0.05
+      },
+      "consumer_results": [
+        {
+          "consumer": "cognitive_decision_flywheel",
+          "consumed": true
+        },
+        {
+          "consumer": "preflight_inject",
+          "consumed": true
+        }
+      ],
+      "search_ranking": [
+        "config_migration_decision"
+      ],
+      "search_ok": true,
+      "preflight_hits": [
+        "plan before apply",
+        "rollback evidence"
+      ],
+      "preflight_ok": true,
+      "status": "verified",
+      "status_trace": [
+        {
+          "step": "capture",
+          "status": "captured"
+        },
+        {
+          "step": "quality_gate",
+          "status": "accept"
+        },
+        {
+          "step": "distill",
+          "status": "verified"
+        },
+        {
+          "step": "consume",
+          "status": "consumed"
+        }
+      ],
+      "provider_trace": {
+        "llm": "mnemos.deterministic_benchmark_provider.v1",
+        "embedding": {
+          "provider": "mnemos.deterministic_benchmark_provider.v1",
+          "dimensions": 8,
+          "checksum": 3.89804
+        },
+        "reranker": "mnemos.deterministic_benchmark_provider.v1",
+        "multimodal": "mock-multimodal:trusted_document_decision_record:summary"
+      },
+      "errors": []
+    },
+    {
+      "sample_id": "low_value_smalltalk_rejection",
+      "categories": [
+        "low_value"
+      ],
+      "quality_decision": {
+        "decision_id": "qd-golden-low_value_smalltalk_rejection",
+        "subject": "golden_benchmark:low_value_smalltalk_rejection",
+        "decision": "reject",
+        "reason_codes": [
+          "low_value",
+          "no_reusable_claim"
+        ],
+        "evidence_refs": [
+          "benchmarks/golden/manifest.json#/low_value_smalltalk_rejection"
+        ],
+        "risk_level": "low",
+        "confidence": 1.0,
+        "auto_fixable": false,
+        "next_action": "skip_without_wiki",
+        "schema_version": "mnemos.quality_decision.v1"
+      },
+      "assets": [],
+      "written_pages": [],
+      "persona_delta": {},
+      "consumer_results": [
+        {
+          "consumer": "quality_gate",
+          "consumed": true
+        },
+        {
+          "consumer": "scorecard",
+          "consumed": true
+        }
+      ],
+      "search_ranking": [],
+      "search_ok": true,
+      "preflight_hits": [],
+      "preflight_ok": true,
+      "status": "degraded",
+      "status_trace": [
+        {
+          "step": "capture",
+          "status": "captured"
+        },
+        {
+          "step": "quality_gate",
+          "status": "reject"
+        },
+        {
+          "step": "distill",
+          "status": "degraded"
+        },
+        {
+          "step": "consume",
+          "status": "consumed"
+        }
+      ],
+      "provider_trace": {
+        "llm": "mnemos.deterministic_benchmark_provider.v1",
+        "embedding": {
+          "provider": "mnemos.deterministic_benchmark_provider.v1",
+          "dimensions": 8,
+          "checksum": 4.470589
+        },
+        "reranker": "mnemos.deterministic_benchmark_provider.v1",
+        "multimodal": "mock-multimodal:low_value_smalltalk_rejection:summary"
+      },
+      "errors": []
+    },
+    {
+      "sample_id": "privacy_secret_block",
+      "categories": [
+        "raw_conversation",
+        "low_value"
+      ],
+      "quality_decision": {
+        "decision_id": "qd-golden-privacy_secret_block",
+        "subject": "golden_benchmark:privacy_secret_block",
+        "decision": "reject",
+        "reason_codes": [
+          "privacy_secret",
+          "wiki_write_blocked"
+        ],
+        "evidence_refs": [
+          "benchmarks/golden/manifest.json#/privacy_secret_block"
+        ],
+        "risk_level": "high",
+        "confidence": 1.0,
+        "auto_fixable": false,
+        "next_action": "redact_and_skip",
+        "schema_version": "mnemos.quality_decision.v1"
+      },
+      "assets": [],
+      "written_pages": [],
+      "persona_delta": {},
+      "consumer_results": [
+        {
+          "consumer": "quality_gate",
+          "consumed": true
+        },
+        {
+          "consumer": "privacy_audit",
+          "consumed": true
+        },
+        {
+          "consumer": "scorecard",
+          "consumed": true
+        }
+      ],
+      "search_ranking": [],
+      "search_ok": true,
+      "preflight_hits": [],
+      "preflight_ok": true,
+      "status": "failed_terminal",
+      "status_trace": [
+        {
+          "step": "capture",
+          "status": "captured"
+        },
+        {
+          "step": "quality_gate",
+          "status": "reject"
+        },
+        {
+          "step": "distill",
+          "status": "failed_terminal"
+        },
+        {
+          "step": "consume",
+          "status": "consumed"
+        }
+      ],
+      "provider_trace": {
+        "llm": "mnemos.deterministic_benchmark_provider.v1",
+        "embedding": {
+          "provider": "mnemos.deterministic_benchmark_provider.v1",
+          "dimensions": 8,
+          "checksum": 3.811764
+        },
+        "reranker": "mnemos.deterministic_benchmark_provider.v1",
+        "multimodal": "mock-multimodal:privacy_secret_block:summary"
+      },
+      "errors": []
+    },
+    {
+      "sample_id": "conflicting_retry_strategy",
+      "categories": [
+        "conflict_input",
+        "decision"
+      ],
+      "quality_decision": {
+        "decision_id": "qd-golden-conflicting_retry_strategy",
+        "subject": "golden_benchmark:conflicting_retry_strategy",
+        "decision": "needs_review",
+        "reason_codes": [
+          "conflict_detected",
+          "requires_dispute_route"
+        ],
+        "evidence_refs": [
+          "benchmarks/golden/manifest.json#/conflicting_retry_strategy"
+        ],
+        "risk_level": "medium",
+        "confidence": 0.82,
+        "auto_fixable": false,
+        "next_action": "route_to_dispute",
+        "schema_version": "mnemos.quality_decision.v1"
+      },
+      "assets": [
+        {
+          "asset_id": "benchmark:conflicting_retry_strategy:0",
+          "asset_type": "distill_claim",
+          "source_refs": [
+            "benchmark://session/conflicting_retry_strategy"
+          ],
+          "evidence_refs": [
+            "benchmark://conflict/retry_strategy"
+          ],
+          "confidence": 0.82,
+          "privacy_level": "document",
+          "status": "needs_user",
+          "consumers": [
+            "dispute_resolver",
+            "knowledge_graph",
+            "preflight_inject"
+          ],
+          "revision_policy": "distill_output_v4 relation_to_existing",
+          "last_used_at": null,
+          "supersedes": [],
+          "contradicts": [
+            "benchmark://legacy/retry_forever"
+          ],
+          "schema_version": "mnemos.cognitive_asset.v1"
+        }
+      ],
+      "written_pages": [
+        "wiki/08-Disputes/conflicting_retry_strategy-distill_claim.md"
+      ],
+      "persona_delta": {
+        "cognitive.conflict_awareness": 0.04
+      },
+      "consumer_results": [
+        {
+          "consumer": "dispute_resolver",
+          "consumed": true
+        },
+        {
+          "consumer": "preflight_inject",
+          "consumed": true
+        },
+        {
+          "consumer": "scorecard",
+          "consumed": true
+        }
+      ],
+      "search_ranking": [
+        "retry_strategy_conflict"
+      ],
+      "search_ok": true,
+      "preflight_hits": [
+        "retry strategy conflict",
+        "route contradiction"
+      ],
+      "preflight_ok": true,
+      "status": "needs_user",
+      "status_trace": [
+        {
+          "step": "capture",
+          "status": "captured"
+        },
+        {
+          "step": "quality_gate",
+          "status": "needs_review"
+        },
+        {
+          "step": "distill",
+          "status": "needs_user"
+        },
+        {
+          "step": "consume",
+          "status": "consumed"
+        }
+      ],
+      "provider_trace": {
+        "llm": "mnemos.deterministic_benchmark_provider.v1",
+        "embedding": {
+          "provider": "mnemos.deterministic_benchmark_provider.v1",
+          "dimensions": 8,
+          "checksum": 3.470587
+        },
+        "reranker": "mnemos.deterministic_benchmark_provider.v1",
+        "multimodal": "mock-multimodal:conflicting_retry_strategy:summary"
+      },
+      "errors": []
+    }
+  ],
+  "action_ledger": "action_ledger.db",
+  "wiki_dir": "wiki",
+  "persona_delta_path": "persona_delta.json",
+  "scorecard_path": "mnemos_benchmark_scorecard.json",
+  "trend_comparison": {
+    "baseline_found": true,
+    "baseline_schema_version": "mnemos.golden_benchmark.v1",
+    "differences": [],
+    "regressions": []
+  },
+  "ok": true,
+  "errors": []
+}

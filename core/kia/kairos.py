@@ -4,42 +4,52 @@ Time Parser - 时间解析器
 解析会话中的时间信息，确定任务执行窗口。
 支持中文/英文相对时间、周期性检测。
 """
+
 # Kairos — 时机之神 — 时间解析，恰当时机的判定
 # 原模块: time_parser.py
-
 
 
 import re
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from enum import Enum
+
+# Constants extracted from magic numbers
+TIME_PARSER_RELATIVE_PATTERNS = 365
+DAYS_DAYS = 7
+DUE_DATE_DAYS = 7
+TIME_PARSER__DAYS_TO_WINDOW_DAYS = 7
+TIME_PARSER__DAYS_TO_WINDOW_DAYS_2 = 30
+TIME_PARSER_GET_REMINDER_DAYS_BEFORE = 7
 
 
 class TimeWindowType(Enum):
     """时间窗口类型"""
-    IMMEDIATE = "immediate"     # 即时（今天/马上）
-    SHORT = "short"             # 短期（<=7天）
-    MEDIUM = "medium"           # 中期（8-30天）
-    LONG = "long"               # 长期（>30天）
-    PERIODIC = "periodic"       # 周期性
+
+    IMMEDIATE = "immediate"  # 即时（今天/马上）
+    SHORT = "short"  # 短期（<=7天）
+    MEDIUM = "medium"  # 中期（8-30天）
+    LONG = "long"  # 长期（>30天）
+    PERIODIC = "periodic"  # 周期性
     NO_TIME_INTENT = "no_time_intent"  # 无时间意图
-    UNKNOWN = "unknown"         # 无法确定
+    UNKNOWN = "unknown"  # 无法确定
 
 
 @dataclass
 class TimeWindow:
     """时间窗口"""
+
     window: TimeWindowType
-    days_until: Optional[int]   # 距离执行的天数（0=今天）
+    days_until: Optional[int]  # 距离执行的天数（0=今天）
     due_date: Optional[datetime] = None  # 预估执行日期
     is_periodic: bool = False
-    period: Optional[str] = None        # weekly/biweekly/monthly/quarterly
-    periodic_keywords: List[str] = None  # 检测到的周期性关键词
-    weekday: Optional[int] = None       # 0=周一, 6=周日
-    hour: Optional[int] = None          # 0-23
-    minute: Optional[int] = None        # 0-59
+    period: Optional[str] = None  # weekly/biweekly/monthly/quarterly
+    periodic_keywords: Optional[List[str]] = None  # 检测到的周期性关键词
+    weekday: Optional[int] = None  # 0=周一, 6=周日
+    hour: Optional[int] = None  # 0-23
+    minute: Optional[int] = None  # 0-59
 
     def __post_init__(self):
         if self.periodic_keywords is None:
@@ -52,43 +62,29 @@ class TimeParser:
     # 相对时间模式 → 天数偏移
     RELATIVE_PATTERNS = [
         # 即时
-        (r'现在|马上|立即|这就|right now|immediately|asap', 0),
+        (r"现在|马上|立即|这就|right now|immediately|asap", 0),
         # 今天
-        (r'今天|今晚|今天下午|今天晚上|today|tonight', 0),
+        (r"今天|今晚|今天下午|今天晚上|today|tonight", 0),
         # 明天
-        (r'明天|明早|明晚|tomorrow', 1),
+        (r"明天|明早|明晚|tomorrow", 1),
         # 后天
-        (r'后天|the day after tomorrow', 2),
+        (r"后天|the day after tomorrow", 2),
         # 3天后
-        (r'3天后|三天后|in 3 days', 3),
+        (r"3天后|三天后|in 3 days", 3),
         # 下下周
-        (r'下下周|the week after next', 14),
-        # 下个月
-        (r'下个月|下月|next month', 30),
-        # 下个月初
-        (r'下个月初|下月初|early next month', 35),
-        # 下个月底
-        (r'下个月底|下月底|end of next month', 55),
-        # 明年Q1
-        (r'明年Q1|明年一季度|next Q1', 90),
-        # 明年Q2
-        (r'明年Q2|明年二季度|next Q2', 180),
-        # 明年Q3
-        (r'明年Q3|明年三季度|next Q3', 270),
-        # 明年Q4
-        (r'明年Q4|明年四季度|next Q4', 360),
-        # 明年
-        (r'明年|next year', 365),
+        (r"下下周|the week after next", 14),
+        # 明年（硬编码回退，动态检测优先）
+        (r"明年|next year", TIME_PARSER_RELATIVE_PATTERNS),
     ]
 
     # 周期性模式
     PERIODIC_PATTERNS = [
-        (r'每周|每星期|每周一|每周二|每周三|每周四|每周五|weekly|every week', 'weekly'),
-        (r'每两周|双周|biweekly|fortnightly|every two weeks', 'biweekly'),
-        (r'每月|每个月|monthly|every month', 'monthly'),
-        (r'每季度|每季|quarterly|every quarter', 'quarterly'),
-        (r'每年|每年一次|yearly|annually|every year', 'yearly'),
-        (r'每天|每日|daily|every day', 'daily'),
+        (r"每周|每星期|每周一|每周二|每周三|每周四|每周五|weekly|every week", "weekly"),
+        (r"每两周|双周|biweekly|fortnightly|every two weeks", "biweekly"),
+        (r"每月|每个月|monthly|every month", "monthly"),
+        (r"每季度|每季|quarterly|every quarter", "quarterly"),
+        (r"每年|每年一次|yearly|annually|every year", "yearly"),
+        (r"每天|每日|daily|every day", "daily"),
     ]
 
     # 模糊时间
@@ -103,13 +99,16 @@ class TimeParser:
     }
 
     FUZZY_ALIASES = {
-        "尽快": r'尽快|as soon as possible|尽快处理|asap',
-        "有空时": r'有空时|有空|when you have time',
-        "不急": r'不急|不着急|not urgent',
+        "尽快": r"尽快|as soon as possible|尽快处理|asap",
+        "有空时": r"有空时|有空|when you have time",
+        "不急": r"不急|不着急|not urgent",
     }
 
     def __init__(self, reference_time: Optional[datetime] = None):
-        self.reference_time = reference_time or datetime.now()
+        self.reference_time = reference_time or datetime.now(timezone.utc)
+        # Normalize naive datetime to UTC for consistent comparisons
+        if self.reference_time.tzinfo is None:
+            self.reference_time = self.reference_time.replace(tzinfo=timezone.utc)
 
     def parse(self, content: str, task_type: Optional[str] = None) -> TimeWindow:
         """
@@ -126,12 +125,17 @@ class TimeParser:
         if periodic_match:
             return periodic_match
 
-        # 2. 检测相对时间
+        # 2. 检测动态相对时间（下个月、明年等需要按实际月份/年份计算）
+        dynamic_match = self._detect_dynamic_relative(content.lower())
+        if dynamic_match:
+            return dynamic_match
+
+        # 3. 检测固定偏移相对时间
         relative_match = self._detect_relative(content)
         if relative_match:
             return relative_match
 
-        # 3. 检测模糊时间
+        # 4. 检测模糊时间
         fuzzy_match = self._detect_fuzzy(content, task_type=task_type)
         if fuzzy_match:
             return fuzzy_match
@@ -142,11 +146,7 @@ class TimeParser:
             return date_match
 
         # 无时间意图交给上游任务类型决定，避免闲聊误触发装载。
-        return TimeWindow(
-            window=TimeWindowType.NO_TIME_INTENT,
-            days_until=None,
-            due_date=None
-        )
+        return TimeWindow(window=TimeWindowType.NO_TIME_INTENT, days_until=None, due_date=None)
 
     def _detect_periodic(self, content: str) -> Optional[TimeWindow]:
         """检测周期性任务"""
@@ -163,13 +163,13 @@ class TimeParser:
                     due_date=self.reference_time,
                     is_periodic=True,
                     period=period,
-                    periodic_keywords=[period]
+                    periodic_keywords=[period],
                 )
         return None
 
     def _detect_compound_periodic(self, content_lower: str) -> Optional[TimeWindow]:
         """检测带星期和时间点的周期表达，如“每周五下午3点”"""
-        pattern = r'每(?:周|星期)([一二三四五六日天])(?:的)?(上午|中午|下午|晚上|早上)?(\d{1,2})(?:点|:)(?:(\d{1,2})分?)?'
+        pattern = r"每(?:周|星期)([一二三四五六日天])(?:的)?(上午|中午|下午|晚上|早上)?(\d{1,2})(?:点|:)(?:(\d{1,2})分?)?"
         match = re.search(pattern, content_lower)
         if not match:
             return None
@@ -215,31 +215,71 @@ class TimeParser:
             if re.search(pattern, content_lower):
                 due_date = self.reference_time + timedelta(days=days)
                 window_type = self._days_to_window(days)
-                return TimeWindow(
-                    window=window_type,
-                    days_until=days,
-                    due_date=due_date
-                )
+                return TimeWindow(window=window_type, days_until=days, due_date=due_date)
         return None
 
     def _detect_dynamic_relative(self, content_lower: str) -> Optional[TimeWindow]:
         """检测需要参考当前日期动态计算的相对时间"""
-        today_weekday = self.reference_time.weekday()
+        ref = self.reference_time
+        today_weekday = ref.weekday()
 
-        if re.search(r'本周|这周|this week', content_lower):
+        if re.search(r"本周|这周|this week", content_lower):
             days = max(0, 4 - today_weekday)  # 默认周五为本周截止
-            due_date = self.reference_time + timedelta(days=days)
+            due_date = ref + timedelta(days=days)
             return TimeWindow(self._days_to_window(days), days, due_date)
 
-        if re.search(r'(?<!下)下周|(?<!下)下星期|next week', content_lower):
-            days = 7 - today_weekday
-            due_date = self.reference_time + timedelta(days=days)
+        if re.search(r"(?<!下)下周|(?<!下)下星期|next week", content_lower):
+            days = DAYS_DAYS - today_weekday
+            due_date = ref + timedelta(days=days)
             return TimeWindow(self._days_to_window(days), days, due_date)
 
-        if re.search(r'本月底|这个月月底|本月|这个月|this month|end of this month', content_lower):
-            last_day = calendar.monthrange(self.reference_time.year, self.reference_time.month)[1]
-            due_date = self.reference_time.replace(day=last_day)
-            days = max(0, (due_date.date() - self.reference_time.date()).days)
+        if re.search(r"本月底|这个月月底|本月|这个月|this month|end of this month", content_lower):
+            last_day = calendar.monthrange(ref.year, ref.month)[1]
+            due_date = ref.replace(day=last_day)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 下个月（动态计算到下个月同一天，跨月边界安全）
+        if re.search(r"下个月|下月|next month", content_lower):
+            next_month = ref.month + 1
+            next_year = ref.year
+            if next_month > 12:
+                next_month = 1
+                next_year += 1
+            last_day = calendar.monthrange(next_year, next_month)[1]
+            target_day = min(ref.day, last_day)
+            due_date = ref.replace(year=next_year, month=next_month, day=target_day)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 明年（动态计算到明年同一天）
+        if re.search(r"明年|next year", content_lower):
+            due_date = ref.replace(year=ref.year + 1)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 明年Q1（动态计算到明年1月1日）
+        if re.search(r"明年q1|明年一季度|next q1", content_lower):
+            due_date = ref.replace(year=ref.year + 1, month=1, day=1)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 明年Q2
+        if re.search(r"明年q2|明年二季度|next q2", content_lower):
+            due_date = ref.replace(year=ref.year + 1, month=4, day=1)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 明年Q3
+        if re.search(r"明年q3|明年三季度|next q3", content_lower):
+            due_date = ref.replace(year=ref.year + 1, month=DUE_DATE_DAYS, day=1)
+            days = max(0, (due_date.date() - ref.date()).days)
+            return TimeWindow(self._days_to_window(days), days, due_date)
+
+        # 明年Q4
+        if re.search(r"明年q4|明年四季度|next q4", content_lower):
+            due_date = ref.replace(year=ref.year + 1, month=10, day=1)
+            days = max(0, (due_date.date() - ref.date()).days)
             return TimeWindow(self._days_to_window(days), days, due_date)
 
         return None
@@ -247,41 +287,36 @@ class TimeParser:
     def _detect_fuzzy(self, content: str, task_type: Optional[str] = None) -> Optional[TimeWindow]:
         """检测模糊时间"""
         content_lower = content.lower()
-        fuzzy_map = self.FUZZY_MAPPING_BY_TYPE.get(task_type or "", self.FUZZY_MAPPING_BY_TYPE["default"])
+        fuzzy_map = self.FUZZY_MAPPING_BY_TYPE.get(
+            task_type or "", self.FUZZY_MAPPING_BY_TYPE["default"]
+        )
         for key, days in fuzzy_map.items():
             pattern = self.FUZZY_ALIASES[key]
             if re.search(pattern, content_lower):
                 due_date = self.reference_time + timedelta(days=days)
                 window_type = self._days_to_window(days)
-                return TimeWindow(
-                    window=window_type,
-                    days_until=days,
-                    due_date=due_date
-                )
+                return TimeWindow(window=window_type, days_until=days, due_date=due_date)
         return None
 
     def _detect_date(self, content: str) -> Optional[TimeWindow]:
         """检测具体日期格式"""
         # 格式：2026-05-07 或 2026/05/07
         date_patterns = [
-            r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})',
-            r'(\d{4})年(\d{1,2})月(\d{1,2})日',
+            r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})",
+            r"(\d{4})年(\d{1,2})月(\d{1,2})日",
         ]
         for pattern in date_patterns:
             match = re.search(pattern, content)
             if match:
                 try:
                     year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
-                    due_date = datetime(year, month, day)
+                    # Attach UTC tzinfo for consistent comparison with reference_time
+                    due_date = datetime(year, month, day, tzinfo=timezone.utc)
                     days = (due_date - self.reference_time).days
                     if days >= 0:
                         window_type = self._days_to_window(days)
-                        return TimeWindow(
-                            window=window_type,
-                            days_until=days,
-                            due_date=due_date
-                        )
-                except ValueError:
+                        return TimeWindow(window=window_type, days_until=days, due_date=due_date)
+                except (ValueError, TypeError):
                     continue
         return None
 
@@ -291,9 +326,9 @@ class TimeParser:
             return TimeWindowType.NO_TIME_INTENT
         if days <= 1:
             return TimeWindowType.IMMEDIATE
-        elif days <= 7:
+        elif days <= TIME_PARSER__DAYS_TO_WINDOW_DAYS:
             return TimeWindowType.SHORT
-        elif days <= 30:
+        elif days <= TIME_PARSER__DAYS_TO_WINDOW_DAYS_2:
             return TimeWindowType.MEDIUM
         else:
             return TimeWindowType.LONG
@@ -311,7 +346,10 @@ class TimeParser:
         if time_window.window in (TimeWindowType.IMMEDIATE, TimeWindowType.SHORT):
             return True
         if time_window.is_periodic:
-            return True  # 周期性任务在触发时立即装载
+            # Validate periodic window: load only if due_date has arrived
+            if time_window.due_date and time_window.due_date <= self.reference_time:
+                return True
+            return False
         if time_window.window == TimeWindowType.NO_TIME_INTENT:
             if task_type in ("coding", "analysis", "review"):
                 return True
@@ -325,7 +363,7 @@ class TimeParser:
         if time_window.window == TimeWindowType.MEDIUM:
             return 3
         elif time_window.window == TimeWindowType.LONG:
-            return 7
+            return TIME_PARSER_GET_REMINDER_DAYS_BEFORE
         return 0
 
 
@@ -346,9 +384,9 @@ class PeriodicDetector:
         # 筛选同类型任务
         dates = []
         for h in history:
-            if h.get('task_type') == task_type and h.get('created_at'):
+            if h.get("task_type") == task_type and h.get("created_at"):
                 try:
-                    dt = datetime.fromisoformat(h['created_at'].replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(h["created_at"].replace("Z", "+00:00"))
                     dates.append(dt)
                 except (ValueError, AttributeError):
                     continue
@@ -373,7 +411,7 @@ class PeriodicDetector:
         weighted_avg = self._weighted_average(intervals)
         variance = self._variance(intervals, weighted_avg)
 
-        variance_ratio = (variance ** 0.5) / weighted_avg if weighted_avg > 0 else float("inf")
+        variance_ratio = (variance**0.5) / weighted_avg if weighted_avg > 0 else float("inf")
 
         if variance_ratio > 0.4:
             return None  # 间隔不稳定，不是周期性任务
@@ -381,15 +419,15 @@ class PeriodicDetector:
         period = None
         # 判断周期
         if 6 <= weighted_avg <= 8:
-            period = 'weekly'
+            period = "weekly"
         elif 13 <= weighted_avg <= 15:
-            period = 'biweekly'
+            period = "biweekly"
         elif 28 <= weighted_avg <= 31:
-            period = 'monthly'
+            period = "monthly"
         elif 85 <= weighted_avg <= 95:
-            period = 'quarterly'
+            period = "quarterly"
         elif 360 <= weighted_avg <= 370:
-            period = 'yearly'
+            period = "yearly"
 
         if not period:
             return None
@@ -422,6 +460,7 @@ class PeriodicDetector:
 
 
 # ========== 便捷函数 ==========
+
 
 def parse_time(
     content: str,

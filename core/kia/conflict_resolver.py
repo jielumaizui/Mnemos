@@ -1,5 +1,5 @@
 import logging
-logger = logging.getLogger(__name__)
+
 """
 Conflict Resolver - 多源知识冲突检测与仲裁引擎
 
@@ -13,73 +13,141 @@ Conflict Resolver - 多源知识冲突检测与仲裁引擎
 
 import re
 import math
-import sys
 import hashlib
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
-from datetime import datetime, timedelta
+from typing import Any, Callable, List, Optional, Dict, Tuple
+from datetime import datetime, timezone
 from pathlib import Path
 
 from core.config import get_config
+from core.cognitive.state_contract import sha256_json
 from core.kia.assertion_extractor import Assertion, KnowledgeForm
+from core.trust.formal_markdown import (
+    TrustedMarkdownDecisionPolicy,
+    submit_or_write_markdown_with_decision,
+)
+
+logger = logging.getLogger(__name__)
+
+CONFLICT_DISPUTE_MARKDOWN_POLICY = TrustedMarkdownDecisionPolicy(
+    contract_id="project-contract:conflict-dispute-page",
+    contract_revision_id="mnemos.conflict_dispute_page.v1",
+    contract_text=(
+        "ConflictResolver may create only the exact dispute page selected for one "
+        "exact unresolved assertion conflict and resolution proposal."
+    ),
+    source_namespace="conflict-dispute-page",
+    producer="conflict-resolver",
+    producer_code_hash=sha256_json(
+        {
+            "module": "core.kia.conflict_resolver",
+            "producer": "save_dispute_page",
+            "version": "mnemos.conflict_dispute_page.v1",
+        }
+    ),
+    evaluator_id="conflict-dispute-page-evaluator",
+    constraints=(
+        "Dispute identity, assertions, scores, resolution, target, and output remain exact.",
+        "Creating a dispute page may not itself resolve or supersede either assertion.",
+    ),
+    approved_candidate_key="create_exact_conflict_dispute",
+    approved_candidate_summary="Create the exact unresolved-conflict adjudication page.",
+    rejected_candidate_key="retain_conflict_without_dispute_page",
+    rejected_candidate_summary="Retain state when conflict or resolution facts drift.",
+    approved_reason_code="conflict_dispute_binding_verified",
+    rejected_reason_code="conflict_dispute_binding_rejected",
+    committed_metric="conflict_dispute_page_committed",
+    rejected_metric="unbound_conflict_dispute_page_count",
+)
+
+
+def _assertion_decision_facts(assertion: Assertion) -> dict[str, object]:
+    return {
+        "claim": assertion.claim,
+        "form": assertion.form.value,
+        "confidence": assertion.confidence,
+        "context": assertion.context,
+        "source": assertion.source,
+        "evidence_level": assertion.evidence_level,
+        "temporal_scope": assertion.temporal_scope,
+        "boundary_hint": assertion.boundary_hint,
+        "is_negated": assertion.is_negated,
+        "tags": list(assertion.tags),
+    }
+
+
+# Constants extracted from magic numbers
+DURATION_BUCKET_QUARTER_DAYS = 90
 
 
 # ========== 数据结构 ==========
 
+
 @dataclass
 class Conflict:
     """检测到的冲突"""
-    conflict_type: str            # temporal/contextual/authority/domain/self_ref
-    strength: float               # 冲突强度 0-1
+
+    conflict_type: str  # temporal/contextual/authority/domain/self_ref
+    strength: float  # 冲突强度 0-1
     new_assertion: Assertion
     existing_assertion: Assertion
-    topic_overlap: float          # topic 语义重叠度 0-1
-    direction_conflict: float     # 结论方向冲突度 0-1
-    reason: str = ""              # 冲突原因描述
+    topic_overlap: float  # topic 语义重叠度 0-1
+    direction_conflict: float  # 结论方向冲突度 0-1
+    reason: str = ""  # 冲突原因描述
 
 
 @dataclass
 class Resolution:
     """仲裁结果"""
-    action: str                   # update_boundary / supersede / create_dispute / no_action
-    target: str                   # "new" | "existing" | "both"
-    updates: Dict = field(default_factory=dict)   # 需要更新的字段
-    reason: str = ""              # 仲裁理由
-    dispute_page: str = ""        # 如果创建争议页面，记录页面 ID
+
+    action: str  # update_boundary / supersede / create_dispute / no_action
+    target: str  # "new" | "existing" | "both"
+    updates: Dict = field(default_factory=dict)  # 需要更新的字段
+    reason: str = ""  # 仲裁理由
+    dispute_page: str = ""  # 如果创建争议页面，记录页面 ID
 
 
 @dataclass
 class WikiPageMeta:
     """Wiki 页面的元数据（用于仲裁评分）"""
+
     page_id: str
     created_at: datetime
     updated_at: datetime
-    evidence_level: str           # single-source / multi-source / curated
+    evidence_level: str  # single-source / multi-source / curated
     verification_count: int
     verification_history: List[Dict] = field(default_factory=list)
     is_user_verified: bool = False
-    source_type: str = ""         # chat / file / annotation
+    source_type: str = ""  # chat / file / annotation
 
 
 # ========== 冲突检测 ==========
 
 # 反义词对（用于检测方向冲突）
 ANTONYM_PAIRS = [
-    ("用", "不用"), ("使用", "不使用"), ("应该", "不应该"),
-    ("要", "不要"), ("可以", "不可以"), ("能", "不能"),
-    ("有效", "无效"), ("正确", "错误"), ("好", "不好"),
-    ("支持", "不支持"), ("兼容", "不兼容"),
-    ("需要", "不需要"), ("必须", "不必"),
+    ("用", "不用"),
+    ("使用", "不使用"),
+    ("应该", "不应该"),
+    ("要", "不要"),
+    ("可以", "不可以"),
+    ("能", "不能"),
+    ("有效", "无效"),
+    ("正确", "错误"),
+    ("好", "不好"),
+    ("支持", "不支持"),
+    ("兼容", "不兼容"),
+    ("需要", "不需要"),
+    ("必须", "不必"),
 ]
 
 # 版本号模式
-VERSION_PATTERN = re.compile(r'v?(\d+)\.?(\d+)?')
+VERSION_PATTERN = re.compile(r"v?(\d+)\.?(\d+)?")
 
 
 def _stable_claim_key(claim: str) -> str:
     """稳定断言 key，避免 Python hash 随进程随机化。"""
     normalized = re.sub(r"\s+", " ", claim.strip().lower())
-    return hashlib.md5(normalized.encode("utf-8")).hexdigest()[:8]
+    return hashlib.md5(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
 
 
 def _calculate_topic_overlap(a1: Assertion, a2: Assertion) -> float:
@@ -87,10 +155,11 @@ def _calculate_topic_overlap(a1: Assertion, a2: Assertion) -> float:
     计算两个断言的 topic 重叠度
     简单实现：基于关键词重叠
     """
+
     # 提取关键词（中文2-4字词 + 英文3+字母词）
     def extract_keywords(text: str) -> set:
-        zh = set(re.findall(r'[一-鿿]{2,4}', text))
-        en = set(re.findall(r'[a-zA-Z]{3,}', text.lower()))
+        zh = set(re.findall(r"[一-鿿]{2,4}", text))
+        en = set(re.findall(r"[a-zA-Z]{3,}", text.lower()))
         return zh | en
 
     k1 = extract_keywords(a1.claim)
@@ -108,6 +177,96 @@ def _calculate_topic_overlap(a1: Assertion, a2: Assertion) -> float:
     return len(intersection) / len(union)
 
 
+def _has_antonym_conflict(c1: str, c2: str) -> bool:
+    """直接反义词对检测。"""
+    for pos, neg in ANTONYM_PAIRS:
+        if (pos in c1 and neg in c2) or (neg in c1 and pos in c2):
+            return True
+    return False
+
+
+def _negation_conflict_score(a1: Assertion, a2: Assertion) -> float:
+    """否定断言与正面断言的方向冲突。"""
+    if a1.is_negated != a2.is_negated:
+        overlap = _calculate_topic_overlap(a1, a2)
+        if overlap > 0.5:
+            return 0.8 * overlap
+    return 0.0
+
+
+def _comparison_conflict_score(c1: str, c2: str) -> float:
+    """比较对象互换冲突，如 'A 比 B 好' vs 'B 比 A 好'。"""
+    comparison_pattern = re.compile(r"(\S+).*(比|优于|好于|胜于|更适合).*(\S+)")
+    m1 = comparison_pattern.search(c1)
+    m2 = comparison_pattern.search(c2)
+    if m1 and m2:
+        obj1_a, obj1_b = m1.group(1), m1.group(3)
+        obj2_a, obj2_b = m2.group(1), m2.group(3)
+        if obj1_a == obj2_b and obj1_b == obj2_a:
+            return 0.85
+    return 0.0
+
+
+def _version_conflict_score(a1: Assertion, a2: Assertion, c1: str, c2: str) -> float:
+    """同一 topic 下版本号不同导致的冲突。"""
+    v1 = VERSION_PATTERN.findall(c1)
+    v2 = VERSION_PATTERN.findall(c2)
+    if v1 and v2:
+        overlap = _calculate_topic_overlap(a1, a2)
+        if overlap > 0.6:
+            return 0.6
+    return 0.0
+
+
+def _numeric_conflict_score(a1: Assertion, a2: Assertion, c1: str, c2: str) -> float:
+    """存在数值差异且 topic 重叠时的冲突。"""
+    nums1 = re.findall(r"\d+\.?\d*%?", c1)
+    nums2 = re.findall(r"\d+\.?\d*%?", c2)
+    if nums1 and nums2 and _calculate_topic_overlap(a1, a2) > 0.5:
+        return 0.5
+    return 0.0
+
+
+def _extract_usage_values(usage_matches: List[Tuple[str, str]]) -> List[str]:
+    """从用法匹配结果中提取长度足够的具体值。"""
+    return [match[1].strip() for match in usage_matches if len(match[1].strip()) > 3]
+
+
+def _usage_values_conflict(vals1: List[str], vals2: List[str]) -> bool:
+    """检查两组具体值是否存在非同一概念的不同推荐。"""
+    for v1 in vals1:
+        for v2 in vals2:
+            if v1 != v2:
+                segs1 = [s for s in v1.split("/") if s]
+                segs2 = [s for s in v2.split("/") if s]
+                if segs1 != segs2:
+                    return True
+    return False
+
+
+def _usage_conflict_score(a1: Assertion, a2: Assertion, c1: str, c2: str) -> float:
+    """推荐具体值不同但 topic 重叠时的冲突。"""
+    usage_pattern = re.compile(
+        r"(?:应该|建议|推荐|要|选)?\s*(用|使用|采用)\s+([\w\-/\.:@#$%&*()+=\[\]{}|\\<>~`]+)",
+        re.IGNORECASE,
+    )
+    u1 = usage_pattern.findall(c1)
+    u2 = usage_pattern.findall(c2)
+
+    if not (u1 and u2 and _calculate_topic_overlap(a1, a2) > 0.3):
+        return 0.0
+
+    vals1 = _extract_usage_values(u1)
+    vals2 = _extract_usage_values(u2)
+
+    if not vals1 or not vals2:
+        return 0.0
+
+    if _usage_values_conflict(vals1, vals2):
+        return 0.7
+    return 0.0
+
+
 def _calculate_direction_conflict(a1: Assertion, a2: Assertion) -> float:
     """
     计算两个断言的结论方向冲突度
@@ -115,79 +274,31 @@ def _calculate_direction_conflict(a1: Assertion, a2: Assertion) -> float:
     c1 = a1.claim
     c2 = a2.claim
 
-    # 1. 直接反义词检测
-    for pos, neg in ANTONYM_PAIRS:
-        if (pos in c1 and neg in c2) or (neg in c1 and pos in c2):
-            return 0.9
+    if _has_antonym_conflict(c1, c2):
+        return 0.9
 
-    # 2. 否定断言 vs 正面断言
-    if a1.is_negated != a2.is_negated:
-        # 检查是否指向同一对象
-        overlap = _calculate_topic_overlap(a1, a2)
-        if overlap > 0.5:
-            return 0.8 * overlap
+    score = _negation_conflict_score(a1, a2)
+    if score:
+        return score
 
-    # 3. "A 比 B 好" vs "B 比 A 好"
-    comparison_pattern = re.compile(r'(\S+).*(比|优于|好于|胜于|更适合).*(\S+)')
-    m1 = comparison_pattern.search(c1)
-    m2 = comparison_pattern.search(c2)
-    if m1 and m2:
-        # 如果比较对象互换，则是冲突
-        obj1_a, obj1_b = m1.group(1), m1.group(3)
-        obj2_a, obj2_b = m2.group(1), m2.group(3)
-        if obj1_a == obj2_b and obj1_b == obj2_a:
-            return 0.85
+    score = _comparison_conflict_score(c1, c2)
+    if score:
+        return score
 
-    # 4. 版本号冲突检测
-    v1 = VERSION_PATTERN.findall(c1)
-    v2 = VERSION_PATTERN.findall(c2)
-    if v1 and v2:
-        # 如果同一 topic 但版本号不同
-        overlap = _calculate_topic_overlap(a1, a2)
-        if overlap > 0.6:
-            return 0.6
+    score = _version_conflict_score(a1, a2, c1, c2)
+    if score:
+        return score
 
-    # 5. 数值冲突检测（如 "0.1%" vs "1%"）
-    nums1 = re.findall(r'\d+\.?\d*%?', c1)
-    nums2 = re.findall(r'\d+\.?\d*%?', c2)
-    if nums1 and nums2 and _calculate_topic_overlap(a1, a2) > 0.5:
-        # 有数值差异且 topic 重叠
-        return 0.5
+    score = _numeric_conflict_score(a1, a2, c1, c2)
+    if score:
+        return score
 
-    # 6. "用 A" vs "用 B" 冲突检测
-    # 检测模式: [可选副词][动词] + [具体值/路径/方法]
-    # 支持: "使用 /v1/..." 或 "应该使用 /v1/..."
-    usage_pattern = re.compile(
-        r'(?:应该|建议|推荐|要|选)?\s*(用|使用|采用)\s+([\w\-/\.:@#$%&*()+=\[\]{}|\\<>~`]+)',
-        re.IGNORECASE
-    )
-    u1 = usage_pattern.findall(c1)
-    u2 = usage_pattern.findall(c2)
-
-    if u1 and u2 and _calculate_topic_overlap(a1, a2) > 0.3:
-        # 提取推荐的具体值
-        vals1 = [match[1].strip() for match in u1 if len(match[1].strip()) > 3]
-        vals2 = [match[1].strip() for match in u2 if len(match[1].strip()) > 3]
-
-        # 如果推荐的具体值不同，但 topic 重叠，则冲突
-        if vals1 and vals2:
-            for v1 in vals1:
-                for v2 in vals2:
-                    # 具体值不同（且不是简单的子串关系）
-                    if v1 != v2:
-                        # 检查是否是同一概念的不同表述（如 /api/v1 和 /v1）
-                        # 按 / 分割后如果段不完全相同，则认为是冲突
-                        segs1 = [s for s in v1.split("/") if s]
-                        segs2 = [s for s in v2.split("/") if s]
-                        if segs1 != segs2:
-                            return 0.7
-
-    return 0.0
+    return _usage_conflict_score(a1, a2, c1, c2)
 
 
-def _classify_conflict_type(a1: Assertion, a2: Assertion,
-                            topic_overlap: float,
-                            direction_conflict: float) -> str:
+def _classify_conflict_type(
+    a1: Assertion, a2: Assertion, topic_overlap: float, direction_conflict: float
+) -> str:
     """分类冲突类型"""
 
     # 自我引用检测
@@ -222,9 +333,11 @@ def _classify_conflict_type(a1: Assertion, a2: Assertion,
     return "temporal"
 
 
-def detect_conflicts(new_assertions: List[Assertion],
-                     existing_assertions: List[Assertion],
-                     min_topic_overlap: float = 0.3) -> List[Conflict]:
+def detect_conflicts(
+    new_assertions: List[Assertion],
+    existing_assertions: List[Assertion],
+    min_topic_overlap: float = 0.3,
+) -> List[Conflict]:
     """
     检测新断言与已有断言之间的冲突
 
@@ -256,22 +369,24 @@ def detect_conflicts(new_assertions: List[Assertion],
                 continue
 
             # 3. 计算总冲突强度
-            strength = (topic_overlap * 0.4 + direction_conflict * 0.6)
+            strength = topic_overlap * 0.4 + direction_conflict * 0.6
 
             # 4. 分类冲突类型
             conflict_type = _classify_conflict_type(
                 new_a, exist_a, topic_overlap, direction_conflict
             )
 
-            conflicts.append(Conflict(
-                conflict_type=conflict_type,
-                strength=strength,
-                new_assertion=new_a,
-                existing_assertion=exist_a,
-                topic_overlap=topic_overlap,
-                direction_conflict=direction_conflict,
-                reason=f"{conflict_type}: '{new_a.claim[:50]}...' vs '{exist_a.claim[:50]}...'"
-            ))
+            conflicts.append(
+                Conflict(
+                    conflict_type=conflict_type,
+                    strength=strength,
+                    new_assertion=new_a,
+                    existing_assertion=exist_a,
+                    topic_overlap=topic_overlap,
+                    direction_conflict=direction_conflict,
+                    reason=f"{conflict_type}: '{new_a.claim[:50]}...' vs '{exist_a.claim[:50]}...'",
+                )
+            )
 
     return conflicts
 
@@ -312,8 +427,9 @@ PERSONALIZATION_WEIGHTS = {
 }
 
 
-def _calculate_arbitration_score(assertion: Assertion,
-                                  meta: Optional[WikiPageMeta] = None) -> float:
+def _calculate_arbitration_score(
+    assertion: Assertion, meta: Optional[WikiPageMeta] = None
+) -> float:
     """
     计算断言的仲裁评分
     score = evidence_level × verification_count × recency × personalization × confidence
@@ -329,8 +445,10 @@ def _calculate_arbitration_score(assertion: Assertion,
     recency = 1.0
     if meta and meta.updated_at:
         days_old = (datetime.now() - meta.updated_at).days
-        form_value = assertion.form.value if hasattr(assertion.form, "value") else str(assertion.form)
-        half_life = HALF_LIFE_DAYS.get(form_value, 90)
+        form_value = (
+            assertion.form.value if hasattr(assertion.form, "value") else str(assertion.form)
+        )
+        half_life = HALF_LIFE_DAYS.get(form_value, DURATION_BUCKET_QUARTER_DAYS)
         recency = math.exp(-days_old / half_life)
 
     # 4. 个性化
@@ -350,9 +468,12 @@ def _calculate_arbitration_score(assertion: Assertion,
 
 # ========== 仲裁策略 ==========
 
-def arbitrate(conflict: Conflict,
-              new_meta: Optional[WikiPageMeta] = None,
-              existing_meta: Optional[WikiPageMeta] = None) -> Resolution:
+
+def arbitrate(
+    conflict: Conflict,
+    new_meta: Optional[WikiPageMeta] = None,
+    existing_meta: Optional[WikiPageMeta] = None,
+) -> Resolution:
     """
     对单个冲突进行仲裁
 
@@ -389,7 +510,7 @@ def _auto_resolve_low(conflict: Conflict) -> Resolution:
             action="update_boundary",
             target="existing",
             updates={"boundary_hint": new_a.boundary_hint},
-            reason=f"低冲突：新断言提供边界条件 '{new_a.boundary_hint[:50]}...'"
+            reason=f"低冲突：新断言提供边界条件 '{new_a.boundary_hint[:50]}...'",
         )
 
     # 如果已有断言有边界提示，加到新断言
@@ -398,21 +519,19 @@ def _auto_resolve_low(conflict: Conflict) -> Resolution:
             action="update_boundary",
             target="new",
             updates={"boundary_hint": exist_a.boundary_hint},
-            reason=f"低冲突：已有断言的边界条件适用于新断言"
+            reason="低冲突：已有断言的边界条件适用于新断言",
         )
 
     # 默认：无操作
-    return Resolution(
-        action="no_action",
-        target="both",
-        reason="低冲突，无显著影响"
-    )
+    return Resolution(action="no_action", target="both", reason="低冲突，无显著影响")
 
 
-def _auto_arbitrate_medium(conflict: Conflict,
-                            new_meta: Optional[WikiPageMeta],
-                            existing_meta: Optional[WikiPageMeta],
-                            scorer: callable = None) -> Resolution:
+def _auto_arbitrate_medium(
+    conflict: Conflict,
+    new_meta: Optional[WikiPageMeta],
+    existing_meta: Optional[WikiPageMeta],
+    scorer: Callable[..., Any] | None = None,
+) -> Resolution:
     """中冲突：按评分公式仲裁"""
     _scorer = scorer or _calculate_arbitration_score
     new_score = _scorer(conflict.new_assertion, new_meta)
@@ -426,9 +545,9 @@ def _auto_arbitrate_medium(conflict: Conflict,
             updates={
                 "status": "deprecated",
                 "superseded_by": conflict.new_assertion.claim[:50],
-                "reason": f"被更高评分的新知识替代 (score: {new_score} vs {exist_score})"
+                "reason": f"被更高评分的新知识替代 (score: {new_score} vs {exist_score})",
             },
-            reason=f"中冲突自动仲裁：新断言评分更高 ({new_score} > {exist_score})"
+            reason=f"中冲突自动仲裁：新断言评分更高 ({new_score} > {exist_score})",
         )
     elif exist_score > new_score * 1.2:
         # 旧断言显著优于新断言
@@ -438,7 +557,7 @@ def _auto_arbitrate_medium(conflict: Conflict,
             updates={
                 "boundary_hint": f"与已有知识冲突，已有知识评分更高 ({exist_score} vs {new_score})"
             },
-            reason=f"中冲突自动仲裁：已有断言评分更高 ({exist_score} > {new_score})"
+            reason=f"中冲突自动仲裁：已有断言评分更高 ({exist_score} > {new_score})",
         )
     else:
         # 评分接近，合并边界条件
@@ -450,7 +569,7 @@ def _auto_arbitrate_medium(conflict: Conflict,
                 "new": {"notes": note},
                 "existing": {"notes": note},
             },
-            reason=f"中冲突自动仲裁：评分接近，添加备注"
+            reason="中冲突自动仲裁：评分接近，添加备注",
         )
 
 
@@ -467,15 +586,18 @@ def _create_dispute_high(conflict: Conflict) -> Resolution:
             "status": "pending_user_review",
             "dispute_page": dispute_id,
         },
-        reason=f"高冲突 (strength={conflict.strength:.2f})：'{conflict.new_assertion.claim[:50]}...' vs '{conflict.existing_assertion.claim[:50]}...'"
+        reason=f"高冲突 (strength={conflict.strength:.2f})：'{conflict.new_assertion.claim[:50]}...' vs '{conflict.existing_assertion.claim[:50]}...'",  # noqa: E501
     )
 
 
 # ========== 批量处理 ==========
 
-def resolve_all_conflicts(conflicts: List[Conflict],
-                          new_metas: Dict[str, WikiPageMeta] = None,
-                          existing_metas: Dict[str, WikiPageMeta] = None) -> List[Resolution]:
+
+def resolve_all_conflicts(
+    conflicts: List[Conflict],
+    new_metas: Dict[str, WikiPageMeta] | None = None,
+    existing_metas: Dict[str, WikiPageMeta] | None = None,
+) -> List[Resolution]:
     """
     批量仲裁所有冲突
 
@@ -487,32 +609,22 @@ def resolve_all_conflicts(conflicts: List[Conflict],
     Returns:
         Resolution 列表
     """
-    resolutions = []
-    new_metas = new_metas or {}
-    existing_metas = existing_metas or {}
-
-    for conflict in conflicts:
-        new_key = _stable_claim_key(conflict.new_assertion.claim)
-        exist_key = _stable_claim_key(conflict.existing_assertion.claim)
-
-        resolution = arbitrate(
-            conflict,
-            new_metas.get(new_key),
-            existing_metas.get(exist_key)
-        )
-        resolutions.append(resolution)
-
-    return resolutions
+    return ConflictResolver().resolve_all(
+        conflicts,
+        new_metas=new_metas,
+        existing_metas=existing_metas,
+    )
 
 
 # ========== 争议页面生成 ==========
+
 
 def generate_dispute_page(conflict: Conflict, resolution: Resolution) -> str:
     """生成争议页面的 Markdown 内容"""
     lines = []
     lines.append("---")
-    lines.append(f"type: dispute")
-    lines.append(f"status: pending_user_review")
+    lines.append("type: dispute")
+    lines.append("status: pending_user_review")
     lines.append(f"conflict_type: {conflict.conflict_type}")
     lines.append(f"strength: {conflict.strength:.2f}")
     lines.append(f"created: {datetime.now().strftime('%Y-%m-%d')}")
@@ -545,34 +657,78 @@ def generate_dispute_page(conflict: Conflict, resolution: Resolution) -> str:
     return "\n".join(lines)
 
 
-def save_dispute_page(conflict: Conflict, resolution: Resolution,
-                      wiki_dir: Optional[Path] = None) -> Path:
-    """生成并保存争议页面到 wiki 报告目录。"""
+def save_dispute_page(
+    conflict: Conflict, resolution: Resolution, wiki_dir: Optional[Path] = None
+) -> Path:
+    """生成并保存争议页面到 wiki 争议目录。"""
     wiki_dir = Path(wiki_dir).expanduser() if wiki_dir else get_config().wiki_dir
-    disputes_dir = wiki_dir / "99-Reports"
+    disputes_dir = wiki_dir / "08-Disputes"
     disputes_dir.mkdir(parents=True, exist_ok=True)
 
     dispute_id = resolution.dispute_page or _create_dispute_high(conflict).dispute_page
     filename = f"争议仲裁-{dispute_id}.md"
     path = disputes_dir / filename
-    path.write_text(generate_dispute_page(conflict, resolution), encoding="utf-8")
+    rendered_content = generate_dispute_page(conflict, resolution)
+    evidence_refs = [f"dispute:{dispute_id}"]
+    submit_or_write_markdown_with_decision(
+        decision_policy=CONFLICT_DISPUTE_MARKDOWN_POLICY,
+        decision_facts={
+            "schema_version": "mnemos.conflict_dispute_facts.v1",
+            "dispute_id": dispute_id,
+            "conflict_type": conflict.conflict_type,
+            "strength": conflict.strength,
+            "topic_overlap": conflict.topic_overlap,
+            "direction_conflict": conflict.direction_conflict,
+            "reason": conflict.reason,
+            "new_assertion": _assertion_decision_facts(conflict.new_assertion),
+            "existing_assertion": _assertion_decision_facts(conflict.existing_assertion),
+            "resolution": {
+                "action": resolution.action,
+                "target": resolution.target,
+                "updates": dict(resolution.updates),
+                "reason": resolution.reason,
+                "dispute_page": resolution.dispute_page,
+            },
+        },
+        decision_task=f"Create adjudication page for dispute {dispute_id}",
+        decision_goal="Preserve the exact unresolved conflict for human adjudication.",
+        decision_created_at=datetime.now(timezone.utc).isoformat(),
+        wiki_base=wiki_dir,
+        target_path=path,
+        content=rendered_content,
+        source="conflict_resolver",
+        actor="system",
+        evidence_refs=evidence_refs,
+        proposed_action="create_dispute_page",
+        metadata={"conflict_type": conflict.conflict_type},
+    )
     return path
 
 
 def detect_relation_conflicts(relations) -> List[Tuple[object, object, str]]:
     """统一的关系级冲突检测入口，供 KnowledgeGraph/免疫系统复用。"""
     try:
-        from core.kia.relation_schema import Relation, RelationType
-    except Exception:
-        logging.getLogger(__name__).warning(f"Caught unexpected error at conflict_resolver.py", exc_info=True)
+        from core.kia.relation_schema import RelationType
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            "Caught unexpected error at conflict_resolver.py", exc_info=True
+        )
         return []
 
     rel_set = {
-        (rel.source, rel.target, rel.relation_type.value if hasattr(rel.relation_type, "value") else rel.relation_type)
+        (
+            rel.source,
+            rel.target,
+            rel.relation_type.value if hasattr(rel.relation_type, "value") else rel.relation_type,
+        )
         for rel in relations
     }
     by_key = {
-        (rel.source, rel.target, rel.relation_type.value if hasattr(rel.relation_type, "value") else rel.relation_type): rel
+        (
+            rel.source,
+            rel.target,
+            rel.relation_type.value if hasattr(rel.relation_type, "value") else rel.relation_type,
+        ): rel
         for rel in relations
     }
     conflicts = []
@@ -581,34 +737,41 @@ def detect_relation_conflicts(relations) -> List[Tuple[object, object, str]]:
         if rel_type == RelationType.BUILDS_ON.value:
             key = (source, target, RelationType.CONTRADICTS.value)
             if key in rel_set:
-                conflicts.append((
-                    by_key[(source, target, rel_type)],
-                    by_key[key],
-                    f"'{source}' 既建立在 '{target}' 之上，又与它矛盾",
-                ))
+                conflicts.append(
+                    (
+                        by_key[(source, target, rel_type)],
+                        by_key[key],
+                        f"'{source}' 既建立在 '{target}' 之上，又与它矛盾",
+                    )
+                )
 
         if rel_type == RelationType.REPLACES.value:
             key = (target, source, RelationType.REPLACES.value)
             if key in rel_set:
-                conflicts.append((
-                    by_key[(source, target, rel_type)],
-                    by_key[key],
-                    f"'{source}' 和 '{target}' 互相替代，形成循环",
-                ))
+                conflicts.append(
+                    (
+                        by_key[(source, target, rel_type)],
+                        by_key[key],
+                        f"'{source}' 和 '{target}' 互相替代，形成循环",
+                    )
+                )
 
         if rel_type == RelationType.EVOLVED_FROM.value:
             key = (target, source, RelationType.EVOLVED_FROM.value)
             if key in rel_set:
-                conflicts.append((
-                    by_key[(source, target, rel_type)],
-                    by_key[key],
-                    f"'{source}' 和 '{target}' 互相演化，形成循环",
-                ))
+                conflicts.append(
+                    (
+                        by_key[(source, target, rel_type)],
+                        by_key[key],
+                        f"'{source}' 和 '{target}' 互相演化，形成循环",
+                    )
+                )
 
     return conflicts
 
 
 # ========== ConflictResolver 类封装 ==========
+
 
 class ConflictResolver:
     """多源知识冲突检测与仲裁引擎（类封装）。
@@ -624,11 +787,11 @@ class ConflictResolver:
 
     def __init__(
         self,
-        min_topic_overlap: float = None,
-        strength_low: float = None,
-        strength_high: float = None,
-        scorer: callable = None,
-        meta_provider: callable = None,
+        min_topic_overlap: float | None = None,
+        strength_low: float | None = None,
+        strength_high: float | None = None,
+        scorer: Callable[..., Any] | None = None,
+        meta_provider: Callable[..., Any] | None = None,
     ):
         self.min_topic_overlap = min_topic_overlap or self.DEFAULT_MIN_TOPIC_OVERLAP
         self.strength_low = strength_low or self.DEFAULT_STRENGTH_LOW
@@ -645,7 +808,8 @@ class ConflictResolver:
     ) -> List[Conflict]:
         """检测新断言与已有断言之间的冲突。"""
         return detect_conflicts(
-            new_assertions, existing_assertions,
+            new_assertions,
+            existing_assertions,
             min_topic_overlap=self.min_topic_overlap,
         )
 
@@ -658,20 +822,24 @@ class ConflictResolver:
         existing_meta: Optional[WikiPageMeta] = None,
     ) -> Resolution:
         """对单个冲突进行仲裁。"""
+        if self._meta_provider is not None:
+            if new_meta is None:
+                new_meta = self._meta_provider(conflict.new_assertion)
+            if existing_meta is None:
+                existing_meta = self._meta_provider(conflict.existing_assertion)
+
         strength = conflict.strength
         if strength < self.strength_low:
             return _auto_resolve_low(conflict)
         if strength < self.strength_high:
-            return _auto_arbitrate_medium(
-                conflict, new_meta, existing_meta, scorer=self._scorer
-            )
+            return _auto_arbitrate_medium(conflict, new_meta, existing_meta, scorer=self._scorer)
         return _create_dispute_high(conflict)
 
     def resolve_all(
         self,
         conflicts: List[Conflict],
-        new_metas: Dict[str, WikiPageMeta] = None,
-        existing_metas: Dict[str, WikiPageMeta] = None,
+        new_metas: Dict[str, WikiPageMeta] | None = None,
+        existing_metas: Dict[str, WikiPageMeta] | None = None,
     ) -> List[Resolution]:
         """批量仲裁所有冲突。"""
         resolutions = []
@@ -714,8 +882,10 @@ class ConflictResolver:
 
 # ========== CLI ==========
 
+
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Conflict Resolver")
     parser.add_argument("--test", action="store_true", help="运行测试示例")
     args = parser.parse_args()
@@ -727,7 +897,7 @@ def main():
                 claim="Codex 用 /codex/v1/chat/completions 作为 endpoint",
                 form=KnowledgeForm.PROBLEM_SOLUTION,
                 evidence_level="single-source",
-                source="old-session"
+                source="old-session",
             )
         ]
         new = [
@@ -735,21 +905,21 @@ def main():
                 claim="Codex 应该使用 /v1/chat/completions 而非 /codex/v1/...",
                 form=KnowledgeForm.PROBLEM_SOLUTION,
                 evidence_level="multi-source",
-                source="new-session"
+                source="new-session",
             )
         ]
 
         conflicts = detect_conflicts(new, existing)
-        logger.info(f"检测到 {len(conflicts)} 个冲突:\n")
+        logger.info("检测到 %s 个冲突:\n", len(conflicts))
 
         for i, c in enumerate(conflicts, 1):
-            logger.info(f"[{i}] 类型: {c.conflict_type}, 强度: {c.strength:.2f}")
-            logger.info(f"    新: {c.new_assertion.claim}")
-            logger.info(f"    旧: {c.existing_assertion.claim}")
+            logger.info("[%s] 类型: %s, 强度: %.2f", i, c.conflict_type, c.strength)
+            logger.info("    新: %s", c.new_assertion.claim)
+            logger.info("    旧: %s", c.existing_assertion.claim)
 
             resolution = arbitrate(c)
-            logger.info(f"    仲裁: {resolution.action} -> {resolution.target}")
-            logger.info(f"    理由: {resolution.reason}")
+            logger.info("    仲裁: %s -> %s", resolution.action, resolution.target)
+            logger.info("    理由: %s", resolution.reason)
             logger.info()
 
 

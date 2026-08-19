@@ -44,6 +44,32 @@ class TestSiliconFlowRateLimiter:
         elapsed = time.time() - start
         assert elapsed < 0.1  # 不应等待
 
+    def test_acquire_rejects_estimated_tokens_over_tpm(self):
+        limiter = SiliconFlowRateLimiter(rpm=100, tpm=10, window_sec=0.1)
+        with pytest.raises(ValueError, match="estimated_tokens exceeds tpm limit"):
+            limiter.acquire(estimated_tokens=20)
+
+    def test_wait_and_record_rejects_estimated_tokens_over_tpm(self):
+        limiter = SiliconFlowRateLimiter(rpm=100, tpm=10, window_sec=0.1)
+        with pytest.raises(ValueError, match="estimated_tokens exceeds tpm limit"):
+            limiter.wait_and_record(
+                estimated_tokens=20,
+                actual_tokens=20,
+                max_wait_seconds=0.01,
+            )
+
+    def test_wait_and_record_respects_max_wait_seconds(self):
+        limiter = SiliconFlowRateLimiter(rpm=1, tpm=1000, window_sec=1.0)
+        limiter.record(actual_tokens=1)
+        start = time.time()
+        with pytest.raises(TimeoutError, match="rate limiter wait exceeded"):
+            limiter.wait_and_record(
+                estimated_tokens=1,
+                actual_tokens=1,
+                max_wait_seconds=0.01,
+            )
+        assert time.time() - start < 0.2
+
     def test_status(self):
         limiter = SiliconFlowRateLimiter(rpm=10, tpm=1000)
         limiter.record(actual_tokens=50)

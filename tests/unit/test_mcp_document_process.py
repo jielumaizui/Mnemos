@@ -7,17 +7,29 @@ MCP document_process 工具单测
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
+from core.agent_kit.authorization import AgentAuthorizationStore
+from core.config import get_config
+from core.sync_framework.capture_schema import CaptureQueueSchema
 from integrations.agora import MCPServer
 
 
 class FakeExtractedDocument:
     """模拟 ExtractedDocument，不依赖真实 DocumentProcessor"""
-    def __init__(self, doc_type, filename, title, content, metadata=None,
-                 summary="", validation_status="pending"):
+
+    def __init__(
+        self,
+        doc_type,
+        filename,
+        title,
+        content,
+        metadata=None,
+        summary="",
+        validation_status="pending",
+    ):
         self.doc_type = FakeDocType(doc_type)
         self.filename = filename
         self.title = title
@@ -33,8 +45,24 @@ class FakeDocType:
 
 
 @pytest.fixture
-def mcp_server():
-    return MCPServer()
+def mcp_server(tmp_path):
+    store = AgentAuthorizationStore(tmp_path / "agent_authorization.db")
+    credential = store.issue_mcp_capability(
+        agent="codex",
+        host_kind="codex",
+        capabilities={"admin_runtime", "memory_write"},
+    )
+    return MCPServer(
+        launch_credential=credential,
+        authorization_store=store,
+    )
+
+
+@pytest.fixture
+def current_capture_queue_schema():
+    """Establish the explicit deployment bootstrap required by capture writes."""
+    config = get_config()
+    return CaptureQueueSchema.initialize(config.database_dir / "capture_queue.db")
 
 
 def _make_fake_doc(ext: str, title: str, content: str):
@@ -60,13 +88,14 @@ class TestMCPDocumentProcess:
 
     def test_html_success(self, tmp_path, mcp_server):
         """HTML 文件处理成功"""
-        file_path = _create_temp_file(tmp_path, "html",
-            "<html><body><h1>测试标题</h1><p>这是内容。</p></body></html>")
+        file_path = _create_temp_file(
+            tmp_path, "html", "<html><body><h1>测试标题</h1><p>这是内容。</p></body></html>"
+        )
         fake_doc = _make_fake_doc("html", "测试HTML", "# 测试标题\n\n这是内容。")
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["title"] == "测试HTML"
@@ -74,7 +103,8 @@ class TestMCPDocumentProcess:
         assert "content_preview" in result
         assert "metadata" in result
         assert "summary" in result
-        assert "wiki_paths" not in result  # save_to_memos=false 不写入
+        assert result["wiki_paths"] == []  # parse 模式不写入
+        assert result["mode"] == "parse"
 
     def test_pdf_success(self, tmp_path, mcp_server):
         """PDF 文件处理成功"""
@@ -83,7 +113,7 @@ class TestMCPDocumentProcess:
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["doc_type"] == "PDF"
@@ -97,7 +127,7 @@ class TestMCPDocumentProcess:
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["doc_type"] == "WORD"
@@ -110,7 +140,7 @@ class TestMCPDocumentProcess:
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["doc_type"] == "EXCEL"
@@ -123,54 +153,50 @@ class TestMCPDocumentProcess:
 
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["doc_type"] == "PPT"
         assert "summary" in result
 
-    def test_save_to_wiki_true(self, tmp_path, mcp_server):
-        """save_to_memos=true 时触发 Wiki 蒸馏管道"""
-        file_path = _create_temp_file(tmp_path, "html",
-            "<html><body><h1>Wiki测试</h1></body></html>")
-        fake_doc = _make_fake_doc("html", "Wiki测试", "# Wiki测试\n\n内容。")
-
-        with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls, \
-             patch("core.llm_config.resolve_llm_api_config") as mock_resolve_llm, \
-             patch("core.hephaestus.document_pipeline.DocumentDistillationPipeline") as mock_pipe_cls:
-            mock_proc_cls.return_value.process_document.return_value = fake_doc
-            mock_resolve_llm.return_value = MagicMock(
-                configured=True,
-                provider="siliconflow",
-                model="deepseek-ai/DeepSeek-V3",
-                source="config:llm.api_key",
-            )
-            mock_pipe = MagicMock()
-            mock_pipe.process.return_value = MagicMock(fragments=[])
-            mock_pipe.write_to_wiki.return_value = [Path("00-Inbox/wiki_test.md")]
-            mock_pipe_cls.return_value = mock_pipe
-
-            result = mcp_server._tool_document_process(str(file_path), write_to_wiki=True)
+    def test_save_to_wiki_true(self, tmp_path, mcp_server, current_capture_queue_schema):
+        """distill 模式通过 canonical capture outbox 异步进入文档蒸馏。"""
+        assert current_capture_queue_schema["status"] == "current"
+        file_path = _create_temp_file(
+            tmp_path, "html", "<html><body><h1>Wiki测试</h1></body></html>"
+        )
+        with (
+            patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls,
+            patch("core.llm_config.resolve_llm_api_chain") as mock_resolve_chain,
+        ):
+            result = mcp_server._tool_document_process(str(file_path), mode="distill")
 
         assert result["success"] is True
         assert "wiki_paths" in result
-        assert result["pipeline"] == "文档 → API 蒸馏 → Wiki"
-        assert "session_id" in result
-        assert "provider" in result
-        assert result["api_config_source"] == "config:llm.api_key"
-        assert "duration" in result
-        mock_pipe.write_to_wiki.assert_called_once()
+        assert result["pipeline"] == (
+            "trusted_user_document → canonical raw → capture outbox → Amphora → quality gate → Wiki"
+        )
+        assert result["ingestion_status"] == "accepted"
+        assert result["handoff_status"] in {"pending", "existing"}
+        assert result["routing_result"]["status"] == "capture_outbox_pending"
+        assert result["wiki_paths"] == []
+        assert result["raw_revision_id"]
+        assert result["asset_kind"] == "trusted_user_document"
+        assert result["requires_api_key"] is True
+        assert result["api_mode"] == "capture_outbox_distillation"
+        mock_proc_cls.assert_not_called()
+        mock_resolve_chain.assert_not_called()
 
-    def test_schema_defaults_parse_only(self, mcp_server):
-        """MCP schema 必须与真实函数默认行为一致：默认只解析，不写 Wiki。"""
+    def test_schema_defaults_distill(self, mcp_server):
+        """MCP schema 必须与真实函数默认行为一致：默认导入并蒸馏。"""
         tools = mcp_server._list_tools()["tools"]
         doc_tool = next(t for t in tools if t["name"] == "document_process")
         props = doc_tool["inputSchema"]["properties"]
 
-        assert "write_to_wiki" in props
-        assert props["write_to_wiki"]["default"] is False
-        assert "save_to_memos" not in props
-        assert "Memos" not in doc_tool["description"]
+        assert "mode" in props
+        assert props["mode"]["default"] == "distill"
+        assert "write_to_wiki" not in props
+        assert "save_to_l1" not in props
 
     def test_file_not_found(self, mcp_server):
         """文件不存在时返回明确错误"""
@@ -189,7 +215,7 @@ class TestMCPDocumentProcess:
         with patch("core.hephaestus.document_processor.DocumentProcessor") as mock_proc_cls:
             mock_proc_cls.return_value.process_document.return_value = fake_doc
             # 如果代码仍访问 doc.pages/doc.toc，这里会抛 AttributeError
-            result = mcp_server._tool_document_process(str(file_path), save_to_memos=False)
+            result = mcp_server._tool_document_process(str(file_path), mode="parse")
 
         assert result["success"] is True
         assert result["pages"] == 3  # 从 metadata 读取

@@ -1,0 +1,2704 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemos.local/schemas/cognitive-successor-design-adjudication-ticket-001.v2.json",
+  "title": "Cognitive successor Ticket #1 non-governing method lifecycle",
+  "description": "Shape validation for the non-governing Ticket #1 method-bootstrap lifecycle only. Every lifecycle artifact, including authorization and its acceptance receipt, must first be decoded as UTF-8 by a duplicate-member-aware raw JSON loader that rejects duplicate object names before semantic parsing. This schema cannot prove cross-file hashes, dependency closure, set partitions, actor independence, arithmetic contracts, authorization validity, or legal state transitions; detached executable verifiers must recompute those facts from exact whole-file bytes.",
+  "oneOf": [
+    {"$ref": "#/$defs/method_bootstrap_protocol"},
+    {"$ref": "#/$defs/method_evidence_manifest"},
+    {"$ref": "#/$defs/method_candidate_denominator"},
+    {"$ref": "#/$defs/design_adjudication_method_candidate"},
+    {"$ref": "#/$defs/method_producer_assessment"},
+    {"$ref": "#/$defs/detached_challenger_report"},
+    {"$ref": "#/$defs/final_method_adjudication_record"},
+    {"$ref": "#/$defs/method_dependency_bundle_manifest"},
+    {"$ref": "#/$defs/detached_structural_verifier_report"},
+    {"$ref": "#/$defs/exact_bytes_user_authorization"},
+    {"$ref": "#/$defs/authorization_acceptance_gate_receipt"}
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "git_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rfc3339_datetime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-([0-2][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$",
+      "$comment": "The pattern supplies fail-closed lexical validation when an implementation lacks a date-time format checker; the detached verifier must still perform calendar-valid RFC 3339 parsing."
+    },
+    "nonempty_string_list": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/nonempty_string"}
+    },
+    "artifact_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_ref", "sha256", "hash_scope"],
+      "properties": {
+        "artifact_ref": {"$ref": "#/$defs/nonempty_string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "hash_scope": {"const": "WHOLE_FILE_RAW_BYTES"}
+      }
+    },
+    "ticket_schema_binding": {
+      "allOf": [
+        {"$ref": "#/$defs/artifact_binding"},
+        {
+          "properties": {
+            "artifact_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json"}
+          }
+        }
+      ]
+    },
+    "historical_artifact_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_commit", "artifact_ref", "sha256", "git_blob_id", "hash_scope", "lineage_edge_semantics"],
+      "properties": {
+        "repository_commit": {"$ref": "#/$defs/git_commit"},
+        "artifact_ref": {"$ref": "#/$defs/nonempty_string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "git_blob_id": {"$ref": "#/$defs/git_commit"},
+        "hash_scope": {"const": "GIT_BLOB_AT_COMMIT_PATH_RAW_BYTES"},
+        "lineage_edge_semantics": {"const": "HISTORICAL_REVISION_ONLY_EXCLUDED_FROM_CURRENT_ARTIFACT_DAG"}
+      }
+    },
+    "legacy_untyped_predecessor_context_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository_commit",
+        "artifact_ref",
+        "sha256",
+        "git_blob_id",
+        "hash_scope",
+        "observed_legacy_shape",
+        "lineage_edge_semantics"
+      ],
+      "properties": {
+        "repository_commit": {"$ref": "#/$defs/git_commit"},
+        "artifact_ref": {"$ref": "#/$defs/nonempty_string"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "git_blob_id": {"$ref": "#/$defs/git_commit"},
+        "hash_scope": {"const": "GIT_BLOB_AT_COMMIT_PATH_RAW_BYTES"},
+        "observed_legacy_shape": {
+          "const": "ARTIFACT_ID_PRESENT_METHOD_KEY_ABSENT_GENERATION_ABSENT_SUPERSEDES_NULL"
+        },
+        "lineage_edge_semantics": {
+          "const": "HISTORICAL_UNTYPED_PREDECESSOR_CONTEXT_NOT_A_TYPED_GENERATION_OR_CURRENT_DAG_EDGE"
+        }
+      }
+    },
+    "nullable_artifact_binding": {
+      "oneOf": [
+        {"$ref": "#/$defs/artifact_binding"},
+        {"type": "null"}
+      ]
+    },
+    "artifact_binding_set": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {"$ref": "#/$defs/artifact_binding"}
+      },
+      "additionalProperties": false
+    },
+    "hash_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "byte_domain",
+        "normalization",
+        "binding_granularity",
+        "embedded_self_hash",
+        "dependency_change_semantics"
+      ],
+      "properties": {
+        "algorithm": {"const": "SHA-256"},
+        "byte_domain": {"const": "RAW_FILE_BYTES"},
+        "normalization": {"const": "NONE"},
+        "binding_granularity": {"const": "EXACT_WHOLE_FILE"},
+        "embedded_self_hash": {"const": false},
+        "dependency_change_semantics": {"const": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"}
+      }
+    },
+    "materiality_profile_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selected_profile", "scope", "rationale", "invalidation_conditions"],
+      "properties": {
+        "selected_profile": {"const": "HIGH"},
+        "scope": {"const": "DECISION_001_SUCCESSOR_DESIGN_METHOD_BOOTSTRAP"},
+        "rationale": {
+          "const": "The method can shape safety, cognition, migration, public Interfaces and later irreversible decisions; use HIGH until a new exact question generation proves a narrower scope."
+        },
+        "invalidation_conditions": {
+          "const": [
+            "THE_EXACT_QUESTION_OR_SCOPE_CHANGES",
+            "A_NEW_GENERATION_PROVES_ALL_EFFECTS_LOW_IMPACT_AND_REVERSIBLE",
+            "APPLICABLE_SAFETY_PRIVACY_AGENCY_MIGRATION_OR_PUBLIC_INTERFACE_SCOPE_CHANGES"
+          ]
+        }
+      }
+    },
+    "question_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question_id", "exact_text", "exact_text_sha256", "scope", "materiality_profile"],
+      "properties": {
+        "question_id": {"const": "COGNITIVE-SUCCESSOR-DECISION-001"},
+        "exact_text": {"$ref": "#/$defs/nonempty_string"},
+        "exact_text_sha256": {"$ref": "#/$defs/sha256"},
+        "scope": {"const": "SUCCESSOR_DESIGN_METHOD_ONLY"},
+        "materiality_profile": {"$ref": "#/$defs/materiality_profile_binding"}
+      }
+    },
+    "evidence_reference_set": {
+      "type": "object",
+      "patternProperties": {
+        "^METHOD-EVID-[0-9]{3}$": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "nonempty_evidence_reference_set": {
+      "allOf": [
+        {"$ref": "#/$defs/evidence_reference_set"},
+        {"minProperties": 1}
+      ]
+    },
+    "hard_constraint_reference_set": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^METHOD-HARD-[0-9]{3}$": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "string_fact_set": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_]*$": {"$ref": "#/$defs/nonempty_string"}
+      },
+      "additionalProperties": false
+    },
+    "nonempty_string_fact_set": {
+      "allOf": [
+        {"$ref": "#/$defs/string_fact_set"},
+        {"minProperties": 1}
+      ]
+    },
+    "candidate_reference_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {"const": true},
+        "AUTHORITY_HIERARCHY": {"const": true},
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {"const": true},
+        "DELIBERATIVE_COMMITTEE": {"const": true},
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {"const": true}
+      }
+    },
+    "nonempty_candidate_reference_set": {
+      "allOf": [
+        {"$ref": "#/$defs/candidate_reference_set"},
+        {"minProperties": 1}
+      ]
+    },
+    "owner_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner_kind", "provenance_binding", "authority_scope", "authority_status"],
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "CURRENT_USER_DIRECTION",
+            "PRODUCT_VALUE_OWNER",
+            "SAFETY_PRIVACY_AGENCY_OWNER",
+            "METHOD_BOOTSTRAP_OWNER",
+            "LEGACY_OPERATION_OWNER",
+            "EVIDENCE_AUTHORITY"
+          ]
+        },
+        "provenance_binding": {"$ref": "#/$defs/artifact_binding"},
+        "authority_scope": {"$ref": "#/$defs/nonempty_string"},
+        "authority_status": {"const": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"}
+      }
+    },
+    "hard_constraint_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "source_refs",
+        "owner_ref",
+        "scope",
+        "version",
+        "invalidation_conditions",
+        "failure_semantics"
+      ],
+      "properties": {
+        "statement": {"$ref": "#/$defs/nonempty_string"},
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonempty_string"}
+        },
+        "owner_ref": {"$ref": "#/$defs/owner_ref"},
+        "scope": {"$ref": "#/$defs/nonempty_string"},
+        "version": {"type": "integer", "minimum": 1},
+        "invalidation_conditions": {"$ref": "#/$defs/nonempty_string_list"},
+        "failure_semantics": {"const": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE"}
+      }
+    },
+    "hard_constraint_catalog": {
+      "type": "object",
+      "minProperties": 10,
+      "patternProperties": {
+        "^METHOD-HARD-[0-9]{3}$": {"$ref": "#/$defs/hard_constraint_body"}
+      },
+      "additionalProperties": false
+    },
+    "verifier_obligations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "EXACT_WHOLE_FILE_HASH_RECOMPUTATION",
+        "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE",
+        "CONSTRAINT_PARTITION_COMPLETENESS",
+        "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION",
+        "LIFECYCLE_STATE_TRANSITION_VALIDITY",
+        "QUALITY_POLICY_CONTRACT_DETERMINISM"
+      ],
+      "properties": {
+        "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": {
+          "const": "Recompute every declared SHA-256, including the ticket schema and dependency bundle members, from referenced whole-file raw bytes; never trust embedded or copied digest text."
+        },
+        "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": {
+          "const": "Rebuild the typed artifact DAG and exact dependency bundle; reject missing, extra, cyclic, stale, ambiguously rooted, role-mismatched, type-mismatched or key-mismatched dependencies; prove selected candidate, selected method, final method and bundle method identity equality; for typed method generation greater than one prove the predecessor has the same method key and exactly the preceding generation, while generation one has null typed supersedes and any legacy untyped predecessor remains context only."
+        },
+        "CONSTRAINT_PARTITION_COMPLETENESS": {
+          "const": "For every candidate, prove each protocol-owned hard-constraint key occurs exactly once across PASS, FAIL, BLOCKING_UNKNOWN, and NOT_APPLICABLE, verify every NOT_APPLICABLE justification, exclude every inadmissible candidate from the feasible set, and prove every frozen tradeoff axis assesses all five candidates exactly once."
+        },
+        "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": {
+          "const": "Verify producer, challenger, finalizer and verifier identities plus material dependency disclosures from bound identity evidence; declarations and reviewer counts do not prove independence, and required roles must be pairwise separated where declared."
+        },
+        "LIFECYCLE_STATE_TRANSITION_VALIDITY": {
+          "const": "Recompute the producer-to-challenger-to-final-candidate-to-dependency-bundle-to-post-final-verifier transition; structural eligibility requires challenger PASS, selected candidate feasible and non-dominated, zero FAIL, zero BLOCKING_UNKNOWN, zero unresolved required evidence gaps and unchanged exact bytes. A pre-authorization verifier must not claim to validate future authorization bytes."
+        },
+        "QUALITY_POLICY_CONTRACT_DETERMINISM": {
+          "const": "Recompute metric normalization, target-range distance, interval and margin ordering, exclusive state precedence, exact all-material outcome and cross-domain denominator equality, complexity-fact membership and effect states, and local-guardrail exact PASS semantics; any null, unfrozen, missing, extra, duplicate, stale, arithmetically inconsistent or non-single-valued quality input blocks the corresponding verdict."
+        }
+      }
+    },
+    "authorization_acceptance_obligations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION",
+        "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY",
+        "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY",
+        "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY",
+        "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY"
+      ],
+      "properties": {
+        "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": {
+          "const": "Decode every authorization-stage artifact as UTF-8 with a duplicate-member-aware raw JSON loader that rejects duplicate object names before parsing; recompute authorization_text.exact_text_sha256 from the exact UTF-8 text; then recompute the exact authorization, ticket schema, final record, challenger report, structural verifier report, dependency bundle, selected method, principal, authentication evidence and recovery-boundary hashes from whole-file raw bytes."
+        },
+        "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": {
+          "const": "Prove the authorized method bytes and key equal the final selected method and dependency-bundle method, and that the authorization binds the same final, challenger, verifier and bundle bytes accepted by the lifecycle."
+        },
+        "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": {
+          "const": "Verify from bound external identity evidence that the principal is authenticated, currently authorized for the exact method-only scope and distinct from the detached authorization-acceptance gate actor."
+        },
+        "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": {
+          "const": "Verify the allowed action and authorized scope are exact, every prohibited action is present, the recovery boundary exists and is applicable, and no production, constitution-clause or legacy-runtime authority is implied."
+        },
+        "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": {
+          "const": "Parse calendar-valid RFC 3339 times; prove valid_from is earlier than expires_at; prove evaluated_at is within that interval using the bound trusted time source; prove the acceptance receipt valid_until does not exceed the authorization expires_at; and require every use to revalidate both the authorization and receipt windows."
+        }
+      }
+    },
+    "schema_capability_boundary": {
+      "const": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS"
+    },
+    "method_bootstrap_protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "question_binding",
+        "evidence_manifest_binding",
+        "candidate_denominator_binding",
+        "hard_constraints",
+        "tradeoff_registry",
+        "input_freeze",
+        "allowed_design_outcomes",
+        "independence_rules",
+        "verifier_obligations",
+        "authorization_acceptance_obligations",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_method_bootstrap_protocol.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_bootstrap_protocol"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-method-bootstrap-protocol"},
+        "artifact_status": {"const": "NON_GOVERNING_EXACT_BYTES_REVIEW_REQUIRED"},
+        "question_binding": {"$ref": "#/$defs/question_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "hard_constraints": {"$ref": "#/$defs/hard_constraint_catalog"},
+        "tradeoff_registry": {"$ref": "#/$defs/fixed_tradeoff_registry"},
+        "input_freeze": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "QUESTION_AND_SCOPE",
+            "CANDIDATE_DENOMINATOR",
+            "HARD_CONSTRAINT_CATALOG",
+            "EVIDENCE_SNAPSHOT",
+            "CLAIM_KIND_STANDING_MAP",
+            "QUALITY_AND_TRADEOFF_POLICY",
+            "IDENTITY_AND_DEPENDENCY_BOUNDARY"
+          ],
+          "properties": {
+            "QUESTION_AND_SCOPE": {"$ref": "#/$defs/nonempty_string"},
+            "CANDIDATE_DENOMINATOR": {"$ref": "#/$defs/nonempty_string"},
+            "HARD_CONSTRAINT_CATALOG": {"$ref": "#/$defs/nonempty_string"},
+            "EVIDENCE_SNAPSHOT": {"$ref": "#/$defs/nonempty_string"},
+            "CLAIM_KIND_STANDING_MAP": {"$ref": "#/$defs/nonempty_string"},
+            "QUALITY_AND_TRADEOFF_POLICY": {"$ref": "#/$defs/nonempty_string"},
+            "IDENTITY_AND_DEPENDENCY_BOUNDARY": {"$ref": "#/$defs/nonempty_string"}
+          }
+        },
+        "allowed_design_outcomes": {
+          "const": [
+            "ADOPT",
+            "REVISE",
+            "REJECT",
+            "RESEARCH_REQUIRED",
+            "PROTOTYPE_REQUIRED",
+            "USER_VALUE_CHOICE_REQUIRED",
+            "EQUIVALENT_SET"
+          ]
+        },
+        "independence_rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidate_cannot_define_its_exam",
+            "producer_cannot_adopt",
+            "challenger_must_be_detached",
+            "finalizer_must_be_detached",
+            "verifier_must_be_detached",
+            "reviewer_count_is_not_independence"
+          ],
+          "properties": {
+            "candidate_cannot_define_its_exam": {"const": true},
+            "producer_cannot_adopt": {"const": true},
+            "challenger_must_be_detached": {"const": true},
+            "finalizer_must_be_detached": {"const": true},
+            "verifier_must_be_detached": {"const": true},
+            "reviewer_count_is_not_independence": {"const": true}
+          }
+        },
+        "verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "immutable_primary_source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_kind", "source_ref", "locator", "version_or_date", "snapshot_binding"],
+      "properties": {
+        "binding_kind": {"const": "IMMUTABLE_PRIMARY"},
+        "source_ref": {"$ref": "#/$defs/nonempty_string"},
+        "locator": {"$ref": "#/$defs/nonempty_string"},
+        "version_or_date": {"$ref": "#/$defs/nonempty_string"},
+        "snapshot_binding": {"$ref": "#/$defs/nullable_artifact_binding"}
+      }
+    },
+    "exact_user_excerpt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact_text", "exact_text_sha256", "interpretation"],
+      "properties": {
+        "exact_text": {"$ref": "#/$defs/nonempty_string"},
+        "exact_text_sha256": {"$ref": "#/$defs/sha256"},
+        "interpretation": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "exact_user_bytes_source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_kind", "source_ref", "locator", "exact_excerpts", "encoding"],
+      "properties": {
+        "binding_kind": {"const": "EXACT_USER_BYTES"},
+        "source_ref": {"$ref": "#/$defs/nonempty_string"},
+        "locator": {"$ref": "#/$defs/nonempty_string"},
+        "exact_excerpts": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/exact_user_excerpt"}
+        },
+        "encoding": {"const": "UTF-8"}
+      }
+    },
+    "mutable_official_snapshot_source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding_kind", "source_ref", "locator", "version_or_date", "snapshot_binding", "captured_at"],
+      "properties": {
+        "binding_kind": {"const": "MUTABLE_OFFICIAL_SNAPSHOT"},
+        "source_ref": {"$ref": "#/$defs/nonempty_string"},
+        "locator": {"$ref": "#/$defs/nonempty_string"},
+        "version_or_date": {"$ref": "#/$defs/nonempty_string"},
+        "snapshot_binding": {"$ref": "#/$defs/nullable_artifact_binding"},
+        "captured_at": {
+          "oneOf": [
+            {"$ref": "#/$defs/rfc3339_datetime"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "source_binding": {
+      "oneOf": [
+        {"$ref": "#/$defs/immutable_primary_source_binding"},
+        {"$ref": "#/$defs/exact_user_bytes_source_binding"},
+        {"$ref": "#/$defs/mutable_official_snapshot_source_binding"}
+      ]
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "assessed_at", "recheck_before_activation", "valid_until", "scope_note"],
+      "properties": {
+        "status": {"enum": ["IMMUTABLE_IN_DECLARED_SCOPE", "CURRENT_AS_OF", "STALE", "UNKNOWN"]},
+        "assessed_at": {"$ref": "#/$defs/rfc3339_datetime"},
+        "recheck_before_activation": {"type": "boolean"},
+        "valid_until": {
+          "oneOf": [
+            {"$ref": "#/$defs/rfc3339_datetime"},
+            {"type": "null"}
+          ]
+        },
+        "scope_note": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "candidate_evidence_association": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effects", "claims"],
+      "properties": {
+        "effects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["SUPPORT", "REFUTE", "ASSUMPTION", "LIMIT"]}
+        },
+        "claims": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonempty_string"}
+        }
+      }
+    },
+    "candidate_associations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {"$ref": "#/$defs/candidate_evidence_association"},
+        "AUTHORITY_HIERARCHY": {"$ref": "#/$defs/candidate_evidence_association"},
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {"$ref": "#/$defs/candidate_evidence_association"},
+        "DELIBERATIVE_COMMITTEE": {"$ref": "#/$defs/candidate_evidence_association"},
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {"$ref": "#/$defs/candidate_evidence_association"}
+      }
+    },
+    "evidence_entry_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dependency_cluster_id",
+        "source_kind",
+        "title",
+        "source_binding",
+        "freshness",
+        "candidate_associations",
+        "limitations"
+      ],
+      "properties": {
+        "dependency_cluster_id": {"type": "string", "pattern": "^METHOD-CLUSTER-[0-9]{3}$"},
+        "source_kind": {
+          "enum": [
+            "CURRENT_USER_VALUE_DIRECTION",
+            "PRIMARY_RESEARCH",
+            "OFFICIAL_ENGINEERING_METHOD",
+            "OFFICIAL_STANDARD_OR_FRAMEWORK",
+            "LOCAL_CODE_OR_ARTIFACT"
+          ]
+        },
+        "title": {"$ref": "#/$defs/nonempty_string"},
+        "source_binding": {"$ref": "#/$defs/source_binding"},
+        "freshness": {"$ref": "#/$defs/freshness"},
+        "candidate_associations": {"$ref": "#/$defs/candidate_associations"},
+        "limitations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonempty_string"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source_binding": {
+                "properties": {"binding_kind": {"const": "MUTABLE_OFFICIAL_SNAPSHOT"}},
+                "required": ["binding_kind"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "freshness": {
+                "properties": {"recheck_before_activation": {"const": true}}
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"source_kind": {"const": "CURRENT_USER_VALUE_DIRECTION"}}},
+          "then": {
+            "properties": {
+              "source_binding": {"$ref": "#/$defs/exact_user_bytes_source_binding"}
+            }
+          }
+        }
+      ]
+    },
+    "evidence_entry_catalog": {
+      "type": "object",
+      "minProperties": 6,
+      "patternProperties": {
+        "^METHOD-EVID-[0-9]{3}$": {"$ref": "#/$defs/evidence_entry_body"}
+      },
+      "additionalProperties": false
+    },
+    "method_evidence_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "question_binding",
+        "dependency_policy",
+        "entries",
+        "known_evidence_gaps",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_method_evidence_manifest.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_evidence_manifest"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-method-evidence-manifest"},
+        "artifact_status": {"const": "NON_GOVERNING_EVIDENCE_INPUT"},
+        "question_binding": {"$ref": "#/$defs/question_binding"},
+        "dependency_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cluster_unit", "duplicate_weight_rule", "mutable_source_rule"],
+          "properties": {
+            "cluster_unit": {"const": "COMMON_UPSTREAM_PAPER_DATASET_MODEL_FAMILY_OR_SYNTHESIS"},
+            "duplicate_weight_rule": {"const": "REPETITION_WITHIN_A_CLUSTER_ADDS_NO_INDEPENDENT_WEIGHT"},
+            "mutable_source_rule": {"const": "RECHECK_AND_REBIND_EXACT_SNAPSHOT_BEFORE_ACTIVATION"}
+          }
+        },
+        "entries": {"$ref": "#/$defs/evidence_entry_catalog"},
+        "known_evidence_gaps": {"$ref": "#/$defs/nonempty_string_list"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "candidate_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strongest_fair_claim",
+        "decision_process",
+        "legitimate_strengths",
+        "known_limitations",
+        "hard_failure_risks",
+        "allowed_auxiliary_roles",
+        "supporting_evidence_refs",
+        "refuting_evidence_refs",
+        "falsification_conditions"
+      ],
+      "properties": {
+        "strongest_fair_claim": {"$ref": "#/$defs/nonempty_string"},
+        "decision_process": {"$ref": "#/$defs/nonempty_string"},
+        "legitimate_strengths": {"$ref": "#/$defs/nonempty_string_list"},
+        "known_limitations": {"$ref": "#/$defs/nonempty_string_list"},
+        "hard_failure_risks": {"$ref": "#/$defs/nonempty_string_list"},
+        "allowed_auxiliary_roles": {"$ref": "#/$defs/nonempty_string_list"},
+        "supporting_evidence_refs": {"$ref": "#/$defs/nonempty_evidence_reference_set"},
+        "refuting_evidence_refs": {"$ref": "#/$defs/nonempty_evidence_reference_set"},
+        "falsification_conditions": {"$ref": "#/$defs/nonempty_string_list"}
+      }
+    },
+    "fixed_candidate_profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+        "AUTHORITY_HIERARCHY",
+        "MULTI_CRITERIA_SCALAR_AGGREGATION",
+        "DELIBERATIVE_COMMITTEE",
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+      ],
+      "properties": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {"$ref": "#/$defs/candidate_profile"},
+        "AUTHORITY_HIERARCHY": {"$ref": "#/$defs/candidate_profile"},
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {"$ref": "#/$defs/candidate_profile"},
+        "DELIBERATIVE_COMMITTEE": {"$ref": "#/$defs/candidate_profile"},
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {"$ref": "#/$defs/candidate_profile"}
+      }
+    },
+    "method_candidate_denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "question_binding",
+        "evidence_manifest_binding",
+        "closure_rule",
+        "candidates",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_method_candidate_denominator.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_candidate_denominator"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-method-candidate-denominator"},
+        "artifact_status": {"const": "NON_GOVERNING_EXACT_CANDIDATE_DENOMINATOR"},
+        "question_binding": {"$ref": "#/$defs/question_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "closure_rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "current_set",
+            "bounded_question",
+            "included_method_families",
+            "search_surfaces",
+            "saturation_rule",
+            "reopen_on_materially_distinct_candidate",
+            "reopening_conditions",
+            "omission_semantics"
+          ],
+          "properties": {
+            "current_set": {"const": "EXACTLY_FIVE_STRONGEST_FAIR_CANDIDATES"},
+            "bounded_question": {"$ref": "#/$defs/nonempty_string"},
+            "included_method_families": {"$ref": "#/$defs/nonempty_string"},
+            "search_surfaces": {"$ref": "#/$defs/nonempty_string_list"},
+            "saturation_rule": {"$ref": "#/$defs/nonempty_string"},
+            "reopen_on_materially_distinct_candidate": {"const": true},
+            "reopening_conditions": {"$ref": "#/$defs/nonempty_string_list"},
+            "omission_semantics": {"const": "BLOCKING_DENOMINATOR_GAP"}
+          }
+        },
+        "candidates": {"$ref": "#/$defs/fixed_candidate_profiles"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "claim_kind_standing_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "EMPIRICAL_CURRENT_STATE",
+        "EMPIRICAL_CAUSAL_OR_COGNITIVE",
+        "PREDICTIVE",
+        "PRODUCT_VALUE",
+        "SAFETY_PRIVACY_AGENCY_CONSTRAINT",
+        "ARCHITECTURE_MECHANISM",
+        "ENGINEERING_FEASIBILITY",
+        "CAPABILITY_EQUIVALENCE",
+        "MIGRATION_OR_CUTOVER_STRATEGY",
+        "OPERATIONAL_AUTHORIZATION"
+      ],
+      "properties": {
+        "EMPIRICAL_CURRENT_STATE": {"const": "EMPIRICAL_EVIDENCE_STANDING"},
+        "EMPIRICAL_CAUSAL_OR_COGNITIVE": {"const": "EMPIRICAL_EVIDENCE_STANDING"},
+        "PREDICTIVE": {"const": "EMPIRICAL_EVIDENCE_STANDING"},
+        "PRODUCT_VALUE": {"const": "PRODUCT_VALUE_OWNER_STANDING"},
+        "SAFETY_PRIVACY_AGENCY_CONSTRAINT": {"const": "SAFETY_CONSTRAINT_STANDING"},
+        "ARCHITECTURE_MECHANISM": {"const": "ARCHITECTURE_VALIDATION_STANDING"},
+        "ENGINEERING_FEASIBILITY": {"const": "ARCHITECTURE_VALIDATION_STANDING"},
+        "CAPABILITY_EQUIVALENCE": {"const": "MIGRATION_CONSERVATION_STANDING"},
+        "MIGRATION_OR_CUTOVER_STRATEGY": {"const": "MIGRATION_CONSERVATION_STANDING"},
+        "OPERATIONAL_AUTHORIZATION": {"const": "OPERATIONAL_AUTHORIZATION_STANDING"}
+      }
+    },
+    "metric_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric_id",
+        "domain",
+        "scenario_id",
+        "cohort_id",
+        "baseline_class",
+        "unit",
+        "direction",
+        "metric_definition_binding",
+        "material_metric_set_binding",
+        "scope_root_binding",
+        "workload_binding",
+        "scenario_cohort_coverage_binding",
+        "distribution_and_scale_binding",
+        "runtime_environment_binding",
+        "cold_or_warm_state",
+        "fault_schedule_binding",
+        "baseline_binding",
+        "candidate_binding",
+        "slo_bounds",
+        "noninferiority_margin",
+        "equivalence_margin",
+        "meaningful_improvement_delta",
+        "baseline_estimate",
+        "candidate_estimate",
+        "candidate_uncertainty_interval",
+        "normalized_candidate_minus_baseline_effect",
+        "effect_uncertainty_interval",
+        "statistical_method_binding",
+        "sample_sizes",
+        "multiple_comparison_policy_binding",
+        "effect_normalization_rule",
+        "target_range_distance_rule",
+        "interval_order_rule",
+        "margin_order_rule",
+        "state_precedence",
+        "state_derivation_rule",
+        "state_is_derived_not_authored",
+        "state"
+      ],
+      "properties": {
+        "metric_id": {"$ref": "#/$defs/nonempty_string"},
+        "domain": {"enum": ["PERFORMANCE", "USER_EXPERIENCE", "CROSS_DOMAIN_GUARDRAIL"]},
+        "scenario_id": {"$ref": "#/$defs/nonempty_string"},
+        "cohort_id": {"$ref": "#/$defs/nonempty_string"},
+        "baseline_class": {
+          "enum": [
+            "LEGACY_CERTIFYING_RELEASE",
+            "HUMAN_ONLY",
+            "SYSTEM_ONLY",
+            "HUMAN_AI_JOINT",
+            "APPROVED_TASK_SPECIFIC"
+          ]
+        },
+        "unit": {"$ref": "#/$defs/nonempty_string"},
+        "direction": {"enum": ["HIGHER_IS_BETTER", "LOWER_IS_BETTER", "TARGET_RANGE"]},
+        "metric_definition_binding": {"$ref": "#/$defs/artifact_binding"},
+        "material_metric_set_binding": {"$ref": "#/$defs/artifact_binding"},
+        "scope_root_binding": {"$ref": "#/$defs/artifact_binding"},
+        "workload_binding": {"$ref": "#/$defs/artifact_binding"},
+        "scenario_cohort_coverage_binding": {"$ref": "#/$defs/artifact_binding"},
+        "distribution_and_scale_binding": {"$ref": "#/$defs/artifact_binding"},
+        "runtime_environment_binding": {"$ref": "#/$defs/artifact_binding"},
+        "cold_or_warm_state": {"enum": ["COLD", "WARM", "MIXED_PREDECLARED"]},
+        "fault_schedule_binding": {"$ref": "#/$defs/artifact_binding"},
+        "baseline_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_binding": {"$ref": "#/$defs/artifact_binding"},
+        "slo_bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lower", "upper", "lower_inclusive", "upper_inclusive"],
+          "properties": {
+            "lower": {"type": ["number", "null"]},
+            "upper": {"type": ["number", "null"]},
+            "lower_inclusive": {"type": "boolean"},
+            "upper_inclusive": {"type": "boolean"}
+          },
+          "anyOf": [
+            {"properties": {"lower": {"type": "number"}}},
+            {"properties": {"upper": {"type": "number"}}}
+          ]
+        },
+        "noninferiority_margin": {"type": "number", "minimum": 0},
+        "equivalence_margin": {"type": "number", "minimum": 0},
+        "meaningful_improvement_delta": {"type": "number", "exclusiveMinimum": 0},
+        "baseline_estimate": {"type": "number"},
+        "candidate_estimate": {"type": "number"},
+        "candidate_uncertainty_interval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lower", "upper", "confidence_level"],
+          "properties": {
+            "lower": {"type": "number"},
+            "upper": {"type": "number"},
+            "confidence_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+          }
+        },
+        "normalized_candidate_minus_baseline_effect": {"type": "number"},
+        "effect_uncertainty_interval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lower", "upper", "confidence_level"],
+          "properties": {
+            "lower": {"type": "number"},
+            "upper": {"type": "number"},
+            "confidence_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+          }
+        },
+        "statistical_method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "sample_sizes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["baseline", "candidate"],
+          "properties": {
+            "baseline": {"type": "integer", "minimum": 1},
+            "candidate": {"type": "integer", "minimum": 1}
+          }
+        },
+        "multiple_comparison_policy_binding": {"$ref": "#/$defs/artifact_binding"},
+        "effect_normalization_rule": {
+          "const": "HIGHER_IS_BETTER:E=CANDIDATE_ESTIMATE-BASELINE_ESTIMATE; LOWER_IS_BETTER:E=BASELINE_ESTIMATE-CANDIDATE_ESTIMATE; TARGET_RANGE:E=DISTANCE(BASELINE_ESTIMATE,SLO_RANGE)-DISTANCE(CANDIDATE_ESTIMATE,SLO_RANGE); POSITIVE_E_IS_BETTER"
+        },
+        "target_range_distance_rule": {
+          "const": "DISTANCE(X,[L,U])=0_IF_X_IS_INSIDE_PRESENT_INCLUSIVE_OR_EXCLUSIVE_BOUNDS; L-X_IF_PRESENT_LOWER_BOUND_IS_VIOLATED; X-U_IF_PRESENT_UPPER_BOUND_IS_VIOLATED; EXACT_BOUNDARY_MEMBERSHIP_FOLLOWS_LOWER_INCLUSIVE_AND_UPPER_INCLUSIVE"
+        },
+        "interval_order_rule": {
+          "const": "CANDIDATE_INTERVAL_LOWER_MUST_NOT_EXCEED_UPPER; EFFECT_INTERVAL_LOWER_MUST_NOT_EXCEED_UPPER; VIOLATION_IS_FAIL_CLOSED"
+        },
+        "margin_order_rule": {
+          "const": "ZERO_LE_EQUIVALENCE_MARGIN_LE_NONINFERIORITY_MARGIN_AND_EQUIVALENCE_MARGIN_LT_MEANINGFUL_IMPROVEMENT_DELTA; VIOLATION_IS_FAIL_CLOSED"
+        },
+        "state_precedence": {
+          "const": [
+            "ABSOLUTE_SLO_FAIL",
+            "ABSOLUTE_SLO_UNKNOWN",
+            "SUPERIOR",
+            "EQUIVALENT",
+            "NONINFERIOR",
+            "EFFECT_FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "state_derivation_rule": {
+          "const": "RECOMPUTE_NORMALIZED_EFFECT_AND_INTERVALS_FIRST; ABSOLUTE_SLO_FAIL_IF_CANDIDATE_INTERVAL_IS_ENTIRELY_OUTSIDE_ANY_REQUIRED_BOUND; ABSOLUTE_SLO_UNKNOWN_IF_CANDIDATE_INTERVAL_CROSSES_ANY_REQUIRED_BOUND; OTHERWISE_SUPERIOR_IF_EFFECT_LOWER_GE_MEANINGFUL_IMPROVEMENT_DELTA; ELSE_EQUIVALENT_IF_EFFECT_LOWER_GE_NEGATIVE_EQUIVALENCE_MARGIN_AND_EFFECT_UPPER_LE_EQUIVALENCE_MARGIN; ELSE_NONINFERIOR_IF_EFFECT_LOWER_GE_NEGATIVE_NONINFERIORITY_MARGIN; ELSE_EFFECT_FAIL_IF_EFFECT_UPPER_LT_NEGATIVE_NONINFERIORITY_MARGIN; ELSE_UNKNOWN; APPLY_STATE_PRECEDENCE_EXACTLY_ONCE"
+        },
+        "state_is_derived_not_authored": {"const": true},
+        "state": {"enum": ["SUPERIOR", "EQUIVALENT", "NONINFERIOR", "FAIL", "UNKNOWN"]}
+      },
+      "$comment": "Cross-field arithmetic, interval ordering, margin ordering, target-range normalization and the exclusive derived state must be recomputed by an executable verifier; JSON Schema validates only the declared fields and constants."
+    },
+    "complexity_fact_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id",
+        "dimension",
+        "fact_definition_binding",
+        "approved_fact_set_binding",
+        "denominator_binding",
+        "denominator_membership_proof_binding",
+        "scenario_binding",
+        "baseline_binding",
+        "candidate_binding",
+        "unit",
+        "materiality",
+        "direction",
+        "baseline_value",
+        "candidate_value",
+        "normalized_baseline_minus_candidate_improvement",
+        "improvement_uncertainty_interval",
+        "improvement_delta",
+        "equivalence_margin",
+        "regression_margin",
+        "interval_order_rule",
+        "margin_order_rule",
+        "state_precedence",
+        "state_derivation_rule",
+        "state_is_derived_not_authored",
+        "state"
+      ],
+      "properties": {
+        "fact_id": {"$ref": "#/$defs/nonempty_string"},
+        "dimension": {"enum": ["K_API", "K_AUTHORITY", "K_PATH", "K_CHANGE", "K_LIFECYCLE", "K_ABSTRACTION"]},
+        "fact_definition_binding": {"$ref": "#/$defs/artifact_binding"},
+        "approved_fact_set_binding": {"$ref": "#/$defs/artifact_binding"},
+        "denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "denominator_membership_proof_binding": {"$ref": "#/$defs/artifact_binding"},
+        "scenario_binding": {"$ref": "#/$defs/artifact_binding"},
+        "baseline_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_binding": {"$ref": "#/$defs/artifact_binding"},
+        "unit": {"$ref": "#/$defs/nonempty_string"},
+        "materiality": {"enum": ["MATERIAL", "NON_MATERIAL_WITH_BOUND_JUSTIFICATION"]},
+        "direction": {"const": "LOWER_IS_BETTER"},
+        "baseline_value": {"type": "number"},
+        "candidate_value": {"type": "number"},
+        "normalized_baseline_minus_candidate_improvement": {"type": "number"},
+        "improvement_uncertainty_interval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lower", "upper", "confidence_level"],
+          "properties": {
+            "lower": {"type": "number"},
+            "upper": {"type": "number"},
+            "confidence_level": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1}
+          }
+        },
+        "improvement_delta": {"type": "number", "exclusiveMinimum": 0},
+        "equivalence_margin": {"type": "number", "minimum": 0},
+        "regression_margin": {"type": "number", "minimum": 0},
+        "interval_order_rule": {"const": "IMPROVEMENT_INTERVAL_LOWER_MUST_NOT_EXCEED_UPPER; VIOLATION_IS_FAIL_CLOSED"},
+        "margin_order_rule": {"const": "ZERO_LE_EQUIVALENCE_MARGIN_LE_REGRESSION_MARGIN_AND_EQUIVALENCE_MARGIN_LT_IMPROVEMENT_DELTA; VIOLATION_IS_FAIL_CLOSED"},
+        "state_precedence": {"const": ["IMPROVED", "EQUIVALENT", "NONREGRESSED", "REGRESSED", "UNKNOWN"]},
+        "state_derivation_rule": {"const": "RECOMPUTE_EFFECT=BASELINE_VALUE-CANDIDATE_VALUE; IMPROVED_IF_INTERVAL_LOWER_GE_IMPROVEMENT_DELTA; ELSE_EQUIVALENT_IF_INTERVAL_LOWER_GE_NEGATIVE_EQUIVALENCE_MARGIN_AND_INTERVAL_UPPER_LE_EQUIVALENCE_MARGIN; ELSE_NONREGRESSED_IF_INTERVAL_LOWER_GE_NEGATIVE_REGRESSION_MARGIN; ELSE_REGRESSED_IF_INTERVAL_UPPER_LT_NEGATIVE_REGRESSION_MARGIN; ELSE_UNKNOWN; APPLY_STATE_PRECEDENCE_EXACTLY_ONCE"},
+        "state_is_derived_not_authored": {"const": true},
+        "state": {"enum": ["IMPROVED", "EQUIVALENT", "NONREGRESSED", "REGRESSED", "UNKNOWN"]}
+      },
+      "$comment": "The executable quality verifier must recompute denominator membership, baseline-minus-candidate effect, interval and exclusive state; JSON Schema alone cannot prove the arithmetic or source evidence."
+    },
+    "local_guardrail_result_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guardrail_id",
+        "approved_profile_binding",
+        "oracle_binding",
+        "workload_binding",
+        "evidence_binding",
+        "state_derivation_rule",
+        "state_is_derived_not_authored",
+        "state"
+      ],
+      "properties": {
+        "guardrail_id": {"enum": ["TYPED_ERROR_SEMANTICS", "DUPLICATE_LOGIC", "PUBLIC_INTERFACE_CONFORMANCE_STABILITY", "READABILITY_AND_MAINTAINABILITY", "STATIC_AND_DYNAMIC_SAFETY"]},
+        "approved_profile_binding": {"$ref": "#/$defs/artifact_binding"},
+        "oracle_binding": {"$ref": "#/$defs/artifact_binding"},
+        "workload_binding": {"$ref": "#/$defs/artifact_binding"},
+        "evidence_binding": {"$ref": "#/$defs/artifact_binding"},
+        "state_derivation_rule": {"const": "PASS_ONLY_IF_THE_BOUND_ORACLE_EXECUTED_ON_THE_COMPLETE_APPROVED_WORKLOAD_AND_REPORTED_ZERO_BLOCKING_FINDINGS; ANY_BLOCKING_FINDING_IS_FAIL; MISSING_STALE_PARTIAL_OR_UNVERIFIED_EVIDENCE_IS_UNKNOWN"},
+        "state_is_derived_not_authored": {"const": true},
+        "state": {"enum": ["PASS", "FAIL", "UNKNOWN"]}
+      }
+    },
+    "complexity_dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition",
+        "fact_types",
+        "unit",
+        "denominator_rule",
+        "threshold_policy",
+        "measurement_obligation",
+        "unknown_semantics",
+        "direction"
+      ],
+      "properties": {
+        "definition": {"$ref": "#/$defs/nonempty_string"},
+        "fact_types": {"$ref": "#/$defs/nonempty_string_fact_set"},
+        "unit": {"$ref": "#/$defs/nonempty_string"},
+        "denominator_rule": {"$ref": "#/$defs/nonempty_string"},
+        "threshold_policy": {"$ref": "#/$defs/nonempty_string"},
+        "measurement_obligation": {"$ref": "#/$defs/nonempty_string"},
+        "unknown_semantics": {"const": "BLOCK_SIMPLICITY_VERDICT_NOT_ZERO"},
+        "direction": {"const": "LOWER_IS_BETTER_AFTER_TIER_1_AND_TIER_2_EQUIVALENCE"}
+      }
+    },
+    "negative_oracle_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "comparator", "threshold", "violation_outcome"],
+      "properties": {
+        "metric": {"$ref": "#/$defs/nonempty_string"},
+        "comparator": {"enum": ["MUST_EQUAL", "MUST_NOT_EXCEED"]},
+        "threshold": {"type": "number", "minimum": 0},
+        "violation_outcome": {"const": "FAIL_DEEP_MODULE_CLAIM"}
+      }
+    },
+    "quality_priority_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activation_semantics",
+        "clause_candidate_ids",
+        "priority_order",
+        "tier_1_admissibility",
+        "tier_2_performance_and_experience",
+        "tier_3_quality_preserving_simplicity",
+        "staged_applicability",
+        "risk_materiality_profiles"
+      ],
+      "properties": {
+        "activation_semantics": {
+          "const": "REFERENCE_ONLY_POLICY_CANDIDATE; METHOD_ADOPTION_DOES_NOT_ACTIVATE_V2_CONST_015_016_OR_017; EACH_CLAUSE_REQUIRES_SEPARATE_ADJUDICATION_VERIFICATION_AND_AUTHORIZATION"
+        },
+        "clause_candidate_ids": {
+          "const": {
+            "V2-CONST-015": true,
+            "V2-CONST-016": true,
+            "V2-CONST-017": true
+          }
+        },
+        "priority_order": {"const": "TIER_1_HARD_GATE_THEN_TIER_2_OUTCOME_EQUIVALENCE_THEN_TIER_3_COMPLEXITY_PARETO"},
+        "tier_1_admissibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "required_dimensions", "unknown_semantics"],
+          "properties": {
+            "mode": {"const": "ZERO_GAP_NON_COMPENSABLE_HARD_GATE"},
+            "required_dimensions": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "FUNCTIONAL_CAPABILITY",
+                "COGNITIVE_ADEQUACY",
+                "SAFETY_PRIVACY_AGENCY",
+                "DATA_AND_EFFECT_CONSERVATION",
+                "FAILURE_RECOVERY_AND_IDEMPOTENCY",
+                "CONCURRENCY_AND_RESTART",
+                "ROLLBACK_AND_OPERATIONAL_REVERSIBILITY"
+              ],
+              "properties": {
+                "FUNCTIONAL_CAPABILITY": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "COGNITIVE_ADEQUACY": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "SAFETY_PRIVACY_AGENCY": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "DATA_AND_EFFECT_CONSERVATION": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "FAILURE_RECOVERY_AND_IDEMPOTENCY": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "CONCURRENCY_AND_RESTART": {"const": "ZERO_FAIL_ZERO_UNKNOWN"},
+                "ROLLBACK_AND_OPERATIONAL_REVERSIBILITY": {"const": "ZERO_FAIL_ZERO_UNKNOWN"}
+              }
+            },
+            "unknown_semantics": {"const": "BLOCKING_NOT_ZERO"}
+          }
+        },
+        "tier_2_performance_and_experience": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metric_profile_state",
+            "comparison_mode",
+            "metric_contract_schema_ref",
+            "approved_material_metric_set_binding",
+            "approved_scenario_cohort_coverage_binding",
+            "approved_baseline_registry_binding",
+            "approved_all_material_outcome_profile_binding",
+            "approved_cross_domain_guardrail_set_binding",
+            "approved_outcome_equivalence_result_binding",
+            "baseline_classes",
+            "metric_denominator_rule",
+            "all_material_outcome_denominator_rule",
+            "workload_freeze_fields",
+            "performance_metrics",
+            "experience_metrics",
+            "cross_domain_guardrail_metrics",
+            "slice_complete_rule",
+            "final_cutover_better_domain_rule",
+            "not_applicable_rule",
+            "outcome_equivalence_scope",
+            "outcome_equivalence_rule",
+            "material_incomparability_exit",
+            "simplicity_tie_break_forbidden"
+          ],
+          "properties": {
+            "metric_profile_state": {"const": "UNFROZEN_BLOCKING_ANY_TIER_2_OR_CUTOVER_VERDICT"},
+            "comparison_mode": {"const": "PER_METRIC_SLO_AND_NONINFERIORITY_THEN_MEANINGFUL_IMPROVEMENT_AND_PARETO"},
+            "metric_contract_schema_ref": {"const": "#/$defs/metric_contract"},
+            "approved_material_metric_set_binding": {"type": "null"},
+            "approved_scenario_cohort_coverage_binding": {"type": "null"},
+            "approved_baseline_registry_binding": {"type": "null"},
+            "approved_all_material_outcome_profile_binding": {"type": "null"},
+            "approved_cross_domain_guardrail_set_binding": {"type": "null"},
+            "approved_outcome_equivalence_result_binding": {"type": "null"},
+            "baseline_classes": {
+              "const": {
+                "LEGACY_CERTIFYING_RELEASE": "Parity, performance and operational comparison against the exact approved legacy release.",
+                "HUMAN_ONLY": "Cognitive task outcome without AI assistance.",
+                "SYSTEM_ONLY": "Cognitive task outcome without user collaboration.",
+                "HUMAN_AI_JOINT": "Joint cognition outcome for complementarity and appropriate-reliance claims.",
+                "APPROVED_TASK_SPECIFIC": "A separately justified exact baseline for a scoped metric only."
+              }
+            },
+            "metric_denominator_rule": {"const": "EXECUTED_MATERIAL_METRIC_KEYS_MUST_EXACTLY_EQUAL_THE_APPROVED_SET; MISSING_EXTRA_DUPLICATE_OR_UNCOVERED_SCENARIO_COHORT_KEYS_BLOCK"},
+            "all_material_outcome_denominator_rule": {"const": "THE_APPROVED_MATERIAL_METRIC_SET_MUST_PARTITION_EXACTLY_INTO_NONEMPTY_FINAL_PERFORMANCE_NONEMPTY_FINAL_USER_EXPERIENCE_AND_THE_COMPLETE_CROSS_DOMAIN_GUARDRAIL_SET_COVERING_COGNITIVE_SAFETY_PRIVACY_AGENCY_DATA_EFFECT_AND_RECOVERY_OUTCOMES; EXECUTED_KEYS_AND_RESULT_KEYS_MUST_EQUAL_THAT_UNION_EXACTLY"},
+            "workload_freeze_fields": {
+              "const": [
+                "workload_coverage_denominator",
+                "material_metric_set_root",
+                "scenario_cohort_coverage_root",
+                "baseline_registry_root_and_class",
+                "baseline_exact_root",
+                "distribution_and_scale",
+                "hardware_runtime_and_config",
+                "cold_and_warm_state",
+                "fault_schedule",
+                "cohort",
+                "sample_size",
+                "metric_direction_and_unit",
+                "slo_bounds",
+                "noninferiority_margin",
+                "equivalence_margin",
+                "meaningful_improvement_delta",
+                "normalized_candidate_minus_baseline_effect",
+                "effect_confidence_interval_method",
+                "multiple_comparison_policy"
+              ]
+            },
+            "performance_metrics": {
+              "type": "object",
+              "maxProperties": 0,
+              "patternProperties": {
+                "^PERF_[A-Z0-9_]+$": {"$ref": "#/$defs/metric_contract"}
+              },
+              "additionalProperties": false
+            },
+            "experience_metrics": {
+              "type": "object",
+              "maxProperties": 0,
+              "patternProperties": {
+                "^UX_[A-Z0-9_]+$": {"$ref": "#/$defs/metric_contract"}
+              },
+              "additionalProperties": false
+            },
+            "cross_domain_guardrail_metrics": {
+              "type": "object",
+              "maxProperties": 0,
+              "patternProperties": {
+                "^GUARD_[A-Z0-9_]+$": {"$ref": "#/$defs/metric_contract"}
+              },
+              "additionalProperties": false
+            },
+            "slice_complete_rule": {"const": "SLICE_TIER_1_ZERO_GAP_AND_EVERY_APPLICABLE_APPROVED_SLICE_METRIC_MEETS_SLO_AND_NONINFERIORITY; NO_GLOBAL_OR_BETTER_DOMAIN_CLAIM"},
+            "final_cutover_better_domain_rule": {"const": "PERFORMANCE_AND_USER_EXPERIENCE_EACH_REQUIRE_AT_LEAST_ONE_PREDECLARED_MEANINGFUL_IMPROVEMENT_AND_ZERO_MATERIAL_REGRESSION"},
+            "not_applicable_rule": {"const": "NOT_APPLICABLE_REQUIRES_INDEPENDENT_SCOPE_PROOF; FINAL_CUTOVER_PERFORMANCE_AND_USER_EXPERIENCE_DENOMINATORS_MUST_EACH_BE_NONEMPTY"},
+            "outcome_equivalence_scope": {"const": "ALL_MATERIAL_COGNITIVE_SAFETY_PRIVACY_AGENCY_DATA_EFFECT_RECOVERY_PERFORMANCE_AND_USER_EXPERIENCE_OUTCOMES_REQUIRE_PREDECLARED_EQUIVALENCE; TIER_1_PASS_ALONE_IS_NOT_EQUIVALENCE"},
+            "outcome_equivalence_rule": {"const": "ONLY_CANDIDATES_IN_THE_SAME_PREDECLARED_OUTCOME_EQUIVALENCE_CLASS_REACH_TIER_3"},
+            "material_incomparability_exit": {"const": "PROTOTYPE_REQUIRED_OR_USER_VALUE_CHOICE_REQUIRED"},
+            "simplicity_tie_break_forbidden": {"const": true}
+          }
+        },
+        "tier_3_quality_preserving_simplicity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "complexity_profile_state",
+            "ranking_mode",
+            "complexity_fact_schema_ref",
+            "complexity_fact_contract_schema_ref",
+            "approved_complexity_fact_denominator_binding",
+            "approved_complexity_fact_contract_set_binding",
+            "approved_change_scenario_binding",
+            "approved_required_seam_registry_binding",
+            "approved_cohesive_concern_owner_denominator_binding",
+            "implementation_comparison_or_saturation_binding",
+            "complexity_fact_results",
+            "complexity_fact_denominator_rule",
+            "complexity_vector",
+            "independent_assessment_rule",
+            "missing_required_asset_semantics",
+            "god_module_negative_oracles",
+            "god_module_threshold_profile_binding",
+            "seam_admission_rule",
+            "local_code_quality_guardrails",
+            "approved_local_guardrail_profile_binding",
+            "approved_local_guardrail_result_binding",
+            "local_guardrail_contract_schema_ref",
+            "local_guardrail_results",
+            "local_guardrail_result_rule",
+            "pareto_incomparability_exit",
+            "comparison_cardinality_rule",
+            "final_implementation_quality_rule",
+            "compatibility_glue_rule"
+          ],
+          "properties": {
+            "complexity_profile_state": {"const": "UNFROZEN_BLOCKING_ANY_SIMPLICITY_OR_ELEGANCE_VERDICT"},
+            "ranking_mode": {"const": "PARETO_ONLY_NO_SINGLE_ELEGANCE_SCORE"},
+            "complexity_fact_schema_ref": {"const": "#/$defs/complexity_dimension"},
+            "complexity_fact_contract_schema_ref": {"const": "#/$defs/complexity_fact_contract"},
+            "approved_complexity_fact_denominator_binding": {"type": "null"},
+            "approved_complexity_fact_contract_set_binding": {"type": "null"},
+            "approved_change_scenario_binding": {"type": "null"},
+            "approved_required_seam_registry_binding": {"type": "null"},
+            "approved_cohesive_concern_owner_denominator_binding": {"type": "null"},
+            "implementation_comparison_or_saturation_binding": {"type": "null"},
+            "complexity_fact_results": {
+              "type": "object",
+              "maxProperties": 0,
+              "patternProperties": {
+                "^K_(API|AUTHORITY|PATH|CHANGE|LIFECYCLE|ABSTRACTION)_[A-Z0-9_]+$": {"$ref": "#/$defs/complexity_fact_contract"}
+              },
+              "additionalProperties": false
+            },
+            "complexity_fact_denominator_rule": {"const": "EXECUTED_COMPLEXITY_FACT_KEYS_AND_DENOMINATOR_MEMBERSHIP_PROOFS_MUST_EQUAL_THE_APPROVED_FACT_SET_EXACTLY; FINAL_ACCEPTANCE_REQUIRES_AT_LEAST_ONE_MATERIAL_IMPROVED_STATE_ZERO_MATERIAL_REGRESSED_OR_UNKNOWN_STATES_AND_NO_MISSING_EXTRA_OR_DUPLICATE_FACT"},
+            "complexity_vector": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["K_API", "K_AUTHORITY", "K_PATH", "K_CHANGE", "K_LIFECYCLE", "K_ABSTRACTION"],
+              "properties": {
+                "K_API": {"$ref": "#/$defs/complexity_dimension"},
+                "K_AUTHORITY": {"$ref": "#/$defs/complexity_dimension"},
+                "K_PATH": {"$ref": "#/$defs/complexity_dimension"},
+                "K_CHANGE": {"$ref": "#/$defs/complexity_dimension"},
+                "K_LIFECYCLE": {"$ref": "#/$defs/complexity_dimension"},
+                "K_ABSTRACTION": {"$ref": "#/$defs/complexity_dimension"}
+              }
+            },
+            "independent_assessment_rule": {"const": "ASSESS_SAME_CODE_CONFIG_SCHEMA_DATA_GENERATED_ASSET_DEPENDENCY_TEST_RUNBOOK_ROOTS_AND_FROZEN_CHANGE_SCENARIOS"},
+            "missing_required_asset_semantics": {"const": "MISSING_REQUIRED_TEST_RUNBOOK_SEAM_OWNER_SCHEMA_DATA_OR_RECOVERY_ASSET_IS_FAIL_OR_UNKNOWN_NEVER_LOWER_COMPLEXITY"},
+            "god_module_negative_oracles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "UNRELATED_CHANGE_FORCES_INTERFACE_CHANGE",
+                "MULTIPLE_INDEPENDENT_STATE_OR_EFFECT_AUTHORITIES",
+                "REPRESENTATIVE_CHANGE_CROSSES_MOST_INTERNAL_OWNERS",
+                "INDEPENDENT_CONCERNS_CANNOT_BE_TESTED_SEPARATELY"
+              ],
+              "properties": {
+                "UNRELATED_CHANGE_FORCES_INTERFACE_CHANGE": {"$ref": "#/$defs/negative_oracle_contract"},
+                "MULTIPLE_INDEPENDENT_STATE_OR_EFFECT_AUTHORITIES": {"$ref": "#/$defs/negative_oracle_contract"},
+                "REPRESENTATIVE_CHANGE_CROSSES_MOST_INTERNAL_OWNERS": {"$ref": "#/$defs/negative_oracle_contract"},
+                "INDEPENDENT_CONCERNS_CANNOT_BE_TESTED_SEPARATELY": {"$ref": "#/$defs/negative_oracle_contract"}
+              }
+            },
+            "god_module_threshold_profile_binding": {"type": "null"},
+            "seam_admission_rule": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["required_evidence", "required_seam_registry_rule", "adapter_count_rule", "replacement_obligation", "conformance_fixture_obligation", "fault_fixture_obligation"],
+              "properties": {
+                "required_evidence": {"const": "VARIATION_OR_TRUST_OR_EFFECT_OR_FAILURE_BOUNDARY_WITH_OWNER_AND_STABLE_CONTRACT"},
+                "required_seam_registry_rule": {"const": "EVERY_APPROVED_REQUIRED_SEAM_MUST_REMAIN_OR_HAVE_A_VERIFIED_EQUIVALENT_BOUNDARY"},
+                "adapter_count_rule": {"const": "ONE_REAL_EXTERNAL_BOUNDARY_CAN_JUSTIFY_A_SEAM; TWO_WRAPPERS_DO_NOT_PROVE_ONE"},
+                "replacement_obligation": {"const": "REPLACE_IMPLEMENTATION_BEHIND_THE_SAME_CONTRACT_WITHOUT_CALLER_REWRITE"},
+                "conformance_fixture_obligation": {"const": "ALL_ADAPTERS_SHARE_ONE_EXECUTED_CONFORMANCE_SUITE"},
+                "fault_fixture_obligation": {"const": "ALL_ADAPTERS_SHARE_CONTRACT_FAULT_FIXTURES_AND_ADD_ADAPTER_SPECIFIC_EXTERNAL_FAILURE_FIXTURES"}
+              }
+            },
+            "local_code_quality_guardrails": {
+              "const": {
+                "TYPED_ERROR_SEMANTICS": "Public errors and recovery obligations remain explicit and testable.",
+                "DUPLICATE_LOGIC": "Material duplicated decision, validation, retry or effect logic is measured and cannot hide behind lower file count.",
+                "PUBLIC_INTERFACE_CONFORMANCE_STABILITY": "Interface fixtures remain stable across implementation replacement.",
+                "READABILITY_AND_MAINTAINABILITY": "Independent review covers naming, cohesion, control flow and change-locality without using LOC as a sole oracle.",
+                "STATIC_AND_DYNAMIC_SAFETY": "Required static, dynamic, fault and recovery checks cannot be deleted to lower measured complexity."
+              }
+            },
+            "approved_local_guardrail_profile_binding": {"type": "null"},
+            "approved_local_guardrail_result_binding": {"type": "null"},
+            "local_guardrail_contract_schema_ref": {"const": "#/$defs/local_guardrail_result_contract"},
+            "local_guardrail_results": {
+              "type": "object",
+              "maxProperties": 0,
+              "patternProperties": {
+                "^(TYPED_ERROR_SEMANTICS|DUPLICATE_LOGIC|PUBLIC_INTERFACE_CONFORMANCE_STABILITY|READABILITY_AND_MAINTAINABILITY|STATIC_AND_DYNAMIC_SAFETY)$": {"$ref": "#/$defs/local_guardrail_result_contract"}
+              },
+              "additionalProperties": false
+            },
+            "local_guardrail_result_rule": {"const": "FINAL_ACCEPTANCE_REQUIRES_EXACTLY_THE_FIVE_APPROVED_LOCAL_GUARDRAIL_KEYS_AND_EACH_DERIVED_STATE_PASS; FAIL_OR_UNKNOWN_BLOCKS_AND_DELETED_OR_PARTIAL_ORACLES_CANNOT_LOWER_COMPLEXITY"},
+            "pareto_incomparability_exit": {"const": "SIMPLICITY_UNRESOLVED_REQUIRES_NEW_MEASUREMENT_OR_PROTOTYPE; STYLE_OWNER_MAY_CHOOSE_ONLY_AFTER_ALL_MATERIAL_COMPLEXITY_FACTS_ARE_EQUIVALENT"},
+            "comparison_cardinality_rule": {"const": "COMPARE_AT_LEAST_TWO_OUTCOME_EQUIVALENT_IMPLEMENTATIONS_OR_BIND_INDEPENDENT_CANDIDATE_SATURATION_EVIDENCE"},
+            "final_implementation_quality_rule": {"const": "FINAL_ACCEPTED_IMPLEMENTATION_REQUIRES_AT_LEAST_ONE_PREDECLARED_MATERIAL_COMPLEXITY_FACT_IMPROVEMENT_AND_NO_MATERIAL_COMPLEXITY_REGRESSION_AGAINST_AN_APPROVED_OUTCOME_EQUIVALENT_IMPLEMENTATION_BASELINE_PLUS_ALL_NEGATIVE_ORACLES_AND_LOCAL_GUARDRAILS_PASS; OTHERWISE_SIMPLICITY_UNRESOLVED"},
+            "compatibility_glue_rule": {"const": "ALLOW_ONLY_WITH_OWNER_EXPIRY_REMOVE_WHEN_AND_TELEMETRY"}
+          }
+        },
+        "staged_applicability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CAPABILITY_CLUSTER", "FINAL_CUTOVER"],
+          "properties": {
+            "CAPABILITY_CLUSTER": {"const": "SLICE_COMPLETE_EQUALS_APPROVED_SLICE_TIER_1_ZERO_GAP_PLUS_APPLICABLE_APPROVED_METRICS_SLO_AND_NONINFERIORITY; NEVER_CLAIM_GLOBAL_CUTOVER_OR_REQUIRE_UNRELATED_UX_IMPROVEMENT"},
+            "FINAL_CUTOVER": {"const": "FINAL_CUTOVER_EQUALS_FULL_TIER_1_ZERO_GAP_PLUS_NONEMPTY_EXACT_PERFORMANCE_AND_USER_EXPERIENCE_DENOMINATORS_EACH_WITH_MEANINGFUL_IMPROVEMENT_AND_ZERO_MATERIAL_REGRESSION_PLUS_TIER_3_APPROVED_OUTCOME_EQUIVALENT_IMPLEMENTATION_BASELINE_PARETO_IMPROVEMENT_AND_LOCAL_GUARDRAILS"}
+          }
+        },
+        "risk_materiality_profiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["LOW", "MEDIUM", "HIGH"],
+          "properties": {
+            "LOW": {"$ref": "#/$defs/nonempty_string"},
+            "MEDIUM": {"$ref": "#/$defs/nonempty_string"},
+            "HIGH": {"$ref": "#/$defs/nonempty_string"}
+          }
+        }
+      }
+    },
+    "design_adjudication_method_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "method_key",
+        "method_instance_id",
+        "generation",
+        "supersedes",
+        "legacy_untyped_predecessor_context",
+        "bootstrap_protocol_binding",
+        "evidence_manifest_binding",
+        "candidate_denominator_binding",
+        "purpose",
+        "scope_boundary",
+        "hard_constraint_ids",
+        "claim_kind_standing_map",
+        "adjudication_algorithm",
+        "quality_priority_policy",
+        "independence_contract",
+        "verifier_obligations",
+        "authorization_acceptance_obligations",
+        "activation_rule",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_design_adjudication_method_candidate.v3"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/design_adjudication_method_candidate"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-design-adjudication-method-candidate"},
+        "artifact_status": {"const": "DESIGN_METHOD_CANDIDATE_NON_GOVERNING"},
+        "method_key": {
+          "enum": [
+            "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+            "AUTHORITY_HIERARCHY",
+            "MULTI_CRITERIA_SCALAR_AGGREGATION",
+            "DELIBERATIVE_COMMITTEE",
+            "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+          ]
+        },
+        "method_instance_id": {
+          "type": "string",
+          "pattern": "^METHOD-INSTANCE-(STATUS-QUO-INFORMED-HOLISTIC-JUDGMENT|AUTHORITY-HIERARCHY|MULTI-CRITERIA-SCALAR-AGGREGATION|DELIBERATIVE-COMMITTEE|CONSTRAINT-FIRST-TYPED-EVIDENCE)-G[1-9][0-9]*$"
+        },
+        "generation": {"type": "integer", "minimum": 1},
+        "supersedes": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "prior_method_key",
+                "prior_method_instance_id",
+                "prior_generation",
+                "historical_artifact_binding",
+                "disposition"
+              ],
+              "properties": {
+                "prior_method_key": {
+                  "enum": [
+                    "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+                    "AUTHORITY_HIERARCHY",
+                    "MULTI_CRITERIA_SCALAR_AGGREGATION",
+                    "DELIBERATIVE_COMMITTEE",
+                    "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+                  ]
+                },
+                "prior_method_instance_id": {
+                  "type": "string",
+                  "pattern": "^METHOD-INSTANCE-(STATUS-QUO-INFORMED-HOLISTIC-JUDGMENT|AUTHORITY-HIERARCHY|MULTI-CRITERIA-SCALAR-AGGREGATION|DELIBERATIVE-COMMITTEE|CONSTRAINT-FIRST-TYPED-EVIDENCE)-G[1-9][0-9]*$"
+                },
+                "prior_generation": {"type": "integer", "minimum": 1},
+                "historical_artifact_binding": {"$ref": "#/$defs/historical_artifact_binding"},
+                "disposition": {"const": "REVISION_REQUIRED_NOT_ACTIVATABLE"}
+              }
+            }
+          ]
+        },
+        "legacy_untyped_predecessor_context": {
+          "oneOf": [
+            {"$ref": "#/$defs/legacy_untyped_predecessor_context_binding"},
+            {"type": "null"}
+          ]
+        },
+        "bootstrap_protocol_binding": {"$ref": "#/$defs/artifact_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "purpose": {"$ref": "#/$defs/nonempty_string"},
+        "scope_boundary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ticket", "included", "excluded", "legacy_operation_rule"],
+          "properties": {
+            "ticket": {"const": "COGNITIVE-SUCCESSOR-DECISION-001"},
+            "included": {"$ref": "#/$defs/nonempty_string"},
+            "excluded": {"$ref": "#/$defs/nonempty_string"},
+            "legacy_operation_rule": {"const": "LEGACY_CONTRACTS_STILL_CONTROL_LEGACY_MUTATION_ONLY"}
+          }
+        },
+        "hard_constraint_ids": {"$ref": "#/$defs/hard_constraint_reference_set"},
+        "claim_kind_standing_map": {"$ref": "#/$defs/claim_kind_standing_map"},
+        "adjudication_algorithm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "FREEZE",
+            "CLASSIFY_CLAIMS",
+            "RECONSTRUCT_ALL_CANDIDATES",
+            "APPLY_HARD_CONSTRAINTS",
+            "COMPARE_FEASIBLE_TRADEOFFS",
+            "ESCALATE_UNKNOWNS",
+            "MERGE_EVIDENCE_NOT_VOTES"
+          ],
+          "properties": {
+            "FREEZE": {"$ref": "#/$defs/nonempty_string"},
+            "CLASSIFY_CLAIMS": {"$ref": "#/$defs/nonempty_string"},
+            "RECONSTRUCT_ALL_CANDIDATES": {"$ref": "#/$defs/nonempty_string"},
+            "APPLY_HARD_CONSTRAINTS": {"$ref": "#/$defs/nonempty_string"},
+            "COMPARE_FEASIBLE_TRADEOFFS": {"$ref": "#/$defs/nonempty_string"},
+            "ESCALATE_UNKNOWNS": {"$ref": "#/$defs/nonempty_string"},
+            "MERGE_EVIDENCE_NOT_VOTES": {"$ref": "#/$defs/nonempty_string"}
+          }
+        },
+        "quality_priority_policy": {"$ref": "#/$defs/quality_priority_policy"},
+        "independence_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["producer_may_adopt", "challenger_role", "finalizer_role", "finalizer_must_not_be_producer_or_challenger", "verifier_role", "identity_evidence_required"],
+          "properties": {
+            "producer_may_adopt": {"const": false},
+            "challenger_role": {"const": "RECONSTRUCT_AND_ATTEMPT_TO_FALSIFY_WITHOUT_VOTING"},
+            "finalizer_role": {"const": "SYNTHESIZE_A_NON_GOVERNING_FINAL_DECISION_CANDIDATE_FROM_FROZEN_INPUTS_AND_CHALLENGE"},
+            "finalizer_must_not_be_producer_or_challenger": {"const": true},
+            "verifier_role": {"const": "RECOMPUTE_STRUCTURE_WITHOUT_DECIDING_EMPIRICAL_TRUTH"},
+            "identity_evidence_required": {"const": true}
+          }
+        },
+        "verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "activation_rule": {"const": "EXACT_BYTES_SELECTED_BY_A_FINAL_ADOPT_RECORD_AND_A_POST_FINAL_STRUCTURAL_ELIGIBLE_REPORT_MAY_RECEIVE_EXACT_USER_AUTHORIZATION; THE_METHOD_REMAINS_NON_ACTIVE_UNTIL_A_POST_AUTHORIZATION_ACCEPTANCE_GATE_RECEIPT_IS_ACTIVATION_ELIGIBLE"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"generation": {"const": 1}},
+            "required": ["generation"]
+          },
+          "then": {
+            "properties": {"supersedes": {"type": "null"}}
+          },
+          "else": {
+            "properties": {"supersedes": {"type": "object"}}
+          }
+        }
+      ],
+      "$comment": "The detached verifier must prove method_instance_id encodes the declared method_key and generation. For generation greater than one it must also prove prior_method_key equals method_key, prior_generation equals generation minus one, and prior_method_instance_id encodes that exact predecessor. JSON Schema cannot enforce those cross-field equalities."
+    },
+    "constraint_partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["PASS", "FAIL", "BLOCKING_UNKNOWN", "NOT_APPLICABLE"],
+      "properties": {
+        "PASS": {
+          "type": "object",
+          "patternProperties": {
+            "^METHOD-HARD-[0-9]{3}$": {"const": true}
+          },
+          "additionalProperties": false
+        },
+        "FAIL": {
+          "type": "object",
+          "patternProperties": {
+            "^METHOD-HARD-[0-9]{3}$": {"const": true}
+          },
+          "additionalProperties": false
+        },
+        "BLOCKING_UNKNOWN": {
+          "type": "object",
+          "patternProperties": {
+            "^METHOD-HARD-[0-9]{3}$": {"const": true}
+          },
+          "additionalProperties": false
+        },
+        "NOT_APPLICABLE": {
+          "type": "object",
+          "patternProperties": {
+            "^METHOD-HARD-[0-9]{3}$": {"$ref": "#/$defs/nonempty_string"}
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "candidate_constraint_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partition", "evidence_refs", "rationale"],
+      "properties": {
+        "partition": {"$ref": "#/$defs/constraint_partition"},
+        "evidence_refs": {"$ref": "#/$defs/evidence_reference_set"},
+        "rationale": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "fixed_candidate_constraint_assessments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+        "AUTHORITY_HIERARCHY",
+        "MULTI_CRITERIA_SCALAR_AGGREGATION",
+        "DELIBERATIVE_COMMITTEE",
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+      ],
+      "properties": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {"$ref": "#/$defs/candidate_constraint_assessment"},
+        "AUTHORITY_HIERARCHY": {"$ref": "#/$defs/candidate_constraint_assessment"},
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {"$ref": "#/$defs/candidate_constraint_assessment"},
+        "DELIBERATIVE_COMMITTEE": {"$ref": "#/$defs/candidate_constraint_assessment"},
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {"$ref": "#/$defs/candidate_constraint_assessment"}
+      }
+    },
+    "tradeoff_axis_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition", "direction", "measurement_obligation", "uncertainty_semantics", "evidence_refs"],
+      "properties": {
+        "definition": {"$ref": "#/$defs/nonempty_string"},
+        "direction": {"enum": ["LOWER_IS_BETTER", "HIGHER_IS_BETTER"]},
+        "measurement_obligation": {"$ref": "#/$defs/nonempty_string"},
+        "uncertainty_semantics": {"const": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED"},
+        "evidence_refs": {"$ref": "#/$defs/nonempty_evidence_reference_set"}
+      }
+    },
+    "fixed_tradeoff_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "METHOD-TRADEOFF-001",
+        "METHOD-TRADEOFF-002",
+        "METHOD-TRADEOFF-003",
+        "METHOD-TRADEOFF-004",
+        "METHOD-TRADEOFF-005",
+        "METHOD-TRADEOFF-006"
+      ],
+      "properties": {
+        "METHOD-TRADEOFF-001": {"$ref": "#/$defs/tradeoff_axis_body"},
+        "METHOD-TRADEOFF-002": {"$ref": "#/$defs/tradeoff_axis_body"},
+        "METHOD-TRADEOFF-003": {"$ref": "#/$defs/tradeoff_axis_body"},
+        "METHOD-TRADEOFF-004": {"$ref": "#/$defs/tradeoff_axis_body"},
+        "METHOD-TRADEOFF-005": {"$ref": "#/$defs/tradeoff_axis_body"},
+        "METHOD-TRADEOFF-006": {"$ref": "#/$defs/tradeoff_axis_body"}
+      }
+    },
+    "tradeoff_candidate_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "evidence_refs", "rationale"],
+      "properties": {
+        "state": {"enum": ["FAVORABLE", "UNFAVORABLE", "MIXED", "TIED", "UNKNOWN", "INCOMPARABLE"]},
+        "evidence_refs": {"$ref": "#/$defs/evidence_reference_set"},
+        "rationale": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "fixed_tradeoff_candidate_states": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+        "AUTHORITY_HIERARCHY",
+        "MULTI_CRITERIA_SCALAR_AGGREGATION",
+        "DELIBERATIVE_COMMITTEE",
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+      ],
+      "properties": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {"$ref": "#/$defs/tradeoff_candidate_state"},
+        "AUTHORITY_HIERARCHY": {"$ref": "#/$defs/tradeoff_candidate_state"},
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {"$ref": "#/$defs/tradeoff_candidate_state"},
+        "DELIBERATIVE_COMMITTEE": {"$ref": "#/$defs/tradeoff_candidate_state"},
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {"$ref": "#/$defs/tradeoff_candidate_state"}
+      }
+    },
+    "tradeoff_result_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_states", "candidate_frontier", "uncertainty", "evidence_refs", "rationale"],
+      "properties": {
+        "candidate_states": {"$ref": "#/$defs/fixed_tradeoff_candidate_states"},
+        "candidate_frontier": {"$ref": "#/$defs/nonempty_candidate_reference_set"},
+        "uncertainty": {"enum": ["LOW", "MEDIUM", "HIGH", "INCOMPARABLE"]},
+        "evidence_refs": {"$ref": "#/$defs/evidence_reference_set"},
+        "rationale": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "tradeoff_result_catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "METHOD-TRADEOFF-001",
+        "METHOD-TRADEOFF-002",
+        "METHOD-TRADEOFF-003",
+        "METHOD-TRADEOFF-004",
+        "METHOD-TRADEOFF-005",
+        "METHOD-TRADEOFF-006"
+      ],
+      "properties": {
+        "METHOD-TRADEOFF-001": {"$ref": "#/$defs/tradeoff_result_body"},
+        "METHOD-TRADEOFF-002": {"$ref": "#/$defs/tradeoff_result_body"},
+        "METHOD-TRADEOFF-003": {"$ref": "#/$defs/tradeoff_result_body"},
+        "METHOD-TRADEOFF-004": {"$ref": "#/$defs/tradeoff_result_body"},
+        "METHOD-TRADEOFF-005": {"$ref": "#/$defs/tradeoff_result_body"},
+        "METHOD-TRADEOFF-006": {"$ref": "#/$defs/tradeoff_result_body"}
+      },
+      "$comment": "Every frozen axis assesses all five candidates; producer-specific one-candidate axes are unrepresentable."
+    },
+    "producer_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epistemic_outcome", "design_outcome", "recommended_candidate_key", "rationale"],
+      "properties": {
+        "epistemic_outcome": {"const": "INDETERMINATE"},
+        "design_outcome": {"enum": ["PROTOTYPE_REQUIRED", "RESEARCH_REQUIRED"]},
+        "recommended_candidate_key": {
+          "oneOf": [
+            {
+              "enum": [
+                "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+                "AUTHORITY_HIERARCHY",
+                "MULTI_CRITERIA_SCALAR_AGGREGATION",
+                "DELIBERATIVE_COMMITTEE",
+                "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+              ]
+            },
+            {"type": "null"}
+          ]
+        },
+        "rationale": {"$ref": "#/$defs/nonempty_string"}
+      }
+    },
+    "producer_identity_declaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "role", "identity_evidence_binding", "independence_claimed"],
+      "properties": {
+        "actor_id": {"$ref": "#/$defs/nonempty_string"},
+        "role": {"const": "PRIMARY_AUTHORING_ORCHESTRATOR"},
+        "identity_evidence_binding": {"$ref": "#/$defs/nullable_artifact_binding"},
+        "independence_claimed": {"const": false}
+      }
+    },
+    "method_producer_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "question_binding",
+        "protocol_binding",
+        "evidence_manifest_binding",
+        "candidate_denominator_binding",
+        "method_binding",
+        "producer_identity_declaration",
+        "raw_candidate_set",
+        "constraint_results",
+        "tradeoff_results",
+        "feasible_non_dominated_candidates",
+        "decision",
+        "uncertainties",
+        "falsification_obligations",
+        "verifier_obligations",
+        "authorization_acceptance_obligations",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_method_producer_assessment.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_producer_assessment"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-method-producer-assessment"},
+        "artifact_status": {"const": "PRODUCER_ASSESSMENT_NON_GOVERNING_REQUIRES_DETACHED_CHALLENGE"},
+        "question_binding": {"$ref": "#/$defs/question_binding"},
+        "protocol_binding": {"$ref": "#/$defs/artifact_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "producer_identity_declaration": {"$ref": "#/$defs/producer_identity_declaration"},
+        "raw_candidate_set": {
+          "const": {
+            "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+            "AUTHORITY_HIERARCHY": true,
+            "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+            "DELIBERATIVE_COMMITTEE": true,
+            "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+          }
+        },
+        "constraint_results": {"$ref": "#/$defs/fixed_candidate_constraint_assessments"},
+        "tradeoff_results": {"$ref": "#/$defs/tradeoff_result_catalog"},
+        "feasible_non_dominated_candidates": {"$ref": "#/$defs/candidate_reference_set"},
+        "decision": {"$ref": "#/$defs/producer_decision"},
+        "uncertainties": {"$ref": "#/$defs/string_fact_set"},
+        "falsification_obligations": {"$ref": "#/$defs/string_fact_set"},
+        "verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "finding_body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message", "evidence_refs", "resolution_state"],
+      "properties": {
+        "severity": {"enum": ["BLOCKING", "NON_BLOCKING", "NOTE"]},
+        "code": {"$ref": "#/$defs/nonempty_string"},
+        "message": {"$ref": "#/$defs/nonempty_string"},
+        "evidence_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nonempty_string"}
+        },
+        "resolution_state": {"enum": ["OPEN", "RESOLVED", "ACCEPTED_EXPLICIT_RISK"]}
+      }
+    },
+    "finding_catalog": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z][A-Z0-9_-]*$": {"$ref": "#/$defs/finding_body"}
+      },
+      "additionalProperties": false
+    },
+    "independence_declaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_identity_binding",
+        "not_method_producer",
+        "not_producer_assessment_author",
+        "not_other_review_author",
+        "selection_blind_reconstruction",
+        "material_dependency_disclosures",
+        "declaration_is_not_proof"
+      ],
+      "properties": {
+        "actor_identity_binding": {"$ref": "#/$defs/artifact_binding"},
+        "not_method_producer": {"const": true},
+        "not_producer_assessment_author": {"const": true},
+        "not_other_review_author": {"const": true},
+        "selection_blind_reconstruction": {"type": "boolean"},
+        "material_dependency_disclosures": {"$ref": "#/$defs/artifact_binding_set"},
+        "declaration_is_not_proof": {"const": true}
+      }
+    },
+    "challenger_reconstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["constraint_results", "tradeoff_results", "feasible_non_dominated_candidates", "divergence_from_producer"],
+      "properties": {
+        "constraint_results": {"$ref": "#/$defs/fixed_candidate_constraint_assessments"},
+        "tradeoff_results": {"$ref": "#/$defs/tradeoff_result_catalog"},
+        "feasible_non_dominated_candidates": {"$ref": "#/$defs/candidate_reference_set"},
+        "divergence_from_producer": {"$ref": "#/$defs/string_fact_set"}
+      }
+    },
+    "detached_challenger_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "protocol_binding",
+        "evidence_manifest_binding",
+        "candidate_denominator_binding",
+        "method_binding",
+        "producer_assessment_binding",
+        "independence_declaration",
+        "reconstruction",
+        "findings",
+        "blocking_finding_count",
+        "outcome",
+        "verifier_obligations",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_detached_challenger_report.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/detached_challenger_report"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-detached-challenger-report"},
+        "artifact_status": {"const": "DETACHED_CHALLENGER_REPORT"},
+        "protocol_binding": {"$ref": "#/$defs/artifact_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "producer_assessment_binding": {"$ref": "#/$defs/artifact_binding"},
+        "independence_declaration": {"$ref": "#/$defs/independence_declaration"},
+        "reconstruction": {"$ref": "#/$defs/challenger_reconstruction"},
+        "findings": {"$ref": "#/$defs/finding_catalog"},
+        "blocking_finding_count": {"type": "integer", "minimum": 0},
+        "outcome": {"enum": ["PASS", "FAIL"]},
+        "verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "PASS"}}, "required": ["outcome"]},
+          "then": {
+            "properties": {
+              "findings": {"maxProperties": 0},
+              "blocking_finding_count": {"const": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {"minProperties": 1},
+              "blocking_finding_count": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    },
+    "control_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "observed", "evidence_binding"],
+      "properties": {
+        "expected": {"const": "ACCEPT"},
+        "observed": {"enum": ["ACCEPT", "REJECT", "ERROR"]},
+        "evidence_binding": {"$ref": "#/$defs/artifact_binding"}
+      }
+    },
+    "mutation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "observed", "evidence_binding"],
+      "properties": {
+        "expected": {"const": "REJECT"},
+        "observed": {"enum": ["REJECT", "ACCEPT", "ERROR"]},
+        "evidence_binding": {"$ref": "#/$defs/artifact_binding"}
+      }
+    },
+    "positive_control_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["VALID_STRUCTURAL_LIFECYCLE_THROUGH_POST_FINAL_VERIFIER"],
+      "properties": {
+        "VALID_STRUCTURAL_LIFECYCLE_THROUGH_POST_FINAL_VERIFIER": {"$ref": "#/$defs/control_result"}
+      }
+    },
+    "mutation_fixture_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "MUTATED_WHOLE_FILE_HASH",
+        "MISSING_REQUIRED_CANDIDATE",
+        "DUPLICATE_OR_ALIASED_KEY",
+        "METHOD_REDEFINES_PROTOCOL_CONSTRAINT",
+        "UNKNOWN_HARD_CONSTRAINT_REFERENCE",
+        "CLAIM_KIND_STANDING_DRIFT",
+        "PRODUCER_SELF_ADOPT",
+        "CHALLENGER_PASS_WITH_FINDING",
+        "VERIFIER_ELIGIBLE_WITH_ACCEPTED_MUTATION",
+        "ARTIFACT_DAG_OR_DEPENDENCY_GAP",
+        "CONSTRAINT_PARTITION_GAP_OR_OVERLAP",
+        "INADMISSIBLE_CANDIDATE_IN_FEASIBLE_SET",
+        "TRADEOFF_REGISTRY_GAP_OR_ASYMMETRY",
+        "MATERIALITY_PROFILE_DRIFT",
+        "QUALITY_POLICY_FORMULA_OR_DENOMINATOR_DRIFT",
+        "CROSS_METHOD_OR_NON_ADJACENT_SUPERSEDES_LINEAGE",
+        "ACTOR_IDENTITY_OR_DEPENDENCY_COLLISION",
+        "ADOPT_SELECTED_CANDIDATE_NOT_FEASIBLE",
+        "SELECTED_FINAL_OR_BUNDLE_METHOD_BINDING_MISMATCH",
+        "SCHEMA_BINDING_OR_DEPENDENCY_BUNDLE_GAP",
+        "ILLEGAL_LIFECYCLE_STATE_TRANSITION"
+      ],
+      "properties": {
+        "MUTATED_WHOLE_FILE_HASH": {"$ref": "#/$defs/mutation_result"},
+        "MISSING_REQUIRED_CANDIDATE": {"$ref": "#/$defs/mutation_result"},
+        "DUPLICATE_OR_ALIASED_KEY": {"$ref": "#/$defs/mutation_result"},
+        "METHOD_REDEFINES_PROTOCOL_CONSTRAINT": {"$ref": "#/$defs/mutation_result"},
+        "UNKNOWN_HARD_CONSTRAINT_REFERENCE": {"$ref": "#/$defs/mutation_result"},
+        "CLAIM_KIND_STANDING_DRIFT": {"$ref": "#/$defs/mutation_result"},
+        "PRODUCER_SELF_ADOPT": {"$ref": "#/$defs/mutation_result"},
+        "CHALLENGER_PASS_WITH_FINDING": {"$ref": "#/$defs/mutation_result"},
+        "VERIFIER_ELIGIBLE_WITH_ACCEPTED_MUTATION": {"$ref": "#/$defs/mutation_result"},
+        "ARTIFACT_DAG_OR_DEPENDENCY_GAP": {"$ref": "#/$defs/mutation_result"},
+        "CONSTRAINT_PARTITION_GAP_OR_OVERLAP": {"$ref": "#/$defs/mutation_result"},
+        "INADMISSIBLE_CANDIDATE_IN_FEASIBLE_SET": {"$ref": "#/$defs/mutation_result"},
+        "TRADEOFF_REGISTRY_GAP_OR_ASYMMETRY": {"$ref": "#/$defs/mutation_result"},
+        "MATERIALITY_PROFILE_DRIFT": {"$ref": "#/$defs/mutation_result"},
+        "QUALITY_POLICY_FORMULA_OR_DENOMINATOR_DRIFT": {"$ref": "#/$defs/mutation_result"},
+        "CROSS_METHOD_OR_NON_ADJACENT_SUPERSEDES_LINEAGE": {"$ref": "#/$defs/mutation_result"},
+        "ACTOR_IDENTITY_OR_DEPENDENCY_COLLISION": {"$ref": "#/$defs/mutation_result"},
+        "ADOPT_SELECTED_CANDIDATE_NOT_FEASIBLE": {"$ref": "#/$defs/mutation_result"},
+        "SELECTED_FINAL_OR_BUNDLE_METHOD_BINDING_MISMATCH": {"$ref": "#/$defs/mutation_result"},
+        "SCHEMA_BINDING_OR_DEPENDENCY_BUNDLE_GAP": {"$ref": "#/$defs/mutation_result"},
+        "ILLEGAL_LIFECYCLE_STATE_TRANSITION": {"$ref": "#/$defs/mutation_result"}
+      }
+    },
+    "authorization_positive_control_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["VALID_EXACT_AUTHORIZATION_ACCEPTANCE"],
+      "properties": {
+        "VALID_EXACT_AUTHORIZATION_ACCEPTANCE": {"$ref": "#/$defs/control_result"}
+      }
+    },
+    "authorization_mutation_fixture_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "AUTHORIZATION_ACCEPTANCE_ELIGIBLE_WITH_ACCEPTED_MUTATION",
+        "AUTHORIZATION_WITH_UNBOUND_PRINCIPAL",
+        "AUTHORIZATION_MISSING_ACTION_EXPIRY_OR_RECOVERY",
+        "INVALID_CALENDAR_TIMESTAMP",
+        "EXPIRED_OR_NON_MONOTONIC_AUTHORIZATION",
+        "AUTHORIZED_METHOD_FINAL_OR_BUNDLE_MISMATCH",
+        "AUTHORIZATION_BYTES_SCHEMA_OR_DEPENDENCY_STALE",
+        "AUTHORIZATION_SCOPE_OR_PROHIBITION_EXPANSION",
+        "RECOVERY_BOUNDARY_MISSING_OR_INAPPLICABLE",
+        "UNTRUSTED_OR_STALE_TIME_SOURCE",
+        "AUTHORIZATION_OR_GATE_RECEIPT_DUPLICATE_RAW_MEMBER",
+        "AUTHORIZATION_TEXT_INTERNAL_HASH_MISMATCH",
+        "ACCEPTANCE_VALID_UNTIL_EXCEEDS_AUTHORIZATION_EXPIRY"
+      ],
+      "properties": {
+        "AUTHORIZATION_ACCEPTANCE_ELIGIBLE_WITH_ACCEPTED_MUTATION": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_WITH_UNBOUND_PRINCIPAL": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_MISSING_ACTION_EXPIRY_OR_RECOVERY": {"$ref": "#/$defs/mutation_result"},
+        "INVALID_CALENDAR_TIMESTAMP": {"$ref": "#/$defs/mutation_result"},
+        "EXPIRED_OR_NON_MONOTONIC_AUTHORIZATION": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZED_METHOD_FINAL_OR_BUNDLE_MISMATCH": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_BYTES_SCHEMA_OR_DEPENDENCY_STALE": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_SCOPE_OR_PROHIBITION_EXPANSION": {"$ref": "#/$defs/mutation_result"},
+        "RECOVERY_BOUNDARY_MISSING_OR_INAPPLICABLE": {"$ref": "#/$defs/mutation_result"},
+        "UNTRUSTED_OR_STALE_TIME_SOURCE": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_OR_GATE_RECEIPT_DUPLICATE_RAW_MEMBER": {"$ref": "#/$defs/mutation_result"},
+        "AUTHORIZATION_TEXT_INTERNAL_HASH_MISMATCH": {"$ref": "#/$defs/mutation_result"},
+        "ACCEPTANCE_VALID_UNTIL_EXCEEDS_AUTHORIZATION_EXPIRY": {"$ref": "#/$defs/mutation_result"}
+      }
+    },
+    "obligation_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed", "evidence_binding"],
+      "properties": {
+        "observed": {"enum": ["PASS", "FAIL", "ERROR"]},
+        "evidence_binding": {"$ref": "#/$defs/artifact_binding"}
+      }
+    },
+    "obligation_result_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "EXACT_WHOLE_FILE_HASH_RECOMPUTATION",
+        "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE",
+        "CONSTRAINT_PARTITION_COMPLETENESS",
+        "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION",
+        "LIFECYCLE_STATE_TRANSITION_VALIDITY",
+        "QUALITY_POLICY_CONTRACT_DETERMINISM"
+      ],
+      "properties": {
+        "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": {"$ref": "#/$defs/obligation_result"},
+        "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": {"$ref": "#/$defs/obligation_result"},
+        "CONSTRAINT_PARTITION_COMPLETENESS": {"$ref": "#/$defs/obligation_result"},
+        "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": {"$ref": "#/$defs/obligation_result"},
+        "LIFECYCLE_STATE_TRANSITION_VALIDITY": {"$ref": "#/$defs/obligation_result"},
+        "QUALITY_POLICY_CONTRACT_DETERMINISM": {"$ref": "#/$defs/obligation_result"}
+      }
+    },
+    "authorization_acceptance_result_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION",
+        "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY",
+        "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY",
+        "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY",
+        "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY"
+      ],
+      "properties": {
+        "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": {"$ref": "#/$defs/obligation_result"},
+        "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": {"$ref": "#/$defs/obligation_result"},
+        "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": {"$ref": "#/$defs/obligation_result"},
+        "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": {"$ref": "#/$defs/obligation_result"},
+        "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": {"$ref": "#/$defs/obligation_result"}
+      }
+    },
+    "method_dependency_bundle_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "selected_candidate_key",
+        "members",
+        "closure_assertions",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_method_dependency_bundle_manifest.v1"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_dependency_bundle_manifest"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-method-dependency-bundle-manifest"},
+        "artifact_status": {"const": "DEPENDENCY_BUNDLE_PENDING_DETACHED_VERIFICATION"},
+        "selected_candidate_key": {
+          "enum": [
+            "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+            "AUTHORITY_HIERARCHY",
+            "MULTI_CRITERIA_SCALAR_AGGREGATION",
+            "DELIBERATIVE_COMMITTEE",
+            "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+          ]
+        },
+        "members": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "TICKET_SCHEMA",
+            "EVIDENCE_MANIFEST",
+            "CANDIDATE_DENOMINATOR",
+            "BOOTSTRAP_PROTOCOL",
+            "SELECTED_METHOD",
+            "PRODUCER_ASSESSMENT",
+            "CHALLENGER_REPORT",
+            "FINAL_DECISION_CANDIDATE",
+            "VERIFIER_IMPLEMENTATION",
+            "AUTHORIZATION_ACCEPTANCE_GATE_IMPLEMENTATION",
+            "FINALIZER_IDENTITY_EVIDENCE"
+          ],
+          "properties": {
+            "TICKET_SCHEMA": {"$ref": "#/$defs/ticket_schema_binding"},
+            "EVIDENCE_MANIFEST": {"$ref": "#/$defs/artifact_binding"},
+            "CANDIDATE_DENOMINATOR": {"$ref": "#/$defs/artifact_binding"},
+            "BOOTSTRAP_PROTOCOL": {"$ref": "#/$defs/artifact_binding"},
+            "SELECTED_METHOD": {"$ref": "#/$defs/artifact_binding"},
+            "PRODUCER_ASSESSMENT": {"$ref": "#/$defs/artifact_binding"},
+            "CHALLENGER_REPORT": {"$ref": "#/$defs/artifact_binding"},
+            "FINAL_DECISION_CANDIDATE": {"$ref": "#/$defs/artifact_binding"},
+            "VERIFIER_IMPLEMENTATION": {"$ref": "#/$defs/artifact_binding"},
+            "AUTHORIZATION_ACCEPTANCE_GATE_IMPLEMENTATION": {"$ref": "#/$defs/artifact_binding"},
+            "FINALIZER_IDENTITY_EVIDENCE": {"$ref": "#/$defs/artifact_binding"}
+          }
+        },
+        "closure_assertions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "member_keys_exact",
+            "all_member_hashes_whole_file_raw_bytes",
+            "selected_key_matches_selected_method_key",
+            "final_selected_method_matches_bundle_method",
+            "current_artifact_dag_acyclic",
+            "historical_lineage_edges_excluded_from_current_dag"
+          ],
+          "properties": {
+            "member_keys_exact": {"const": true},
+            "all_member_hashes_whole_file_raw_bytes": {"const": true},
+            "selected_key_matches_selected_method_key": {"const": true},
+            "final_selected_method_matches_bundle_method": {"const": true},
+            "current_artifact_dag_acyclic": {"const": true},
+            "historical_lineage_edges_excluded_from_current_dag": {"const": true}
+          }
+        },
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "detached_structural_verifier_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "dependency_bundle_binding",
+        "final_record_binding",
+        "independence_declaration",
+        "verifier_implementation_binding",
+        "declared_verifier_obligations",
+        "obligation_results",
+        "positive_controls",
+        "mutation_fixture_results",
+        "findings",
+        "blocking_finding_count",
+        "eligibility",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_detached_structural_verifier_report.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/detached_structural_verifier_report"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-detached-structural-verifier-report"},
+        "artifact_status": {"const": "POST_FINAL_DETACHED_STRUCTURAL_VERIFIER_REPORT"},
+        "dependency_bundle_binding": {"$ref": "#/$defs/artifact_binding"},
+        "final_record_binding": {"$ref": "#/$defs/artifact_binding"},
+        "independence_declaration": {"$ref": "#/$defs/independence_declaration"},
+        "verifier_implementation_binding": {"$ref": "#/$defs/artifact_binding"},
+        "declared_verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "obligation_results": {"$ref": "#/$defs/obligation_result_set"},
+        "positive_controls": {"$ref": "#/$defs/positive_control_set"},
+        "mutation_fixture_results": {"$ref": "#/$defs/mutation_fixture_set"},
+        "findings": {"$ref": "#/$defs/finding_catalog"},
+        "blocking_finding_count": {"type": "integer", "minimum": 0},
+        "eligibility": {"enum": ["ELIGIBLE", "INELIGIBLE"]},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"eligibility": {"const": "ELIGIBLE"}}, "required": ["eligibility"]},
+          "then": {
+            "properties": {
+              "positive_controls": {
+                "properties": {
+                  "VALID_STRUCTURAL_LIFECYCLE_THROUGH_POST_FINAL_VERIFIER": {
+                    "properties": {"observed": {"const": "ACCEPT"}}
+                  }
+                }
+              },
+              "mutation_fixture_results": {
+                "properties": {
+                  "MUTATED_WHOLE_FILE_HASH": {"properties": {"observed": {"const": "REJECT"}}},
+                  "MISSING_REQUIRED_CANDIDATE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "DUPLICATE_OR_ALIASED_KEY": {"properties": {"observed": {"const": "REJECT"}}},
+                  "METHOD_REDEFINES_PROTOCOL_CONSTRAINT": {"properties": {"observed": {"const": "REJECT"}}},
+                  "UNKNOWN_HARD_CONSTRAINT_REFERENCE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "CLAIM_KIND_STANDING_DRIFT": {"properties": {"observed": {"const": "REJECT"}}},
+                  "PRODUCER_SELF_ADOPT": {"properties": {"observed": {"const": "REJECT"}}},
+                  "CHALLENGER_PASS_WITH_FINDING": {"properties": {"observed": {"const": "REJECT"}}},
+                  "VERIFIER_ELIGIBLE_WITH_ACCEPTED_MUTATION": {"properties": {"observed": {"const": "REJECT"}}},
+                  "ARTIFACT_DAG_OR_DEPENDENCY_GAP": {"properties": {"observed": {"const": "REJECT"}}},
+                  "CONSTRAINT_PARTITION_GAP_OR_OVERLAP": {"properties": {"observed": {"const": "REJECT"}}},
+                  "INADMISSIBLE_CANDIDATE_IN_FEASIBLE_SET": {"properties": {"observed": {"const": "REJECT"}}},
+                  "TRADEOFF_REGISTRY_GAP_OR_ASYMMETRY": {"properties": {"observed": {"const": "REJECT"}}},
+                  "MATERIALITY_PROFILE_DRIFT": {"properties": {"observed": {"const": "REJECT"}}},
+                  "QUALITY_POLICY_FORMULA_OR_DENOMINATOR_DRIFT": {"properties": {"observed": {"const": "REJECT"}}},
+                  "CROSS_METHOD_OR_NON_ADJACENT_SUPERSEDES_LINEAGE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "ACTOR_IDENTITY_OR_DEPENDENCY_COLLISION": {"properties": {"observed": {"const": "REJECT"}}},
+                  "ADOPT_SELECTED_CANDIDATE_NOT_FEASIBLE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "SELECTED_FINAL_OR_BUNDLE_METHOD_BINDING_MISMATCH": {"properties": {"observed": {"const": "REJECT"}}},
+                  "SCHEMA_BINDING_OR_DEPENDENCY_BUNDLE_GAP": {"properties": {"observed": {"const": "REJECT"}}},
+                  "ILLEGAL_LIFECYCLE_STATE_TRANSITION": {"properties": {"observed": {"const": "REJECT"}}}
+                }
+              },
+              "obligation_results": {
+                "properties": {
+                  "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": {"properties": {"observed": {"const": "PASS"}}},
+                  "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": {"properties": {"observed": {"const": "PASS"}}},
+                  "CONSTRAINT_PARTITION_COMPLETENESS": {"properties": {"observed": {"const": "PASS"}}},
+                  "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": {"properties": {"observed": {"const": "PASS"}}},
+                  "LIFECYCLE_STATE_TRANSITION_VALIDITY": {"properties": {"observed": {"const": "PASS"}}},
+                  "QUALITY_POLICY_CONTRACT_DETERMINISM": {"properties": {"observed": {"const": "PASS"}}}
+                }
+              },
+              "findings": {"maxProperties": 0},
+              "blocking_finding_count": {"const": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {"minProperties": 1},
+              "blocking_finding_count": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    },
+    "adopt_final_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "epistemic_outcome",
+        "design_outcome",
+        "selected_candidate_key",
+        "selected_method_binding",
+        "rationale",
+        "evidence_refs"
+      ],
+      "properties": {
+        "epistemic_outcome": {"const": "SUPPORTED"},
+        "design_outcome": {"const": "ADOPT"},
+        "selected_candidate_key": {
+          "enum": [
+            "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+            "AUTHORITY_HIERARCHY",
+            "MULTI_CRITERIA_SCALAR_AGGREGATION",
+            "DELIBERATIVE_COMMITTEE",
+            "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+          ]
+        },
+        "selected_method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "rationale": {"$ref": "#/$defs/nonempty_string"},
+        "evidence_refs": {"$ref": "#/$defs/evidence_reference_set"}
+      }
+    },
+    "non_adopt_final_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "epistemic_outcome",
+        "design_outcome",
+        "selected_candidate_key",
+        "selected_method_binding",
+        "rationale",
+        "evidence_refs"
+      ],
+      "properties": {
+        "epistemic_outcome": {"enum": ["SUPPORTED", "REFUTED", "INDETERMINATE"]},
+        "design_outcome": {
+          "enum": [
+            "REVISE",
+            "REJECT",
+            "RESEARCH_REQUIRED",
+            "PROTOTYPE_REQUIRED",
+            "USER_VALUE_CHOICE_REQUIRED",
+            "EQUIVALENT_SET"
+          ]
+        },
+        "selected_candidate_key": {
+          "oneOf": [
+            {
+              "enum": [
+                "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT",
+                "AUTHORITY_HIERARCHY",
+                "MULTI_CRITERIA_SCALAR_AGGREGATION",
+                "DELIBERATIVE_COMMITTEE",
+                "CONSTRAINT_FIRST_TYPED_EVIDENCE"
+              ]
+            },
+            {"type": "null"}
+          ]
+        },
+        "selected_method_binding": {"$ref": "#/$defs/nullable_artifact_binding"},
+        "rationale": {"$ref": "#/$defs/nonempty_string"},
+        "evidence_refs": {"$ref": "#/$defs/evidence_reference_set"}
+      }
+    },
+    "final_method_adjudication_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "question_binding",
+        "protocol_binding",
+        "evidence_manifest_binding",
+        "candidate_denominator_binding",
+        "method_binding",
+        "producer_assessment_binding",
+        "challenger_report_binding",
+        "finalizer_independence_declaration",
+        "report_assertions",
+        "decision",
+        "decision_verification_state",
+        "authorization_state",
+        "next_required_artifact",
+        "verifier_obligations",
+        "authorization_acceptance_obligations",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_final_method_adjudication_record.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/final_method_adjudication_record"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-final-method-adjudication-record"},
+        "artifact_status": {"const": "FINAL_DECISION_CANDIDATE_NON_GOVERNING_UNTIL_POST_FINAL_VERIFICATION_EXACT_USER_AUTHORIZATION_AND_POST_AUTHORIZATION_ACCEPTANCE"},
+        "question_binding": {"$ref": "#/$defs/question_binding"},
+        "protocol_binding": {"$ref": "#/$defs/artifact_binding"},
+        "evidence_manifest_binding": {"$ref": "#/$defs/artifact_binding"},
+        "candidate_denominator_binding": {"$ref": "#/$defs/artifact_binding"},
+        "method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "producer_assessment_binding": {"$ref": "#/$defs/artifact_binding"},
+        "challenger_report_binding": {"$ref": "#/$defs/artifact_binding"},
+        "finalizer_independence_declaration": {"$ref": "#/$defs/independence_declaration"},
+        "report_assertions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "producer_epistemic_outcome",
+            "challenger_outcome",
+            "challenger_blocking_findings",
+            "selected_candidate_reconstruction_state",
+            "selected_candidate_fail_count",
+            "selected_candidate_blocking_unknown_count",
+            "unresolved_required_evidence_gap_count"
+          ],
+          "properties": {
+            "producer_epistemic_outcome": {"const": "INDETERMINATE"},
+            "challenger_outcome": {"enum": ["PASS", "FAIL"]},
+            "challenger_blocking_findings": {"type": "integer", "minimum": 0},
+            "selected_candidate_reconstruction_state": {"enum": ["FEASIBLE_NON_DOMINATED", "INADMISSIBLE", "UNRESOLVED", "NOT_SELECTED"]},
+            "selected_candidate_fail_count": {"type": "integer", "minimum": 0},
+            "selected_candidate_blocking_unknown_count": {"type": "integer", "minimum": 0},
+            "unresolved_required_evidence_gap_count": {"type": "integer", "minimum": 0}
+          }
+        },
+        "decision": {
+          "oneOf": [
+            {"$ref": "#/$defs/adopt_final_decision"},
+            {"$ref": "#/$defs/non_adopt_final_decision"}
+          ]
+        },
+        "decision_verification_state": {"const": "PENDING_POST_FINAL_DETACHED_STRUCTURAL_VERIFICATION"},
+        "authorization_state": {"const": "NOT_AUTHORIZED"},
+        "next_required_artifact": {
+          "enum": ["METHOD_DEPENDENCY_BUNDLE_THEN_DETACHED_STRUCTURAL_VERIFICATION", "NEW_LIFECYCLE_GENERATION_OR_DECLARED_EXIT"]
+        },
+        "verifier_obligations": {"$ref": "#/$defs/verifier_obligations"},
+        "authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "decision": {
+                "properties": {"design_outcome": {"const": "ADOPT"}},
+                "required": ["design_outcome"]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "report_assertions": {
+                "properties": {
+                  "challenger_outcome": {"const": "PASS"},
+                  "challenger_blocking_findings": {"const": 0},
+                  "selected_candidate_reconstruction_state": {"const": "FEASIBLE_NON_DOMINATED"},
+                  "selected_candidate_fail_count": {"const": 0},
+                  "selected_candidate_blocking_unknown_count": {"const": 0},
+                  "unresolved_required_evidence_gap_count": {"const": 0}
+                }
+              },
+              "next_required_artifact": {"const": "METHOD_DEPENDENCY_BUNDLE_THEN_DETACHED_STRUCTURAL_VERIFICATION"}
+            }
+          },
+          "else": {
+            "properties": {"next_required_artifact": {"const": "NEW_LIFECYCLE_GENERATION_OR_DECLARED_EXIT"}}
+          }
+        }
+      ]
+    },
+    "exact_authorization_text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exact_text", "exact_text_sha256", "encoding"],
+      "properties": {
+        "exact_text": {"$ref": "#/$defs/nonempty_string"},
+        "exact_text_sha256": {"$ref": "#/$defs/sha256"},
+        "encoding": {"const": "UTF-8"}
+      }
+    },
+    "authorization_principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["principal_artifact_binding", "authority_scope", "authentication_evidence_binding"],
+      "properties": {
+        "principal_artifact_binding": {"$ref": "#/$defs/artifact_binding"},
+        "authority_scope": {"const": "AUTHORIZE_SUCCESSOR_DESIGN_METHOD_EXACT_BYTES_ONLY"},
+        "authentication_evidence_binding": {"$ref": "#/$defs/artifact_binding"}
+      }
+    },
+    "exact_bytes_user_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "authorized_method_binding",
+        "final_record_binding",
+        "challenger_report_binding",
+        "verifier_report_binding",
+        "dependency_bundle_binding",
+        "authorization_principal",
+        "authorization_text",
+        "bound_claims",
+        "allowed_action",
+        "authorized_scope",
+        "prohibited_actions",
+        "valid_from",
+        "expires_at",
+        "recovery_boundary_binding",
+        "recovery_or_reversion_semantics",
+        "invalidation_conditions",
+        "acceptance_state",
+        "next_required_artifact",
+        "authorization_acceptance_obligations",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_exact_bytes_user_authorization.v2"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/exact_bytes_user_authorization"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-exact-bytes-user-authorization"},
+        "artifact_status": {"const": "EXACT_BYTES_USER_AUTHORIZATION_PENDING_DETACHED_ACCEPTANCE_GATE"},
+        "authorized_method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "final_record_binding": {"$ref": "#/$defs/artifact_binding"},
+        "challenger_report_binding": {"$ref": "#/$defs/artifact_binding"},
+        "verifier_report_binding": {"$ref": "#/$defs/artifact_binding"},
+        "dependency_bundle_binding": {"$ref": "#/$defs/artifact_binding"},
+        "authorization_principal": {"$ref": "#/$defs/authorization_principal"},
+        "authorization_text": {"$ref": "#/$defs/exact_authorization_text"},
+        "bound_claims": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "final_record_design_outcome",
+            "challenger_outcome",
+            "challenger_blocking_findings",
+            "verifier_eligibility",
+            "verifier_blocking_findings",
+            "dependency_bundle_closed",
+            "method_bytes_unchanged",
+            "selected_key_matches_method_key",
+            "authorized_method_matches_final_and_bundle",
+            "authorization_time_window_declared_well_formed"
+          ],
+          "properties": {
+            "final_record_design_outcome": {"const": "ADOPT"},
+            "challenger_outcome": {"const": "PASS"},
+            "challenger_blocking_findings": {"const": 0},
+            "verifier_eligibility": {"const": "ELIGIBLE"},
+            "verifier_blocking_findings": {"const": 0},
+            "dependency_bundle_closed": {"const": true},
+            "method_bytes_unchanged": {"const": true},
+            "selected_key_matches_method_key": {"const": true},
+            "authorized_method_matches_final_and_bundle": {"const": true},
+            "authorization_time_window_declared_well_formed": {"const": true}
+          },
+          "$comment": "These are claims signed by the authorization principal, not machine proof. The downstream detached acceptance gate must recompute every claim from bound bytes and external identity and time evidence."
+        },
+        "allowed_action": {"const": "USE_THE_BOUND_METHOD_BYTES_AS_THE_SUCCESSOR_DESIGN_ADJUDICATION_PROCESS_ONLY"},
+        "authorized_scope": {"const": "USE_AS_SUCCESSOR_DESIGN_ADJUDICATION_METHOD_ONLY"},
+        "prohibited_actions": {
+          "const": [
+            "ACTIVATE_ANY_CONSTITUTION_CLAUSE",
+            "IMPLEMENT_OR_MODIFY_PRODUCTION_CODE",
+            "MUTATE_LEGACY_MNEMOS_RUNTIME_OR_DATA",
+            "AUTHORIZE_MIGRATION_REPLAY_DAEMON_REAL_API_OR_CUTOVER"
+          ]
+        },
+        "valid_from": {"$ref": "#/$defs/rfc3339_datetime"},
+        "expires_at": {"$ref": "#/$defs/rfc3339_datetime"},
+        "recovery_boundary_binding": {"$ref": "#/$defs/artifact_binding"},
+        "recovery_or_reversion_semantics": {
+          "const": "REVOCATION_EXPIRY_OR_INVALIDATION_RETURNS_FUTURE_DESIGN_WORK_TO_NON_GOVERNING_REVIEW_REQUIRED_STATE; NO_PRODUCTION_ROLLBACK_IS_AUTHORIZED_OR_IMPLIED"
+        },
+        "invalidation_conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ANY_DEPENDENCY_BYTE_CHANGES",
+            "AUTHORIZATION_EXPIRES",
+            "PRINCIPAL_SCOPE_OR_AUTHENTICATION_CHANGES",
+            "CHALLENGER_OR_VERIFIER_BECOMES_INVALID",
+            "METHOD_SCOPE_OR_MATERIALITY_CHANGES",
+            "RECOVERY_BOUNDARY_UNAVAILABLE"
+          ],
+          "properties": {
+            "ANY_DEPENDENCY_BYTE_CHANGES": {"const": "INVALIDATE"},
+            "AUTHORIZATION_EXPIRES": {"const": "INVALIDATE"},
+            "PRINCIPAL_SCOPE_OR_AUTHENTICATION_CHANGES": {"const": "INVALIDATE"},
+            "CHALLENGER_OR_VERIFIER_BECOMES_INVALID": {"const": "INVALIDATE"},
+            "METHOD_SCOPE_OR_MATERIALITY_CHANGES": {"const": "INVALIDATE"},
+            "RECOVERY_BOUNDARY_UNAVAILABLE": {"const": "INVALIDATE"}
+          },
+          "$comment": "The downstream authorization acceptance gate must prove valid_from < expires_at, evaluated_at in range, and calendar-valid RFC 3339 timestamps, and consumers must repeat the time check at each use."
+        },
+        "acceptance_state": {"const": "PENDING_DETACHED_AUTHORIZATION_ACCEPTANCE_GATE"},
+        "next_required_artifact": {"const": "AUTHORIZATION_ACCEPTANCE_GATE_RECEIPT"},
+        "authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      }
+    },
+    "authorization_acceptance_gate_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "schema_ref",
+        "schema_binding",
+        "artifact_id",
+        "artifact_status",
+        "authorization_binding",
+        "authorized_method_binding",
+        "final_record_binding",
+        "challenger_report_binding",
+        "structural_verifier_report_binding",
+        "dependency_bundle_binding",
+        "principal_artifact_binding",
+        "authentication_evidence_binding",
+        "recovery_boundary_binding",
+        "trusted_time_source_binding",
+        "gate_actor_identity_binding",
+        "gate_implementation_binding",
+        "independence_assertions",
+        "evaluated_at",
+        "authorization_window_state",
+        "declared_authorization_acceptance_obligations",
+        "obligation_results",
+        "positive_controls",
+        "mutation_fixture_results",
+        "findings",
+        "blocking_finding_count",
+        "eligibility",
+        "valid_until",
+        "use_time_revalidation_required",
+        "activation_semantics",
+        "schema_capability_boundary",
+        "hash_policy"
+      ],
+      "properties": {
+        "schema_version": {"const": "mnemos.cognitive_successor_authorization_acceptance_gate_receipt.v1"},
+        "schema_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/authorization_acceptance_gate_receipt"},
+        "schema_binding": {"$ref": "#/$defs/ticket_schema_binding"},
+        "artifact_id": {"const": "cognitive-successor-authorization-acceptance-gate-receipt"},
+        "artifact_status": {"const": "POST_AUTHORIZATION_DETACHED_ACCEPTANCE_GATE_RECEIPT"},
+        "authorization_binding": {"$ref": "#/$defs/artifact_binding"},
+        "authorized_method_binding": {"$ref": "#/$defs/artifact_binding"},
+        "final_record_binding": {"$ref": "#/$defs/artifact_binding"},
+        "challenger_report_binding": {"$ref": "#/$defs/artifact_binding"},
+        "structural_verifier_report_binding": {"$ref": "#/$defs/artifact_binding"},
+        "dependency_bundle_binding": {"$ref": "#/$defs/artifact_binding"},
+        "principal_artifact_binding": {"$ref": "#/$defs/artifact_binding"},
+        "authentication_evidence_binding": {"$ref": "#/$defs/artifact_binding"},
+        "recovery_boundary_binding": {"$ref": "#/$defs/artifact_binding"},
+        "trusted_time_source_binding": {"$ref": "#/$defs/artifact_binding"},
+        "gate_actor_identity_binding": {"$ref": "#/$defs/artifact_binding"},
+        "gate_implementation_binding": {"$ref": "#/$defs/artifact_binding"},
+        "independence_assertions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "gate_actor_is_not_authorization_principal",
+            "gate_actor_is_not_method_or_assessment_producer",
+            "gate_actor_is_not_challenger_or_finalizer",
+            "gate_actor_is_not_structural_verifier_report_author",
+            "identity_and_dependency_evidence_recomputed_not_self_declared"
+          ],
+          "properties": {
+            "gate_actor_is_not_authorization_principal": {"const": true},
+            "gate_actor_is_not_method_or_assessment_producer": {"const": true},
+            "gate_actor_is_not_challenger_or_finalizer": {"const": true},
+            "gate_actor_is_not_structural_verifier_report_author": {"const": true},
+            "identity_and_dependency_evidence_recomputed_not_self_declared": {"const": true}
+          }
+        },
+        "evaluated_at": {"$ref": "#/$defs/rfc3339_datetime"},
+        "authorization_window_state": {"enum": ["CURRENTLY_VALID", "NOT_YET_VALID", "EXPIRED", "INVALID"]},
+        "declared_authorization_acceptance_obligations": {"$ref": "#/$defs/authorization_acceptance_obligations"},
+        "obligation_results": {"$ref": "#/$defs/authorization_acceptance_result_set"},
+        "positive_controls": {"$ref": "#/$defs/authorization_positive_control_set"},
+        "mutation_fixture_results": {"$ref": "#/$defs/authorization_mutation_fixture_set"},
+        "findings": {"$ref": "#/$defs/finding_catalog"},
+        "blocking_finding_count": {"type": "integer", "minimum": 0},
+        "eligibility": {"enum": ["ACTIVATION_ELIGIBLE", "INELIGIBLE"]},
+        "valid_until": {"$ref": "#/$defs/rfc3339_datetime"},
+        "use_time_revalidation_required": {"const": true},
+        "activation_semantics": {"const": "ACTIVATION_ELIGIBILITY_APPLIES_ONLY_TO_THE_BOUND_DESIGN_METHOD_AND_ONLY_WHILE_THE_AUTHORIZATION_AND_ACCEPTANCE_RECEIPT_REMAIN_VALID; IT_DOES_NOT_ACTIVATE_CONSTITUTION_CLAUSES_OR_AUTHORIZE_IMPLEMENTATION_PRODUCTION_MIGRATION_REPLAY_REAL_API_OR_CUTOVER"},
+        "schema_capability_boundary": {"$ref": "#/$defs/schema_capability_boundary"},
+        "hash_policy": {"$ref": "#/$defs/hash_policy"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"eligibility": {"const": "ACTIVATION_ELIGIBLE"}}, "required": ["eligibility"]},
+          "then": {
+            "properties": {
+              "authorization_window_state": {"const": "CURRENTLY_VALID"},
+              "obligation_results": {
+                "properties": {
+                  "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": {"properties": {"observed": {"const": "PASS"}}},
+                  "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": {"properties": {"observed": {"const": "PASS"}}},
+                  "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": {"properties": {"observed": {"const": "PASS"}}},
+                  "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": {"properties": {"observed": {"const": "PASS"}}},
+                  "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": {"properties": {"observed": {"const": "PASS"}}}
+                }
+              },
+              "positive_controls": {
+                "properties": {
+                  "VALID_EXACT_AUTHORIZATION_ACCEPTANCE": {"properties": {"observed": {"const": "ACCEPT"}}}
+                }
+              },
+              "mutation_fixture_results": {
+                "properties": {
+                  "AUTHORIZATION_ACCEPTANCE_ELIGIBLE_WITH_ACCEPTED_MUTATION": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_WITH_UNBOUND_PRINCIPAL": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_MISSING_ACTION_EXPIRY_OR_RECOVERY": {"properties": {"observed": {"const": "REJECT"}}},
+                  "INVALID_CALENDAR_TIMESTAMP": {"properties": {"observed": {"const": "REJECT"}}},
+                  "EXPIRED_OR_NON_MONOTONIC_AUTHORIZATION": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZED_METHOD_FINAL_OR_BUNDLE_MISMATCH": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_BYTES_SCHEMA_OR_DEPENDENCY_STALE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_SCOPE_OR_PROHIBITION_EXPANSION": {"properties": {"observed": {"const": "REJECT"}}},
+                  "RECOVERY_BOUNDARY_MISSING_OR_INAPPLICABLE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "UNTRUSTED_OR_STALE_TIME_SOURCE": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_OR_GATE_RECEIPT_DUPLICATE_RAW_MEMBER": {"properties": {"observed": {"const": "REJECT"}}},
+                  "AUTHORIZATION_TEXT_INTERNAL_HASH_MISMATCH": {"properties": {"observed": {"const": "REJECT"}}},
+                  "ACCEPTANCE_VALID_UNTIL_EXCEEDS_AUTHORIZATION_EXPIRY": {"properties": {"observed": {"const": "REJECT"}}}
+                }
+              },
+              "findings": {"maxProperties": 0},
+              "blocking_finding_count": {"const": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "findings": {"minProperties": 1},
+              "blocking_finding_count": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      ]
+    }
+  }
+}

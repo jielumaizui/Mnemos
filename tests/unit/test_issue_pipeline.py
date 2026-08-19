@@ -7,17 +7,16 @@ Issue Pipeline 单元测试
 """
 
 import shutil
-import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from core.kia.issue_pipeline import (
-    Issue, IssueRegistry, AutoFixExecutor, IgnoreRule,
-    AUTO_FIX_RULES,
+    Issue,
+    IssueRegistry,
+    AutoFixExecutor,
+    IgnoreRule,
 )
 
 
@@ -107,8 +106,11 @@ class TestIssueRegistry(unittest.TestCase):
         issue = self._make_issue()
         self.registry.register(issue)
         ok = self.registry.update_status(
-            issue.issue_id, "resolved", resolved_by="user",
-            resolution_action="confirmed", resolution_notes="looks ok",
+            issue.issue_id,
+            "resolved",
+            resolved_by="user",
+            resolution_action="confirmed",
+            resolution_notes="looks ok",
         )
         self.assertTrue(ok)
         reloaded = self.registry.get_issue(issue.issue_id)
@@ -127,6 +129,17 @@ class TestIssueRegistry(unittest.TestCase):
         counts = self.registry.count_by_status()
         self.assertEqual(counts.get("detected"), 1)
         self.assertEqual(counts.get("resolved"), 1)
+
+    def test_count_by_severity(self):
+        """统计按严重度分布"""
+        i1 = self._make_issue(page="a.md", severity="high")
+        i2 = self._make_issue(page="b.md", severity="medium")
+        self.registry.register(i1)
+        self.registry.register(i2)
+
+        counts = self.registry.count_by_severity()
+        self.assertEqual(counts.get("high"), 1)
+        self.assertEqual(counts.get("medium"), 1)
 
     def test_add_ignore_rule_exact(self):
         """精确忽略规则应命中"""
@@ -147,8 +160,9 @@ class TestIssueRegistry(unittest.TestCase):
     def test_add_ignore_rule_expires(self):
         """过期忽略规则不应命中"""
         past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        rule = IgnoreRule(issue_type="conflict", page_pattern="a.md",
-                          reason="temp", expires_at=past)
+        rule = IgnoreRule(
+            issue_type="conflict", page_pattern="a.md", reason="temp", expires_at=past
+        )
         self.registry.add_ignore_rule(rule)
 
         issue = self._make_issue(issue_type="conflict", page="a.md")
@@ -184,24 +198,30 @@ class TestAutoFixExecutor(unittest.TestCase):
     def test_can_auto_fix_low_risk(self):
         """白名单内的问题应判定为可自动修复"""
         issue = Issue(
-            source_module="immune", issue_type="orphan",
-            page_path="a.md", severity="medium",
+            source_module="immune",
+            issue_type="orphan",
+            page_path="a.md",
+            severity="medium",
         )
         self.assertTrue(self.executor.can_auto_fix(issue))
 
     def test_can_auto_fix_high_risk(self):
         """白名单外的问题应判定为不可自动修复"""
         issue = Issue(
-            source_module="immune", issue_type="conflict",
-            page_path="a.md", severity="critical",
+            source_module="immune",
+            issue_type="conflict",
+            page_path="a.md",
+            severity="critical",
         )
         self.assertFalse(self.executor.can_auto_fix(issue))
 
     def test_execute_skips_non_auto_fixable(self):
         """不可自动修复的问题应被跳过"""
         issue = Issue(
-            source_module="immune", issue_type="conflict",
-            page_path="a.md", severity="critical",
+            source_module="immune",
+            issue_type="conflict",
+            page_path="a.md",
+            severity="critical",
         )
         result = self.executor.execute(issue)
         self.assertTrue(result.skipped)
@@ -210,8 +230,10 @@ class TestAutoFixExecutor(unittest.TestCase):
     def test_execute_skips_ignored_issue(self):
         """被忽略的问题应被跳过"""
         issue = Issue(
-            source_module="immune", issue_type="orphan",
-            page_path="a.md", severity="medium",
+            source_module="immune",
+            issue_type="orphan",
+            page_path="a.md",
+            severity="medium",
         )
         self.registry.register(issue)
         self.registry.add_ignore_rule(
@@ -227,8 +249,10 @@ class TestAutoFixExecutor(unittest.TestCase):
         page.write_text("# Test\ncontent\n", encoding="utf-8")
 
         issue = Issue(
-            source_module="entropy", issue_type="cross_reference",
-            page_path=str(page), related_pages=[str(self.wiki_dir / "b.md")],
+            source_module="entropy",
+            issue_type="cross_reference",
+            page_path=str(page),
+            related_pages=[str(self.wiki_dir / "b.md")],
             severity="low",
         )
         result = self.executor.execute(issue)
@@ -241,8 +265,10 @@ class TestAutoFixExecutor(unittest.TestCase):
         page.write_text("# Test\ncontent\n", encoding="utf-8")
 
         issue = Issue(
-            source_module="immune", issue_type="orphan",
-            page_path=str(page), severity="medium",
+            source_module="immune",
+            issue_type="orphan",
+            page_path=str(page),
+            severity="medium",
         )
         result = self.executor.execute(issue)
         # 由于 wiki 目录为空，discover_relations 可能返回 0，但不应抛异常
@@ -256,8 +282,10 @@ class TestAutoFixExecutor(unittest.TestCase):
         page_b.write_text("# B\ncontent\n", encoding="utf-8")
 
         issue = Issue(
-            source_module="entropy", issue_type="cross_reference",
-            page_path=str(page_a), related_pages=[str(page_b)],
+            source_module="entropy",
+            issue_type="cross_reference",
+            page_path=str(page_a),
+            related_pages=[str(page_b)],
             severity="low",
         )
         result = self.executor.execute(issue)
@@ -272,8 +300,10 @@ class TestAutoFixExecutor(unittest.TestCase):
         page_b.write_text("# B\ncontent\n", encoding="utf-8")
 
         issue = Issue(
-            source_module="entropy", issue_type="cross_reference",
-            page_path=str(page_a), related_pages=[str(page_b)],
+            source_module="entropy",
+            issue_type="cross_reference",
+            page_path=str(page_a),
+            related_pages=[str(page_b)],
             severity="low",
         )
         r1 = self.executor.execute(issue)
@@ -300,9 +330,12 @@ class TestDisputePageGenerator(unittest.TestCase):
 
         gen = DisputePageGenerator(wiki_base=self.wiki_dir)
         issue = Issue(
-            source_module="immune", issue_type="conflict",
-            page_path="03-Tech/redis.md", severity="critical",
-            description="Redis 冲突", suggestion="添加版本边界",
+            source_module="immune",
+            issue_type="conflict",
+            page_path="03-Tech/redis.md",
+            severity="critical",
+            description="Redis 冲突",
+            suggestion="添加版本边界",
             related_pages=["03-Tech/redis-cluster.md"],
             detected_at="2026-05-19",
         )

@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mnemos 系统图 · 项目拓扑</title>
+<style>
+:root {
+  --bg: #fafafa; --bg-elev: #ffffff; --bg-soft: #f0f0f2;
+  --text: #1a1a1f; --text-dim: #5a5a64; --text-faint: #8a8a94;
+  --border: #d8d8de; --border-soft: #e8e8ee;
+  --accent: #0066cc; --accent-soft: #e6f0ff;
+  --warn: #b8480a; --warn-soft: #fff0e6;
+  --ok: #1a7a3a; --ok-soft: #e6f5ec;
+  --code-bg: #f5f5f7; --code-text: #c41a16;
+  --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px var(--border-soft);
+  --radius: 8px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+[data-theme="dark"] {
+  --bg: #1a1a1f; --bg-elev: #24242b; --bg-soft: #2e2e36;
+  --text: #e8e8ee; --text-dim: #a8a8b4; --text-faint: #6a6a74;
+  --border: #3a3a44; --border-soft: #2e2e36;
+  --accent: #4da6ff; --accent-soft: #1a3a5c;
+  --warn: #ff944d; --warn-soft: #3a2410;
+  --ok: #4dc878; --ok-soft: #1a3a28;
+  --code-bg: #2e2e36; --code-text: #ff8a80;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px var(--border-soft);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+body {
+  font-family: var(--font); font-size: 15px; line-height: 1.6;
+  color: var(--text); background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+  backdrop-filter: saturate(180%) blur(12px);
+}
+.topbar h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.topbar .meta { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.topbar .spacer { flex: 1; }
+.search-box { flex: 0 0 280px; position: relative; }
+.search-box input {
+  width: 100%; padding: 6px 12px 6px 30px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-soft); color: var(--text);
+  font-family: var(--font); font-size: 13px;
+}
+.search-box input:focus { outline: none; border-color: var(--accent); }
+.search-box::before {
+  content: "\2395"; position: absolute; left: 8px; top: 50%;
+  transform: translateY(-50%); color: var(--text-faint); font-size: 16px;
+}
+.btn-icon {
+  background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; cursor: pointer;
+  font-size: 14px; color: var(--text);
+}
+.btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+
+.layout { display: flex; max-width: 1400px; margin: 0 auto; }
+.sidebar {
+  flex: 0 0 240px; position: sticky; top: 56px;
+  height: calc(100vh - 56px); overflow-y: auto;
+  padding: 24px 16px; border-right: 1px solid var(--border-soft);
+}
+.sidebar nav { font-size: 13px; }
+.sidebar nav a {
+  display: block; padding: 4px 10px; color: var(--text-dim);
+  text-decoration: none; border-radius: 4px; border-left: 2px solid transparent;
+  margin-left: -2px;
+}
+.sidebar nav a:hover { background: var(--bg-soft); color: var(--text); }
+.sidebar nav a.active {
+  color: var(--accent); border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+.sidebar nav .sub a { padding-left: 24px; font-size: 12px; }
+.sidebar nav .sep { height: 1px; background: var(--border-soft); margin: 8px 4px; }
+.main { flex: 1; padding: 32px 40px 80px; min-width: 0; }
+
+section { margin-bottom: 56px; scroll-margin-top: 80px; }
+section > h2 {
+  font-size: 22px; font-weight: 600; margin-bottom: 16px;
+  padding-bottom: 8px; border-bottom: 2px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+section > h2 .num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; background: var(--accent); color: white;
+  border-radius: 6px; font-size: 14px; font-weight: 700;
+}
+h3 { font-size: 16px; font-weight: 600; margin: 20px 0 10px; color: var(--text); }
+
+.card {
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); padding: 16px 20px; margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.card h4 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: var(--accent); }
+.card .role { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.card p { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+.card .files { font-size: 12px; color: var(--text-dim); margin-top: 8px; word-break: break-all; }
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+th { background: var(--bg-soft); font-weight: 600; color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+tr:hover { background: var(--bg-soft); }
+tr.hidden { display: none; }
+td code, .tag {
+  background: var(--code-bg); color: var(--code-text);
+  padding: 1px 6px; border-radius: 3px; font-size: 12px;
+}
+td code { white-space: nowrap; }
+
+.hero {
+  background: linear-gradient(135deg, var(--accent-soft), var(--bg-elev));
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px 28px; margin-bottom: 40px;
+}
+.hero h2 { border: none; padding: 0; margin-bottom: 16px; font-size: 28px; }
+.hero .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.hero .stat { background: var(--bg-elev); padding: 12px 14px; border-radius: 6px; border: 1px solid var(--border-soft); }
+.hero .stat .k { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.hero .stat .v { font-size: 16px; font-weight: 600; margin-top: 2px; }
+.hero .stat .v code { font-size: 14px; }
+
+.tree details { margin-left: 0; }
+.tree details summary {
+  cursor: pointer; padding: 4px 8px; border-radius: 4px;
+  list-style: none; font-size: 13px; user-select: none;
+}
+.tree details summary::-webkit-details-marker { display: none; }
+.tree details summary::before { content: "\25B8 "; color: var(--text-faint); width: 1em; display: inline-block; }
+.tree details[open] > summary::before { content: "\25BE "; }
+.tree details summary:hover { background: var(--bg-soft); }
+.tree details[open] > summary { color: var(--accent); font-weight: 500; }
+.tree .leaf {
+  padding: 2px 8px 2px 28px; font-size: 12px; color: var(--text-dim);
+  border-left: 1px solid var(--border-soft); margin-left: 8px;
+}
+.tree .leaf code { font-size: 11px; }
+.tree .leaf .cmt { color: var(--text-faint); margin-left: 8px; }
+
+.flow {
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); margin-bottom: 16px; overflow: hidden;
+}
+.flow > summary {
+  cursor: pointer; padding: 12px 16px; background: var(--bg-soft);
+  font-weight: 500; font-size: 14px; list-style: none;
+  display: flex; align-items: center; gap: 8px;
+}
+.flow > summary::-webkit-details-marker { display: none; }
+.flow > summary::before { content: "\25B8"; color: var(--text-faint); transition: transform 0.15s; }
+.flow[open] > summary::before { transform: rotate(90deg); }
+.flow > summary .tag-id {
+  font-size: 11px; color: var(--text-faint); background: var(--bg-elev);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-soft);
+}
+.flow .body { padding: 16px; }
+.flow .steps { display: flex; flex-direction: column; gap: 2px; }
+.flow .step {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 12px; border-radius: 4px; font-size: 13px;
+}
+.flow .step:hover { background: var(--bg-soft); }
+.flow .step .idx {
+  flex: 0 0 22px; height: 22px; border-radius: 50%;
+  background: var(--accent); color: white;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; margin-top: 1px;
+}
+.flow .step .txt { flex: 1; }
+.flow .step .txt code { color: var(--accent); }
+.flow .arrow {
+  margin-left: 11px; padding: 0 0 2px 11px;
+  color: var(--text-faint); border-left: 2px dotted var(--border);
+  font-size: 16px; line-height: 1;
+}
+
+code.highlight {
+  background: var(--warn-soft) !important; color: var(--warn) !important;
+  outline: 2px solid var(--warn); outline-offset: 1px;
+}
+.flow .step .txt code { cursor: pointer; border-bottom: 1px dashed var(--text-faint); }
+.flow .step .txt code:hover { border-bottom-color: var(--accent); border-bottom-style: solid; }
+
+details.submodule {
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  border-radius: var(--radius); margin-bottom: 12px; overflow: hidden;
+}
+details.submodule > summary {
+  cursor: pointer; padding: 10px 16px; background: var(--bg-soft);
+  font-weight: 500; font-size: 14px; list-style: none;
+  display: flex; align-items: center; gap: 8px;
+}
+details.submodule > summary::-webkit-details-marker { display: none; }
+details.submodule > summary::before {
+  content: "\25B8"; color: var(--text-faint); transition: transform 0.15s;
+}
+details.submodule[open] > summary::before { transform: rotate(90deg); }
+details.submodule > summary .count {
+  font-size: 11px; color: var(--text-faint); background: var(--bg-elev);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-soft);
+}
+details.submodule .body { padding: 12px 16px; }
+details.submodule .note {
+  font-size: 12px; color: var(--text-faint); font-style: italic;
+  padding: 8px 0 0; border-top: 1px solid var(--border-soft); margin-top: 8px;
+}
+
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tags .tag { background: var(--bg-soft); color: var(--text-dim); }
+
+.conv {
+  background: var(--warn-soft); border-left: 3px solid var(--warn);
+  padding: 12px 16px; border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 10px; font-size: 13px;
+}
+.conv code { background: var(--bg-elev); }
+
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .sidebar { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .main { padding: 20px; }
+  .search-box { flex-basis: 160px; }
+}
+
+footer {
+  padding: 24px 40px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-faint); text-align: center;
+}
+#global-empty {
+  display: none; padding: 24px; text-align: center;
+  color: var(--text-faint); font-style: italic; font-size: 14px;
+}
+#global-empty.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Mnemos 系统图</h1>
+  <span class="meta">v2.0.0 · 17 章节 · 629 引用 · 生成 2026-08-06</span>
+  <div class="spacer"></div>
+  <div class="search-box">
+    <input id="search" type="search" placeholder="搜索文件 / 命令 / 模块 / class…" autocomplete="off">
+  </div>
+  <button class="btn-icon" id="theme" title="切换主题">◐</button>
+  <button class="btn-icon" id="collapse-all" title="全部折叠/展开">⊞</button>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav id="toc">
+      <a href="#overview">概览</a>
+      <a href="#basics">1. 基础信息</a>
+      <a href="#tree">2. 目录结构</a>
+      <a href="#modules">3. 模块地图</a>
+      <a href="#dataflow">4. 数据流图</a>
+      <div class="sub">
+        <a href="#flow-capture">4.1 对话捕获</a>
+        <a href="#flow-bus">4.2 事件总线</a>
+        <a href="#flow-search">4.3 检索</a>
+        <a href="#flow-push">4.4 预测推送</a>
+        <a href="#flow-doc">4.5 文档摄入</a>
+        <a href="#flow-agent">4.6 Agent 源同步</a>
+      </div>
+      <a href="#entry">5. 入口点</a>
+      <a href="#storage">6. 数据存储</a>
+      <a href="#diff">7. 差异矩阵</a>
+      <a href="#lookup">8. 文件速查</a>
+      <a href="#cli">9. CLI 路由</a>
+      <a href="#deps">10. 依赖</a>
+      <a href="#conv">11. 工程约定</a>
+      <div class="sep"></div>
+      <a href="#core-top">12. L4 core 顶层</a>
+      <a href="#core-sub">13. L4 core 子模块</a>
+      <a href="#daemon">14. L4 daemon</a>
+      <a href="#integrations">15. L4 integrations</a>
+      <a href="#scripts">16. L4 scripts</a>
+      <a href="#hub">17. L5 枢纽索引</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <section id="overview">
+      <div class="hero">
+        <h2>Mnemos · 本地 AI Agent 第二大脑</h2>
+        <div class="stats">
+          <div class="stat"><div class="k">定位</div><div class="v">知识捕获/蒸馏/搜索/行动辅助</div></div>
+          <div class="stat"><div class="k">类型</div><div class="v">CLI + Daemon + MCP</div></div>
+          <div class="stat"><div class="k">语言</div><div class="v">Python 3.10+</div></div>
+          <div class="stat"><div class="k">版本</div><div class="v"><code>mnemos v2.0.0</code></div></div>
+          <div class="stat"><div class="k">Python 文件</div><div class="v">1708</div></div>
+          <div class="stat"><div class="k">核心模块</div><div class="v">core 24 子模块</div></div>
+          <div class="stat"><div class="k">CLI 命令</div><div class="v">54</div></div>
+          <div class="stat"><div class="k">存储</div><div class="v">SQLite 多库 + 双 Vault</div></div>
+          <div class="stat"><div class="k">拓扑章节</div><div class="v">17</div></div>
+          <div class="stat"><div class="k">文件引用</div><div class="v">629</div></div>
+          <div class="stat"><div class="k">core 顶层</div><div class="v">47 文件</div></div>
+          <div class="stat"><div class="k">daemon</div><div class="v">37 文件</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="basics">
+      <h2><span class="num">1</span>基础信息</h2>
+      <table>
+        <tr><th>项</th><th>值</th></tr>
+        <tr><td>项目根</td><td><code>~/mnemos</code></td></tr>
+        <tr><td>包名</td><td>mnemos v2.0.0（MIT）</td></tr>
+        <tr><td>定位</td><td>本地 AI Agent 知识捕获、蒸馏、搜索与行动辅助系统（第二大脑）</td></tr>
+        <tr><td>入口</td><td><code>mnemos_cli.py</code>（CLI）· <code>mnemos_daemon.py</code>（守护）· <code>mnemos_cli.py mcp serve</code>（MCP）</td></tr>
+        <tr><td>数据目录</td><td><code>~/.mnemos/</code>（data_dir，SQLite 多库）</td></tr>
+        <tr><td>Vault</td><td>raw=<code>~/Documents/raw</code>（canonical raw + Obsidian 投影）· wiki=<code>~/Documents/mnemos</code>（macOS 默认，见 <code>core/config.py</code> vaults.raw/vaults.mnemos）</td></tr>
+        <tr><td>配置</td><td><code>~/.mnemos/configs/main.json</code>（默认，MNEMOS_DIR 可覆盖）+ <code>config/config.example.yaml</code>（示例，<code>core/config.py</code> 统一装载）</td></tr>
+      </table>
+    </section>
+
+    <section id="tree">
+      <h2><span class="num">2</span>目录结构（L1-L3）</h2>
+      <div class="card tree">
+        <details open>
+          <summary><code>mnemos/</code></summary>
+          <div class="leaf"><code>mnemos_cli.py</code><span class="cmt">CLI 入口（懒加载 50+ 子命令）</span></div>
+          <div class="leaf"><code>mnemos_daemon.py</code><span class="cmt">守护进程入口（start/stop/status/run）</span></div>
+          <div class="leaf"><code>predictive_push.py</code><span class="cmt">预测性知识推送</span></div>
+          <div class="leaf"><code>blindspot_discovery.py</code> · <code>context_search.py</code> · <code>build_embedding_index.py</code> · <code>index_manager.py</code> · <code>auto_setup.py</code></div>
+          <details>
+            <summary><code>core/</code> ★ 核心领域逻辑（24 子模块）</summary>
+            <details><summary><code>cli/</code> — CLI 框架 + <code>commands/</code>（54 命令模块）</summary></details>
+            <details><summary><code>app/</code> — Application Hub：意图路由/盲点/新鲜度/复盘/周报</summary></details>
+            <details><summary><code>application/</code> — 门面 Facade（MCP 工具实现层，1424 行）</summary></details>
+            <details><summary><code>cognitive/</code> ★ 认知层（127 文件）</summary><div class="leaf">信念修正 / 决策追踪 / 观察引擎 / prediction ledger / 训练治理 / 状态存储</div></details>
+            <details><summary><code>kia/</code> ★ KIA 神话系（77 文件）</summary><div class="leaf">知识摄入(Amphora) / 知识图谱 / Chronos 调度 / Reminder / PolicyPatch / 知识免疫</div></details>
+            <details><summary><code>hephaestus/</code> ★ 蒸馏引擎（71 文件）</summary><div class="leaf">分块提取 / LLM 蒸馏 / 质量门 / 检查点 / 信任写入闭环</div></details>
+            <details><summary><code>sync_framework/</code> — 捕获管线（44 文件）</summary><div class="leaf">CaptureService / raw event / capture queue / 文件监听 / agent source 同步</div></details>
+            <details><summary><code>ops/</code> — 运维与治理</summary><div class="leaf">健康检查 / 审计运行 / 读-执行闸门 / durable io / 操作事故管线 / 模型调用账本</div></details>
+            <details><summary><code>persona/</code> — 用户画像</summary><div class="leaf">Psyche / Pythia / Daimon / Delphi / Hamartia</div></details>
+            <details><summary><code>reflection/</code> — 反思</summary><div class="leaf">触发检测 / 经验匹配 / 洞察生成 / 反馈闭环</div></details>
+            <details><summary><code>trust/</code> ★ 可信推送闭环</summary><div class="leaf">ProposalQueue → PushDecisionGate → WriteJournal → KnowledgeVaultWriter</div></details>
+            <details><summary><code>scoring/</code> · <code>telemetry/</code> · <code>agent_kit/</code></summary><div class="leaf">打分（rule_scorer/distill_scorer_v2）· 遥测（model_call_ledger）· Agent 能力（protocol/report/authorization）</div></details>
+            <details><summary><code>evidence/</code> · <code>cognitive_graph/</code> · <code>embeddings/</code> · <code>privacy/</code> · <code>vaults/</code> · <code>migrations/</code></summary><div class="leaf">证据图 · 认知图谱 · 向量嵌入 · 隐私 ACL · vault 注册 · DB 迁移</div></details>
+            <div class="leaf"><strong>基础层：</strong><code>mnemos_bus.py</code>(事件总线 1483 行) · <code>config.py</code> · <code>runtime_paths.py</code> · <code>module_toggles.py</code> · <code>import_guard.py</code> · <code>document_import.py</code></div>
+          </details>
+          <details>
+            <summary><code>daemon/</code> ★ 守护服务层（38 文件）</summary>
+            <div class="leaf"><code>runtime.py</code> — RuntimeContext + 资源注册</div>
+            <div class="leaf"><code>service_registry.py</code> · <code>service_state.py</code> — 服务注册与状态</div>
+            <div class="leaf"><code>process_control.py</code> · <code>instance_control.py</code> — 进程/实例控制</div>
+            <div class="leaf"><code>event_handlers.py</code> — 事件订阅处理器</div>
+            <div class="leaf"><code>raw_sync.py</code> · <code>raw_projection_service.py</code> — raw vault 同步/投影</div>
+            <div class="leaf"><code>agent_source_runtime.py</code> · <code>agent_source_coverage.py</code></div>
+            <div class="leaf"><code>distill_service.py</code> · <code>consolidation_service.py</code> · <code>kia_services.py</code> · <code>prediction_service.py</code> · <code>observation_service.py</code> · <code>reflection_services.py</code> · <code>adaptive_service.py</code></div>
+            <div class="leaf"><code>file_ingest.py</code> · <code>triggers.py</code> · <code>intervals.py</code> · <code>heartbeat.py</code></div>
+            <div class="leaf"><code>operational_incident_service.py</code> · <code>training_governance_service.py</code></div>
+          </details>
+          <details>
+            <summary><code>integrations/</code> — 外部集成（MCP/Agent 适配）</summary>
+            <div class="leaf"><code>agora.py</code> ★ MCP 服务器（工具注册 + ACL 策略校验）</div>
+            <div class="leaf"><code>agora_tools/schema.py</code> — 工具 schema 注册表</div>
+            <div class="leaf"><code>sources/</code> ★ 12 平台解析器 + 4 辅助（claude/codex/opencode/kimi/cursor/aider/…）</div>
+            <div class="leaf"><code>backends/obsidian_backend.py</code> · <code>active.py</code> · <code>kimi_adapter.py</code> · <code>crush_adapter.py</code> · <code>oracle.py</code></div>
+          </details>
+          <div class="leaf"><code>scripts/</code> — 250+ 运维/审计/对账脚本（<code>audit_*</code> / <code>reconcile_*</code> / <code>verify_*</code>）</div>
+          <div class="leaf"><code>tests/</code> — 600+ 测试（unit/integration/e2e/benchmark/static）</div>
+          <div class="leaf"><code>config/</code> · <code>prompts/</code> · <code>docs/</code> · <code>analysis/</code> · <code>benchmarks/</code> · <code>bin/</code> · <code>build/</code></div>
+          <div class="leaf"><code>pyproject.toml</code> · <code>requirements.txt</code> · <code>uv.lock</code> · <code>setup.py</code> · <code>run_tests.py</code></div>
+        </details>
+      </div>
+    </section>
+
+    <section id="modules">
+      <h2><span class="num">3</span>模块地图</h2>
+      <div class="card-grid">
+        <div class="card"><div class="role">入口层</div><h4>core/cli</h4><p>54 个命令解析与执行</p><div class="files"><code>commands/</code> init/status/daemon/mcp/wiki/distill/sync/search/recap/…</div></div>
+        <div class="card"><div class="role">门面</div><h4>core/application/facade.py</h4><p>MCP 工具的实现统一入口（67 个方法）</p><div class="files"><code>facade.py</code></div></div>
+        <div class="card"><div class="role">MCP 服务器</div><h4>integrations/agora.py</h4><p>工具注册、ACL 授权校验、schema 一致性</p><div class="files"><code>agora.py</code></div></div>
+        <div class="card"><div class="role">捕获管线</div><h4>core/sync_framework</h4><p>对话/文档 → canonical raw → capture queue</p><div class="files"><code>capture_service.py</code> · <code>capture_queue.py</code> · <code>raw_event_store.py</code> · <code>sync_engine.py</code></div></div>
+        <div class="card"><div class="role">蒸馏入站</div><h4>core/kia/amphora</h4><p>raw 出库 → 质量门 → 蒸馏排队</p><div class="files"><code>amphora.py</code> · <code>amphora_queries.py</code></div></div>
+        <div class="card"><div class="role">蒸馏引擎</div><h4>core/hephaestus</h4><p>分块 → LLM 提取 → 合并 → 写 Wiki</p><div class="files"><code>distillation_engine.py</code> · <code>distillation_extractor.py</code> · <code>chunked_extraction.py</code> · <code>wiki_builder.py</code></div></div>
+        <div class="card"><div class="role">写入安全</div><h4>core/trust</h4><p>可信推送闭环（proposal→gate→journal→writer）</p><div class="files"><code>push_decision_gate.py</code> · <code>write_journal.py</code> · <code>knowledge_vault_writer.py</code></div></div>
+        <div class="card"><div class="role">认知层</div><h4>core/cognitive</h4><p>信念修正/决策记录/观察/预测/训练治理</p><div class="files"><code>belief_revision.py</code> · <code>decision_trace.py</code> · <code>observation_engine.py</code> · <code>state_store.py</code> · <code>prediction_ledger.py</code></div></div>
+        <div class="card"><div class="role">画像</div><h4>core/persona</h4><p>三层用户画像 + 行为提示</p><div class="files"><code>psyche.py</code> · <code>pythia.py</code> · <code>delphi.py</code> · <code>daimon.py</code></div></div>
+        <div class="card"><div class="role">反思</div><h4>core/reflection</h4><p>触发→匹配→洞察→反馈</p><div class="files"><code>reflection_engine.py</code> · <code>trigger_detector.py</code> · <code>experience_matcher.py</code></div></div>
+        <div class="card"><div class="role">应用服务</div><h4>core/app</h4><p>意图路由/盲点/新鲜度/复盘/周报</p><div class="files"><code>intent_router.py</code> · <code>blindspot_discovery.py</code> · <code>freshness_alert.py</code> · <code>retrospective_*.py</code></div></div>
+        <div class="card"><div class="role">运维</div><h4>core/ops</h4><p>健康/审计/闸门/事故</p><div class="files"><code>health_check.py</code> · <code>gate_execution.py</code> · <code>operational_incident.py</code>（账本在 <code>core/telemetry/model_call_ledger/</code>）</div></div>
+        <div class="card"><div class="role">常驻服务</div><h4>daemon</h4><p>全部后台周期任务</p><div class="files"><code>runtime.py</code> + 各 <code>*service.py</code></div></div>
+      </div>
+    </section>
+
+    <section id="dataflow">
+      <h2><span class="num">4</span>数据流图</h2>
+      <p style="color:var(--text-dim);margin-bottom:16px;font-size:13px;">点击各链路展开查看步骤详情。共 6 条核心数据流。文件路径 <code>可点击高亮</code> 同名文件。</p>
+
+      <details class="flow" id="flow-capture" open>
+        <summary><span class="tag-id">4.1</span>对话捕获主链路（Agent → Wiki）</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt"><strong>Agent</strong>（Claude/OpenCode/Kimi/…）通过 MCP/CLI 调用 <code>capture_turn</code> / session capture · <code>core/application/facade.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt"><strong>CaptureService.capture_turn</strong> · <code>core/sync_framework/capture_service.py</code><br>校验+规范化（payload size policy, hashing）→ 写 canonical raw（revision 幂等）→ 入 capture queue</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt"><strong>CaptureWorker / Amphora 出库</strong> · <code>core/kia/amphora.py</code><br>质量门 + duplicate policy → 入 distill queue</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">4</div><div class="txt"><strong>DistillationEngine 分块</strong> · <code>core/hephaestus/distillation_engine.py</code><br>tokenizer 无损切块（lossless-visible-v1）→ KnowledgeExtractor（LLM, 硬校验+自我修正）→ FragmentMerger（Jaccard 聚类 + LLM 合成/规则回退）→ 检查点</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">5</div><div class="txt"><strong>TrustedPush 闭环</strong>（mode=shadow/enforce）· <code>core/trust/</code><br>ProposalQueue → PushDecisionGate → WriteJournal → KnowledgeVaultWriter</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">6</div><div class="txt"><strong>写 Wiki 页面</strong>（vaults.mnemos）</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">7</div><div class="txt"><strong>WikiProjectionLedger</strong>（append-only）+ 发布 <code>wiki_page_updated</code> 事件 · <code>core/wiki_projection_lifecycle.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">8</div><div class="txt"><strong>EventBus</strong> → 6 个 required consumers：<code>knowledge_graph</code> / <code>cognitive_graph</code> / <code>relation_embeddings</code> / <code>wiki_search_index</code> / <code>wiki_metrics</code> / <code>moc_navigation</code></div></div>
+        </div></div>
+      </details>
+
+      <details class="flow" id="flow-bus">
+        <summary><span class="tag-id">4.2</span>事件总线（异步核心）</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt"><code>publish_event()</code> → <strong>EventBus.publish</strong>（持久化 <code>events.db</code>）· <code>core/mnemos_bus.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt">→ <code>start_dispatch</code> 线程循环 → <code>_dispatch_event</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt">→ <strong>HandlerOutcome</strong> ack/noop/retry/defer/dead 记录 · <code>core/event_outcome.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">4</div><div class="txt">失败 → <strong>dead letter</strong>（可 replay）· <code>core/event_bus_dead_letter_policy.py</code></div></div>
+        </div></div>
+      </details>
+
+      <details class="flow" id="flow-search">
+        <summary><span class="tag-id">4.3</span>检索链路</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt">MCP <code>wiki_search</code> / <code>context_aware_search</code> / <code>session_search</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt">→ <strong>Facade</strong> · <code>core/application/facade.py</code> + <code>core/application/intelligence.py</code> → <strong>ContextAwareSearch</strong> · <code>core/app/context_search.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt">→ <strong>ACL / privacy 过滤</strong> · <code>core/app/context_search_authorization.py</code> + <code>core/privacy/</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">4</div><div class="txt">→ <strong>ANN 索引</strong> · <code>core/embeddings/index_manager.py</code> + <code>core/embeddings/dual_index.py</code> → 排序返回（heat score / 画像加权）</div></div>
+        </div></div>
+      </details>
+
+      <details class="flow" id="flow-push">
+        <summary><span class="tag-id">4.4</span>预测性推送链路</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt"><code>predictive_push.py</code> → <strong>ApplicationHub</strong> · <code>core/app/application_hub.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt">→ 信号检测（工作目录 / 用户输入）· <code>core/app/freshness_alert.py</code> + <code>core/app/blindspot_discovery.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt">→ 推送（受 <code>core/trust/push_decision_gate.py</code> 约束）→ <code>push_feedback</code> 回执</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">4</div><div class="txt">→ <strong>PredictionLedger maturity</strong> · <code>daemon/prediction_service.py</code></div></div>
+        </div></div>
+      </details>
+
+      <details class="flow" id="flow-doc">
+        <summary><span class="tag-id">4.5</span>文档摄入链路</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt"><code>document_process(file)</code> → <strong>DocumentImportService</strong> · <code>core/application/document_import_service.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt">→ <strong>FileIngestor</strong> · <code>core/sync_framework/file_ingestor.py</code> → canonical raw（asset_kind=trusted_user_document, SHA-256 asset_id）</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt">→ capture outbox → <code>core/kia/amphora.py</code> → distill（默认）→ <code>core/hephaestus/distillation_engine.py</code> → <code>core/trust/</code> → Wiki</div></div>
+        </div></div>
+      </details>
+
+      <details class="flow" id="flow-agent">
+        <summary><span class="tag-id">4.6</span>Agent 源同步链路（跨 agent 记忆）</summary>
+        <div class="body"><div class="steps">
+          <div class="step"><div class="idx">1</div><div class="txt"><code>daemon/agent_source_runtime.py</code> → <code>daemon/raw_sync.py</code> → <code>integrations/sources/*_source.py</code>（12 个平台解析器）</div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">2</div><div class="txt">→ <strong>BaseAgentSource.parse_turns</strong> · <code>integrations/sources/base.py</code> → raw capture · <code>core/sync_framework/capture_worker.py</code></div></div>
+          <div class="arrow">↓</div>
+          <div class="step"><div class="idx">3</div><div class="txt">→ 与主链路（§4.1）汇合 · <code>daemon/agent_sync_cursor.py</code>（durable cursor）+ <code>daemon/agent_source_coverage.py</code></div></div>
+        </div></div>
+      </details>
+    </section>
+
+    <section id="entry">
+      <h2><span class="num">5</span>入口点</h2>
+      <table>
+        <tr><th>入口</th><th>命令</th></tr>
+        <tr><td>CLI</td><td><code>python3 mnemos_cli.py &lt;cmd&gt;</code>（status / init / daemon / distill / wiki / search / sync / recap / mcp …）</td></tr>
+        <tr><td>Daemon</td><td><code>python3 mnemos_daemon.py start|stop|status|run</code></td></tr>
+        <tr><td>MCP</td><td><code>python3 mnemos_cli.py mcp serve</code>（stdio，供 Claude Code / OpenCode / Kimi 等连接）</td></tr>
+        <tr><td>测试</td><td><code>python3 scripts/run_tests.py quick|integration|heavy|full</code></td></tr>
+        <tr><td>门禁</td><td><code>python3 scripts/run_full_score_gates.py --strict --real-api</code></td></tr>
+        <tr><td>安全</td><td><code>python3 scripts/security_audit.py --strict --json</code></td></tr>
+      </table>
+    </section>
+
+    <section id="storage">
+      <h2><span class="num">6</span>数据存储（SQLite 多库 + Markdown vault）</h2>
+      <div class="card" style="background:var(--bg-soft);border-left:3px solid var(--accent);">
+        <strong>注：</strong>全库 50+ 个 SQLite 文件分散于 data_dir/database_dir（<code>~/.mnemos/</code>，MNEMOS_DIR 可覆盖）。以下为<strong>核心库</strong>；其余按模块散落（persona.db / observations.db / policy_patches.db / wiki_state.db / reflections.db / action_ledger.db 等），修改前用 <code>git grep '"xxx.db"'</code> 定位 owner。
+      </div>
+      <table>
+        <tr><th>库</th><th>用途</th></tr>
+        <tr><td><code>mnemos.db</code></td><td>主库（wiki 索引/知识图谱/认知状态等）</td></tr>
+        <tr><td><code>capture_queue.db</code></td><td>捕获队列</td></tr>
+        <tr><td><code>distill_queue.db</code></td><td>蒸馏队列</td></tr>
+        <tr><td><code>events.db</code></td><td>事件总线（含 dead letter）</td></tr>
+        <tr><td><code>raw_events.db</code></td><td>canonical raw 事件存储</td></tr>
+        <tr><td><code>model_call_ledger.db</code></td><td>模型调用账本（计费/审计，owner=core/telemetry/model_call_ledger/）</td></tr>
+        <tr><td><code>knowledge_graph.db</code></td><td>知识图谱 + relation_evidence</td></tr>
+        <tr><td><code>cognitive_graph.db</code></td><td>认知图谱</td></tr>
+        <tr><td><code>trusted_push.db</code></td><td>信任推送闭环日志</td></tr>
+        <tr><td><code>operational_incidents.db</code></td><td>操作事故管线</td></tr>
+        <tr><td><code>sync_log.db</code></td><td>同步日志</td></tr>
+        <tr><td><code>~/.mnemos/</code></td><td>data_dir：SQLite 多库 + daemon pid/status/日志 + configs/main.json</td></tr>
+        <tr><td><code>~/Documents/raw</code></td><td>raw vault：canonical raw + Obsidian 投影（raw_current_projection），macOS 默认</td></tr>
+        <tr><td><code>~/Documents/mnemos</code></td><td>wiki vault：Wiki Markdown（00-Inbox / 01-… / 06-Retrospectives 等），macOS 默认</td></tr>
+      </table>
+    </section>
+
+    <section id="diff">
+      <h2><span class="num">7</span>差异矩阵（同类模块）</h2>
+      <div class="card" style="background:var(--warn-soft);border-left:3px solid var(--warn);">
+        <strong>变异程度：轻度-高度</strong> —— 同类模块模式统一但实现各异，务必按目标 agent/能力定位文件。
+      </div>
+
+      <h3>7.1 agent 数据源解析器（integrations/sources/，12 解析器 + 4 辅助）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>平台</th><th>主类</th><th>差异点</th></tr>
+        <tr><td><code>claude_source.py</code></td><td>Claude Code</td><td>ClaudeSource</td><td>JSONL session 文件</td></tr>
+        <tr><td><code>codex_source.py</code></td><td>Codex</td><td>CodexSource</td><td>Codex 原生格式</td></tr>
+        <tr><td><code>opencode_source.py</code></td><td>OpenCode</td><td>OpenCodeSource</td><td>分片合并 parse_session</td></tr>
+        <tr><td><code>kimi_source.py</code></td><td>Kimi</td><td>KimiSource</td><td>JSONL + kimi_payload 解码</td></tr>
+        <tr><td><code>cursor_source.py</code></td><td>Cursor IDE</td><td>CursorSource</td><td>Cursor session 格式</td></tr>
+        <tr><td><code>aider_source.py</code></td><td>Aider</td><td>AiderSource</td><td>AI pair programming 日志</td></tr>
+        <tr><td><code>crush_source.py</code></td><td>Crush</td><td>CrushSource</td><td>被动同步</td></tr>
+        <tr><td><code>hermes_source.py</code></td><td>Hermes</td><td>HermesSource</td><td>Hermes 原生格式</td></tr>
+        <tr><td><code>kiro_source.py</code></td><td>Kiro</td><td>KiroSource</td><td>CLI 被动同步</td></tr>
+        <tr><td><code>openclaw_source.py</code></td><td>OpenClaw</td><td>OpenClawSource</td><td>openclaw_identity + openclaw_payload</td></tr>
+        <tr><td><code>gemini_cli_source.py</code></td><td>Gemini CLI</td><td>GeminiCliSource</td><td>Google Gemini CLI</td></tr>
+        <tr><td><code>windsurf_source.py</code></td><td>Windsurf</td><td>WindsurfSource</td><td>Codeium IDE</td></tr>
+        <tr><td><code>base.py</code></td><td>共享基类</td><td>BaseAgentSource</td><td>接口契约 parse_turns/parse_session</td></tr>
+        <tr><td><code>kimi_payload.py</code></td><td>Kimi 辅助</td><td>_NativeJsonRecord</td><td>JSONL 解码</td></tr>
+        <tr><td><code>openclaw_identity.py</code></td><td>OpenClaw 辅助</td><td>OpenClawSessionCandidate</td><td>身份等价规则</td></tr>
+        <tr><td><code>openclaw_payload.py</code></td><td>OpenClaw 辅助</td><td>—</td><td>payload 无损解码</td></tr>
+      </table>
+      <p style="font-size:12px;color:var(--text-faint);margin-bottom:16px;">共性：均继承 BaseAgentSource，实现 parse_turns()/parse_session()；注册进 SourceRegistry。</p>
+
+      <h3>7.2 蒸馏后端（core/hephaestus/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>distill_backend.py</code></td><td>LLM 调用统一后端（DistillBackend / LLMBackend / BackendChain）</td></tr>
+        <tr><td><code>backend_bundle.py</code></td><td>后端构造组合根（DistillBackendBundle）</td></tr>
+        <tr><td><code>distill_response.py</code></td><td>每次模型调用的 typed 响应证据（DistillBackendResponse）</td></tr>
+      </table>
+
+      <h3>7.3 scorer 族（core/scoring/ + core/kia/rule_scorer.py）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>scorers/distill_scorer_v2.py</code></td><td>蒸馏层评分器（DistillScorerV2）</td></tr>
+        <tr><td><code>scorers/domain_scorers.py</code></td><td>V2 领域评分器（SyncDomainScorer/RawMemoryScorer/KGDomainScorer/ProfileDomainScorer/OpsDomainScorer）</td></tr>
+        <tr><td><code>adaptive_scorer_v2.py</code></td><td>规则优先 + 治理模型激活边界（AdaptiveScorerV2）</td></tr>
+        <tr><td><code>bayesian_scorer.py</code></td><td>Beta-Bayesian 统一评分器</td></tr>
+        <tr><td><code>fallback.py</code></td><td>评分降级策略（ScorerFallback）</td></tr>
+        <tr><td><code>feedback_channel.py</code></td><td>V2 反馈通道</td></tr>
+        <tr><td><code>online_stats.py</code></td><td>Welford 增量均值/方差</td></tr>
+        <tr><td><code>lightweight_nb.py</code></td><td>纯 Python Complement Naive Bayes</td></tr>
+        <tr><td><code>rule_helpers.py</code></td><td>V1→V2 规则函数集</td></tr>
+        <tr><td><code>core/kia/_quality_scoring.py</code></td><td>rule_scorer + ingest_helpers 共享质量评分</td></tr>
+      </table>
+
+      <h3>7.4 daemon 服务族（daemon/*service.py + daemon/*_service.py）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>adaptive_service.py</code></td><td>AdaptiveConfig 守护服务</td></tr>
+        <tr><td><code>agent_source_runtime.py</code></td><td>AgentSource 捕获集成</td></tr>
+        <tr><td><code>consolidation_service.py</code></td><td>认知整合规划 tick</td></tr>
+        <tr><td><code>distill_service.py</code></td><td>蒸馏工作</td></tr>
+        <tr><td><code>file_ingest.py</code></td><td>文件摄入</td></tr>
+        <tr><td><code>kia_services.py</code></td><td>KIA 服务（recap/graph/reminder/freshness/entropy/dispute）</td></tr>
+        <tr><td><code>link_probe.py</code></td><td>外部链接探测</td></tr>
+        <tr><td><code>observation_service.py</code></td><td>观察引擎</td></tr>
+        <tr><td><code>operational_incident_service.py</code></td><td>操作事故诊断通知</td></tr>
+        <tr><td><code>prediction_service.py</code></td><td>PredictionLedger maturity</td></tr>
+        <tr><td><code>raw_projection_service.py</code></td><td>Raw vault 投影编排</td></tr>
+        <tr><td><code>raw_sync.py</code></td><td>Raw 持续同步</td></tr>
+        <tr><td><code>reflection_services.py</code></td><td>反思 + 反馈</td></tr>
+        <tr><td><code>training_governance_service.py</code></td><td>治理训练投影</td></tr>
+        <tr><td><code>wiki_route.py</code></td><td>Wiki 路由</td></tr>
+      </table>
+      <p style="font-size:12px;color:var(--text-faint);margin-bottom:16px;">共性：均注册进 <code>daemon/service_registry.py</code>；调度周期/事件订阅各异。</p>
+
+      <h3>7.5 audit/reconcile 脚本族</h3>
+      <table class="searchable">
+        <tr><th>前缀</th><th>数量</th><th>模式</th><th>代表</th></tr>
+        <tr><td><code>audit_*</code></td><td>82</td><td><code>--json</code> 只读审计</td><td>audit_action_ledger.py, audit_cognitive_source_authority.py</td></tr>
+        <tr><td><code>reconcile_*</code></td><td>48</td><td><code>--json</code> 预览 → <code>--apply --backup-dir</code> 迁移</td><td>reconcile_relation_evidence_schema.py, reconcile_distill_execution_checkpoints.py</td></tr>
+        <tr><td><code>verify_*</code></td><td>5</td><td>校验脚本</td><td>verify_installation.py, verify_full_score_certificate.py</td></tr>
+        <tr><td><code>run_*</code></td><td>7</td><td>运行脚本</td><td>run_tests.py, run_full_score_gates.py</td></tr>
+        <tr><td><code>generate_*</code></td><td>7</td><td>证据/配置生成</td><td>generate_config_examples.py, generate_event_bus_map.py</td></tr>
+        <tr><td><code>check_*</code></td><td>5</td><td>检查脚本</td><td>check_maintainability_budget.py, check_zombie_code_policy.py</td></tr>
+        <tr><td><code>e2e_*</code></td><td>4</td><td>端到端探针</td><td>e2e_probe.py, e2e_wow_probe.py</td></tr>
+        <tr><td><code>rebuild_*</code></td><td>2</td><td>重建脚本</td><td>rebuild_wiki_projection_state.py</td></tr>
+        <tr><td><code>build_*</code></td><td>2</td><td>构建脚本</td><td>build_embedding_index.py</td></tr>
+      </table>
+    </section>
+
+    <section id="lookup">
+      <h2><span class="num">8</span>关键文件速查（按需求定位）</h2>
+      <table class="searchable" id="lookup-table">
+        <tr><th>需求</th><th>文件</th></tr>
+        <tr><td>加一个 MCP 工具</td><td><code>core/application/facade.py</code>（实现）+ <code>integrations/agora.py</code>（注册）+ <code>integrations/agora_tools/schema.py</code>（schema）</td></tr>
+        <tr><td>改蒸馏逻辑</td><td><code>core/hephaestus/distillation_engine.py</code> / <code>distillation_extractor.py</code> / <code>distill_action_router.py</code></td></tr>
+        <tr><td>改捕获链路</td><td><code>core/sync_framework/capture_service.py</code> / <code>raw_event_store.py</code> / <code>capture_queue.py</code></td></tr>
+        <tr><td>改知识写入安全</td><td><code>core/trust/push_decision_gate.py</code> / <code>write_journal.py</code> / <code>knowledge_vault_writer.py</code></td></tr>
+        <tr><td>改事件总线</td><td><code>core/mnemos_bus.py</code></td></tr>
+        <tr><td>改画像</td><td><code>core/persona/psyche.py</code> / <code>pythia.py</code> / <code>delphi.py</code></td></tr>
+        <tr><td>改复盘</td><td><code>core/app/retrospective_*.py</code>（store/session_manager/consumption_router）</td></tr>
+        <tr><td>改认知状态</td><td><code>core/cognitive/state_store.py</code> / <code>state_schema.py</code></td></tr>
+        <tr><td>改守护服务</td><td><code>daemon/</code> + <code>mnemos_daemon.py</code>（注册进 mnemos_daemon.py 的 import 列表）</td></tr>
+        <tr><td>新增 agent 源</td><td><code>integrations/sources/&lt;name&gt;_source.py</code> + 注册 SourceRegistry</td></tr>
+        <tr><td>改配置</td><td><code>core/config.py</code> + <code>config/config.example.yaml</code></td></tr>
+        <tr><td>改 DB schema</td><td><code>core/migrations/</code> + <code>scripts/reconcile_*</code></td></tr>
+      </table>
+    </section>
+
+    <section id="cli">
+      <h2><span class="num">9</span>CLI 命令路由表（core/cli/commands/ 54 模块）</h2>
+      <table class="searchable" id="cli-table">
+        <tr><th>命令</th><th>功能</th></tr>
+        <tr><td>init / setup / doctor / status / version / verify</td><td>初始化与体检</td></tr>
+        <tr><td>daemon / scheduler / link_probe</td><td>守护与调度（periodic 为 core/cli/periodic.py 定时入口）</td></tr>
+        <tr><td>config / secrets / policy</td><td>配置与密钥</td></tr>
+        <tr><td>ingest / sync / events / raw_index / vaults</td><td>捕获与同步</td></tr>
+        <tr><td>distill / capsule / genos / shadow</td><td>蒸馏</td></tr>
+        <tr><td>search / kg / build_relation_index / cognitive_graph</td><td>检索与图谱（context_search 为 core/app/context_search.py 独立入口）</td></tr>
+        <tr><td>wiki / report / entropy / reminder</td><td>Wiki 与报告</td></tr>
+        <tr><td>recap / reflect / observe / persona / fresh / blindspot / decision_inbox / dispute</td><td>认知与应用</td></tr>
+        <tr><td>mcp / agent</td><td>MCP 服务器与 agent 管理</td></tr>
+        <tr><td>golden / scorer / perf / stress / metrics</td><td>评测与性能</td></tr>
+        <tr><td>backup / migrate / db / data / immune / proposal / signals / feedback</td><td>运维</td></tr>
+        <tr><td>push</td><td>预测推送</td></tr>
+      </table>
+    </section>
+
+    <section id="deps">
+      <h2><span class="num">10</span>依赖列表（核心）</h2>
+      <div class="tags">
+        <span class="tag">requests</span><span class="tag">pyyaml</span><span class="tag">jsonschema</span><span class="tag">watchdog</span><span class="tag">numpy</span><span class="tag">pandas</span><span class="tag">openpyxl</span><span class="tag">python-pptx</span><span class="tag">pypdf</span><span class="tag">python-docx</span><span class="tag">beautifulsoup4</span><span class="tag">markdownify</span><span class="tag">ebooklib</span><span class="tag">openai</span><span class="tag">anthropic</span><span class="tag">keyring</span><span class="tag">pdfplumber</span><span class="tag">psutil</span>
+      </div>
+      <p style="margin-top:12px;font-size:13px;color:var(--text-dim);">可选：<code>scikit-learn</code> + <code>hnswlib</code> 向量加速</p>
+    </section>
+
+    <section id="conv">
+      <h2><span class="num">11</span>工程约定速查</h2>
+      <div class="conv">正式写页必须过 <code>core/trust</code> 闭环；<code>trusted_push.mode=off/shadow/enforce</code> 三态</div>
+      <div class="conv">一切写 Wiki 先记 <code>WikiProjectionLedger</code> mutation，再发 <code>wiki_page_updated</code> 事件</div>
+      <div class="conv">6 个 required consumers 必须写投影 receipt</div>
+      <div class="conv">测试/门禁必须走 <code>core.ops.hermetic_run.HermeticRunEnvironment</code>，禁止手写 HOME 重定向</div>
+      <div class="conv"><code>source_authority</code> 权限只有 7 类，未授权来源不得产生认知更新</div>
+      <div class="conv">存量数据修正确认流程：先跑 <code>scripts/reconcile_*.py --json</code> 预览 → 停 daemon → <code>--apply --backup-dir &lt;dir&gt;</code> → <code>PRAGMA integrity_check</code></div>
+    </section>
+
+    <section id="core-top">
+      <h2><span class="num">12</span>L4 文件级清单 — core 顶层模块（47 个）</h2>
+      <p style="color:var(--text-dim);margin-bottom:12px;font-size:13px;">扫描方式：AST 提取模块 docstring 首行 + 顶层 class/def/常量名。排除 <code>__init__.py</code>。</p>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责（docstring 首行）</th><th>主要 class / 关键 def</th></tr>
+        <tr><td><code>access_policy.py</code></td><td>Read access policy for agent-visible memory and wiki search results</td><td>AccessContext, AccessDecision, ACLReconciler</td></tr>
+        <tr><td><code>cognition_episode_contract.py</code></td><td>Shared contracts for model drafts and canonical cognition episodes</td><td>—</td></tr>
+        <tr><td><code>config.py</code></td><td>配置系统 v2 — 统一管理所有路径、开关和常量</td><td>Config / get_config, reload_config</td></tr>
+        <tr><td><code>config_persistence.py</code></td><td>Durable configuration-file paths and persistence boundaries</td><td>—</td></tr>
+        <tr><td><code>config_provider.py</code></td><td>Minimal configuration protocol for dependency injection</td><td>ConfigProvider</td></tr>
+        <tr><td><code>config_registry.py</code></td><td>Canonical registry for Mnemos configuration keys</td><td>ConfigRegistry</td></tr>
+        <tr><td><code>config_value_normalization.py</code></td><td>Compatibility normalization for values</td><td>—</td></tr>
+        <tr><td><code>db_init.py</code></td><td>Idempotent database bootstrap for daemon and deployment checks</td><td>—</td></tr>
+        <tr><td><code>db_utils.py</code></td><td>SQLite 连接安全工具</td><td>RetryingConnection, SqlitePool</td></tr>
+        <tr><td><code>diagnostics.py</code></td><td>Mnemos 连接诊断引擎</td><td>ConnectionDiagnostics</td></tr>
+        <tr><td><code>document_import.py</code></td><td>Shared trusted-user document import policy and helpers</td><td>TrustedDocumentValidation</td></tr>
+        <tr><td><code>event_bus_contract.py</code></td><td>Event value contract and config-path resolution for the event bus</td><td>Event</td></tr>
+        <tr><td><code>event_bus_dead_letter_policy.py</code></td><td>Dead-letter selection and archival policy for the event bus</td><td>EventBusDeadLetterPolicyMixin</td></tr>
+        <tr><td><code>event_bus_lease.py</code></td><td>Durable multi-process lease contract for EventBus delivery</td><td>EventBusLeaseLifecycleMixin</td></tr>
+        <tr><td><code>event_bus_state.py</code></td><td>Retry, external-decision, and operational state for EventBus</td><td>EventBusStateLifecycleMixin</td></tr>
+        <tr><td><code>event_outcome.py</code></td><td>Typed business outcome returned by EventBus handlers</td><td>HandlerOutcome</td></tr>
+        <tr><td><code>event_subscription.py</code></td><td>Stable EventBus subscription identities and restart checkpoints</td><td>—</td></tr>
+        <tr><td><code>file_ops.py</code></td><td>Minimal filesystem primitives that do not depend on runtime config</td><td>—</td></tr>
+        <tr><td><code>frontmatter.py</code></td><td>Frontmatter field contract helpers</td><td>—</td></tr>
+        <tr><td><code>hephaestus_worker.py</code></td><td>蒸馏 Worker 包装</td><td>HephaestusWorker</td></tr>
+        <tr><td><code>import_guard.py</code></td><td>动态导入白名单守卫</td><td>assert_allowed_module, is_allowed_module</td></tr>
+        <tr><td><code>ingest_chunking.py</code></td><td>SemanticChunker — ingestion 侧语义分片</td><td>SemanticChunker</td></tr>
+        <tr><td><code>jsonl_rotation.py</code></td><td>Generic append-only JSONL rotation helpers</td><td>—</td></tr>
+        <tr><td><code>knowledge_form.py</code></td><td>Canonical vocabulary for distilled knowledge forms</td><td>—</td></tr>
+        <tr><td><code>llm_config.py</code></td><td>Unified LLM API configuration resolver</td><td>LLMApiConfig, ModelApiConfig</td></tr>
+        <tr><td><code>llm_key_pool.py</code></td><td>Lightweight in-memory key pool for LLM API failover</td><td>KeyPool</td></tr>
+        <tr><td><code>mnemos_bus.py</code></td><td>EventBus 事件总线（1483 行）</td><td>EventBus / publish_event</td></tr>
+        <tr><td><code>module_toggles.py</code></td><td>Module toggle and cold-start output contracts</td><td>ModuleToggleDefinition</td></tr>
+        <tr><td><code>pipeline_receipts.py</code></td><td>Typed durable receipts shared by cross-database pipeline handoffs</td><td>DistillationEnqueueReceipt</td></tr>
+        <tr><td><code>pluggable.py</code></td><td>PluggableModule 热插拔接口</td><td>ModuleRegistry</td></tr>
+        <tr><td><code>prometheus_fire.py</code></td><td>QueueDistillTask</td><td>QueueDistillTask</td></tr>
+        <tr><td><code>resource_budget.py</code></td><td>ResourceBudget — 资源预算治理层</td><td>ResourceBudget</td></tr>
+        <tr><td><code>runtime_environment.py</code></td><td>Single process-environment seam for runtime config</td><td>—</td></tr>
+        <tr><td><code>runtime_paths.py</code></td><td>Canonical runtime-owned paths shared by core and daemon</td><td>RuntimePaths</td></tr>
+        <tr><td><code>system_contract_registry.py</code></td><td>Canonical static registries for system_contracts</td><td>—</td></tr>
+        <tr><td><code>system_contracts.py</code></td><td>System-wide contracts for Mnemos cognitive assets</td><td>CognitiveAsset, QualityDecision</td></tr>
+        <tr><td><code>task_id_parser.py</code></td><td>Task ID 自动解析模块</td><td>TaskIdParser, TagBuilder</td></tr>
+        <tr><td><code>utils.py</code></td><td>核心工具函数 — 跨模块共享的通用工具</td><td>LazyPath</td></tr>
+        <tr><td><code>wiki_derived_projection.py</code></td><td>Typed, replayable lifecycle for canonical-store-derived Wiki pages</td><td>DerivedProjectionLifecycle</td></tr>
+        <tr><td><code>wiki_event_contract.py</code></td><td>Authoritative contract validation for durable Wiki mutation events</td><td>—</td></tr>
+        <tr><td><code>wiki_metrics.py</code></td><td>Wiki Metrics — 精简版 wiki 质量与热力追踪</td><td>WikiMetrics</td></tr>
+        <tr><td><code>wiki_metrics_contract.py</code></td><td>Value types and pure scoring functions for Wiki metrics</td><td>PageMetrics, HeatLevel</td></tr>
+        <tr><td><code>wiki_metrics_lifecycle.py</code></td><td>Incremental page lifecycle operations for Wiki metrics projection</td><td>WikiMetricsLifecycleMixin</td></tr>
+        <tr><td><code>wiki_navigation.py</code></td><td>Deterministic, trusted MOC navigation projection</td><td>NavigationPlan</td></tr>
+        <tr><td><code>wiki_page_roles.py</code></td><td>Wiki page role classification shared by metrics and readiness</td><td>—</td></tr>
+        <tr><td><code>wiki_projection_lifecycle.py</code></td><td>Durable Wiki page identity, mutation, and projection receipt</td><td>WikiProjectionLedger</td></tr>
+        <tr><td><code>wiki_projection_publisher.py</code></td><td>Publish durable Wiki mutations without coupling ledger to EventBus</td><td>—</td></tr>
+      </table>
+    </section>
+
+    <section id="core-sub">
+      <h2><span class="num">13</span>L4 文件级清单 — core 子模块</h2>
+      <p style="color:var(--text-dim);margin-bottom:16px;font-size:13px;">按子模块分组，默认折叠。点击展开查看文件表。搜索时匹配行自动展开。</p>
+
+      <details class="submodule">
+        <summary>13.1 core/agent_kit <span class="count">13 个</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>agent_kit/acceptance_contracts.py</code></td><td>Agent data life line acceptance contracts</td></tr>
+            <tr><td><code>agent_kit/agent_backend.py</code></td><td>CLI AgentBackend for shadow-only local agent evaluation</td></tr>
+            <tr><td><code>agent_kit/authorization.py</code></td><td>Read-only safe authorization state for discovered local agents</td></tr>
+            <tr><td><code>agent_kit/evidence.py</code></td><td>Installation evidence helpers derived from the support manifest</td></tr>
+            <tr><td><code>agent_kit/native_raw_challenger.py</code></td><td>Independent Native-to-Raw challenger for host AgentSources</td></tr>
+            <tr><td><code>agent_kit/prompt_sanitizer.py</code></td><td>Sanitize content before sending to local AgentBackend processes</td></tr>
+            <tr><td><code>agent_kit/protocol.py</code></td><td>Shared Mnemos Agent Kit protocol</td></tr>
+            <tr><td><code>agent_kit/report.py</code></td><td>Agent Kit conformance reporting</td></tr>
+            <tr><td><code>agent_kit/runtime_probe_contract.py</code></td><td>Immutable synthetic-safe Agent Kit runtime probe contract</td></tr>
+            <tr><td><code>agent_kit/runtime_receipts.py</code></td><td>Durable, content-free receipts for verified Agent Kit runtime probes</td></tr>
+            <tr><td><code>agent_kit/shadow_eval.py</code></td><td>Golden shadow evaluation for one local CLI AgentBackend</td></tr>
+            <tr><td><code>agent_kit/source_capture_verification.py</code></td><td>Independent, content-free verification of source-to-Raw generation</td></tr>
+            <tr><td><code>agent_kit/source_support_manifest.py</code></td><td>Canonical AgentSource support manifest and runtime snapshot contract</td></tr>
+          </table>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.2 core/app <span class="count">32 个（列出 30）</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>app/application_hub.py</code></td><td>ApplicationHub — 应用层统一调度</td></tr>
+            <tr><td><code>app/application_signal_detectors.py</code></td><td>Blindspot/divergence/freshness 信号检测</td></tr>
+            <tr><td><code>app/application_signal_service.py</code></td><td>Application signal detection service with persistence</td></tr>
+            <tr><td><code>app/blindspot_asset_schema.py</code></td><td>Schema authority for knowledge-coverage gap revisions</td></tr>
+            <tr><td><code>app/blindspot_discovery.py</code></td><td>BlindspotDiscovery — 盲点主动发现</td></tr>
+            <tr><td><code>app/blindspot_response_builder.py</code></td><td>为宿主 Agent 构建盲区提醒的自然语言回复</td></tr>
+            <tr><td><code>app/context_search.py</code></td><td>ContextAwareSearch — 上下文感知搜索</td></tr>
+            <tr><td><code>app/context_search_authorization.py</code></td><td>ACL-first authorization helpers for context-aware retrieval</td></tr>
+            <tr><td><code>app/context_search_feedback.py</code></td><td>Authorized search-session feedback recording</td></tr>
+            <tr><td><code>app/context_search_models.py</code></td><td>Typed search-result contract</td></tr>
+            <tr><td><code>app/context_search_profile.py</code></td><td>Persona-aware ranking and immutable profile-effect receipts</td></tr>
+            <tr><td><code>app/dispute_resolver.py</code></td><td>DisputeResolver — 争议仲裁界面</td></tr>
+            <tr><td><code>app/dispute_scorer.py</code></td><td>DisputeScorer — 争议仲裁综合评分器</td></tr>
+            <tr><td><code>app/forced_retrospective.py</code></td><td>ForcedRetrospective — 强制复盘决策引擎</td></tr>
+            <tr><td><code>app/freshness_alert.py</code></td><td>Knowledge freshness — application-layer entity and ACL adapter</td></tr>
+            <tr><td><code>app/freshness_refresh_worker.py</code></td><td>FreshnessRefreshWorker — 知识新鲜度自动刷新</td></tr>
+            <tr><td><code>app/intent_router.py</code></td><td>IntentRouter — 意图路由器</td></tr>
+            <tr><td><code>app/obsidian_opener.py</code></td><td>ObsidianOpener — 跨平台 Obsidian 自动打开</td></tr>
+            <tr><td><code>app/outcome_recorder.py</code></td><td>Compatibility adapter for canonical feedback attribution</td></tr>
+            <tr><td><code>app/question_answer_search.py</code></td><td>QuestionAnswerSearch</td></tr>
+            <tr><td><code>app/raw_search.py</code></td><td>RawContextSearch — 轻量索引 + 上下文感知搜索</td></tr>
+            <tr><td><code>app/raw_search_support.py</code></td><td>Query/result helpers shared by the canonical Raw index owner</td></tr>
+            <tr><td><code>app/recap_consumption.py</code></td><td>Durable recap consumption plans, commands, and receipt aggregation</td></tr>
+            <tr><td><code>app/recap_feedback.py</code></td><td>Durable correction outbox for feedback on consumed retrospectives</td></tr>
+            <tr><td><code>app/retrospective_builder.py</code></td><td>Build structured retrospective drafts from the three-question flow</td></tr>
+            <tr><td><code>app/retrospective_completion.py</code></td><td>Terminal-page verification for retrospective workflow receipts</td></tr>
+            <tr><td><code>app/retrospective_consumption_router.py</code></td><td>Route finalized retrospectives and skip events to downstream consumers</td></tr>
+            <tr><td><code>app/retrospective_models.py</code></td><td>Shared models for structured forced retrospectives</td></tr>
+            <tr><td><code>app/retrospective_session_manager.py</code></td><td>State machine for structured forced retrospective sessions</td></tr>
+            <tr><td><code>app/retrospective_skip_event_store.py</code></td><td>Structured storage for recap skip feedback</td></tr>
+          </table>
+          <div class="note">…及 2 个辅助文件。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.3 core/application <span class="count">16 个</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责 / 主要 class</th></tr>
+            <tr><td><code>application/cognitive_state.py</code></td><td>High-leverage application operations for canonical cognitive state — CognitiveStateApplicationService</td></tr>
+            <tr><td><code>application/contracts.py</code></td><td>Typed application facade contract — MnemosServiceFacade</td></tr>
+            <tr><td><code>application/decision_inbox.py</code></td><td>Canonical decision inbox — DecisionInboxService</td></tr>
+            <tr><td><code>application/document_import_service.py</code></td><td>Unified backend for user-specified document imports — DocumentImportService</td></tr>
+            <tr><td><code>application/document_security.py</code></td><td>Security helpers for document processing entrypoints</td></tr>
+            <tr><td><code>application/facade.py</code></td><td>Stable application facade — DefaultMnemosServiceFacade（1424 行，67 方法）</td></tr>
+            <tr><td><code>application/facade_capture.py</code></td><td>Session capture operations — FacadeCaptureMixin</td></tr>
+            <tr><td><code>application/intelligence.py</code></td><td>Context-intelligence application service — IntelligenceApplicationService</td></tr>
+            <tr><td><code>application/kia.py</code></td><td>KIA application service — KiaApplicationService</td></tr>
+            <tr><td><code>application/memory.py</code></td><td>Scoped-memory application service — MemoryApplicationService</td></tr>
+            <tr><td><code>application/observation.py</code></td><td>Observation application service — ObservationApplicationService</td></tr>
+            <tr><td><code>application/persona.py</code></td><td>Persona application service — PersonaApplicationService</td></tr>
+            <tr><td><code>application/recap_feedback_service.py</code></td><td>Authenticated adapter from retrospective feedback to canonical attribution</td></tr>
+            <tr><td><code>application/reflection.py</code></td><td>Reflection application service — ReflectionApplicationService</td></tr>
+            <tr><td><code>application/storage.py</code></td><td>Storage application service — StorageApplicationService</td></tr>
+            <tr><td><code>application/trusted_write_bridge.py</code></td><td>Trusted-push bridge for application-layer formal writes</td></tr>
+          </table>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.4 core/cognitive <span class="count">127 个（列出 17）</span></summary>
+        <div class="body">
+          <p style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">认知层核心模块，含信念修正/决策追踪/观察引擎/prediction ledger/训练治理/状态存储。完整清单见 <code>git ls-files core/cognitive/</code>。</p>
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>cognitive/cognition_episode_event_schema.py</code></td><td>Schema authority for cognition-episode terminal EventBus receipts</td></tr>
+            <tr><td><code>cognitive/cognition_episode_persistence.py</code></td><td>Atomic persistence seam for admitted distillation cognition episodes</td></tr>
+            <tr><td><code>cognitive/cognition_episode_projection_audit_support.py</code></td><td>Independent projection-shape helpers for cognition dispatch auditing</td></tr>
+            <tr><td><code>cognitive/cognition_episode_projection_receipt.py</code></td><td>Fixed-family oracle for cognition-episode projection receipts</td></tr>
+            <tr><td><code>cognitive/cognition_episode_projection_schema.py</code></td><td>Canonical schema authority for cognition-episode graph projections</td></tr>
+            <tr><td><code>cognitive/cognition_episode_reconciliation.py</code></td><td>Dry-run-first reconciliation for committed cognition episode projections</td></tr>
+            <tr><td><code>cognitive/cognition_extraction_context.py</code></td><td>System-owned provenance context for cognition episode extraction</td></tr>
+            <tr><td><code>cognitive/consolidator.py</code></td><td>Cognitive consolidation planning for raw retention and distilled methods</td></tr>
+            <tr><td><code>cognitive/decision_snapshot_access.py</code></td><td>Typed source-purpose authorization for canonical Decision snapshots</td></tr>
+            <tr><td><code>cognitive/decision_trace.py</code></td><td>Canonical public entry point for DecisionTrace and material-action commands</td></tr>
+            <tr><td><code>cognitive/decision_trace_contracts.py</code></td><td>Stable DecisionTrace types, constants, and validation primitives</td></tr>
+            <tr><td><code>cognitive/decision_trace_material.py</code></td><td>Material-action authorization and terminal receipt coordination</td></tr>
+            <tr><td><code>cognitive/decision_trace_migration.py</code></td><td>Object-level provenance inventory and migration for legacy material actions</td></tr>
+            <tr><td><code>cognitive/decision_trace_migration_runtime.py</code></td><td>Exclusive runtime and SQLite snapshot primitives for decision migration</td></tr>
+            <tr><td><code>cognitive/decision_trace_payloads.py</code></td><td>Decision input normalization and canonical payload construction</td></tr>
+            <tr><td><code>cognitive/decision_trace_project_contract.py</code></td><td>Exact project-contract decision resolvers and material-action guards</td></tr>
+          </table>
+          <div class="note">…及 111 个辅助文件（含 belief_revision.py, observation_engine.py, state_store.py, prediction_ledger.py 等）。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.5 core/kia <span class="count">77 个（列出 30）</span></summary>
+        <div class="body">
+          <p style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">KIA 神话系：知识摄入(Amphora)/知识图谱/Chronos 调度/Reminder/PolicyPatch/知识免疫。</p>
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>kia/adaptive_config.py</code></td><td>AdaptiveConfig — 自适应配置</td></tr>
+            <tr><td><code>kia/adaptive_policy_matrix.py</code></td><td>Adaptive policy coverage contract</td></tr>
+            <tr><td><code>kia/aegis.py</code></td><td>In-process Guard — 执行中守护</td></tr>
+            <tr><td><code>kia/aegis_models.py</code></td><td>Typed contracts for the in-process guard</td></tr>
+            <tr><td><code>kia/aion.py</code></td><td>Time Capsule — 知识时间胶囊</td></tr>
+            <tr><td><code>kia/amphora.py</code></td><td>Distillation Queue — 子 Agent 蒸馏任务队列管理</td></tr>
+            <tr><td><code>kia/amphora_cli.py</code></td><td>Command-line presentation for the Amphora distillation queue</td></tr>
+            <tr><td><code>kia/amphora_provenance_reconciliation.py</code></td><td>Append-only historical provenance reconciliation for Amphora</td></tr>
+            <tr><td><code>kia/amphora_provenance_support.py</code></td><td>Object-level legacy Amphora provenance inventory and verified backups</td></tr>
+            <tr><td><code>kia/amphora_queries.py</code></td><td>Read-only queue queries for the Amphora storage façade</td></tr>
+            <tr><td><code>kia/amphora_queue_support.py</code></td><td>Pure identity, priority, and path-state helpers for Amphora</td></tr>
+            <tr><td><code>kia/amphora_source_span_migration.py</code></td><td>Transactional executor for reviewed Amphora source-span generations</td></tr>
+            <tr><td><code>kia/amphora_source_span_reconciliation.py</code></td><td>Fail-closed evidence planning for legacy Amphora tasks without Raw spans</td></tr>
+            <tr><td><code>kia/amphora_terminal_contract.py</code></td><td>Terminal receipt validation primitives for Amphora</td></tr>
+            <tr><td><code>kia/amphora_terminal_operations.py</code></td><td>Terminal state transitions and outbox operations for Amphora</td></tr>
+            <tr><td><code>kia/amphora_types.py</code></td><td>Shared immutable types and constants for the Amphora queue</td></tr>
+            <tr><td><code>kia/ananke.py</code></td><td>Version Time Travel — 知识版本时间旅行</td></tr>
+            <tr><td><code>kia/ariadne.py</code></td><td>Knowledge Trail — 知识使用轨迹追踪</td></tr>
+            <tr><td><code>kia/assertion_extractor.py</code></td><td>Assertion extraction from distilled knowledge</td></tr>
+            <tr><td><code>kia/charon.py</code></td><td>RelationEngine — 知识图谱连接器</td></tr>
+            <tr><td><code>kia/charon_entities.py</code></td><td>Entity lexicons and extraction engine for Charon</td></tr>
+            <tr><td><code>kia/charon_page_mutation.py</code></td><td>Pure rendering helpers for Charon page classification mutations</td></tr>
+            <tr><td><code>kia/chronos.py</code></td><td>Chronos — 时间之神 — KIA 步骤调度中心</td></tr>
+            <tr><td><code>kia/chronos_builtin_steps.py</code></td><td>Built-in Chronos registrations and bounded task adapters</td></tr>
+            <tr><td><code>kia/chronos_contracts.py</code></td><td>Immutable scheduling contracts, trigger types, and recovery oracles</td></tr>
+            <tr><td><code>kia/chronos_scheduler_support.py</code></td><td>Dependency-light registration and event helpers for Chronos</td></tr>
+            <tr><td><code>kia/cognitive_decision_assets.py</code></td><td>Cognitive decision asset primitives for the Ixion flywheel</td></tr>
+            <tr><td><code>kia/conflict_resolver.py</code></td><td>Conflict resolution and dispute page generation</td></tr>
+            <tr><td><code>kia/cross_agent_linker.py</code></td><td>CrossAgentLinker — 跨 Agent 知识关联器</td></tr>
+          </table>
+          <div class="note">…及 47 个辅助文件（含 knowledge_graph.py, rule_scorer.py, hygieia.py, relation_evidence_schema.py 等）。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.6 core/hephaestus <span class="count">71 个（列出 30）</span></summary>
+        <div class="body">
+          <p style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">蒸馏引擎：分块提取/LLM 蒸馏/质量门/检查点/信任写入闭环。</p>
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>hephaestus/backend_bundle.py</code></td><td>Backend construction helpers for Hephaestus composition roots</td></tr>
+            <tr><td><code>hephaestus/behavior_intent.py</code></td><td>Behavior/intent signal helpers for distillation</td></tr>
+            <tr><td><code>hephaestus/chunk_aggregate.py</code></td><td>Deterministic, lossless aggregation for admitted chunk extraction roots</td></tr>
+            <tr><td><code>hephaestus/chunk_checkpoint.py</code></td><td>Durable checkpoints for chunked distillation</td></tr>
+            <tr><td><code>hephaestus/chunked_extraction.py</code></td><td>Deep module for resumable, deterministic chunked extraction orchestration</td></tr>
+            <tr><td><code>hephaestus/cognition_asset_store.py</code></td><td>Durable owner for complete skill cognition and derived proposals</td></tr>
+            <tr><td><code>hephaestus/cognition_episode_validation.py</code></td><td>Admission rules for model-produced cognition episode drafts</td></tr>
+            <tr><td><code>hephaestus/cognitive_action_effect_audit.py</code></td><td>Read-only independent audit for distill cognitive-action effects</td></tr>
+            <tr><td><code>hephaestus/cognitive_action_state_reconcile_contracts.py</code></td><td>Contracts for object-level cognitive-action target-state reconciliation</td></tr>
+            <tr><td><code>hephaestus/cognitive_action_state_reconcile_executor.py</code></td><td>Backup-first executor for reviewed cognitive-action state reconciliation</td></tr>
+            <tr><td><code>hephaestus/cognitive_action_state_reconcile_planner.py</code></td><td>Read-only planner for exact cognitive-action target-state reconciliation</td></tr>
+            <tr><td><code>hephaestus/cognitive_action_targets.py</code></td><td>Real target-service effects for admitted distill cognitive actions</td></tr>
+            <tr><td><code>hephaestus/cognitive_value_gate.py</code></td><td>Cognitive-value admission gate for distillation outputs</td></tr>
+            <tr><td><code>hephaestus/content_expression.py</code></td><td>Lightweight Wiki content expression formatter</td></tr>
+            <tr><td><code>hephaestus/distill_action_models.py</code></td><td>Shared models for distillation action routing</td></tr>
+            <tr><td><code>hephaestus/distill_action_reconciliation.py</code></td><td>Explicit COG-014 reconciliation for legacy cognitive-action ledgers</td></tr>
+            <tr><td><code>hephaestus/distill_action_router.py</code></td><td>Route validated distill_output_v4 actions into auditable Wiki changes</td></tr>
+            <tr><td><code>hephaestus/distill_action_store.py</code></td><td>Canonical append-only state owner for distill and cognitive actions</td></tr>
+            <tr><td><code>hephaestus/distill_backend.py</code></td><td>Backend abstraction for distillation LLM calls</td></tr>
+            <tr><td><code>hephaestus/distill_cognitive_action_worker.py</code></td><td>Lease/retry worker for real distill cognitive-action effects</td></tr>
+            <tr><td><code>hephaestus/distill_entrypoint_audit.py</code></td><td>Static ownership audit for the production distillation entrypoint</td></tr>
+            <tr><td><code>hephaestus/distill_execution_spec.py</code></td><td>Canonical execution identity for resumable chunked distillation</td></tr>
+            <tr><td><code>hephaestus/distill_input_spec.py</code></td><td>Immutable provenance for one distillation extraction input</td></tr>
+            <tr><td><code>hephaestus/distill_output_version.py</code></td><td>Single version identity for the conversation distillation output contract</td></tr>
+            <tr><td><code>hephaestus/distill_persistence_projection.py</code></td><td>Prepare a privacy-safe action sink projection after immutable admission</td></tr>
+            <tr><td><code>hephaestus/distill_response.py</code></td><td>Typed response evidence for every distillation model call</td></tr>
+            <tr><td><code>hephaestus/distillation_contract.py</code></td><td>Validation for structured distillation output before vault writes</td></tr>
+            <tr><td><code>hephaestus/distillation_cross_linker.py</code></td><td>Legacy Jaccard-based cross-agent linker for distillation</td></tr>
+            <tr><td><code>hephaestus/distillation_engine.py</code></td><td>DistillationEngine core pipeline</td></tr>
+            <tr><td><code>hephaestus/distillation_extractor.py</code></td><td>Knowledge extraction stage for the distillation pipeline</td></tr>
+          </table>
+          <div class="note">…及 41 个辅助文件（含 wiki_builder.py, tokenizer.py, distillation_text.py 等）。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.7 core/sync_framework <span class="count">44 个（列出 30）</span></summary>
+        <div class="body">
+          <p style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">捕获管线：CaptureService / raw event / capture queue / 文件监听 / agent source 同步。</p>
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>sync_framework/agent_path_watcher.py</code></td><td>Agent data-path watcher (stat-only)</td></tr>
+            <tr><td><code>sync_framework/agent_source.py</code></td><td>AgentSource 接口契约</td></tr>
+            <tr><td><code>sync_framework/agent_source_metadata_deletion.py</code></td><td>Physical deletion owner for SyncEngine metadata</td></tr>
+            <tr><td><code>sync_framework/capture_duplicate_policy.py</code></td><td>One canonical idempotency contract for Capture queue work</td></tr>
+            <tr><td><code>sync_framework/capture_handoff.py</code></td><td>Transactional Capture-to-Amphora outbox and session-end receipts</td></tr>
+            <tr><td><code>sync_framework/capture_maintenance.py</code></td><td>Explicit retention maintenance for Capture queue payloads and artifacts</td></tr>
+            <tr><td><code>sync_framework/capture_queue.py</code></td><td>CaptureQueue — SQLite 持久化队列</td></tr>
+            <tr><td><code>sync_framework/capture_schema.py</code></td><td>Explicit schema owner for the mutable Capture queue database</td></tr>
+            <tr><td><code>sync_framework/capture_service.py</code></td><td>CaptureService — 统一入口层</td></tr>
+            <tr><td><code>sync_framework/capture_status_reader.py</code></td><td>Read-only status access for the Capture queue</td></tr>
+            <tr><td><code>sync_framework/capture_worker.py</code></td><td>CaptureWorkerPool — 全局 Worker 池</td></tr>
+            <tr><td><code>sync_framework/file_ingestor.py</code></td><td>FileIngestor — 用户文件摄入器</td></tr>
+            <tr><td><code>sync_framework/file_watcher.py</code></td><td>Stat-only file change watcher for raw vault and wiki paths</td></tr>
+            <tr><td><code>sync_framework/ingestion_receipt.py</code></td><td>Canonical ingestion receipt helpers for formal content ingestion</td></tr>
+            <tr><td><code>sync_framework/native_artifact_bounded_parse.py</code></td><td>RSS-bounded child parsing and private transcript spool ownership</td></tr>
+            <tr><td><code>sync_framework/native_artifact_inventory.py</code></td><td>Immutable, privacy-safe inventory for AgentSource parser inputs</td></tr>
+            <tr><td><code>sync_framework/native_artifact_models.py</code></td><td>Typed evidence and immutable adapters for native artifact generations</td></tr>
+            <tr><td><code>sync_framework/native_event_identity.py</code></td><td>Canonical native-event identity resolution for Raw and Capture paths</td></tr>
+            <tr><td><code>sync_framework/native_file_io.py</code></td><td>Compatibility exports for the process-wide stable regular-file reader</td></tr>
+            <tr><td><code>sync_framework/native_raw_contract_ledger.py</code></td><td>Append-only native Raw contract observations and effective certification state</td></tr>
+            <tr><td><code>sync_framework/native_raw_recovery_evidence.py</code></td><td>Content-free conservation evidence for Native-to-Raw recovery</td></tr>
+            <tr><td><code>sync_framework/native_sqlite.py</code></td><td>Exact read-only SQLite capability for native AgentSource artifacts</td></tr>
+            <tr><td><code>sync_framework/raw_current_projection_reconciliation.py</code></td><td>Exact-plan repair for legacy Raw current/revision projection drift</td></tr>
+            <tr><td><code>sync_framework/raw_current_projection_store.py</code></td><td>Current-row repair operations backed by immutable Raw revisions</td></tr>
+            <tr><td><code>sync_framework/raw_event_identity.py</code></td><td>Canonical Raw revision identity and completeness policy</td></tr>
+            <tr><td><code>sync_framework/raw_event_identity_aliases.py</code></td><td>Fail-closed reconciliation for legacy Raw turn identities</td></tr>
+            <tr><td><code>sync_framework/raw_event_identity_schema.py</code></td><td>Explicit migration for legacy Raw turn-number uniqueness</td></tr>
+            <tr><td><code>sync_framework/raw_event_lifecycle.py</code></td><td>Destructive subject redaction and scheduled retention lifecycle for Raw</td></tr>
+            <tr><td><code>sync_framework/raw_event_reader.py</code></td><td>Strict read-only projection of canonical Raw revisions</td></tr>
+            <tr><td><code>sync_framework/raw_event_store.py</code></td><td>Canonical raw turn store</td></tr>
+          </table>
+          <div class="note">…及 14 个辅助文件（含 sync_engine.py, triggers.py 等）。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.8 core/ops <span class="count">49 个（列出 30）</span></summary>
+        <div class="body">
+          <p style="font-size:12px;color:var(--text-faint);margin-bottom:8px;">运维与治理：健康检查/审计运行/读-执行闸门/durable io/操作事故管线/模型调用账本。</p>
+          <table class="searchable">
+            <tr><th>文件</th><th>职责</th></tr>
+            <tr><td><code>ops/action_ledger.py</code></td><td>Append-only ActionLedger persistence facade</td></tr>
+            <tr><td><code>ops/action_ledger_schema.py</code></td><td>Canonical append-only schema authority for action_ledger.db</td></tr>
+            <tr><td><code>ops/action_ledger_subject_provenance.py</code></td><td>Object provenance and tombstone owner for the ActionLedger</td></tr>
+            <tr><td><code>ops/audit_run.py</code></td><td>Canonical execution boundary for audits that inspect formal state</td></tr>
+            <tr><td><code>ops/auto_healing.py</code></td><td>Unified auto-healing orchestration for operational findings</td></tr>
+            <tr><td><code>ops/cognitive_data_contract.py</code></td><td>Unified cognitive data event contracts and interface registry</td></tr>
+            <tr><td><code>ops/cognitive_event_ledger.py</code></td><td>Envelope and consumer-receipt operations for the shared cognitive ledger</td></tr>
+            <tr><td><code>ops/cognitive_performance_baseline.py</code></td><td>Phase 0 contract validation for the COG-040 performance baseline</td></tr>
+            <tr><td><code>ops/cognitive_pipeline_receipts.py</code></td><td>Canonical receipt adapters for capture, sync, distillation, and KG pipelines</td></tr>
+            <tr><td><code>ops/cognitive_readiness.py</code></td><td>Read-only cognitive readiness audit for Mnemos runtime data</td></tr>
+            <tr><td><code>ops/cognitive_readiness_lineage.py</code></td><td>Read-only lineage and freshness metrics for cognitive readiness</td></tr>
+            <tr><td><code>ops/cognitive_readiness_reference.py</code></td><td>Independent, read-only reference proof for cognitive consolidation effects</td></tr>
+            <tr><td><code>ops/config_audit.py</code></td><td>Strict, redacted configuration audit for one-pass deployment checks</td></tr>
+            <tr><td><code>ops/config_scope.py</code></td><td>Scoped process-config authority for read-only command execution</td></tr>
+            <tr><td><code>ops/durable_io.py</code></td><td>Small fail-closed durability primitives for migration control files</td></tr>
+            <tr><td><code>ops/durable_io_types.py</code></td><td>Shared public types for durable filesystem operations</td></tr>
+            <tr><td><code>ops/durable_scope.py</code></td><td>Stable physical-scope inventory implementation for durable I/O</td></tr>
+            <tr><td><code>ops/event_subject_provenance.py</code></td><td>Object provenance and physical deletion owner for EventBus payloads</td></tr>
+            <tr><td><code>ops/evidence_backfill.py</code></td><td>Backfill page-level evidence refs for distilled Wiki pages</td></tr>
+            <tr><td><code>ops/exclusive_file_lock.py</code></td><td>Cross-platform advisory locks for offline migration writer exclusion</td></tr>
+            <tr><td><code>ops/gate_execution.py</code></td><td>Trustworthy per-gate execution and executable mutation contracts</td></tr>
+            <tr><td><code>ops/git_repository_lock.py</code></td><td>Repository-scoped lock paths shared by a Git repository and its worktrees</td></tr>
+            <tr><td><code>ops/health_agent.py</code></td><td>Read-only Agent Kit projection for the machine health report</td></tr>
+            <tr><td><code>ops/health_check.py</code></td><td>Machine-readable operational health report for Mnemos</td></tr>
+            <tr><td><code>ops/health_contract.py</code></td><td>Canonical identity for the public Mnemos health snapshot</td></tr>
+            <tr><td><code>ops/heartbeat_health.py</code></td><td>Public, content-free projection of the daemon heartbeat for health checks</td></tr>
+            <tr><td><code>ops/hermetic_run.py</code></td><td>Run-scoped ownership boundary for tests, gates, and diagnostic probes</td></tr>
+            <tr><td><code>ops/keyring_doctor.py</code></td><td>Keyring and env secret fallback diagnostics</td></tr>
+            <tr><td><code>ops/model_call_ledger_health.py</code></td><td>Read-only health projection for the provider-bound model-call ledger</td></tr>
+            <tr><td><code>ops/native_file_io.py</code></td><td>Stable no-follow readers for native regular-file artifacts</td></tr>
+          </table>
+          <div class="note">…及 19 个辅助文件。</div>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.9 core/persona <span class="count">27 个</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责 / 主要 class</th></tr>
+            <tr><td><code>persona/behavior_tracker.py</code></td><td>BehaviorPromptTracker — 画像行为提示使用追踪</td></tr>
+            <tr><td><code>persona/calibration_cli.py</code></td><td>画像校准 CLI</td></tr>
+            <tr><td><code>persona/challenge_feedback.py</code></td><td>Exact presentation-bound feedback for canonical Persona challenges</td></tr>
+            <tr><td><code>persona/challenge_queue.py</code></td><td>Durable DecisionTrace-backed Persona challenge command consumer</td></tr>
+            <tr><td><code>persona/cognitive_profile.py</code></td><td>User cognitive profile v2 storage and assembly helpers — CognitiveProfileRepository</td></tr>
+            <tr><td><code>persona/contextual_strategy.py</code></td><td>Context-scoped persona strategy helpers and report-only skill suggestions</td></tr>
+            <tr><td><code>persona/daimon.py</code></td><td>Signal Collector — 统一信号采集接口 — SignalCollector</td></tr>
+            <tr><td><code>persona/delphi.py</code></td><td>Persona Store — 画像存储与wiki frontmatter反写 — PersonaStore</td></tr>
+            <tr><td><code>persona/delphi_behavior_rules.py</code></td><td>Declarative persona-dimension rules for behavior prompts</td></tr>
+            <tr><td><code>persona/evolution_timeline.py</code></td><td>PersonaEvolutionTimeline — 14 维度长期变化可视化</td></tr>
+            <tr><td><code>persona/hamartia.py</code></td><td>Blind Spot Analyzer — 盲区画像分析器</td></tr>
+            <tr><td><code>persona/profile_access_schema.py</code></td><td>Explicit migration helper for legacy cognitive-profile access tables</td></tr>
+            <tr><td><code>persona/profile_assertion_schema.py</code></td><td>Canonical schema authority for the Profile v2 assertion revision ledger</td></tr>
+            <tr><td><code>persona/profile_effect.py</code></td><td>Typed counterfactual effect receipts for Persona profile consumers</td></tr>
+            <tr><td><code>persona/profile_payload.py</code></td><td>Rendering for the ACL-filtered user cognitive-profile payload</td></tr>
+            <tr><td><code>persona/profile_subject_deletion.py</code></td><td>Typed subject deletion owner for ACL-bound cognitive profile objects</td></tr>
+            <tr><td><code>persona/profile_usage_repository.py</code></td><td>Profile usage authorization, durable effect logging, and outbox replay</td></tr>
+            <tr><td><code>persona/projection_runtime.py</code></td><td>Read-only Persona loading and replayable Markdown projection lifecycle</td></tr>
+            <tr><td><code>persona/psyche.py</code></td><td>Signal Store — 用户行为信号数据库 — SignalStore</td></tr>
+            <tr><td><code>persona/psyche_constants.py</code></td><td>Shared Persona signal-store operating constants</td></tr>
+            <tr><td><code>persona/psyche_material_contracts.py</code></td><td>Exact Persona material-action contracts and recovery oracles</td></tr>
+            <tr><td><code>persona/psyche_models.py</code></td><td>Persisted persona-signal value objects</td></tr>
+            <tr><td><code>persona/psyche_persona.py</code></td><td>Profile queries and governed Persona material mutations for SignalStore</td></tr>
+            <tr><td><code>persona/psyche_schema.py</code></td><td>Canonical SQLite schema text for the Persona signal store</td></tr>
+            <tr><td><code>persona/pythia.py</code></td><td>Preference Analyzer — 偏好画像分析器（三层雷达）— PreferenceAnalyzer</td></tr>
+            <tr><td><code>persona/pythia_profiles.py</code></td><td>Typed preference profiles and reusable calibration helpers</td></tr>
+            <tr><td><code>persona/reflection_signal_persistence.py</code></td><td>Idempotent persistence seam for Layer 5 reflection signals</td></tr>
+          </table>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.10 core/reflection <span class="count">21 个</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责 / 主要 class</th></tr>
+            <tr><td><code>reflection/consumers.py</code></td><td>Layer 5 外循环消费者 — Insight/Feedback/CognitiveShift 下游消费管道</td></tr>
+            <tr><td><code>reflection/deviation_detector.py</code></td><td>Deviation Detector — 偏差检测触发器</td></tr>
+            <tr><td><code>reflection/experience_matcher.py</code></td><td>Experience Similarity — 历史经验匹配</td></tr>
+            <tr><td><code>reflection/feedback_analytics.py</code></td><td>Feedback analytics for dimension/trigger effectiveness</td></tr>
+            <tr><td><code>reflection/feedback_collector.py</code></td><td>Feedback Collector — 用户反馈收集器</td></tr>
+            <tr><td><code>reflection/feedback_loop.py</code></td><td>Feedback Loop — 认知变迁反哺机制</td></tr>
+            <tr><td><code>reflection/feedback_provenance.py</code></td><td>Reflection-owned boundaries for quarantined legacy feedback provenance</td></tr>
+            <tr><td><code>reflection/implicit_feedback.py</code></td><td>Implicit Feedback Detector — 隐式反馈检测器</td></tr>
+            <tr><td><code>reflection/insight_calibrator.py</code></td><td>Insight Calibrator — 洞察生成校准器</td></tr>
+            <tr><td><code>reflection/insight_generator.py</code></td><td>Insight Generator — 洞察生成器</td></tr>
+            <tr><td><code>reflection/internal_validator.py</code></td><td>Internal Validator — 内部一致性校验器</td></tr>
+            <tr><td><code>reflection/mirror_engine.py</code></td><td>Mirror Engine — 证据链检索与拼接</td></tr>
+            <tr><td><code>reflection/models.py</code></td><td>Reflection 数据模型</td></tr>
+            <tr><td><code>reflection/reflection_access.py</code></td><td>Access and deletion contracts shared by the reflection store</td></tr>
+            <tr><td><code>reflection/reflection_capability.py</code></td><td>Reflection Capability — 无触发反射能力封装</td></tr>
+            <tr><td><code>reflection/reflection_engine.py</code></td><td>Reflection Engine — 主控引擎</td></tr>
+            <tr><td><code>reflection/reflection_exporter.py</code></td><td>Reflection Markdown Exporter — L4 Reflection Index 的只读投影</td></tr>
+            <tr><td><code>reflection/reflection_router.py</code></td><td>Reflection Router — 轻量 role + scene 路由</td></tr>
+            <tr><td><code>reflection/reflection_store.py</code></td><td>Reflection store persistence</td></tr>
+            <tr><td><code>reflection/time_awareness.py</code></td><td>时间感知模块 — 代码层实现</td></tr>
+            <tr><td><code>reflection/trigger_detector.py</code></td><td>Trigger detection for reflection activation</td></tr>
+          </table>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.11 core/trust <span class="count">14 个</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>文件</th><th>职责 / 主要 class</th></tr>
+            <tr><td><code>trust/config.py</code></td><td>Configuration helpers for the trusted push decision system — TrustedPushConfig</td></tr>
+            <tr><td><code>trust/dialog_push.py</code></td><td>Dialog-facing decision cards for trusted push proposals — DialogDecisionPush</td></tr>
+            <tr><td><code>trust/formal_cognitive_mutation.py</code></td><td>Append-only journal for formal non-Markdown cognitive mutations</td></tr>
+            <tr><td><code>trust/formal_markdown.py</code></td><td>Trusted entrypoint for formal Markdown vault mutations</td></tr>
+            <tr><td><code>trust/knowledge_vault_writer.py</code></td><td>Trusted writer from approved proposals to NativeStore and Markdown</td></tr>
+            <tr><td><code>trust/markdown_adapter.py</code></td><td>Safe Markdown writes for trusted push — MarkdownAdapter</td></tr>
+            <tr><td><code>trust/markdown_update.py</code></td><td>Small convenience wrappers around trusted formal Markdown writes</td></tr>
+            <tr><td><code>trust/models.py</code></td><td>Shared models for trusted push proposals and journal events</td></tr>
+            <tr><td><code>trust/proposal_queue.py</code></td><td>SQLite-backed proposal queue for trusted push — ProposalQueue</td></tr>
+            <tr><td><code>trust/push_decision_gate.py</code></td><td>P0 hard-boundary gate for trusted push proposals — PushDecisionGate</td></tr>
+            <tr><td><code>trust/recovery.py</code></td><td>Recovery helpers for incomplete trusted push writes</td></tr>
+            <tr><td><code>trust/static_scan.py</code></td><td>AST checks for trusted-push and formal-vault write bypasses</td></tr>
+            <tr><td><code>trust/vault_mutation_service.py</code></td><td>Trusted proposal bridge for formal Markdown vault mutations</td></tr>
+            <tr><td><code>trust/write_journal.py</code></td><td>Append-only trusted push write journal — WriteJournal</td></tr>
+          </table>
+        </div>
+      </details>
+
+      <details class="submodule">
+        <summary>13.12 其他子模块文件数 <span class="count">12 子模块</span></summary>
+        <div class="body">
+          <table class="searchable">
+            <tr><th>子模块</th><th>文件数</th><th>代表文件</th></tr>
+            <tr><td><code>core/backup/</code></td><td>1</td><td>snapshot_manager.py</td></tr>
+            <tr><td><code>core/benchmarks/</code></td><td>1</td><td>golden.py</td></tr>
+            <tr><td><code>core/cognitive_graph/</code></td><td>6</td><td>store.py, models.py, updater.py</td></tr>
+            <tr><td><code>core/embeddings/</code></td><td>7</td><td>index_manager.py, dual_index.py, siliconflow_client.py</td></tr>
+            <tr><td><code>core/evidence/</code></td><td>6</td><td>source_authority.py, artifact_catalog.py, evidence_graph.py</td></tr>
+            <tr><td><code>core/migrations/</code></td><td>14</td><td>registry.py, model_call_ledger_migration.py</td></tr>
+            <tr><td><code>core/privacy/</code></td><td>11</td><td>data_ownership.py, content_redaction.py</td></tr>
+            <tr><td><code>core/role/</code></td><td>1</td><td>role_graph.py</td></tr>
+            <tr><td><code>core/scoring/</code></td><td>15</td><td>adaptive_scorer_v2.py, bayesian_scorer.py, scorers/distill_scorer_v2.py</td></tr>
+            <tr><td><code>core/setup/</code></td><td>2</td><td>install_lifecycle.py, vault_layout.py</td></tr>
+            <tr><td><code>core/telemetry/</code></td><td>12</td><td>model_call_ledger/api.py, prompt_call_log.py</td></tr>
+            <tr><td><code>core/vaults/</code></td><td>7</td><td>vault_sync.py, naming.py, link_audit.py</td></tr>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <section id="daemon">
+      <h2><span class="num">14</span>L4 文件级清单 — daemon（37 个）</h2>
+      <p style="color:var(--text-dim);margin-bottom:12px;font-size:13px;">守护服务层：全部后台周期任务。均注册进 <code>daemon/service_registry.py</code>。</p>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>adaptive_service.py</code></td><td>AdaptiveConfig daemon service helper</td></tr>
+        <tr><td><code>agent_source_coverage.py</code></td><td>Durable, privacy-safe coverage state for continuous AgentSource capture</td></tr>
+        <tr><td><code>agent_source_runtime.py</code></td><td>Daemon integration seam for manifest-owned AgentSource capture services</td></tr>
+        <tr><td><code>agent_sync_cursor.py</code></td><td>Durable cursors for lossless continuous AgentSource Raw capture</td></tr>
+        <tr><td><code>cognition_episode_dispatch.py</code></td><td>Daemon bootstrap for the committed cognition-episode durable dispatcher</td></tr>
+        <tr><td><code>command_control.py</code></td><td>OS-facing daemon command orchestration — DaemonCommandContext</td></tr>
+        <tr><td><code>consolidation_service.py</code></td><td>Daemon-owned, read-only Cognitive consolidation planning tick</td></tr>
+        <tr><td><code>distill_service.py</code></td><td>Daemon services for distillation work</td></tr>
+        <tr><td><code>entrypoint_support.py</code></td><td>Broad-free orchestration used by the patchable mnemos_daemon facade</td></tr>
+        <tr><td><code>event_handlers.py</code></td><td>Daemon event handler implementations (on_session_end / on_observation_updated / on_knowledge_stale)</td></tr>
+        <tr><td><code>file_ingest.py</code></td><td>File ingestion helpers for the daemon</td></tr>
+        <tr><td><code>heartbeat.py</code></td><td>Heartbeat snapshot helpers for the Mnemos daemon</td></tr>
+        <tr><td><code>instance_control.py</code></td><td>High-level daemon start/status/stop control</td></tr>
+        <tr><td><code>instance_identity.py</code></td><td>OS-bound identity contract shared by daemon pidfile, heartbeat, status and stop</td></tr>
+        <tr><td><code>intervals.py</code></td><td>Default daemon service intervals</td></tr>
+        <tr><td><code>kia_services.py</code></td><td>KIA-oriented daemon service helpers (recap/graph/reminder/freshness/entropy/dispute)</td></tr>
+        <tr><td><code>link_probe.py</code></td><td>External link probe service helper for the daemon</td></tr>
+        <tr><td><code>maintenance.py</code></td><td>Maintenance and status helpers for the daemon</td></tr>
+        <tr><td><code>observation_service.py</code></td><td>Observation engine daemon service helper</td></tr>
+        <tr><td><code>operational_incident_service.py</code></td><td>Daemon worker for diagnosis and incident notification outboxes</td></tr>
+        <tr><td><code>prediction_service.py</code></td><td>Bounded PredictionLedger maturity service adapter</td></tr>
+        <tr><td><code>process_control.py</code></td><td>Process-control helpers for the Mnemos daemon</td></tr>
+        <tr><td><code>raw_only_sync_engine.py</code></td><td>Canonical Raw-only engine for controlled AgentSource reconciliation — RawOnlySyncEngine</td></tr>
+        <tr><td><code>raw_projection_service.py</code></td><td>Daemon-owned orchestration for canonical Raw vault projection</td></tr>
+        <tr><td><code>raw_projection_state.py</code></td><td>Pure state and path helpers for the canonical Raw vault projection</td></tr>
+        <tr><td><code>raw_sync.py</code></td><td>Continuous, denominator-complete Raw synchronization for AgentSource data</td></tr>
+        <tr><td><code>reflection_services.py</code></td><td>Reflection and feedback daemon service helpers</td></tr>
+        <tr><td><code>resource_budget.py</code></td><td>Resource-budget gates for daemon service scheduling</td></tr>
+        <tr><td><code>runtime.py</code></td><td>Startup/runtime bootstrap helpers — RuntimeContext</td></tr>
+        <tr><td><code>runtime_flow_receipts.py</code></td><td>Daemon-owned runtime flow bootstrap and raw-projection episode receipts</td></tr>
+        <tr><td><code>scoring_signals.py</code></td><td>Scoring signal detection services for the daemon</td></tr>
+        <tr><td><code>service_registry.py</code></td><td>Service name resolution for the Mnemos daemon scheduler</td></tr>
+        <tr><td><code>service_state.py</code></td><td>Service execution state helpers for the Mnemos daemon</td></tr>
+        <tr><td><code>training_governance_service.py</code></td><td>Bounded daemon adapter for governed training projection and runs</td></tr>
+        <tr><td><code>triggers.py</code></td><td>Trigger-driven tail acceleration for the Mnemos continuous Raw owner</td></tr>
+        <tr><td><code>wiki_projection_handlers.py</code></td><td>Production EventBus consumers for Wiki projection endpoints</td></tr>
+        <tr><td><code>wiki_route.py</code></td><td>Wiki route daemon service helper</td></tr>
+      </table>
+    </section>
+
+    <section id="integrations">
+      <h2><span class="num">15</span>L4 文件级清单 — integrations</h2>
+
+      <h3>15.1 integrations/ 顶层（14 个）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责 / 主要 class</th></tr>
+        <tr><td><code>active.py</code></td><td>Shared helpers for Mnemos active agent integration</td></tr>
+        <tr><td><code>active_bridge.py</code></td><td>Runtime bridge used by generated agent wrappers</td></tr>
+        <tr><td><code>agora.py</code></td><td>MCP Server — Model Context Protocol 服务器 — MCPServer</td></tr>
+        <tr><td><code>agora_contract.py</code></td><td>Public JSON-RPC constants and bounded MCP health projection</td></tr>
+        <tr><td><code>apollon.py</code></td><td>Claude Code 适配器 — ClaudeCodeAdapter</td></tr>
+        <tr><td><code>apollon_context.py</code></td><td>Intent classification and context assembly for the Apollon adapter</td></tr>
+        <tr><td><code>crush_adapter.py</code></td><td>Crush adapter — CrushAdapter</td></tr>
+        <tr><td><code>diagnostics_provider.py</code></td><td>Diagnostics providers owned by integration adapters</td></tr>
+        <tr><td><code>kimi_adapter.py</code></td><td>Kimi adapter — KimiAdapter</td></tr>
+        <tr><td><code>mcp_config_security.py</code></td><td>Atomic security boundary for MCP host config and capability rotation</td></tr>
+        <tr><td><code>olympus.py</code></td><td>Agent adapter registry — AgentAdapter, AgentRegistry</td></tr>
+        <tr><td><code>oracle.py</code></td><td>Wiki Reader — Wiki知识读取模块 — WikiReader</td></tr>
+        <tr><td><code>preflight_builder.py</code></td><td>Agent-agnostic Mnemos preflight context builders</td></tr>
+        <tr><td><code>thread_call.py</code></td><td>Bounded daemon-thread execution with exact exception propagation</td></tr>
+      </table>
+
+      <h3>15.2 integrations/agora_tools/（1 个）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>agora_tools/schema.py</code></td><td>MCP tool schema declarations for the Agora server — list_tools</td></tr>
+      </table>
+
+      <h3>15.3 integrations/backends/（1 个）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>职责</th></tr>
+        <tr><td><code>backends/obsidian_backend.py</code></td><td>ObsidianBackend — 本地 Markdown 文件存储后端</td></tr>
+      </table>
+
+      <h3>15.4 integrations/sources/（16 个，见 §7.1）</h3>
+      <p style="font-size:13px;color:var(--text-dim);">12 个平台解析器 + 4 辅助文件，完整清单见 §7.1 差异矩阵。</p>
+    </section>
+
+    <section id="scripts">
+      <h2><span class="num">16</span>L4 文件级清单 — scripts 分类</h2>
+      <p style="color:var(--text-dim);margin-bottom:12px;font-size:13px;">scripts/ 共 260 个 .py 文件。按前缀分类如下，每类列出代表文件。</p>
+
+      <h3>16.1 audit_*（82 个）</h3>
+      <div class="card">
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">只读审计脚本，<code>--json</code> 输出。代表：</p>
+        <ul style="list-style:none;padding:0;font-size:13px;color:var(--text-dim);line-height:1.8;">
+          <li><code>audit_action_ledger.py</code> — Audit the global ActionLedger contract</li>
+          <li><code>audit_adaptive_data_flows.py</code> — Validate adaptive data has real consumers</li>
+          <li><code>audit_agent_source_coverage.py</code> — Audit continuous capture coverage for all active sources</li>
+          <li><code>audit_cognitive_source_authority.py</code> — Static audit for the COG-044 cognitive contract</li>
+          <li><code>audit_document_asset_manifest.py</code> — Audit tracked Markdown/Prompt/Desktop asset manifest</li>
+          <li><code>audit_schema_registry.py</code> — Audit production DDL owner and live DB signature</li>
+        </ul>
+        <p style="font-size:12px;color:var(--text-faint);margin-top:8px;">…及 76 个同前缀文件。</p>
+      </div>
+
+      <h3>16.2 reconcile_*（48 个）</h3>
+      <div class="card">
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:8px;">存量数据迁移脚本，<code>--json</code> 预览 → <code>--apply --backup-dir</code> 迁移。代表：</p>
+        <ul style="list-style:none;padding:0;font-size:13px;color:var(--text-dim);line-height:1.8;">
+          <li><code>reconcile_relation_evidence_schema.py</code> — relation_evidence schema 迁移</li>
+          <li><code>reconcile_distill_execution_checkpoints.py</code> — distill execution checkpoint 迁移</li>
+          <li><code>reconcile_recap_consumption.py</code> — recap consumption schema 对账</li>
+          <li><code>reconcile_policy_patch_triggers.py</code> — policy patch trigger 清理</li>
+          <li><code>reconcile_agent_sync_cursor_schema.py</code> — AgentSource cursor ledger 迁移</li>
+        </ul>
+        <p style="font-size:12px;color:var(--text-faint);margin-top:8px;">…及 43 个同前缀文件。</p>
+      </div>
+
+      <h3>16.3 其他前缀</h3>
+      <table class="searchable">
+        <tr><th>前缀</th><th>数量</th><th>代表文件</th></tr>
+        <tr><td><code>verify_*</code></td><td>5</td><td>verify_installation.py, verify_full_score_certificate.py</td></tr>
+        <tr><td><code>run_*</code></td><td>7</td><td>run_tests.py, run_full_score_gates.py, run_golden_benchmark.py</td></tr>
+        <tr><td><code>generate_*</code></td><td>7</td><td>generate_config_examples.py, generate_event_bus_map.py</td></tr>
+        <tr><td><code>check_*</code></td><td>5</td><td>check_maintainability_budget.py, check_zombie_code_policy.py</td></tr>
+        <tr><td><code>e2e_*</code></td><td>4</td><td>e2e_probe.py, e2e_wow_probe.py</td></tr>
+        <tr><td><code>rebuild_*</code></td><td>2</td><td>rebuild_wiki_projection_state.py, rebuild_obsidian_index.py</td></tr>
+        <tr><td><code>build_*</code></td><td>2</td><td>build_embedding_index.py, build_cross_agent_links.py</td></tr>
+        <tr><td>其他</td><td>98</td><td>auto_setup.py, security_audit.py, vulture_whitelist.py, arch_dependency_graph.py 等</td></tr>
+      </table>
+    </section>
+
+    <section id="hub">
+      <h2><span class="num">17</span>L5 枢纽文件索引（主要 class / def / 常量）</h2>
+      <p style="color:var(--text-dim);margin-bottom:16px;font-size:13px;">根因高发枢纽文件，按子系统分组。提取方式：AST 顶层 class + public def + 大写常量。</p>
+
+      <h3>17.1 事件总线</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>core/mnemos_bus.py</code></td><td>EventBus</td><td>reset_event_bus, publish_event, get_event_stats</td><td>MAX_QUEUE_DEPTH, CONN_SECONDS, DEFAULT_MAX_CHAIN_DEPTH, EVENT_TYPES</td></tr>
+      </table>
+
+      <h3>17.2 门面层（core/application/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>说明</th></tr>
+        <tr><td><code>facade.py</code></td><td>DefaultMnemosServiceFacade</td><td>1424 行，67 方法，MCP 工具统一入口</td></tr>
+        <tr><td><code>facade_capture.py</code></td><td>FacadeCaptureMixin</td><td>Session capture operations</td></tr>
+        <tr><td><code>kia.py</code></td><td>KiaApplicationService</td><td>KIA 应用服务</td></tr>
+        <tr><td><code>memory.py</code></td><td>MemoryApplicationService</td><td>Scoped-memory 应用服务</td></tr>
+        <tr><td><code>intelligence.py</code></td><td>IntelligenceApplicationService</td><td>Context-intelligence 应用服务</td></tr>
+        <tr><td><code>observation.py</code></td><td>ObservationApplicationService</td><td>Observation 应用服务</td></tr>
+        <tr><td><code>persona.py</code></td><td>PersonaApplicationService</td><td>Persona 应用服务</td></tr>
+        <tr><td><code>reflection.py</code></td><td>ReflectionApplicationService</td><td>Reflection 应用服务</td></tr>
+        <tr><td><code>storage.py</code></td><td>StorageApplicationService</td><td>Storage 应用服务</td></tr>
+        <tr><td><code>trusted_write_bridge.py</code></td><td>—</td><td>write_application_wiki_page, submit_application_wiki_write</td></tr>
+        <tr><td><code>cognitive_state.py</code></td><td>CognitiveStateApplicationService</td><td>READ_MODEL_SCHEMA_VERSION, DEFAULT_STATE_CONSUMERS</td></tr>
+        <tr><td><code>decision_inbox.py</code></td><td>DecisionInboxPaths, DecisionInboxService</td><td>DECISION_INBOX_SCHEMA_VERSION</td></tr>
+        <tr><td><code>document_import_service.py</code></td><td>DocumentImportService</td><td>IMPORT_MODES</td></tr>
+      </table>
+
+      <h3>17.3 捕获管线（core/sync_framework/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>capture_service.py</code></td><td>_RawStore, CaptureService</td><td>—</td><td>MAX_PAYLOAD_BYTES</td></tr>
+        <tr><td><code>capture_queue.py</code></td><td>CaptureQueueOperationError, CaptureQueue</td><td>—</td><td>MAX_DEPTH</td></tr>
+        <tr><td><code>raw_event_store.py</code></td><td>RawEventStore</td><td>—</td><td>—</td></tr>
+        <tr><td><code>sync_engine.py</code></td><td>_SyncEventBusConfig, SyncEngine</td><td>—</td><td>SHARD_THRESHOLD</td></tr>
+      </table>
+
+      <h3>17.4 蒸馏入站 + 引擎（core/kia/ + core/hephaestus/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>kia/amphora.py</code></td><td>AmphoraTaskPayloadUnavailableError</td><td>enqueue_with_receipt, list_pending, get_next, claim_task, cleanup_old</td><td>CONN_SECONDS, CLEANUP_OLD_DAYS</td></tr>
+        <tr><td><code>kia/amphora_queries.py</code></td><td>AmphoraQueries</td><td>—</td><td>—</td></tr>
+        <tr><td><code>hephaestus/distillation_engine.py</code></td><td>HttpApiHostAgentCaller, LLMValueJudge, KnowledgeExtractor, DistillationEngine</td><td>generate_distillation_error_report, generate_wiki_page, distill_session, distill_and_write</td><td>DEFAULT_TOKEN_BUDGET_TOTAL, FRAGMENT_BOUNDARY_CHARS</td></tr>
+        <tr><td><code>hephaestus/distillation_extractor.py</code></td><td>KnowledgeExtractor</td><td>—</td><td>—</td></tr>
+        <tr><td><code>hephaestus/chunked_extraction.py</code></td><td>ChunkSourceSpanError, ChunkedExtractionCoordinator</td><td>build_chunk_source_span_map</td><td>—</td></tr>
+        <tr><td><code>hephaestus/wiki_builder.py</code></td><td>—</td><td>fetch_l1_sessions, reconstruct_session, score_session, run_build_cycle, update_index_md, update_moc_pages, main</td><td>WIKI_BUILDER_OPERATION_ERRORS</td></tr>
+        <tr><td><code>hephaestus/distill_backend.py</code></td><td>DistillBackend, LLMBackend, BackendChain</td><td>create_default_llm_backend, create_default_backend_chain</td><td>—</td></tr>
+      </table>
+
+      <h3>17.5 可信推送闭环（core/trust/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>push_decision_gate.py</code></td><td>GateDecision, GateResult, PushDecisionGate</td><td>—</td><td>_SENSITIVE_PATTERNS</td></tr>
+        <tr><td><code>write_journal.py</code></td><td>WriteJournal</td><td>—</td><td>—</td></tr>
+        <tr><td><code>knowledge_vault_writer.py</code></td><td>KnowledgeVaultEffectOracle, KnowledgeVaultWriter</td><td>knowledge_vault_material_action_binding</td><td>KNOWLEDGE_VAULT_ACTION_TYPE, KNOWLEDGE_VAULT_OWNER</td></tr>
+        <tr><td><code>proposal_queue.py</code></td><td>ProposalQueue</td><td>—</td><td>—</td></tr>
+        <tr><td><code>vault_mutation_service.py</code></td><td>TrustedVaultMutationService</td><td>trusted_markdown_material_action_binding</td><td>—</td></tr>
+      </table>
+
+      <h3>17.6 Wiki 投影生命周期（core/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>wiki_projection_lifecycle.py</code></td><td>WikiMutationReceipt, WikiProjectionLedger</td><td>resolve_wiki_projection_db_path, projection_snapshot_hash</td><td>MUTATION_TYPES, DEFAULT_REQUIRED_CONSUMERS</td></tr>
+        <tr><td><code>wiki_projection_publisher.py</code></td><td>—</td><td>publish_wiki_mutation, publish_wiki_page_updated, publish_unpublished_mutations</td><td>—</td></tr>
+        <tr><td><code>wiki_metrics.py</code></td><td>WikiMetrics</td><td>get_default_metrics, quick_assess, write_mnemos_home, main</td><td>WIKI_METRICS_MARKDOWN_POLICY</td></tr>
+      </table>
+
+      <h3>17.7 认知层（core/cognitive/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>state_store.py</code></td><td>CognitiveStateStore, CognitiveStateUnitOfWork</td><td>—</td><td>—</td></tr>
+        <tr><td><code>belief_revision.py</code></td><td>BeliefRevisionStore, BeliefRevisionProjector</td><td>—</td><td>BELIEF_CONSUMER, BELIEF_COMMAND_TYPE</td></tr>
+        <tr><td><code>decision_trace.py</code></td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td><code>observation_engine.py</code></td><td>ObservationEngine</td><td>canonical_raw_engine_kwargs</td><td>MAX_BACKFILL_RETURNED_OBSERVATIONS</td></tr>
+      </table>
+
+      <h3>17.8 证据权限（core/evidence/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>source_authority.py</code></td><td>SourceAuthority, SourceAuthorityCatalog, SourceAuthorityResolution</td><td>verify_source_authority_raw_span, resolve_model_source_authority_selections, claim_cognitive_authority</td><td>SOURCE_AUTHORITY_SCHEMA_VERSION, COGNITIVE_UPDATE_AUTHORITIES</td></tr>
+      </table>
+
+      <h3>17.9 配置与基础（core/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>config.py</code></td><td>Config</td><td>get_config, reload_config, reset_config</td><td>PARTS, PERFORMANCE_TIERS, DEFAULT_CONFIG</td></tr>
+        <tr><td><code>runtime_paths.py</code></td><td>RuntimePaths</td><td>—</td><td>—</td></tr>
+        <tr><td><code>module_toggles.py</code></td><td>ToggleOutputContract, ModuleToggleDefinition</td><td>get_toggle_definition, build_toggle_matrix, audit_module_toggle_registry</td><td>MODULE_TOGGLE_SCHEMA_VERSION, TOGGLE_STATES</td></tr>
+        <tr><td><code>import_guard.py</code></td><td>—</td><td>assert_allowed_module, is_allowed_module</td><td>_ALLOWED_MODULE_PREFIXES</td></tr>
+        <tr><td><code>document_import.py</code></td><td>TrustedDocumentValidation</td><td>document_max_file_size_mb, validate_trusted_user_document, file_sha256</td><td>DEFAULT_DOCUMENT_MAX_FILE_SIZE_MB</td></tr>
+      </table>
+
+      <h3>17.10 MCP 集成（integrations/）</h3>
+      <table class="searchable">
+        <tr><th>文件</th><th>class</th><th>public def</th><th>常量</th></tr>
+        <tr><td><code>agora.py</code></td><td>MCPServer</td><td>build_mcp_server_from_environment, run_mcp_server</td><td>—</td></tr>
+        <tr><td><code>agora_tools/schema.py</code></td><td>—</td><td>list_tools</td><td>—</td></tr>
+      </table>
+    </section>
+
+    <div id="global-empty">无匹配结果 — 尝试其他关键词</div>
+
+  </main>
+</div>
+
+<footer>
+  Mnemos 项目拓扑 · 17 章节 · 629 文件引用 · 由 project-topology-mapping skill 生成 · 已通过 verify_topology.py 校验
+</footer>
+
+<script>
+// 主题切换
+var htmlEl = document.documentElement;
+var themeBtn = document.getElementById('theme');
+var savedTheme = localStorage.getItem('topo-theme');
+if (savedTheme) htmlEl.setAttribute('data-theme', savedTheme);
+themeBtn.addEventListener('click', function() {
+  var cur = htmlEl.getAttribute('data-theme');
+  var next = cur === 'dark' ? 'light' : 'dark';
+  htmlEl.setAttribute('data-theme', next);
+  localStorage.setItem('topo-theme', next);
+});
+
+// scrollspy
+var tocLinks = document.querySelectorAll('#toc a');
+var sections = document.querySelectorAll('section[id]');
+var linkMap = {};
+tocLinks.forEach(function(a) { linkMap[a.getAttribute('href').slice(1)] = a; });
+var obs = new IntersectionObserver(function(entries) {
+  entries.forEach(function(e) {
+    if (e.isIntersecting) {
+      tocLinks.forEach(function(a) { a.classList.remove('active'); });
+      var link = linkMap[e.target.id];
+      if (link) link.classList.add('active');
+    }
+  });
+}, { rootMargin: '-80px 0px -70% 0px' });
+sections.forEach(function(s) { obs.observe(s); });
+
+// 搜索（所有 .searchable 表格 + 自动展开折叠的子模块）
+var search = document.getElementById('search');
+var globalEmpty = document.getElementById('global-empty');
+search.addEventListener('input', function() {
+  var q = search.value.trim().toLowerCase();
+  var anyMatch = false;
+  document.querySelectorAll('.searchable').forEach(function(tbl) {
+    var hasVisible = false;
+    tbl.querySelectorAll('tr').forEach(function(tr) {
+      if (tr.querySelector('th')) return;
+      var text = tr.textContent.toLowerCase();
+      var match = !q || text.indexOf(q) !== -1;
+      tr.classList.toggle('hidden', !match);
+      if (match) hasVisible = true;
+    });
+    if (hasVisible) anyMatch = true;
+    var parentDetails = tbl.closest('details.submodule, details.flow');
+    if (parentDetails) {
+      if (q && hasVisible) parentDetails.setAttribute('open', '');
+      else if (q && !hasVisible) parentDetails.removeAttribute('open');
+    }
+  });
+  globalEmpty.classList.toggle('show', q !== '' && !anyMatch);
+});
+
+// 全部折叠/展开
+var collapseBtn = document.getElementById('collapse-all');
+var allOpen = true;
+collapseBtn.addEventListener('click', function() {
+  allOpen = !allOpen;
+  document.querySelectorAll('details').forEach(function(d) {
+    if (allOpen) d.setAttribute('open', '');
+    else d.removeAttribute('open');
+  });
+});
+
+// 代码高亮：点击 §4 数据流中的 code，高亮所有同名 code
+var highlightedText = null;
+function clearHighlight() {
+  document.querySelectorAll('code.highlight').forEach(function(c) { c.classList.remove('highlight'); });
+  highlightedText = null;
+}
+function highlightCode(text) {
+  clearHighlight();
+  document.querySelectorAll('code').forEach(function(c) {
+    if (c.textContent.trim() === text.trim()) c.classList.add('highlight');
+  });
+  highlightedText = text;
+}
+document.querySelectorAll('.flow code').forEach(function(code) {
+  code.title = '点击高亮同名文件';
+  code.addEventListener('click', function(e) {
+    e.stopPropagation();
+    var text = code.textContent;
+    if (highlightedText === text) clearHighlight();
+    else highlightCode(text);
+  });
+});
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.flow code')) clearHighlight();
+});
+
+// 键盘：/ 聚焦搜索
+document.addEventListener('keydown', function(e) {
+  if (e.key === '/' && document.activeElement !== search) {
+    e.preventDefault();
+    search.focus();
+  }
+});
+</script>
+</body>
+</html>

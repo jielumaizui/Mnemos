@@ -8,10 +8,8 @@ P0-2 长链路测试 — 真实 EventBus 链路
 断言目标：DB 记录、事件状态流转、handler 被调用、异常不阻塞后续事件。
 """
 
-import sqlite3
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -42,10 +40,14 @@ class TestEventBusRealLoop:
         """bus.publish 应将事件写入 SQLite events 表。"""
         from core.mnemos_bus import Event
 
-        event = Event(event_type="memory_synced", source="sync", payload={
-            "session_id": "sess-001",
-            "source": "memos",
-        })
+        event = Event(
+            event_type="memory_synced",
+            source="sync",
+            payload={
+                "session_id": "sess-001",
+                "source": "notes",
+            },
+        )
         event_id = bus.publish(event, force=True)
         assert event_id
 
@@ -63,14 +65,17 @@ class TestEventBusRealLoop:
     def test_handler_receives_event(self, bus):
         """订阅 handler 应在事件发布后收到回调。"""
         from core.mnemos_bus import Event
+
         received = []
 
         def handler(event):
-            received.append({
-                "type": event.event_type,
-                "source": event.source,
-                "payload": event.payload,
-            })
+            received.append(
+                {
+                    "type": event.event_type,
+                    "source": event.source,
+                    "payload": event.payload,
+                }
+            )
 
         bus.subscribe("content_scored", handler)
 
@@ -88,12 +93,15 @@ class TestEventBusRealLoop:
     def test_multiple_handlers_same_event(self, bus):
         """同一事件类型多个 handler 都应被调用。"""
         from core.mnemos_bus import Event
+
         calls = []
 
         bus.subscribe("knowledge_distilled", lambda e: calls.append("h1"))
         bus.subscribe("knowledge_distilled", lambda e: calls.append("h2"))
 
-        bus.publish(Event(event_type="knowledge_distilled", source="distill", payload={"title": "x"}))
+        bus.publish(
+            Event(event_type="knowledge_distilled", source="distill", payload={"title": "x"})
+        )
         time.sleep(0.3)
 
         assert "h1" in calls
@@ -102,6 +110,7 @@ class TestEventBusRealLoop:
     def test_handler_exception_does_not_block_others(self, bus):
         """某个 handler 抛异常不应阻塞同事件的其他 handler。"""
         from core.mnemos_bus import Event
+
         calls = []
 
         def bad_handler(event):
@@ -121,6 +130,7 @@ class TestEventBusRealLoop:
     def test_event_status_lifecycle(self, bus):
         """事件状态应在 DB 中记录为 pending，handler 完成后更新为 done。"""
         from core.mnemos_bus import Event
+
         processed = []
 
         def sync_handler(event):
@@ -134,7 +144,8 @@ class TestEventBusRealLoop:
 
         conn = bus._get_conn()
         row = conn.execute(
-            "SELECT status FROM events WHERE trace_id=?", (event.trace_id,),
+            "SELECT status FROM events WHERE trace_id=?",
+            (event.trace_id,),
         ).fetchone()
         assert row is not None
         # handler 成功执行后状态应为 done
@@ -144,18 +155,20 @@ class TestEventBusRealLoop:
     def test_bus_stats_returns_counts(self, bus):
         """stats() 应返回事件统计。"""
         from core.mnemos_bus import Event
+
         bus.publish(Event(event_type="type_a", source="s", payload={}), force=True)
         bus.publish(Event(event_type="type_a", source="s", payload={}), force=True)
         bus.publish(Event(event_type="type_b", source="s", payload={}), force=True)
         time.sleep(0.3)
 
         stats = bus.stats()
-        assert stats.get("pending", 0) + stats.get("done", 0) >= 3
+        assert stats.get("total_recorded", 0) >= 3
         assert "dead_letters" in stats
 
     def test_cross_thread_publish_and_consume(self, bus):
         """跨线程 publish → consume 应正常工作。"""
         from core.mnemos_bus import Event
+
         consumed = []
 
         def handler(event):

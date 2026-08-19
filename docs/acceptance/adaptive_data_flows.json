@@ -1,0 +1,1194 @@
+{
+  "schema_version": "mnemos.adaptive_data_flows.v1",
+  "updated": "2026-07-14",
+  "runtime_audit": {
+    "schema_version": "mnemos.runtime_producer_consumer.v2",
+    "data_event_schema": "mnemos.cognitive_data_event.v1",
+    "data_interface_registry_schema": "mnemos.data_interface_registry.v1",
+    "ledger": "producer_consumer_ledger.db",
+    "default_topic": "flow_id",
+    "default_pending_budget": 0,
+    "default_dead_letter_budget": 0,
+    "default_max_lag_seconds": 86400,
+    "strict_gate": "python3 scripts/audit_runtime_producer_consumer_closure.py --strict",
+    "data_interface_strict_gate": "python3 scripts/audit_data_interface_registry.py --strict",
+    "health_check": "checks.runtime_producer_consumer",
+    "flow_contracts": {
+      "raw_quality_to_distill_gate": {"observation_mode": "continuous", "required": true, "min_observations": 1, "freshness_required": true},
+      "distill_quality_to_write_admission": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "search_feedback_to_scoring": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "heat_to_search_and_quality_gate": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "freshness_to_search_and_refresh": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "entropy_to_kg_cleanup": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "observation_to_reflection_and_persona": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "persona_to_behavior_and_search": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "feedback_to_push_and_reflection": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Legacy multi-owner feedback fan-out was retired by COG-038; canonical attribution and proposal receipts are audited by the feedback attribution gate."},
+      "predictive_push_to_penalty": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Direct reaction-to-penalty reinforcement was retired by COG-038; reactions now create canonical attribution and proposal-only target receipts."},
+      "reminder_to_dialog_nudge": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "kg_confidence_to_relation_display": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false, "receipt_grace_seconds": 60},
+      "adaptive_config_to_runtime_weights": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "module_toggle_to_activation_contract": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Static activation registry validated by contract gates; it does not emit runtime business events."},
+      "toggle_output_to_consumer_effect": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Static output wiring registry validated by contract gates; runtime effects are covered by their business flow ids."},
+      "migration_plan_to_ledger": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "snapshot_manifest_to_restore_plan": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "data_inventory_to_delete_proof": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "golden_benchmark_to_scorecard": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Deterministic synthetic release gate writes its own scorecard and does not represent a production business event stream."},
+      "resource_budget_to_scheduler": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "install_lifecycle_to_scorecard": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false},
+      "wiki_quality_to_scorecard_and_action_ledger": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Read-only quality audit output is a release report, not a runtime producer event; applied fixes remain in ActionLedger."},
+      "cognitive_readiness_to_scorecard_and_action_ledger": {"observation_mode": "not_applicable", "required": false, "min_observations": 0, "freshness_required": false, "not_applicable_reason": "Read-only readiness aggregation consumes the underlying business flow receipts and must not write self-observation evidence."},
+      "raw_projection_error_to_recovery_ledger": {"observation_mode": "on_event", "required": false, "min_observations": 1, "freshness_required": false}
+    },
+    "scorecard_metrics": [
+      "producer_consumer.closed_flows",
+      "producer_consumer.orphan_outputs",
+      "producer_consumer.no_source_consumers",
+      "producer_consumer.item_mismatches",
+      "producer_consumer.dead_letters",
+      "cognitive_data.events",
+      "cognitive_data.consumed_events",
+      "duplicates.reconciled"
+    ]
+  },
+  "flows": [
+    {
+      "id": "raw_quality_to_distill_gate",
+      "data_type": "raw capture quality and completeness",
+      "producer": {
+        "code": [
+          "core/sync_framework/raw_event_store.py",
+          "core/sync_framework/sync_engine.py"
+        ],
+        "writes": [
+          "raw_turns completeness/source_coverage/truncated metadata"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/hephaestus/quality_gate.py",
+          "core/hephaestus/distillation_prejudge.py"
+        ],
+        "reads": [
+          "source_coverage",
+          "raw_truncated",
+          "source_truncated",
+          "distill_source_coverage"
+        ]
+      },
+      "adaptive_effect": "Incomplete or truncated raw data can defer distillation or require complete raw before writing knowledge.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/distill.py",
+          "core/cli/commands/sync.py"
+        ],
+        "docs": [
+          "docs/acceptance/raw_event_contract.md",
+          "docs/acceptance/distilled_knowledge_contract.md"
+        ]
+      },
+      "rollback_or_degradation": "Known-derived sources are reported separately; incomplete raw becomes audit/defer instead of silent write.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_quality_gate.py tests/unit/test_distillation_engine.py tests/unit/test_sync_backfill.py -q"
+      ]
+    },
+    {
+      "id": "distill_quality_to_write_admission",
+      "data_type": "distillation quality and structured output",
+      "producer": {
+        "code": [
+          "core/hephaestus/distillation_contract.py",
+          "core/hephaestus/distillation_quality.py"
+        ],
+        "writes": [
+          "distill_output_v4",
+          "canonical cognition_episode revision and projection outbox",
+          "quality_gate frontmatter fields",
+          "distill_actions.db action logs"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/hephaestus/distillation_engine.py",
+          "core/hephaestus/distill_action_router.py",
+          "core/hephaestus/distillation_wiki_page.py"
+        ],
+        "reads": [
+          "validated contract",
+          "recommended actions",
+          "quality gate frontmatter fields"
+        ]
+      },
+      "adaptive_effect": "Low value, conflict, duplicate, or invalid output changes write behavior to skip/defer/dispute/update/reinforce.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/distill.py",
+          "core/hephaestus/distillation_wiki_page.py"
+        ],
+        "docs": [
+          "docs/acceptance/distilled_knowledge_contract.md"
+        ]
+      },
+      "rollback_or_degradation": "Invalid structured output is corrected once or blocked; non-create write plans do not create accidental pages.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_distillation_contract.py tests/unit/test_distillation_engine.py tests/unit/test_distill_v2_bridge.py -q"
+      ]
+    },
+    {
+      "id": "search_feedback_to_scoring",
+      "data_type": "search and tool outcome scoring samples",
+      "producer": {
+        "code": [
+          "core/application/intelligence.py",
+          "core/app/context_search.py",
+          "core/app/outcome_recorder.py"
+        ],
+        "writes": [
+          "AdaptiveScorerV2 samples",
+          "search_sessions",
+          "outcome records"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/scoring/adaptive_scorer_v2.py",
+          "core/scoring/rule_helpers.py"
+        ],
+        "reads": [
+          "training samples",
+          "rule weights",
+          "outcome history"
+        ]
+      },
+      "adaptive_effect": "Search result counts, clicks, and outcomes train kg/profile dimensions and future scoring weights.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/scorer.py",
+          "core/scoring/adaptive_scorer_v2.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Scorer can report status and rollback model versions; failed enqueue logs warning without blocking search.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_adaptive_scorer_v2.py tests/unit/scoring/test_adaptive_scorer_v2.py tests/unit/test_daemon_scoring_signals.py -q"
+      ]
+    },
+    {
+      "id": "heat_to_search_and_quality_gate",
+      "data_type": "wiki heat and access metrics",
+      "producer": {
+        "code": [
+          "core/wiki_metrics.py",
+          "core/app/context_search.py"
+        ],
+        "writes": [
+          "page heat_score",
+          "last_accessed",
+          "search hit/access counters"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/app/context_search.py",
+          "core/hephaestus/quality_gate.py"
+        ],
+        "reads": [
+          "heat_score",
+          "heat_level",
+          "search/reference signals"
+        ]
+      },
+      "adaptive_effect": "Heat participates in search result explanation and can let quality gate wait for more evidence before distilling.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/metrics.py",
+          "core/cli/commands/perf.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Missing metrics ledger degrades to cold/default heat and does not block search.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_wiki_metrics.py tests/unit/test_context_search.py tests/unit/test_quality_gate.py -q"
+      ]
+    },
+    {
+      "id": "freshness_to_search_and_refresh",
+      "data_type": "freshness and version-bound knowledge state",
+      "producer": {
+        "code": [
+          "core/app/freshness_alert.py",
+          "core/kia/proteus.py"
+        ],
+        "writes": [
+          "freshness alerts",
+          "stale/fresh page state",
+          "version-aware metadata"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/app/context_search.py",
+          "core/app/freshness_refresh_worker.py",
+          "core/cli/commands/freshness.py"
+        ],
+        "reads": [
+          "freshness state",
+          "stale pages",
+          "auto_refresh requests"
+        ]
+      },
+      "adaptive_effect": "Stale pages are surfaced in search explanations and can be refreshed manually or in batch.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/freshness.py",
+          "core/app/freshness_alert.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Refresh failure leaves existing page intact and reports stale/error state.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_freshness_alert.py tests/unit/test_cli_freshness.py tests/unit/test_freshness_refresh_worker.py tests/unit/test_proteus_freshness.py -q"
+      ]
+    },
+    {
+      "id": "entropy_to_kg_cleanup",
+      "data_type": "entropy, duplicate, and disorder signals",
+      "producer": {
+        "code": [
+          "core/kia/eris.py"
+        ],
+        "writes": [
+          "entropy report",
+          "merge/link/cleanup suggestions"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cli/commands/entropy.py",
+          "core/kia/knowledge_graph.py",
+          "core/kia/dialog_reminder.py",
+          "daemon/kia_services.py"
+        ],
+        "reads": [
+          "entropy suggestions",
+          "candidate relations"
+        ]
+      },
+      "adaptive_effect": "Entropy findings can generate reports or, with explicit auto-fix flags, add KG links.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/entropy.py",
+          "core/kia/eris.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Auto-fix requires explicit flag; scan-only mode does not mutate KG.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_eris.py tests/unit/test_cli_entropy.py -q"
+      ]
+    },
+    {
+      "id": "observation_to_reflection_and_persona",
+      "data_type": "canonical current Raw revision-backed objective observations plus committed replayable calibration records",
+      "producer": {
+        "code": [
+          "core/cognitive/observation_engine.py",
+          "core/cognitive/observation_store.py",
+          "core/cognitive/sources.py",
+          "core/cognitive/calibration_lineage.py",
+          "core/cognitive/calibration_record.py",
+          "core/cognitive/observation_calibration_schema.py",
+          "core/sync_framework/raw_event_store.py",
+          "core/sync_framework/raw_provenance_store.py"
+        ],
+        "writes": [
+          "observations.db",
+          "raw_events.db raw_provenance_edges (exact revision/span observation_created)",
+          "raw_events.db raw_provenance_gaps (typed intentional_no_observation)",
+          "observations.db observation_source_cursors (post-terminal progress)",
+          "observations.db verified or historical_unverified base measurement plus committed calibration revision/input/spec/record hashes",
+          "producer_consumer_ledger.db calibration_record revision/event/outbox/effect receipts",
+          "observation index",
+          "dimension counts",
+          "ObservationBatch extraction_status/extraction_reason"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/reflection/mirror_engine.py",
+          "core/reflection/consumers.py",
+          "core/application/observation.py",
+          "core/cognitive/wiki_exporter.py",
+          "daemon/event_handlers.py"
+        ],
+        "reads": [
+          "observations",
+          "exact Raw revision/span terminal provenance",
+          "dimension signals",
+          "reflection evidence",
+          "policy patch/no_patch evidence",
+          "committed CalibrationRecord prior/posterior, independent support/counter clusters, source spans and omission receipts"
+        ]
+      },
+      "adaptive_effect": "Canonical current Raw revisions feed exact Observation evidence; independent lineage clusters produce a committed replayable calibration posterior before Wiki projection, reflection, persona signals, PolicyPatchStore/no_patch evidence and later cognitive graph reconciliation.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/observe.py",
+          "core/cognitive/observation_index.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Observation extraction can run incrementally with per-source durable cursors. Missing or malformed canonical Raw blocks instead of falling back to Markdown; every eligible Raw reaches an exact observation edge or a typed intentional_no_observation terminal, while extractor/persist failure stays retryable. Missing canonical CalibrationRecord leaves a verified base confidence unchanged; stale spec, partial pointer, calibrated historical_unverified base, derived double count or projection receipt gap fails the calibration audit. Legacy binding schema requires daemon-stopped, backup-first explicit reconciliation, marks an unrecoverable prior historical_unverified, and never fabricates a base or record. An all-visible-Raw skip state is a readiness failure, not green coverage.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/cognitive/test_canonical_raw_observation.py tests/unit/cognitive/test_observation_engine.py tests/unit/cognitive/test_observation_store.py tests/unit/cognitive/test_calibration_record.py tests/unit/cognitive/test_calibration_lineage_audit.py tests/unit/test_daemon_observation_service.py tests/unit/test_observation_reflection_bridge.py tests/unit/reflection/test_reflection_policy_patch_consumer.py -q",
+        "python3 scripts/audit_cognitive_calibration_lineage.py --strict --json"
+      ]
+    },
+    {
+      "id": "persona_to_behavior_and_search",
+      "data_type": "persona and behavior signals",
+      "producer": {
+        "code": [
+          "core/persona/behavior_tracker.py",
+          "core/persona/psyche.py",
+          "core/application/persona.py"
+        ],
+        "writes": [
+          "persona signals",
+          "behavior metrics",
+          "profile"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/persona/contextual_strategy.py",
+          "core/app/context_search.py",
+          "integrations/preflight_builder.py"
+        ],
+        "reads": [
+          "persona profile",
+          "domain/form preferences",
+          "behavior prompt inputs"
+        ]
+      },
+      "adaptive_effect": "Persona influences behavior prompts, context search persona score, and preflight framing.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/persona.py",
+          "core/application/persona.py"
+        ],
+        "docs": [
+          "docs/AGENT_GUIDE.md"
+        ]
+      },
+      "rollback_or_degradation": "Missing profile degrades to neutral persona score and default behavior prompt.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_persona_alignment.py tests/unit/test_persona_contextual_strategy.py tests/unit/persona/test_behavior_tracker.py -q"
+      ]
+    },
+    {
+      "id": "feedback_to_push_and_reflection",
+      "data_type": "canonical subject-bound reaction attribution",
+      "producer": {
+        "code": [
+          "core/cognitive/feedback_entrypoints.py",
+          "core/cognitive/feedback_attribution.py",
+          "integrations/agora.py"
+        ],
+        "writes": [
+          "feedback_attribution_record revisions",
+          "reaction_target proposal receipts",
+          "correction and neutralization receipts"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cognitive/feedback_targets.py",
+          "core/cognitive/feedback_attribution_audit.py"
+        ],
+        "reads": [
+          "exact subject and principal attribution",
+          "supersedes and correction chain",
+          "proposal-only target receipts",
+          "compensation receipts before replacement effects"
+        ]
+      },
+      "adaptive_effect": "A reaction is recorded once against an exact subject. It may create reviewable target proposals, but it never directly changes trust, scores, persona, reflection, or push penalties.",
+      "observable_state": {
+        "code": [
+          "scripts/audit_feedback_attribution.py",
+          "scripts/reconcile_feedback_attribution_history.py"
+        ],
+        "docs": [
+          "docs/AGENT_GUIDE.md"
+        ]
+      },
+      "rollback_or_degradation": "Unknown action, missing or unauthorized subject, stale supersedes references, and incomplete correction compensation fail closed. Historical ambiguous rows remain quarantined and never become active cognition.",
+      "validation_commands": [
+        "python3 scripts/audit_feedback_attribution.py --strict --json",
+        "python3 -m pytest tests/unit/cognitive/test_feedback_attribution_store.py tests/unit/cognitive/test_feedback_targets.py -q"
+      ]
+    },
+    {
+      "id": "predictive_push_to_penalty",
+      "data_type": "retired direct predictive-push penalty path",
+      "producer": {
+        "code": [
+          "core/cognitive/feedback_entrypoints.py",
+          "core/cognitive/feedback_attribution.py"
+        ],
+        "writes": [
+          "subject-bound predictive push reaction",
+          "proposal-only target receipt"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cognitive/feedback_targets.py",
+          "core/cognitive/feedback_attribution_audit.py"
+        ],
+        "reads": [
+          "canonical reaction record",
+          "attribution and target-effect reciprocity"
+        ]
+      },
+      "adaptive_effect": "No direct penalty or reinforcement occurs. A predictive-push reaction can only create a reviewable proposal with exact provenance.",
+      "observable_state": {
+        "code": [
+          "integrations/agora.py",
+          "scripts/audit_feedback_attribution.py"
+        ],
+        "docs": [
+          "docs/AGENT_GUIDE.md"
+        ]
+      },
+      "rollback_or_degradation": "Missing or unauthorized delivery identity fails closed; legacy penalty state is historical input only and is quarantined during object-level migration.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/cognitive/test_feedback_attribution_contract.py tests/unit/test_agora.py -q"
+      ]
+    },
+    {
+      "id": "reminder_to_dialog_nudge",
+      "data_type": "recap and dialog reminder state",
+      "producer": {
+        "code": [
+          "core/kia/reminder_engine.py",
+          "core/kia/dialog_reminder.py",
+          "core/app/forced_retrospective.py",
+          "core/app/recap_consumption.py",
+          "core/app/recap_feedback.py",
+          "core/app/retrospective_consumption_router.py"
+        ],
+        "writes": [
+          "dialog_reminder.db",
+          "pending recap/reminder rows",
+          "dismissed/expired reminder rows",
+          "recap_task_events",
+          "recap consumption plan/command/receipt rows",
+          "recap feedback correction commands/receipts/effect states"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cli/commands/reminder.py",
+          "core/cli/commands/recap.py",
+          "integrations/agora.py",
+          "core/kia/dialog_reminder.py",
+          "daemon/kia_services.py",
+          "core/app/retrospective_consumption_router.py"
+        ],
+        "reads": [
+          "pending reminders",
+          "pending high/critical recap tasks",
+          "force-open scores",
+          "user active events",
+          "pending/retryable/stale recap target commands",
+          "pending feedback correction commands"
+        ]
+      },
+      "adaptive_effect": "Urgent or due reminders become concise nudges; resolved/dismissed/expired reminders stop repeating; finalized or skipped recaps affect retrieval, policy, follow-up, persona, scheduler and scoring only through required receipts; negative feedback cancels, suppresses or compensates those effects; high/critical recap backlog is explicit health debt until resolved or dismissed.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/reminder.py",
+          "core/cli/commands/recap.py",
+          "core/kia/dialog_reminder.py",
+          "core/app/recap_consumption.py",
+          "core/app/recap_feedback.py",
+          "core/app/retrospective_consumption_router.py",
+          "daemon/kia_services.py"
+        ],
+        "docs": [
+          "docs/AGENT_GUIDE.md"
+        ]
+      },
+      "rollback_or_degradation": "Resolved/ignored/dismissed/expired reminders are filtered; no pending items returns quiet success; missing/failed target or correction receipts remain visible and retryable, stale leases are reclaimed idempotently, and superseded recap retrieval fails closed when correction state is unavailable; high/critical recap pending or reminder active over budget degrades health queues.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_reminder_engine.py tests/unit/test_dialog_reminder.py tests/unit/test_cli_reminder.py tests/unit/test_cli_recap.py tests/unit/test_retrospective_workflow.py -q",
+        "python3 -m pytest tests/integration/test_recap_consumption_runtime_e2e.py tests/integration/test_recap_feedback_correction.py tests/unit/test_reconcile_recap_consumption.py -q"
+      ]
+    },
+    {
+      "id": "kg_confidence_to_relation_display",
+      "data_type": "KG confidence and relation evidence",
+      "producer": {
+        "code": [
+          "core/kia/knowledge_graph.py",
+          "core/kia/kg_event_handler.py"
+        ],
+        "writes": [
+          "knowledge_graph.db relations",
+          "relation confidence",
+          "relation evidence"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/kia/kg_exporter.py",
+          "core/embeddings/relation_manager.py",
+          "core/cli/commands/kg.py"
+        ],
+        "reads": [
+          "relation confidence",
+          "source_method",
+          "relation context"
+        ]
+      },
+      "adaptive_effect": "Confidence and source metadata affect relation projection, pruning candidates, and relation embedding context.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/kg.py",
+          "core/kia/kg_exporter.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Weak or orphan relations are inspectable before pruning; relation embedding failures degrade to page/keyword search.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_knowledge_graph.py tests/unit/test_relation_embedding.py tests/unit/test_mnemos_cli.py::TestCmdDoctor -q"
+      ]
+    },
+    {
+      "id": "adaptive_config_to_runtime_weights",
+      "data_type": "adaptive configuration, rule weights, and runtime policy coverage",
+      "producer": {
+        "code": [
+          "daemon/adaptive_service.py",
+          "core/kia/adaptive_config.py",
+          "core/kia/policy.py",
+          "core/kia/adaptive_policy_matrix.py",
+          "core/reflection/consumers.py"
+        ],
+        "writes": [
+          "usage_metrics",
+          "config_adaptation_log",
+          "policy_shadow",
+          "rule weight store",
+          "adaptive policy coverage matrix"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/kia/adaptive_config.py",
+          "core/kia/policy.py",
+          "core/hephaestus/distillation_quality.py",
+          "core/hephaestus/distillation_engine.py",
+          "core/hephaestus/document_pipeline.py",
+          "core/app/intent_router.py",
+          "core/sync_framework/raw_event_store.py",
+          "core/application/facade.py",
+          "core/cognitive/trust_scorer.py",
+          "core/cognitive/delivery_router.py",
+          "core/scoring/rule_helpers.py"
+        ],
+        "reads": [
+          "effective config",
+          "active policy_shadow overrides",
+          "distill thresholds",
+          "quality gate thresholds",
+          "raw retention days",
+          "document size default",
+          "intent fallback threshold",
+          "delivery and trust thresholds",
+          "shared rule weights"
+        ]
+      },
+      "adaptive_effect": "EWMA/cooldown/shadow/rollback suggestions can tune distill, quality gate, raw, document, intent, delivery, trust, search and scoring parameters through audited EffectivePolicy consumers instead of a single push-count knob.",
+      "observable_state": {
+        "code": [
+          "scripts/audit_adaptive_policy_matrix.py",
+          "core/cli/commands/status.py",
+          "core/ops/health_check.py",
+          "core/cli/commands/scorer.py",
+          "core/kia/adaptive_config.py"
+        ],
+        "docs": [
+          "docs/acceptance/function_matrix.json",
+          "docs/acceptance/adaptive_policy_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Consumers use active shadow overrides only when present, otherwise caller config/defaults remain authoritative; status and health expose active_shadow, metric_before, age and overdue rollback windows.",
+      "validation_commands": [
+        "python3 scripts/audit_adaptive_policy_matrix.py --strict",
+        "python3 -m pytest tests/unit/kia/test_adaptive_policy_matrix.py tests/unit/kia/test_adaptive_config_effective.py tests/unit/test_daemon_adaptive_service.py tests/unit/kia/test_rule_weight_store.py tests/unit/scoring/test_rule_helpers_shared_weights.py -q"
+      ]
+    },
+    {
+      "id": "module_toggle_to_activation_contract",
+      "data_type": "module toggle state, activation evidence, and cold-start output contract",
+      "producer": {
+        "code": [
+          "core/module_toggles.py",
+          "core/system_contracts.py",
+          "core/ops/health_check.py"
+        ],
+        "writes": [
+          "module toggle registry",
+          "activation policies",
+          "output contracts",
+          "health.module_toggles"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cli/commands/doctor.py",
+          "core/ops/health_check.py",
+          "core/system_contracts.py"
+        ],
+        "reads": [
+          "default reasons",
+          "auto-enable policy",
+          "consumer_ids",
+          "effect metrics",
+          "rollback strategy"
+        ]
+      },
+      "adaptive_effect": "Default-off modules can become eligible only after capability, privacy, cost, consumer readiness, and rollback evidence exist; unwired or stale toggles stay disabled.",
+      "observable_state": {
+        "code": [
+          "scripts/audit_module_toggle_registry.py",
+          "scripts/audit_cold_start_toggle_matrix.py",
+          "scripts/audit_toggle_auto_disable_policy.py"
+        ],
+        "docs": [
+          "docs/AGENT_GUIDE.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/adaptive_data_flows.json"
+        ]
+      },
+      "rollback_or_degradation": "Activation is recorded as a decision before runtime policy changes; no-consumer modules are registered_but_unwired and cannot auto-enable.",
+      "validation_commands": [
+        "python3 scripts/audit_module_toggle_registry.py --strict",
+        "python3 scripts/audit_cold_start_toggle_matrix.py --strict",
+        "python3 -m pytest tests/unit/test_module_toggle_registry.py -q"
+      ]
+    },
+    {
+      "id": "toggle_output_to_consumer_effect",
+      "data_type": "module output, downstream consumer effect, and scorecard value proof",
+      "producer": {
+        "code": [
+          "core/module_toggles.py",
+          "daemon/service_registry.py",
+          "core/pluggable.py"
+        ],
+        "writes": [
+          "output_type",
+          "storage_ref",
+          "schema_ref",
+          "consumer_effect_metrics",
+          "scorecard_metrics"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "scripts/audit_toggle_output_consumers.py",
+          "scripts/audit_runtime_producer_consumer_closure.py",
+          "core/ops/health_check.py"
+        ],
+        "reads": [
+          "consumer_ids",
+          "mutual_exclusion",
+          "high_cost",
+          "action_ledger_ref",
+          "scorecard_metrics"
+        ]
+      },
+      "adaptive_effect": "A module being enabled is not enough; its output must be consumed by named consumers and prove a measurable behavior or value change.",
+      "observable_state": {
+        "code": [
+          "mnemos_cli.py",
+          "core/cli/commands/doctor.py",
+          "scripts/audit_toggle_output_consumers.py"
+        ],
+        "docs": [
+          "docs/ARCHITECTURE.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/cognitive_behavior_scenarios.json"
+        ]
+      },
+      "rollback_or_degradation": "Mutually exclusive raw-vault watchers declare raw_projection mutex; high-cost modules carry budget gates and disable/restore rollback strategy.",
+      "validation_commands": [
+        "python3 scripts/audit_toggle_output_consumers.py --strict",
+        "python3 scripts/audit_runtime_producer_consumer_closure.py --strict",
+        "python3 -m pytest tests/unit/test_toggle_output_contract.py tests/integration/test_toggle_output_consumption.py -q"
+      ]
+    },
+    {
+      "id": "migration_plan_to_ledger",
+      "data_type": "migration plan, backup reference, verification, and rollback status",
+      "producer": {
+        "code": [
+          "core/migrations/registry.py",
+          "mnemos_cli.py"
+        ],
+        "writes": [
+          "MigrationSpec",
+          "MigrationPlan",
+          "MigrationLedgerRecord",
+          "plan_hash"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/ops/health_check.py",
+          "scripts/audit_migration_registry.py",
+          "core/system_contracts.py"
+        ],
+        "reads": [
+          "migration_id",
+          "scope",
+          "risk_level",
+          "backup_ref",
+          "rollback_ref",
+          "status"
+        ]
+      },
+      "adaptive_effect": "Upgrade actions become explainable and recoverable instead of hidden in standalone scripts or Config alias reads.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/migrate.py",
+          "core/migrations/registry.py"
+        ],
+        "docs": [
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/ops_resilience_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Config stale-key apply creates a local backup and can rollback; wrapped legacy scripts stay blocked unless explicitly executed with backup review.",
+      "validation_commands": [
+        "python3 scripts/audit_migration_registry.py --strict",
+        "python3 -m pytest tests/unit/test_migration_registry.py tests/integration/test_migrate_plan_apply_rollback.py -q"
+      ]
+    },
+    {
+      "id": "snapshot_manifest_to_restore_plan",
+      "data_type": "snapshot manifest, checksum entries, restore preconditions, and conflict plan",
+      "producer": {
+        "code": [
+          "core/backup/snapshot_manager.py",
+          "core/cli/commands/backup.py"
+        ],
+        "writes": [
+          "SnapshotManifest",
+          "SnapshotFileEntry",
+          "sha256",
+          "restore_preconditions"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/cli/commands/backup.py",
+          "core/ops/health_check.py",
+          "scripts/audit_backup_recovery_contract.py"
+        ],
+        "reads": [
+          "snapshot_id",
+          "file_entries",
+          "database_entries",
+          "conflicts",
+          "restore_status"
+        ]
+      },
+      "adaptive_effect": "High-risk automation can point to a verifiable system snapshot before changing config, SQLite, vaults, ledgers, or module state.",
+      "observable_state": {
+        "code": [
+          "mnemos_cli.py",
+          "core/backup/snapshot_manager.py"
+        ],
+        "docs": [
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/ops_resilience_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Restore without a snapshot returns blocked; changed destination files are conflicts until explicitly allowed.",
+      "validation_commands": [
+        "python3 scripts/audit_backup_recovery_contract.py --strict",
+        "python3 -m pytest tests/unit/test_snapshot_manager.py tests/integration/test_backup_restore_roundtrip.py tests/integration/test_disaster_recovery_drill.py -q"
+      ]
+    },
+    {
+      "id": "data_inventory_to_delete_proof",
+      "data_type": "data inventory, export manifest, freeze request, delete request, and deletion proof",
+      "producer": {
+        "code": [
+          "core/privacy/data_ownership.py",
+          "core/cli/commands/data.py"
+        ],
+        "writes": [
+          "DataExportManifest",
+          "DataFreezeRequest",
+          "DataDeleteRequest",
+          "DeletionProof"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/ops/health_check.py",
+          "scripts/audit_data_ownership_contract.py",
+          "core/system_contracts.py"
+        ],
+        "reads": [
+          "scope_kind",
+          "affected_domains",
+          "derived_impacts",
+          "subject_hash",
+          "affected_consumers"
+        ]
+      },
+      "adaptive_effect": "Users can inspect, export, freeze, and plan deletion across raw and derived data without leaking secrets in manifests or proofs.",
+      "observable_state": {
+        "code": [
+          "mnemos_cli.py",
+          "core/privacy/data_ownership.py"
+        ],
+        "docs": [
+          "README.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/ops_resilience_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Delete apply is blocked until freeze, snapshot ref, and confirmation exist; dry-run reports derived impacts first.",
+      "validation_commands": [
+        "python3 scripts/audit_data_ownership_contract.py --strict",
+        "python3 -m pytest tests/unit/test_data_ownership_contract.py tests/integration/test_data_export_bundle.py tests/integration/test_data_delete_freeze_flow.py -q"
+      ]
+    },
+    {
+      "id": "golden_benchmark_to_scorecard",
+      "data_type": "golden fixture sample results, consumer proof, and benchmark scorecard",
+      "producer": {
+        "code": [
+          "core/benchmarks/golden.py",
+          "scripts/run_golden_benchmark.py"
+        ],
+        "writes": [
+          "sample_results",
+          "mnemos_benchmark_scorecard",
+          "temporary ActionLedger",
+          "persona_delta"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/ops/health_check.py",
+          "scripts/audit_golden_benchmark_contract.py",
+          "core/system_contracts.py"
+        ],
+        "reads": [
+          "manifest schema",
+          "baseline scorecard",
+          "scorecard dimensions",
+          "trend_comparison"
+        ]
+      },
+      "adaptive_effect": "Prompt, schema, router, scorer, quality gate, search, preflight, and persona changes can be compared against fixed synthetic cognition cases before they touch user data.",
+      "observable_state": {
+        "code": [
+          "scripts/run_golden_benchmark.py",
+          "core/benchmarks/golden.py"
+        ],
+        "docs": [
+          "README.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Strict mode fails when required fixtures, baseline, mock providers, consumers, or score thresholds are missing; trend_comparison reports score regressions.",
+      "validation_commands": [
+        "python3 scripts/audit_golden_benchmark_contract.py --strict",
+        "python3 -m pytest tests/unit/test_golden_benchmark_contract.py tests/integration/test_golden_benchmark_pipeline.py -q"
+      ]
+    },
+    {
+      "id": "resource_budget_to_scheduler",
+      "data_type": "resource budget and runtime pressure",
+      "producer": {
+        "code": [
+          "core/resource_budget.py"
+        ],
+        "writes": [
+          "resource snapshots",
+          "budget status",
+          "history stats"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/kia/chronos.py",
+          "core/cli/helpers.py",
+          "daemon/resource_budget.py"
+        ],
+        "reads": [
+          "budget status",
+          "history stats",
+          "resource pressure"
+        ]
+      },
+      "adaptive_effect": "Scheduler and status reporting can reduce or explain background work under constrained resources.",
+      "observable_state": {
+        "code": [
+          "core/cli/commands/status.py",
+          "core/cli/helpers.py"
+        ],
+        "docs": [
+          "docs/OPS_MANUAL.md"
+        ]
+      },
+      "rollback_or_degradation": "Resource probe failure reports unknown/default budget rather than stopping foreground commands.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_resource_budget.py tests/unit/test_chronos.py tests/unit/test_mnemos_cli.py::TestCmdStatus -q"
+      ]
+    },
+    {
+      "id": "install_lifecycle_to_scorecard",
+      "data_type": "install lifecycle state, migration plan, backup reference, and repair actions",
+      "producer": {
+        "code": [
+          "core/setup/install_lifecycle.py",
+          "core/cli/commands/setup.py",
+          "scripts/e2e_install_probe.py",
+          "scripts/e2e_upgrade_probe.py"
+        ],
+        "writes": [
+          "install_state.json",
+          "action_ledger install_setup/install_upgrade/install_uninstall/install_repair_all",
+          "migration_plan_hash",
+          "backup_ref",
+          "repair_actions"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/ops/health_check.py",
+          "core/system_contracts.py",
+          "scripts/audit_install_upgrade_contract.py",
+          "scripts/audit_mnemos_scorecard.py"
+        ],
+        "reads": [
+          "state.status",
+          "state.steps[].failure_reason",
+          "state.steps[].repair_action",
+          "backup_ref",
+          "action_ledger_ref"
+        ]
+      },
+      "adaptive_effect": "Deployment/migration score can reflect first-run friction, blocked upgrade wrappers, backup availability, and whether repair-all gives structured next actions instead of free-text errors.",
+      "observable_state": {
+        "code": [
+          "mnemos_cli.py",
+          "core/setup/install_lifecycle.py",
+          "core/ops/health_check.py"
+        ],
+        "docs": [
+          "README.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Upgrade apply records rollback_available with a snapshot ref when wrapped migrations are blocked; purge uninstall degrades to a data ownership delete dry-run until freeze/snapshot/confirm exist.",
+      "validation_commands": [
+        "python3 scripts/audit_install_upgrade_contract.py --strict",
+        "python3 scripts/e2e_install_probe.py --tmp-home",
+        "python3 scripts/e2e_upgrade_probe.py --tmp-home --preserve-existing"
+      ]
+    },
+    {
+      "id": "wiki_quality_to_scorecard_and_action_ledger",
+      "data_type": "wiki lint issue counts, lifecycle state mapping, budget lines, manual review queues, and auto-fix evidence",
+      "producer": {
+        "code": [
+          "scripts/wiki_lint.py",
+          "scripts/audit_wiki_quality_contract.py",
+          "core/vaults/content_audit.py"
+        ],
+        "writes": [
+          "mnemos.wiki_quality.v1 stdout JSON",
+          "budget owner/strategy lines",
+          "manual review samples",
+          "action_ledger wiki_quality_fix when --fix applies metadata"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/system_contracts.py",
+          "scripts/audit_mnemos_scorecard.py",
+          "scripts/audit_action_ledger.py"
+        ],
+        "reads": [
+          "wiki_quality.summary issue counts",
+          "wiki_quality.budgets.ok",
+          "wiki_quality.state_machine lifecycle statuses",
+          "action_ledger_ref"
+        ]
+      },
+      "adaptive_effect": "Obsidian experience score and release readiness can distinguish rebuilt clean vaults from old-data debt, while auto metadata repair becomes auditable instead of silent filesystem mutation.",
+      "observable_state": {
+        "code": [
+          "scripts/wiki_lint.py",
+          "core/system_contracts.py"
+        ],
+        "docs": [
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Broken links, orphan pages and stubs produce owner-tagged manual review queues; metadata repair is explicit --fix only and records wiki_quality_fix in ActionLedger.",
+      "validation_commands": [
+        "python3 scripts/audit_wiki_quality_contract.py --strict",
+        "python3 -m pytest tests/unit/test_wiki_lint.py tests/unit/vaults/test_content_audit.py -q"
+      ]
+    },
+    {
+      "id": "cognitive_readiness_to_scorecard_and_action_ledger",
+      "data_type": "source refs coverage, canonical current Raw revision Observation terminals, Wiki page_role source-required/source-exempt accounting, evidence refs, delivery/outcome ledgers, search behavior outcomes, learning signal conversion, and reminder closure state",
+      "producer": {
+        "code": [
+          "core/ops/cognitive_readiness.py",
+          "scripts/audit_cognitive_readiness.py",
+          "core/wiki_metrics.py",
+          "core/wiki_page_roles.py",
+          "core/app/context_search.py",
+          "daemon/scoring_signals.py",
+          "core/kia/dialog_reminder.py",
+          "core/scoring/adaptive_scorer_v2.py",
+          "core/cognitive/observation_engine.py",
+          "core/reflection/consumers.py",
+          "core/cognitive/consolidator.py",
+          "core/ops/health_check.py"
+        ],
+        "writes": [
+          "mnemos.cognitive_readiness.v2 stdout JSON",
+          "source/evidence/consumer/behavior budget lines",
+          "page_metrics.page_role plus source_required/source_exempt metrics",
+          "ActionLedger cognitive_readiness_gap only when --record-gaps is explicit",
+          "search_sessions click/open/ignore/no_result outcome fields",
+          "mnemos.learning_signal.v2 metrics",
+          "per-lineage denominator/covered/uncovered/coverage_ratio/freshness/cold_start fields",
+          "learning_signal.all_visible_raw_skipped anti-false-green metric",
+          "checks.cognitive_learning non-strict health status",
+          "cognitive_consolidation dry-run run rows when --record-run is explicit",
+          "policy_patch_feedback no_patch evidence"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/system_contracts.py",
+          "scripts/audit_mnemos_scorecard.py",
+          "scripts/audit_action_ledger.py",
+          "core/ops/health_check.py"
+        ],
+        "reads": [
+          "cognitive_readiness.budget_ok",
+          "cognitive_readiness.failure_count",
+          "readiness section statuses",
+          "readiness source_required_total/source_exempt_total/stale_metric_rows",
+          "action_ledger_ref",
+          "learning_signal.observation_output_gap",
+          "learning_signal.policy_patch_gap",
+          "learning_signal.consolidation_run_gap",
+          "learning_signal.delivery_feedback_lineage_gap",
+          "learning_signal.observation_lineage_gap",
+          "learning_signal.all_visible_raw_skipped",
+          "learning_signal.policy_driver_lineage_gap",
+          "learning_signal.consolidation_coverage_gap",
+          "learning_signal.stale_lineage_count",
+          "learning_signal.unobserved_lineage_count"
+        ]
+      },
+      "adaptive_effect": "Cognitive assets score can distinguish generated/system/support pages from source-backed, evidence-backed, consumed, behavior-confirmed and learning-converted knowledge.",
+      "observable_state": {
+        "code": [
+          "core/ops/cognitive_readiness.py",
+          "core/app/context_search.py",
+          "core/wiki_metrics.py",
+          "core/wiki_page_roles.py",
+          "core/system_contracts.py"
+        ],
+        "docs": [
+          "README.md",
+          "docs/OPS_MANUAL.md",
+          "docs/acceptance/function_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "Default audit remains read-only; budget mode fails nonzero on source-required knowledge page gaps, behavior outcome gaps, lineage gaps or an all-visible-Raw skip state. Source-exempt page roles and stale metric rows stay observable, health exposes non-strict cognitive_learning warnings, ActionLedger writes require explicit --record-gaps, and consolidation dry-run ledger writes require explicit --record-run.",
+      "validation_commands": [
+        "python3 scripts/audit_cognitive_readiness.py --json --budget",
+        "python3 -m pytest tests/unit/cognitive/test_canonical_raw_observation.py tests/unit/test_cognitive_readiness_audit.py tests/unit/test_health_check_heartbeat.py tests/unit/test_cognitive_consolidator.py -q"
+      ]
+    },
+    {
+      "id": "raw_projection_error_to_recovery_ledger",
+      "data_type": "daemon raw_projection service error, heartbeat state, and recovery ledger record",
+      "producer": {
+        "code": [
+          "mnemos_daemon.py",
+          "daemon/service_state.py",
+          "daemon/heartbeat.py"
+        ],
+        "writes": [
+          "daemon_heartbeat.json services.* error_state/error_active",
+          "action_ledger raw_projection_recovered"
+        ]
+      },
+      "consumer": {
+        "code": [
+          "core/ops/health_check.py",
+          "mnemos_cli.py",
+          "scripts/audit_action_ledger.py"
+        ],
+        "reads": [
+          "active_service_errors",
+          "historical_service_errors",
+          "ActionLedger raw_projection_recovered"
+        ]
+      },
+      "adaptive_effect": "Operational health can distinguish current lock failures from already recovered raw_projection history without hiding the historical evidence.",
+      "observable_state": {
+        "code": [
+          "mnemos_cli.py",
+          "core/ops/health_check.py"
+        ],
+        "docs": [
+          "docs/OPS_MANUAL.md",
+          "docs/AGENT_GUIDE.md",
+          "docs/acceptance/ops_resilience_matrix.json"
+        ]
+      },
+      "rollback_or_degradation": "If a later run fails, raw_projection remains in active_service_errors; if a later run succeeds/skips, stale error state is cleared and recovery is audited.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_daemon_heartbeat.py tests/unit/test_daemon_service_state.py tests/unit/test_health_check_heartbeat.py tests/unit/test_mnemos_daemon.py::TestRawProjectionService -q",
+        "python3 scripts/audit_action_ledger.py --strict"
+      ]
+    }
+  ]
+}

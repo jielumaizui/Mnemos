@@ -1,0 +1,5 @@
+{
+  "description": "Function/class level legacy or compatibility candidates allowed by the No Zombie Code Policy gate.",
+  "entries": [],
+  "schema_version": "mnemos.zombie_code_baseline.v2"
+}

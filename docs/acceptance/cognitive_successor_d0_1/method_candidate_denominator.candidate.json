@@ -1,0 +1,262 @@
+{
+  "schema_version": "mnemos.cognitive_successor_method_candidate_denominator.v2",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_candidate_denominator",
+  "schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+    "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "artifact_id": "cognitive-successor-method-candidate-denominator",
+  "artifact_status": "NON_GOVERNING_EXACT_CANDIDATE_DENOMINATOR",
+  "question_binding": {
+    "question_id": "COGNITIVE-SUCCESSOR-DECISION-001",
+    "exact_text": "How should successor design conflicts be adjudicated without granting prior authority to legacy contracts, preserved designs, user directions, code evidence, cognitive theory, reviewers, agents or majority agreement; and which results may become constitution clauses?",
+    "exact_text_sha256": "sha256:3ef025f277667650f07703282d38a4f8a2875d742d33d38e94b67d64dbd2f495",
+    "scope": "SUCCESSOR_DESIGN_METHOD_ONLY",
+    "materiality_profile": {
+      "selected_profile": "HIGH",
+      "scope": "DECISION_001_SUCCESSOR_DESIGN_METHOD_BOOTSTRAP",
+      "rationale": "The method can shape safety, cognition, migration, public Interfaces and later irreversible decisions; use HIGH until a new exact question generation proves a narrower scope.",
+      "invalidation_conditions": [
+        "THE_EXACT_QUESTION_OR_SCOPE_CHANGES",
+        "A_NEW_GENERATION_PROVES_ALL_EFFECTS_LOW_IMPACT_AND_REVERSIBLE",
+        "APPLICABLE_SAFETY_PRIVACY_AGENCY_MIGRATION_OR_PUBLIC_INTERFACE_SCOPE_CHANGES"
+      ]
+    }
+  },
+  "candidates": {
+    "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+      "strongest_fair_claim": "For novel, poorly measured and tightly coupled architecture choices, informed holistic judgment can preserve context and tacit expertise better than premature formalization, while reaching a timely and revisable decision.",
+      "legitimate_strengths": [
+        "Retains qualitative context, tacit knowledge and interactions that an incomplete metric model may omit.",
+        "Has low process overhead and can respond quickly when evidence is sparse or the decision is reversible.",
+        "Can adapt the depth of analysis to the materiality and uncertainty of the decision."
+      ],
+      "hard_failure_risks": [
+        "A plausible narrative can conceal a missing candidate, unsupported assumption or unresolved hard constraint.",
+        "The producer can become its own oracle when no detached falsification or verification path exists.",
+        "Chronology, confidence or status can silently substitute for claim-specific evidence."
+      ],
+      "allowed_auxiliary_roles": [
+        "Expert synthesis after candidate-specific evidence and constraints have been made inspectable.",
+        "Rapid triage for low-impact reversible questions with explicit reopening triggers.",
+        "Generation of hypotheses, scenarios and candidate mechanisms for subsequent testing."
+      ],
+      "falsification_conditions": [
+        "Independent reconstruction repeatedly finds material omitted candidates, constraints or counter-evidence.",
+        "Equivalent decision makers given the same frozen inputs reach incompatible outcomes without an identifiable value choice.",
+        "The method cannot distinguish an empirical disagreement from a product-value or authorization disagreement."
+      ],
+      "decision_process": "A responsible designer or small expert group integrates available facts, constraints, experience and context into a documented holistic judgment without a mandatory formal aggregation algorithm.",
+      "known_limitations": [
+        "Reasoning, candidate coverage and tradeoff treatment may be difficult for an independent party to reconstruct.",
+        "Calibration depends strongly on the expertise, incentives and cognitive limits of the decision maker.",
+        "Unstated values and authority assumptions can be mistaken for empirical conclusions."
+      ],
+      "supporting_evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-009": true
+      },
+      "refuting_evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true
+      }
+    },
+    "AUTHORITY_HIERARCHY": {
+      "strongest_fair_claim": "A transparent authority hierarchy provides fast, accountable and unambiguous resolution where legitimate owners must set values, risk tolerance or operational permissions and where indecision itself is costly.",
+      "legitimate_strengths": [
+        "Makes accountability and escalation paths explicit.",
+        "Fits genuine product-value, safety-risk-acceptance and operational-authorization decisions that require an accountable owner.",
+        "Avoids deadlock and can provide deterministic resolution under time pressure."
+      ],
+      "hard_failure_risks": [
+        "Organizational rank can override refuting evidence or a non-compensable safety constraint.",
+        "One authority class can impersonate another, such as product ownership being treated as verification evidence.",
+        "Ambiguous scope or stale delegation can create apparently authorized but invalid decisions."
+      ],
+      "allowed_auxiliary_roles": [
+        "Assign legitimate owners for product values, safety acceptance and exact operational authorization.",
+        "Resolve process escalation and resource-allocation questions without deciding empirical claims.",
+        "Authenticate who may accept a disclosed residual risk or choose among genuine value-equivalent options."
+      ],
+      "falsification_conditions": [
+        "The hierarchy produces different truth judgments for identical evidence solely because the claimant identity changes.",
+        "An authority decision cannot expose which part is value choice, constraint acceptance, empirical finding or execution permission.",
+        "Scope, delegation, authentication or expiration cannot be independently verified for a material decision."
+      ],
+      "decision_process": "Claims or decisions are resolved by a predeclared hierarchy of accountable authorities, with lower levels deferring to the highest applicable authority and escalating unresolved scope conflicts.",
+      "known_limitations": [
+        "Authority over a decision does not establish empirical truth or architecture correctness.",
+        "A single hierarchy may not fit claims with different legitimate owners and scopes.",
+        "The quality of the result depends on information reaching the authority without distortion."
+      ],
+      "supporting_evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-007": true
+      },
+      "refuting_evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-010": true
+      }
+    },
+    "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+      "strongest_fair_claim": "When objectives, measurements and preference tradeoffs are sufficiently specified, scalar multi-criteria aggregation makes reasoning reproducible, exposes sensitivity and enables disciplined comparison across many heterogeneous alternatives.",
+      "legitimate_strengths": [
+        "Forces explicit objectives, criteria, measurements and preference weights.",
+        "Supports repeatable ranking, sensitivity analysis and comparison of many alternatives.",
+        "Makes compensatory tradeoffs visible when compensation is legitimately allowed."
+      ],
+      "hard_failure_risks": [
+        "A severe safety, capability or evidence gap can be compensated by unrelated advantages.",
+        "UNKNOWN or contested measurements can be converted into neutral numbers and produce a false winner.",
+        "Candidate, criterion or weight choices can be tuned after observing results."
+      ],
+      "allowed_auxiliary_roles": [
+        "Sensitivity analysis within a set that has already passed all applicable hard constraints.",
+        "Elicitation and documentation of product-value preferences and objective tradeoffs.",
+        "Prioritization of research, prototype or implementation work where the score is not treated as truth or authorization."
+      ],
+      "falsification_conditions": [
+        "Reasonable normalization, weighting or uncertainty choices reverse the selected alternative.",
+        "The scalar ordering changes when an irrelevant or dominated alternative is added or removed.",
+        "A candidate with a blocking unknown or non-compensable constraint failure can outrank an admissible candidate."
+      ],
+      "decision_process": "Alternatives are evaluated on explicit criteria, normalized and combined through declared weights or utility functions into a scalar ordering, with uncertainty and sensitivity analysis around inputs and preferences.",
+      "known_limitations": [
+        "Normalization and weights encode value judgments and model assumptions.",
+        "A single scalar can obscure Pareto structure, uncertainty, incomparability and non-compensable constraints.",
+        "Results can be unstable when evidence is sparse, correlated or measured on ill-defined scales."
+      ],
+      "supporting_evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-008": true,
+        "METHOD-EVID-011": true
+      },
+      "refuting_evidence_refs": {
+        "METHOD-EVID-007": true,
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-012": true
+      }
+    },
+    "DELIBERATIVE_COMMITTEE": {
+      "strongest_fair_claim": "Structured deliberation among independent perspectives can reveal blind spots, integrate distributed expertise and earn legitimate commitment for complex socio-technical decisions that no single analyst can fully model.",
+      "legitimate_strengths": [
+        "Combines domain, operations, safety, user and architecture perspectives.",
+        "Adversarial discussion can expose hidden assumptions and shared-source dependencies.",
+        "A reasoned consensus process can improve implementation commitment and surface residual dissent."
+      ],
+      "hard_failure_risks": [
+        "Vote count or apparent consensus can be mistaken for empirical proof.",
+        "Minority safety findings or disconfirming evidence can be suppressed by convergence pressure.",
+        "Unclear membership and decision rights can blur product values, verification and authorization."
+      ],
+      "allowed_auxiliary_roles": [
+        "Independent challenge and multidisciplinary scenario discovery.",
+        "Merge distinct findings, counterarguments and evidence without treating reviewers as votes.",
+        "Deliberate genuine product-value choices after empirical and safety boundaries are explicit."
+      ],
+      "falsification_conditions": [
+        "Outcome tracks reviewer count, status or coalition membership more strongly than disclosed evidence and constraints.",
+        "Independent dissent, counter-evidence or shared dependency clusters cannot remain visible in the final record.",
+        "Changing committee composition reverses empirical findings without any change to the frozen evidence."
+      ],
+      "decision_process": "A diverse, conflict-disclosing committee examines competing proposals and evidence, challenges assumptions and seeks reasoned consensus or an explicit recorded disagreement rather than relying on one producer.",
+      "known_limitations": [
+        "Consensus may reflect social dynamics, incentives, status or fatigue rather than evidence quality.",
+        "Shared upstream assumptions can make nominally diverse reviewers dependent.",
+        "Deliberation cost and latency grow with group size, ambiguity and decision scope."
+      ],
+      "supporting_evidence_refs": {
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-010": true
+      },
+      "refuting_evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-012": true
+      }
+    },
+    "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+      "strongest_fair_claim": "For high-impact successor design, a constraint-first typed-evidence method can prevent authority, values, evidence and authorization from impersonating one another while preserving uncertainty, falsifiability and non-compensable obligations more faithfully than a forced hierarchy, vote or scalar score.",
+      "legitimate_strengths": [
+        "Separates empirical support, product values, safety admissibility, architecture validation and operational authorization.",
+        "Keeps blocking unknowns and incomparability visible instead of forcing a winner.",
+        "Supports exact denominators, counter-evidence, falsification, independent challenge and detached activation."
+      ],
+      "hard_failure_risks": [
+        "The method producer can design self-serving constraints or candidate representations and then pass its own test.",
+        "A large schema and artifact graph can export complexity without improving decision quality.",
+        "Overclassification can delay useful prototypes or disguise ordinary judgment as mechanical certainty."
+      ],
+      "allowed_auxiliary_roles": [
+        "Use informed expert judgment to generate claims, candidates and interpretations, with assumptions visible.",
+        "Use scalar aggregation only for legitimate compensatory preferences inside the feasible set.",
+        "Use deliberative review to merge evidence and findings, and authority only for genuine value or authorization decisions."
+      ],
+      "falsification_conditions": [
+        "Independent challengers cannot reproduce claim classification, constraint ownership or the non-dominated set from frozen inputs.",
+        "The method reaches a forced outcome when a material hard constraint, evidence dependency, unknown or genuine value choice remains unresolved.",
+        "For comparable decisions, the additional artifacts and interfaces do not measurably improve error detection, reversibility or decision traceability over a simpler method."
+      ],
+      "decision_process": "Classify each claim by legitimate standing, freeze a strongest-fair candidate and evidence denominator, eliminate hard-constraint failures or blocking unknowns, compare the remaining Pareto set with discriminating tests, and keep design disposition separate from activation authorization.",
+      "known_limitations": [
+        "Requires careful claim typing, denominator construction and evidence maintenance.",
+        "Can impose disproportionate process cost on low-impact or easily reversible decisions.",
+        "Hard-constraint definitions and typed-standing boundaries can themselves be incomplete or contested."
+      ],
+      "supporting_evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-007": true
+      },
+      "refuting_evidence_refs": {
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-010": true,
+        "METHOD-EVID-011": true
+      }
+    }
+  },
+  "hash_policy": {
+    "algorithm": "SHA-256",
+    "byte_domain": "RAW_FILE_BYTES",
+    "normalization": "NONE",
+    "binding_granularity": "EXACT_WHOLE_FILE",
+    "embedded_self_hash": false,
+    "dependency_change_semantics": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"
+  },
+  "evidence_manifest_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+    "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "closure_rule": {
+    "current_set": "EXACTLY_FIVE_STRONGEST_FAIR_CANDIDATES",
+    "bounded_question": "Select or revise a design-adjudication method for the cognitive successor while keeping empirical support, product values, safety constraints, architecture validation and operational authorization distinguishable.",
+    "included_method_families": "The five keyed candidates are the strongest-fair representatives found for informal expert synthesis, authority ordering, scalar multi-criteria aggregation, deliberative collective judgment and constraint-first typed evidence.",
+    "search_surfaces": [
+      "current_user_value_and_authorization_direction",
+      "official_systems_engineering_decision_methods",
+      "architecture_tradeoff_and_assurance_methods",
+      "independent_verification_and_validation_methods",
+      "value_focused_and_bounded_rationality_research",
+      "rough_consensus_and_multi_criteria_guidance",
+      "social_choice_impossibility_results"
+    ],
+    "saturation_rule": "Saturation is reached only for this bounded question when an additional discovered method is either mechanism-equivalent to a keyed candidate, usable solely as an auxiliary technique, or introduces no distinct way to determine admissibility and resolve remaining tradeoffs.",
+    "reopen_on_materially_distinct_candidate": true,
+    "reopening_conditions": [
+      "A discovered method has a materially distinct admissibility or tradeoff-resolution mechanism that cannot be represented by any keyed candidate or its allowed auxiliary roles.",
+      "New supporting or refuting evidence materially changes a strongest-fair candidate, limitation, hard-failure risk or falsification condition.",
+      "The bounded question, claim-kind scope, legitimate owners or applicable non-compensable constraints change.",
+      "Independent challenge demonstrates that any keyed candidate is a strawman, asymmetric, internally inconsistent or missing a material variant.",
+      "A falsification condition is observed for the denominator construction or saturation claim."
+    ],
+    "omission_semantics": "BLOCKING_DENOMINATOR_GAP"
+  },
+  "schema_capability_boundary": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS"
+}

@@ -11,9 +11,9 @@ Knowledge Profile - 个人知识画像
 
 输出格式：Markdown 报告（可用于 Obsidian）
 """
+
 # Metis — 智慧女神 — 知识画像，知识体系的深层刻画
 # 原模块: knowledge_profile.py
-
 
 
 import json
@@ -28,6 +28,10 @@ from collections import Counter
 from core.config import get_config
 import logging
 
+# Constants extracted from magic numbers
+MONTH = 7
+PROFILE_GENERATOR_DURATION_BUCKET_MONTH_DAYS = 30
+
 logger = logging.getLogger(__name__)
 try:
     import yaml
@@ -35,13 +39,14 @@ except ImportError:  # pragma: no cover - optional dependency fallback
     yaml = None
 
 
-EXCLUDED_DIRS = {".obsidian", ".git", "99-Archive", "templates", "__pycache__"}
+EXCLUDED_DIRS = {".obsidian", ".git", "templates", "__pycache__"}
 PROFILE_DB_NAME = "profiles.db"
 
 
 @dataclass
 class KnowledgeProfile:
     """知识画像"""
+
     generated_at: str = ""
     total_knowledge: int = 0
     domain_distribution: Dict[str, int] = field(default_factory=dict)
@@ -75,26 +80,35 @@ class ProfileGenerator:
     }
     DEFAULT_TEMPORAL_WEIGHTS = {"永久": 1.0, "稳定": 0.8, "版本绑定": 0.5, "上下文相关": 0.3}
     REQUIRED_FRONTMATTER_FIELDS = ["领域", "类型", "复杂度", "置信度", "时效性", "创建日期"]
+    # 英文键别名映射，兼容中英文 frontmatter
+    FIELD_ALIASES: Dict[str, List[str]] = {
+        "领域": ["domain", "area"],
+        "类型": ["type", "kind", "category"],
+        "复杂度": ["complexity"],
+        "置信度": ["confidence"],
+        "时效性": ["temporal_scope", "temporal", "validity"],
+        "创建日期": ["created_at", "date", "created", "distilled_at"],
+    }
 
     def __init__(
         self,
-        wiki_base: str = None,
+        wiki_base: str | None = None,
         db_path: str | Path | None = None,
         trail=None,
         immune=None,
         task_db: str | Path | None = None,
     ):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
         self.inbox = self.wiki_base / "00-Inbox"
-        self.profile_db = Path(db_path).expanduser() if db_path else (
-            self.wiki_base / ".kg" / PROFILE_DB_NAME
+        self.profile_db = (
+            Path(db_path).expanduser() if db_path else (self.wiki_base / ".kg" / PROFILE_DB_NAME)
         )
         self.trail = trail
         self.immune = immune
-        self.task_db = Path(task_db).expanduser() if task_db else (
-            self.wiki_base / ".kg" / "task_classifier.db"
+        self.task_db = (
+            Path(task_db).expanduser()
+            if task_db
+            else (self.wiki_base / ".kg" / "task_classifier.db")
         )
         self._init_db()
 
@@ -161,7 +175,9 @@ class ProfileGenerator:
         profile.growth_trend = self._calculate_growth(pages)
 
         # 9. 学习模式
-        profile.learning_mode = self._detect_learning_mode(profile.form_distribution, page_frontmatters)
+        profile.learning_mode = self._detect_learning_mode(
+            profile.form_distribution, page_frontmatters
+        )
 
         # 10. 质量评分
         profile.quality_score = self._calculate_quality_score(
@@ -174,7 +190,9 @@ class ProfileGenerator:
         profile.task_distribution = self._calculate_task_distribution()
         profile.health_trend = self._calculate_health_trend()
         profile.blindspot_distribution = dict(profile.health_trend.get("issue_breakdown", {}))
-        profile.frontmatter_completeness = self._calculate_frontmatter_completeness(all_frontmatters)
+        profile.frontmatter_completeness = self._calculate_frontmatter_completeness(
+            all_frontmatters
+        )
         profile.update_ratio = self._calculate_update_ratio(pages)
         profile.domain_entropy = self._calculate_domain_entropy(profile.domain_distribution)
 
@@ -182,13 +200,13 @@ class ProfileGenerator:
 
         return profile
 
-    def generate_report(self, profile: KnowledgeProfile = None) -> str:
+    def generate_report(self, profile: KnowledgeProfile | None = None) -> str:
         """生成 Markdown 报告"""
         if profile is None:
             profile = self.generate()
 
         lines = [
-            f"# 个人知识画像",
+            "# 个人知识画像",
             f"生成时间: {profile.generated_at}",
             f"知识总量: **{profile.total_knowledge}** 条",
             "",
@@ -225,7 +243,9 @@ class ProfileGenerator:
         if isinstance(profile.learning_mode, dict):
             lines.append(f"**{profile.learning_mode.get('simple_mode', '数据不足')}**")
             lines.append(f"- 转化路径: {profile.learning_mode.get('conversion_paths', 0)} 条")
-            lines.append(f"- 效果驱动: {profile.learning_mode.get('effect_driven_mode', '数据不足')}")
+            lines.append(
+                f"- 效果驱动: {profile.learning_mode.get('effect_driven_mode', '数据不足')}"
+            )
         else:
             lines.append(f"**{profile.learning_mode}**")
 
@@ -244,7 +264,7 @@ class ProfileGenerator:
         return "\n".join(lines)
 
     def generate_and_report(self) -> str:
-        """生成画像并返回 Markdown 报告，供调度器调用。"""
+        """生成画像并返回 Markdown 报告，供模块级入口复用。"""
         profile = self.generate()
         return self.generate_report(profile)
 
@@ -262,20 +282,20 @@ class ProfileGenerator:
 
     def _calculate_growth(self, pages: List[Path]) -> List[Dict]:
         """计算月度创建与更新趋势"""
-        monthly_created = Counter()
-        monthly_updated = Counter()
+        monthly_created = Counter()  # type: ignore[var-annotated]
+        monthly_updated = Counter()  # type: ignore[var-annotated]
         for page in pages:
             fm = self._extract_frontmatter(page)
             if fm:
                 created = fm.get("创建日期", "")
                 if created:
-                    month = str(created)[:7]
+                    month = str(created)[:MONTH]
                     if re.match(r"^\d{4}-\d{2}$", month):
                         monthly_created[month] += 1
 
                 updated = fm.get("updated_at", "") or fm.get("修改日期", "")
                 if updated:
-                    month = str(updated)[:7]
+                    month = str(updated)[:MONTH]
                     if re.match(r"^\d{4}-\d{2}$", month):
                         monthly_updated[month] += 1
 
@@ -291,7 +311,9 @@ class ProfileGenerator:
             for month in all_months[-12:]
         ]
 
-    def _detect_learning_mode(self, form_dist: Dict[str, int], page_frontmatters: List[Tuple[Path, Dict]] = None) -> Dict:
+    def _detect_learning_mode(
+        self, form_dist: Dict[str, int], page_frontmatters: List[Tuple[Path, Dict]] | None = None
+    ) -> Dict:
         """检测学习模式"""
         problem_solving = form_dist.get("问题-解决", 0)
         anti_pattern = form_dist.get("反模式", 0)
@@ -322,9 +344,12 @@ class ProfileGenerator:
             "effect_driven_mode": effect_mode,
         }
 
-    def _calculate_quality_score(self, confidences: List[float],
-                                  frontmatters: List[Dict],
-                                  domain_dist: Optional[Dict[str, int]] = None) -> float:
+    def _calculate_quality_score(
+        self,
+        confidences: List[float],
+        frontmatters: List[Dict],
+        domain_dist: Optional[Dict[str, int]] = None,
+    ) -> float:
         """计算质量评分 0-10"""
         if not confidences:
             return 0.0
@@ -339,17 +364,16 @@ class ProfileGenerator:
             score += 1
 
         # 关键词完整度加分
-        complete_keywords = sum(
-            1 for fm in frontmatters
-            if self._has_complete_keywords(fm)
-        )
+        complete_keywords = sum(1 for fm in frontmatters if self._has_complete_keywords(fm))
         keyword_ratio = complete_keywords / max(len(frontmatters), 1)
         score += keyword_ratio * 2
 
         temporal_bonus = sum(
-            self.DOMAIN_TEMPORAL_WEIGHTS.get(
+            self.DOMAIN_TEMPORAL_WEIGHTS.get(  # type: ignore[misc]
                 fm.get("领域", "其他"), self.DEFAULT_TEMPORAL_WEIGHTS
-            ).get(fm.get("时效性"), 0.5)
+            ).get(
+                fm.get("时效性", ""), 0.5
+            )  # type: ignore[arg-type]
             for fm in frontmatters
         ) / max(len(frontmatters), 1)
         score += temporal_bonus * 2
@@ -361,7 +385,7 @@ class ProfileGenerator:
         keywords = fm.get("关键词", {})
         if isinstance(keywords, dict):
             layers = ["核心概念", "场景标签", "工具实体", "动作标签"]
-            return sum(1 for l in layers if keywords.get(l)) >= 3
+            return sum(1 for line in layers if keywords.get(line)) >= 3
         return False
 
     def _list_pages(self) -> List[Path]:
@@ -375,7 +399,9 @@ class ProfileGenerator:
             pages.append(page)
         return sorted(pages)
 
-    def _detect_conversion_paths(self, page_frontmatters: List[Tuple[Path, Dict]]) -> List[Tuple[str, str]]:
+    def _detect_conversion_paths(
+        self, page_frontmatters: List[Tuple[Path, Dict]]
+    ) -> List[Tuple[str, str]]:
         type_by_stem = {page.stem: fm.get("类型", "未知") for page, fm in page_frontmatters}
         paths = []
         for page, fm in page_frontmatters:
@@ -383,8 +409,10 @@ class ProfileGenerator:
                 continue
             try:
                 content = page.read_text(encoding="utf-8")
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at metis.py", exc_info=True)
+            except (OSError, IOError):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at metis.py", exc_info=True
+                )
                 continue
             for target in re.findall(r"\[\[([^\]|#]+)", content):
                 if type_by_stem.get(Path(target).stem) == "方法论":
@@ -416,9 +444,12 @@ class ProfileGenerator:
         if self.trail is None:
             try:
                 from core.kia.ariadne import KnowledgeTrail
+
                 self.trail = KnowledgeTrail(wiki_base=str(self.wiki_base))
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at metis.py", exc_info=True)
+            except ImportError:
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at metis.py", exc_info=True
+                )
                 return {}
 
         heatmap = {}
@@ -426,7 +457,9 @@ class ProfileGenerator:
             stats = self._get_page_stats(page)
             if stats:
                 heatmap[page.stem] = {
-                    "query_count": int(stats.get("total_queries") or stats.get("access_count") or 0),
+                    "query_count": int(
+                        stats.get("total_queries") or stats.get("access_count") or 0
+                    ),
                     "modify_count": int(stats.get("total_modifications") or 0),
                     "effect_score": float(stats.get("effect_score") or 0.0),
                     "last_accessed": stats.get("last_accessed") or "",
@@ -437,16 +470,20 @@ class ProfileGenerator:
         if hasattr(self.trail, "get_page_stats"):
             try:
                 return dict(self.trail.get_page_stats(str(page)) or {})
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at metis.py", exc_info=True)
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at metis.py", exc_info=True
+                )
                 return {}
         db_path = getattr(self.trail, "db_path", self.wiki_base / ".kg" / "trail.db")
         if not Path(db_path).exists():
             return {}
         try:
             with sqlite3.connect(str(db_path)) as conn:
-                conn.row_factory = sqlite3.Row
-                row = conn.execute("SELECT * FROM page_stats WHERE page_path=?", (str(page),)).fetchone()
+                conn.row_factory = sqlite3.Row  # noqa
+                row = conn.execute(
+                    "SELECT * FROM page_stats WHERE page_path=?", (str(page),)
+                ).fetchone()
                 return dict(row) if row else {}
         except sqlite3.Error:
             return {}
@@ -482,24 +519,40 @@ class ProfileGenerator:
         if self.immune is None:
             try:
                 from core.kia.hygieia import KnowledgeImmuneSystem
+
                 self.immune = KnowledgeImmuneSystem(wiki_base=str(self.wiki_base))
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at metis.py", exc_info=True)
+            except ImportError:
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at metis.py", exc_info=True
+                )
                 return {}
         try:
             report = self.immune.full_scan()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at metis.py", exc_info=True)
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at metis.py", exc_info=True
+            )
             return {}
 
         issue_breakdown = Counter(issue.issue_type for issue in getattr(report, "issues", []))
-        critical_count = sum(1 for issue in getattr(report, "issues", []) if issue.severity == "critical")
+        critical_count = sum(
+            1 for issue in getattr(report, "issues", []) if issue.severity == "critical"
+        )
         return {
             "current_score": getattr(report, "health_score", 100.0),
             "issue_count": len(getattr(report, "issues", [])),
             "issue_breakdown": dict(issue_breakdown),
             "critical_count": critical_count,
         }
+
+    def _field_present(self, fm: Dict, field_name: str) -> bool:
+        """检查 frontmatter 中是否存在指定字段（支持中英文别名）。"""
+        if fm.get(field_name) not in (None, "", []):
+            return True
+        for alias in self.FIELD_ALIASES.get(field_name, []):
+            if fm.get(alias) not in (None, "", []):
+                return True
+        return False
 
     def _calculate_frontmatter_completeness(self, frontmatters: List[Dict]) -> float:
         if not frontmatters:
@@ -509,13 +562,13 @@ class ProfileGenerator:
             1
             for fm in frontmatters
             for field_name in self.REQUIRED_FRONTMATTER_FIELDS
-            if fm.get(field_name) not in (None, "", [])
+            if self._field_present(fm, field_name)
         )
         return round(present / max(total, 1), 3)
 
     @staticmethod
     def _calculate_update_ratio(pages: List[Path]) -> float:
-        cutoff = datetime.now() - timedelta(days=30)
+        cutoff = datetime.now() - timedelta(days=PROFILE_GENERATOR_DURATION_BUCKET_MONTH_DAYS)
         updated = sum(1 for page in pages if datetime.fromtimestamp(page.stat().st_mtime) > cutoff)
         return round(updated / max(len(pages), 1), 3)
 
@@ -524,7 +577,9 @@ class ProfileGenerator:
         total = sum(domain_dist.values())
         if total == 0 or len(domain_dist) <= 1:
             return 0.0
-        entropy = -sum((count / total) * math.log(count / total) for count in domain_dist.values() if count > 0)
+        entropy = -sum(
+            (count / total) * math.log(count / total) for count in domain_dist.values() if count > 0
+        )
         return round(entropy / math.log(len(domain_dist)), 3)
 
     def _init_db(self):
@@ -565,7 +620,8 @@ class ProfileGenerator:
                         tool_stack, scenario_tags, complexity_distribution, confidence_distribution,
                         temporal_distribution, growth_trend, learning_mode, quality_score,
                         activity_heatmap, effect_distribution, task_distribution, health_trend,
-                        blindspot_distribution, frontmatter_completeness, update_ratio, domain_entropy)
+                        blindspot_distribution, frontmatter_completeness,
+                        update_ratio, domain_entropy)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         profile.generated_at,
@@ -591,20 +647,21 @@ class ProfileGenerator:
                     ),
                 )
         except sqlite3.Error as exc:
-            logger.warning(f"画像持久化失败: {exc}")
+            logger.warning("画像持久化失败: %s", exc)
 
     def incremental_update(self, page_path: str, operation: str = "created"):
         fm = self._extract_frontmatter(Path(page_path))
         if not fm:
-            return
+            return False
+        operation = "created" if operation in {"create", "created"} else operation
         try:
             with sqlite3.connect(str(self.profile_db), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+                conn.row_factory = sqlite3.Row  # noqa
                 row = conn.execute(
                     "SELECT * FROM knowledge_profiles ORDER BY generated_at DESC, id DESC LIMIT 1"
                 ).fetchone()
                 if not row:
-                    return
+                    return False
                 domains = json.loads(row["domain_distribution"] or "{}")
                 domain = fm.get("领域", "其他")
                 total_delta = 1 if operation == "created" else 0
@@ -616,8 +673,10 @@ class ProfileGenerator:
                        WHERE id=?""",
                     (json.dumps(domains, ensure_ascii=False), total_delta, row["id"]),
                 )
+            return True
         except sqlite3.Error as exc:
-            logger.warning(f"画像增量更新失败: {exc}")
+            logger.warning("画像增量更新失败: %s", exc)
+            return False
 
     @staticmethod
     def _extract_frontmatter(page: Path) -> Optional[Dict]:
@@ -629,8 +688,8 @@ class ProfileGenerator:
                 parts = content.split("---", 2)
                 if len(parts) >= 3:
                     return yaml.safe_load(parts[1]) or {}
-        except Exception as e:
-            logger.warning(f"忽略异常: {e}")
+        except (OSError, UnicodeError, ValueError, TypeError, yaml.YAMLError) as e:
+            logger.warning("忽略异常: %s", e, exc_info=True)
         return {}
 
     @staticmethod
@@ -641,10 +700,46 @@ class ProfileGenerator:
         return []
 
 
+def sync_profile_update(
+    payload: Dict[str, Any],
+    wiki_base: str | None = None,
+    operation: str | None = None,
+    db_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Apply wiki page update events to the latest persisted knowledge profile."""
+    raw_pages = payload.get("wiki_pages") or []
+    page_path = payload.get("page_path")
+    if page_path:
+        raw_pages = [page_path, *raw_pages]
+    pages = [str(page) for page in raw_pages if page]
+    if not pages:
+        return {"status": "skipped", "updated": 0}
+
+    generator = ProfileGenerator(wiki_base=wiki_base, db_path=db_path)
+    event_operation = operation or payload.get("update_type") or "created"
+    event_operation = "created" if event_operation in {"create", "created"} else str(event_operation)
+    base = Path(wiki_base).expanduser() if wiki_base else None
+
+    updated = 0
+    seen = set()
+    for raw_page in pages:
+        page = Path(raw_page).expanduser()
+        if base and not page.is_absolute():
+            page = base / page
+        key = str(page)
+        if key in seen:
+            continue
+        seen.add(key)
+        if generator.incremental_update(key, operation=event_operation):
+            updated += 1
+
+    return {"status": "ok", "updated": updated}
+
+
 # ========== 便捷函数 ==========
 
-def generate_profile(wiki_base: str = None) -> str:
+
+def generate_profile(wiki_base: str | None = None) -> str:
     """便捷函数：生成知识画像报告"""
     generator = ProfileGenerator(wiki_base=wiki_base)
-    profile = generator.generate()
-    return generator.generate_report(profile)
+    return generator.generate_and_report()

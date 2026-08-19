@@ -10,16 +10,17 @@
 
 ### 🔴 高优先级：必须完成
 
-#### 1. 连接 Memos（知识库入口）
-- **问用户**："你有 Memos 实例吗？如果有，请提供 API 地址和 Token。"
-- **操作**：调用 `self_diagnose()` 查看当前 Memos 状态
-- **如果有**：调用 `configure_memos(api_url="...", token="...")`
-- **如果没有**：告诉用户"没有 Memos 也能用，知识会直接写入本地 Wiki"
+#### 1. 确认 Obsidian / raw vault（知识库入口）
+- **操作**：调用 `self_diagnose()` 查看当前 Obsidian/raw vault 状态
+- **问用户**："你的 Mnemos 主认知 Vault 和 raw 原始记录 Vault 在哪个路径？是否允许 Mnemos 创建默认的 `~/Documents/mnemos` 与 `~/Documents/raw`？"
+- **如果 Mnemos 主认知 Vault 路径不正确**：调用 `configure_wiki(vault_path="...")`；如果是首次部署、raw Vault 缺失或 Obsidian 未安装，引导用户运行 `./setup.sh`（macOS/Linux）或 `.\setup.bat`（Windows PowerShell）
+- **说明**：当前版本不需要旧外部笔记服务、访问令牌或端口；原始对话先写入 `raw_events.db`，再由 daemon 投影到本地 raw vault，知识结果进入 Wiki
 
-#### 2. 确认 Wiki / Obsidian 路径
-- **操作**：调用 `detect_sources()` 查看当前 Wiki 路径
-- **问用户**："你的 Obsidian Vault 在哪个路径？"
-- **如果不正确**：调用 `configure_wiki(vault_path="...")`
+#### 2. 确认三类模型 API 配置（部署必需）
+- **操作**：调用 `health_check()` 或 `mnemos doctor` 查看 LLM / embedding / reranker 配置状态
+- **配置要求**：LLM、Embedding、Reranker 三类都必须提供模型 ID、API 地址和 API Key；Mnemos 不指定模型厂商，只要求端点兼容对应 API
+- **分项配置**：LLM 用 `MNEMOS_LLM_MODEL` / `MNEMOS_LLM_BASE_URL` / `MNEMOS_LLM_API_KEY`；Embedding 用 `MNEMOS_EMBEDDING_MODEL` / `MNEMOS_EMBEDDING_BASE_URL` / `MNEMOS_EMBEDDING_API_KEY`；Reranker 用 `MNEMOS_RERANKER_MODEL` / `MNEMOS_RERANKER_BASE_URL` / `MNEMOS_RERANKER_API_KEY`
+- **如果未配置或 smoke 失败**：不要告诉用户可以跳过；引导用户重新运行 setup 或修正环境变量 / `~/.mnemos/configs/main.json` 后再验证
 
 ### 🟡 中优先级：尽快完成
 
@@ -45,8 +46,8 @@
 
 ## 常见场景处理
 
-### 用户说"我安装了 Memos"
-→ 调用 `configure_memos(api_url=用户提供的URL, token=用户提供的Token)` → 确认返回值中 `memos_connected` 为 true
+### 用户说“我以前安装过旧外部笔记服务”
+→ 说明当前版本不再连接该服务；如需迁移历史数据，应先导出为文件，再导入 raw vault。不要要求用户提供旧服务的 API 地址或访问令牌。
 
 ### 用户说"我的 Obsidian 在另一个路径"
 → 调用 `configure_wiki(vault_path=用户提供的绝对路径)` → 确认 `writable` 为 true

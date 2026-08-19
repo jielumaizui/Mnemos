@@ -1,0 +1,69 @@
+{
+  "schema_version": "mnemos.cognition_episode_golden_corpus.v1",
+  "cases": [
+    {
+      "case_id": "decision",
+      "judgment": "knowledge",
+      "source_text": "现有同步任务在高峰期重复执行。目标是只执行一次且可恢复。备选方案是进程锁或数据库租约；决定采用数据库租约，因为重启后仍可验证。先灰度启用并观察重复率。",
+      "claim_text": "高峰期同步任务应采用可恢复的数据库租约并先灰度验证。",
+      "claim_type": "decision",
+      "known_fields": {
+        "situation": "高峰期同步任务发生重复执行。",
+        "goal": "让同一同步任务只执行一次且失败后可恢复。",
+        "desired_state": "每个任务只有一个有效租约和可审计的终态。",
+        "facts": "进程锁在进程重启后不能提供跨进程恢复证明。",
+        "alternatives": "可选进程锁或数据库租约。",
+        "tradeoffs": "数据库租约增加持久化成本，但提供重启恢复和审计能力。",
+        "decision": "采用数据库租约。",
+        "rationale": "数据库租约在重启后仍可验证并收敛重复执行。",
+        "actions": "先灰度启用租约并观察重复率。",
+        "scope": "适用于高峰期的分布式同步任务。"
+      },
+      "not_applicable_fields": ["supersedes"]
+    },
+    {
+      "case_id": "failure_correction",
+      "judgment": "knowledge",
+      "source_text": "昨晚发布后请求延迟升高，监控显示连接没有释放。原假设是数据库变慢，复核后根因是异常分支遗漏 close。回滚旧版本并补充 finally 释放；这条纠正取代原先的数据库容量判断。如果连接数再次持续上升，当前结论失效。",
+      "claim_text": "本次延迟故障的根因是异常分支遗漏释放连接，纠正措施是回滚并补 finally。",
+      "claim_type": "technical_fact",
+      "known_fields": {
+        "situation": "发布后请求延迟显著升高。",
+        "facts": "监控显示连接在异常分支没有释放。",
+        "hypotheses": "最初假设数据库容量不足。",
+        "causal_links": "异常分支遗漏 close 导致连接耗尽并推高延迟。",
+        "outcomes": "回滚旧版本后延迟恢复。",
+        "root_cause": "异常分支遗漏连接释放。",
+        "correction": "回滚旧版本并在 finally 中释放连接。",
+        "supersedes": "取代原先的数据库容量不足判断。",
+        "uncertainty": "仍需确认所有异常类型都经过 finally。",
+        "invalidation_conditions": "如果连接数再次持续上升，当前根因判断失效。",
+        "scope": "适用于本次发布后的连接泄漏故障。"
+      }
+    },
+    {
+      "case_id": "preference_boundary",
+      "judgment": "knowledge",
+      "source_text": "我偏好默认给出简洁答案，但涉及数据迁移时必须展开风险、备份和回滚步骤。这个偏好只用于我自己的本地工作流；如果我明确要求详细解释，则按当次要求覆盖默认值。",
+      "claim_text": "用户默认偏好简洁回答，但数据迁移必须展开风险、备份与回滚。",
+      "claim_type": "preference",
+      "known_fields": {
+        "situation": "用户说明本地工作流中的回答风格偏好。",
+        "goal": "减少普通任务的信息负担，同时保护高风险迁移操作。",
+        "facts": "数据迁移需要显式风险、备份和回滚步骤。",
+        "decision": "普通回答默认简洁，数据迁移例外地展开。",
+        "rationale": "迁移风险高于普通问答，必须保留恢复信息。",
+        "uncertainty": "当次明确要求可能覆盖默认风格。",
+        "invalidation_conditions": "用户明确要求详细解释时，默认简洁偏好不适用。",
+        "scope": "仅用于该用户自己的本地工作流。"
+      },
+      "not_applicable_fields": ["root_cause", "correction", "supersedes"]
+    },
+    {
+      "case_id": "no_conclusion",
+      "judgment": "skip",
+      "source_text": "好的，收到，谢谢。",
+      "skip_reason": "对话只有一次性确认，没有事实、判断、决策或可复用偏好。"
+    }
+  ]
+}

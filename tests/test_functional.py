@@ -1,17 +1,12 @@
 """功能测试 - 验证核心模块的读写操作"""
 
-import sys
-import os
 import tempfile
 import shutil
 import unittest
-import json
 import gc
 from unittest.mock import patch
 from pathlib import Path
 from datetime import datetime, timedelta
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def _cleanup_temp(path: str):
@@ -36,11 +31,12 @@ class TestConfigFunctional(unittest.TestCase):
 
         config = Config(config_path=self.config_path)
         # 修改一个值
-        config._data["wiki"]["vault_path"] = "/tmp/test_vault"
+        config.set("wiki.vault_path", "/tmp/test_vault")
         config.save()
 
         # 读取保存的文件内容
         import yaml
+
         with open(self.config_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         self.assertEqual(data["wiki"]["vault_path"], "/tmp/test_vault")
@@ -61,7 +57,7 @@ class TestSignalStoreFunctional(unittest.TestCase):
         """信号数据库可读写"""
         from core.persona.psyche import SignalStore, SessionSignal
 
-        self._store = store = SignalStore(db_path=self.db_path)
+        self._store = store = SignalStore(initialize_schema=True, db_path=self.db_path)
 
         # 写入 session 信号
         signal = SessionSignal(
@@ -82,7 +78,7 @@ class TestSignalStoreFunctional(unittest.TestCase):
         """非法数据源会被拒绝"""
         from core.persona.psyche import SignalStore
 
-        self._store = store = SignalStore(db_path=self.db_path)
+        self._store = store = SignalStore(initialize_schema=True, db_path=self.db_path)
         with self.assertRaises(ValueError):
             store._validate_source("invalid_source")
 
@@ -110,12 +106,12 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         due = datetime.now() + timedelta(days=10)
         task_id = scheduler.schedule(
             task_type="review",
-            subtype="dark_knowledge",
+            subtype="knowledge_gap",
             due_date=due,
             context="测试上下文",
         )
 
-        self.assertTrue(task_id.startswith("review-dark_knowledge-"))
+        self.assertTrue(task_id.startswith("review-knowledge_gap-"))
 
         # 列出所有任务
         tasks = scheduler.list_all()
@@ -259,17 +255,30 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
 
         # 创建一个已完成的旧任务（通过直接操作数据库，因为 schedule API 不允许设置过去日期）
         import sqlite3
+
         old_date = (datetime.now() - timedelta(days=60)).isoformat()
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO knowledge_scheduled_tasks
                 (task_id, task_type, subtype, due_date, reminder_date,
                  is_periodic, period, status, context, created_at, completed_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                "old-task-1", "test", "cleanup", old_date, old_date,
-                0, None, "completed", "", old_date, old_date,
-            ))
+            """,
+                (
+                    "old-task-1",
+                    "test",
+                    "cleanup",
+                    old_date,
+                    old_date,
+                    0,
+                    None,
+                    "completed",
+                    "",
+                    old_date,
+                    old_date,
+                ),
+            )
 
         # 清理 30 天前的
         scheduler.cleanup_old_tasks(days=30)
@@ -285,8 +294,10 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         issue_db = Path(self.temp_dir) / "issues.db"
         registry = IssueRegistry(db_path=str(issue_db))
         issue = Issue(
-            source_module="immune", issue_type="orphan",
-            page_path="orphan.md", severity="medium",
+            source_module="immune",
+            issue_type="orphan",
+            page_path="orphan.md",
+            severity="medium",
         )
         registry.register(issue)
 
@@ -294,6 +305,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         result = scheduler._run_issue_pipeline(registry=registry)
         self.assertEqual(result["status"], "ok")
         self.assertGreaterEqual(result["scanned"], 1)
+        self.assertEqual(result["severity_counts"].get("medium"), 1)
 
     def test_dialog_reminder_cleanup_step(self):
         """dialog_reminder_cleanup 步骤清理过期记录"""
@@ -306,6 +318,7 @@ class TestKnowledgeSchedulerFunctional(unittest.TestCase):
         queue.resolve(rid, "ok")
         # 将 resolved_at 改为过去
         import sqlite3
+
         old = (datetime.now() - timedelta(days=40)).isoformat()
         with sqlite3.connect(str(reminder_db), timeout=10) as conn:
             conn.execute(

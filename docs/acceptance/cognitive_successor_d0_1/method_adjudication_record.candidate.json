@@ -1,0 +1,509 @@
+{
+  "schema_version": "mnemos.cognitive_successor_method_producer_assessment.v2",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_producer_assessment",
+  "schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+    "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "artifact_id": "cognitive-successor-method-producer-assessment",
+  "artifact_status": "PRODUCER_ASSESSMENT_NON_GOVERNING_REQUIRES_DETACHED_CHALLENGE",
+  "question_binding": {
+    "question_id": "COGNITIVE-SUCCESSOR-DECISION-001",
+    "exact_text": "How should successor design conflicts be adjudicated without granting prior authority to legacy contracts, preserved designs, user directions, code evidence, cognitive theory, reviewers, agents or majority agreement; and which results may become constitution clauses?",
+    "exact_text_sha256": "sha256:3ef025f277667650f07703282d38a4f8a2875d742d33d38e94b67d64dbd2f495",
+    "scope": "SUCCESSOR_DESIGN_METHOD_ONLY",
+    "materiality_profile": {
+      "selected_profile": "HIGH",
+      "scope": "DECISION_001_SUCCESSOR_DESIGN_METHOD_BOOTSTRAP",
+      "rationale": "The method can shape safety, cognition, migration, public Interfaces and later irreversible decisions; use HIGH until a new exact question generation proves a narrower scope.",
+      "invalidation_conditions": [
+        "THE_EXACT_QUESTION_OR_SCOPE_CHANGES",
+        "A_NEW_GENERATION_PROVES_ALL_EFFECTS_LOW_IMPACT_AND_REVERSIBLE",
+        "APPLICABLE_SAFETY_PRIVACY_AGENCY_MIGRATION_OR_PUBLIC_INTERFACE_SCOPE_CHANGES"
+      ]
+    }
+  },
+  "protocol_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_bootstrap_protocol.candidate.json",
+    "sha256": "sha256:b5eec59c119e487f64015c1605ac636086e4976ca4c16fb47a74e67ab5ba0ddd",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "evidence_manifest_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+    "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "candidate_denominator_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_candidate_denominator.candidate.json",
+    "sha256": "sha256:8a27275454ce860617e23bbb755350d3a97473eeaf7a29d5ba38e2ee609eeee4",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "method_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json",
+    "sha256": "sha256:be842ac9d6eab51db8f633073f0b331ff67f4382a85f1f13afca446aa49fea2f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "producer_identity_declaration": {
+    "actor_id": "codex-primary-authoring-orchestrator",
+    "role": "PRIMARY_AUTHORING_ORCHESTRATOR",
+    "identity_evidence_binding": null,
+    "independence_claimed": false
+  },
+  "raw_candidate_set": {
+    "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+    "AUTHORITY_HIERARCHY": true,
+    "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+    "DELIBERATIVE_COMMITTEE": true,
+    "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+  },
+  "constraint_results": {
+    "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+      "partition": {
+        "PASS": {},
+        "FAIL": {},
+        "BLOCKING_UNKNOWN": {
+          "METHOD-HARD-001": true,
+          "METHOD-HARD-002": true,
+          "METHOD-HARD-003": true,
+          "METHOD-HARD-004": true,
+          "METHOD-HARD-005": true,
+          "METHOD-HARD-006": true,
+          "METHOD-HARD-007": true,
+          "METHOD-HARD-008": true,
+          "METHOD-HARD-009": true,
+          "METHOD-HARD-010": true,
+          "METHOD-HARD-011": true
+        },
+        "NOT_APPLICABLE": {}
+      },
+      "evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true
+      },
+      "rationale": "The strongest status-quo method preserves context, tacit knowledge, speed and proportionality, but the frozen evidence does not yet prove that it can satisfy any protocol constraint without becoming a different structured method."
+    },
+    "AUTHORITY_HIERARCHY": {
+      "partition": {
+        "PASS": {
+          "METHOD-HARD-006": true,
+          "METHOD-HARD-009": true
+        },
+        "FAIL": {
+          "METHOD-HARD-001": true,
+          "METHOD-HARD-002": true,
+          "METHOD-HARD-003": true
+        },
+        "BLOCKING_UNKNOWN": {
+          "METHOD-HARD-004": true,
+          "METHOD-HARD-005": true,
+          "METHOD-HARD-007": true,
+          "METHOD-HARD-008": true,
+          "METHOD-HARD-010": true,
+          "METHOD-HARD-011": true
+        },
+        "NOT_APPLICABLE": {}
+      },
+      "evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-007": true,
+        "METHOD-EVID-008": true
+      },
+      "rationale": "Authority is the correct mechanism for scoped product values, risk acceptance and operational permission, but a universal hierarchy would allow decision rights to impersonate empirical or architecture truth."
+    },
+    "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+      "partition": {
+        "PASS": {
+          "METHOD-HARD-002": true,
+          "METHOD-HARD-004": true,
+          "METHOD-HARD-005": true
+        },
+        "FAIL": {
+          "METHOD-HARD-001": true,
+          "METHOD-HARD-006": true
+        },
+        "BLOCKING_UNKNOWN": {
+          "METHOD-HARD-003": true,
+          "METHOD-HARD-007": true,
+          "METHOD-HARD-008": true,
+          "METHOD-HARD-009": true,
+          "METHOD-HARD-010": true,
+          "METHOD-HARD-011": true
+        },
+        "NOT_APPLICABLE": {}
+      },
+      "evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-011": true
+      },
+      "rationale": "Scalar aggregation can expose compensatory preferences and sensitivity inside a proven feasible set, but as a universal correctness engine it can compensate non-compensable failures or hide unknown and incomparable states."
+    },
+    "DELIBERATIVE_COMMITTEE": {
+      "partition": {
+        "PASS": {
+          "METHOD-HARD-005": true
+        },
+        "FAIL": {},
+        "BLOCKING_UNKNOWN": {
+          "METHOD-HARD-001": true,
+          "METHOD-HARD-002": true,
+          "METHOD-HARD-003": true,
+          "METHOD-HARD-004": true,
+          "METHOD-HARD-006": true,
+          "METHOD-HARD-007": true,
+          "METHOD-HARD-008": true,
+          "METHOD-HARD-009": true,
+          "METHOD-HARD-010": true,
+          "METHOD-HARD-011": true
+        },
+        "NOT_APPLICABLE": {}
+      },
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-012": true
+      },
+      "rationale": "Structured multidisciplinary deliberation can discover missing scenarios and counterarguments, but group composition, shared upstream assumptions and social convergence do not themselves prove correctness or independence."
+    },
+    "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+      "partition": {
+        "PASS": {
+          "METHOD-HARD-001": true,
+          "METHOD-HARD-002": true,
+          "METHOD-HARD-003": true,
+          "METHOD-HARD-004": true,
+          "METHOD-HARD-005": true,
+          "METHOD-HARD-006": true,
+          "METHOD-HARD-007": true,
+          "METHOD-HARD-009": true,
+          "METHOD-HARD-010": true,
+          "METHOD-HARD-011": true
+        },
+        "FAIL": {},
+        "BLOCKING_UNKNOWN": {
+          "METHOD-HARD-008": true
+        },
+        "NOT_APPLICABLE": {}
+      },
+      "evidence_refs": {
+        "METHOD-EVID-001": true,
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-007": true
+      },
+      "rationale": "The candidate explicitly models typed standing, non-compensable constraints, unknowns, symmetric alternatives, falsification and detached authorization, but executable protection against self-oracles, stale bindings and cycles remains unproven."
+    }
+  },
+  "tradeoff_results": {
+    "METHOD-TRADEOFF-001": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-009": true},
+          "rationale": "No identical blinded packet establishes the candidate's material omission or false-conclusion rate."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-009": true},
+          "rationale": "No identical blinded packet establishes the candidate's material omission or false-conclusion rate."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-009": true},
+          "rationale": "No identical blinded packet establishes the candidate's material omission or false-conclusion rate."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-009": true},
+          "rationale": "No identical blinded packet establishes the candidate's material omission or false-conclusion rate."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-009": true},
+          "rationale": "No identical blinded packet establishes the candidate's material omission or false-conclusion rate."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-009": true
+      },
+      "rationale": "Material decision-error risk has no common-workload measurement; all five candidates remain tied on an unknown frontier rather than receiving candidate-specific axes."
+    },
+    "METHOD-TRADEOFF-002": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-006": true},
+          "rationale": "Detached exact-input reconstruction has not been executed for this candidate."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-006": true},
+          "rationale": "Detached exact-input reconstruction has not been executed for this candidate."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-006": true},
+          "rationale": "Detached exact-input reconstruction has not been executed for this candidate."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-006": true},
+          "rationale": "Detached exact-input reconstruction has not been executed for this candidate."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-006": true},
+          "rationale": "Detached exact-input reconstruction has not been executed for this candidate."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-006": true
+      },
+      "rationale": "Traceability and reconstruction fidelity have not been measured symmetrically for any candidate."
+    },
+    "METHOD-TRADEOFF-003": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-009": true},
+          "rationale": "End-to-end latency, compute, actor time and maintenance cost have not been measured on the frozen profile."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-009": true},
+          "rationale": "End-to-end latency, compute, actor time and maintenance cost have not been measured on the frozen profile."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-009": true},
+          "rationale": "End-to-end latency, compute, actor time and maintenance cost have not been measured on the frozen profile."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-009": true},
+          "rationale": "End-to-end latency, compute, actor time and maintenance cost have not been measured on the frozen profile."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-009": true},
+          "rationale": "End-to-end latency, compute, actor time and maintenance cost have not been measured on the frozen profile."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-009": true
+      },
+      "rationale": "Latency and resource cost remain unknown for all five candidates under the same required work and materiality profile."
+    },
+    "METHOD-TRADEOFF-004": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-009": true, "METHOD-EVID-010": true},
+          "rationale": "Cognitive load, coordination burden, dissent handling and fatigue have not been measured."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-009": true, "METHOD-EVID-010": true},
+          "rationale": "Cognitive load, coordination burden, dissent handling and fatigue have not been measured."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-009": true, "METHOD-EVID-010": true},
+          "rationale": "Cognitive load, coordination burden, dissent handling and fatigue have not been measured."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-009": true, "METHOD-EVID-010": true},
+          "rationale": "Cognitive load, coordination burden, dissent handling and fatigue have not been measured."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-009": true, "METHOD-EVID-010": true},
+          "rationale": "Cognitive load, coordination burden, dissent handling and fatigue have not been measured."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-010": true
+      },
+      "rationale": "Human cognitive and coordination burden remains unknown for all five candidates."
+    },
+    "METHOD-TRADEOFF-005": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-007": true},
+          "rationale": "No frozen new-evidence injection establishes detection, reopening, rollback or correction cost."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-007": true},
+          "rationale": "No frozen new-evidence injection establishes detection, reopening, rollback or correction cost."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-007": true},
+          "rationale": "No frozen new-evidence injection establishes detection, reopening, rollback or correction cost."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-007": true},
+          "rationale": "No frozen new-evidence injection establishes detection, reopening, rollback or correction cost."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-002": true, "METHOD-EVID-003": true, "METHOD-EVID-007": true},
+          "rationale": "No frozen new-evidence injection establishes detection, reopening, rollback or correction cost."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-007": true
+      },
+      "rationale": "Reversibility and adaptation to new evidence remain unknown for all five candidates."
+    },
+    "METHOD-TRADEOFF-006": {
+      "candidate_states": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-006": true, "METHOD-EVID-010": true},
+          "rationale": "Identity, dependency, mutation and dissent fixtures have not been executed."
+        },
+        "AUTHORITY_HIERARCHY": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-006": true, "METHOD-EVID-010": true},
+          "rationale": "Identity, dependency, mutation and dissent fixtures have not been executed."
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-006": true, "METHOD-EVID-010": true},
+          "rationale": "Identity, dependency, mutation and dissent fixtures have not been executed."
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-006": true, "METHOD-EVID-010": true},
+          "rationale": "Identity, dependency, mutation and dissent fixtures have not been executed."
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "state": "UNKNOWN",
+          "evidence_refs": {"METHOD-EVID-004": true, "METHOD-EVID-005": true, "METHOD-EVID-006": true, "METHOD-EVID-010": true},
+          "rationale": "Identity, dependency, mutation and dissent fixtures have not been executed."
+        }
+      },
+      "candidate_frontier": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": true,
+        "AUTHORITY_HIERARCHY": true,
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": true,
+        "DELIBERATIVE_COMMITTEE": true,
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": true
+      },
+      "uncertainty": "HIGH",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-010": true
+      },
+      "rationale": "Independence and self-oracle resistance remain unknown for all five candidates until the fixed fixture suite is executed."
+    }
+  },
+  "feasible_non_dominated_candidates": {},
+  "decision": {
+    "epistemic_outcome": "INDETERMINATE",
+    "design_outcome": "PROTOTYPE_REQUIRED",
+    "recommended_candidate_key": "CONSTRAINT_FIRST_TYPED_EVIDENCE",
+    "rationale": "The feasible non-dominated set is empty because every candidate has at least one FAIL or BLOCKING_UNKNOWN. Use constraint-first typed evidence only as the working prototype base because it best exposes the frozen distinctions; this is a research action, not selection or adoption. Mutable source snapshots, detached challenge, executable structural verification and common-workload comparison remain absent."
+  },
+  "uncertainties": {
+    "MUTABLE_SOURCE_SNAPSHOT_HASHES_MISSING": "Official mutable sources require archived exact-byte snapshots before any terminal evidence claim.",
+    "DETACHED_CHALLENGE_MISSING": "A non-producer must reconstruct the candidate denominator, constraint application and tradeoff frontier from the exact frozen inputs.",
+    "EXECUTABLE_STRUCTURAL_VERIFIER_MISSING": "JSON Schema cannot itself prove referenced hashes, graph acyclicity, exact partitions, identity independence or lifecycle truth.",
+    "COMMON_WORKLOAD_PROTOTYPE_MISSING": "The five methods have not been compared on identical blinded decision packets for missed blockers, false conclusions, turnaround, cognitive load and lifecycle cost.",
+    "QUALITY_PROFILES_UNCALIBRATED": "Function, cognitive adequacy, performance, experience and simplicity profiles lack exact metric, baseline, scenario, complexity-fact, required-Seam, change-scenario and threshold bindings; no quality or simplicity verdict is currently available.",
+    "FIXED_TRADEOFF_WORKLOAD_UNEXECUTED": "All six protocol-owned tradeoff axes assess all five candidates symmetrically, but every candidate state remains UNKNOWN until identical blinded workloads and fixtures execute."
+  },
+  "falsification_obligations": {
+    "MISSING_METHOD_FAMILY_CHALLENGE": "Search for a materially distinct strongest-fair method family; discovery invalidates the five-candidate denominator.",
+    "HISTORICAL_PACKET_BLIND_TEST": "Apply all five methods to identical blinded historical design packets and compare material omissions, false decisions, reconstruction accuracy, time and user burden.",
+    "DEPENDENCY_DIVERSITY_TEST": "Repeat challenge with actors whose upstream models and source packets differ, then merge evidence-linked findings rather than votes.",
+    "SCALAR_REVERSAL_TEST": "Vary declared MCDA weights, normalization and dominated alternatives; any hard failure or unknown becoming the winner falsifies universal scalar use.",
+    "STRUCTURAL_MUTATION_TEST": "Inject duplicate raw members, stale or missing schema and bundle bindings, partition gaps and overlaps, an inadmissible candidate in the feasible set, missing or asymmetric tradeoff axes, cycles, role/type/key mismatches, fake PASS reports, infeasible ADOPT, final/authorized method mismatch, invalid or expired time windows, missing authorization action/scope/recovery, REVISE activation and arbitrary principals; every mutation must fail closed."
+  },
+  "verifier_obligations": {
+    "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": "Recompute every declared SHA-256, including the ticket schema and dependency bundle members, from referenced whole-file raw bytes; never trust embedded or copied digest text.",
+    "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": "Rebuild the typed artifact DAG and exact dependency bundle; reject missing, extra, cyclic, stale, ambiguously rooted, role-mismatched, type-mismatched or key-mismatched dependencies; prove selected candidate, selected method, final method and bundle method identity equality; for typed method generation greater than one prove the predecessor has the same method key and exactly the preceding generation, while generation one has null typed supersedes and any legacy untyped predecessor remains context only.",
+    "CONSTRAINT_PARTITION_COMPLETENESS": "For every candidate, prove each protocol-owned hard-constraint key occurs exactly once across PASS, FAIL, BLOCKING_UNKNOWN, and NOT_APPLICABLE, verify every NOT_APPLICABLE justification, exclude every inadmissible candidate from the feasible set, and prove every frozen tradeoff axis assesses all five candidates exactly once.",
+    "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": "Verify producer, challenger, finalizer and verifier identities plus material dependency disclosures from bound identity evidence; declarations and reviewer counts do not prove independence, and required roles must be pairwise separated where declared.",
+    "LIFECYCLE_STATE_TRANSITION_VALIDITY": "Recompute the producer-to-challenger-to-final-candidate-to-dependency-bundle-to-post-final-verifier transition; structural eligibility requires challenger PASS, selected candidate feasible and non-dominated, zero FAIL, zero BLOCKING_UNKNOWN, zero unresolved required evidence gaps and unchanged exact bytes. A pre-authorization verifier must not claim to validate future authorization bytes.",
+    "QUALITY_POLICY_CONTRACT_DETERMINISM": "Recompute metric normalization, target-range distance, interval and margin ordering, exclusive state precedence, exact all-material outcome and cross-domain denominator equality, complexity-fact membership and effect states, and local-guardrail exact PASS semantics; any null, unfrozen, missing, extra, duplicate, stale, arithmetically inconsistent or non-single-valued quality input blocks the corresponding verdict."
+  },
+  "authorization_acceptance_obligations": {
+    "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": "Decode every authorization-stage artifact as UTF-8 with a duplicate-member-aware raw JSON loader that rejects duplicate object names before parsing; recompute authorization_text.exact_text_sha256 from the exact UTF-8 text; then recompute the exact authorization, ticket schema, final record, challenger report, structural verifier report, dependency bundle, selected method, principal, authentication evidence and recovery-boundary hashes from whole-file raw bytes.",
+    "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": "Prove the authorized method bytes and key equal the final selected method and dependency-bundle method, and that the authorization binds the same final, challenger, verifier and bundle bytes accepted by the lifecycle.",
+    "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": "Verify from bound external identity evidence that the principal is authenticated, currently authorized for the exact method-only scope and distinct from the detached authorization-acceptance gate actor.",
+    "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": "Verify the allowed action and authorized scope are exact, every prohibited action is present, the recovery boundary exists and is applicable, and no production, constitution-clause or legacy-runtime authority is implied.",
+    "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": "Parse calendar-valid RFC 3339 times; prove valid_from is earlier than expires_at; prove evaluated_at is within that interval using the bound trusted time source; prove the acceptance receipt valid_until does not exceed the authorization expires_at; and require every use to revalidate both the authorization and receipt windows."
+  },
+  "schema_capability_boundary": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS",
+  "hash_policy": {
+    "algorithm": "SHA-256",
+    "byte_domain": "RAW_FILE_BYTES",
+    "normalization": "NONE",
+    "binding_granularity": "EXACT_WHOLE_FILE",
+    "embedded_self_hash": false,
+    "dependency_change_semantics": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"
+  }
+}

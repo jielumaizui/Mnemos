@@ -1,1 +1,1 @@
-# Mnemos 运维工具包
+"""Operational health checks for Mnemos."""

@@ -1,63 +1,73 @@
 # -*- coding: utf-8 -*-
 """
-评分层 V2 单元测试 — beta_bayesian / lightweight_nb / fallback / training_scheduler / adaptive_scorer_v2
+评分层 V2 单元测试 — bayesian_scorer / lightweight_nb / fallback / adaptive_scorer_v2
 """
 
-import json
-import pickle
 import sqlite3
-import sys
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
-# ==================== beta_bayesian ====================
+@pytest.fixture(autouse=True)  # noqa
+def _patch_get_config_for_scoring_v2_tests(patched_get_config):
+    """确保本模块所有测试使用隔离的 fake config，不写入真实 ~/.mnemos。"""
+    return patched_get_config
 
-class TestBetaBayesianFusion:
-    def test_prior_mean_after_positive_update(self):
-        from core.scoring.beta_bayesian import BetaBayesianFusion
 
-        bb = BetaBayesianFusion(["memos"])
-        bb.update_from_ground_truth("memos", 1, confidence=1.0)
-        # prior: alpha=1+1=2, beta=1 => mean=2/3
-        assert bb.priors["memos"].mean == pytest.approx(2 / 3, abs=0.01)
+# ==================== bayesian_scorer ====================
 
-    def test_prior_mean_after_negative_update(self):
-        from core.scoring.beta_bayesian import BetaBayesianFusion
 
-        bb = BetaBayesianFusion(["memos"])
-        bb.update_from_ground_truth("memos", 0, confidence=1.0)
-        # alpha=1, beta=1+1=2 => mean=1/3
-        assert bb.priors["memos"].mean == pytest.approx(1 / 3, abs=0.01)
+class TestBayesianScorerFusion:
+    @pytest.fixture
+    def bb(self, tmp_path):
+        from core.scoring.bayesian_scorer import BayesianScorer
 
-    def test_fuse_returns_score_between_0_and_1(self):
-        from core.scoring.beta_bayesian import BetaBayesianFusion
+        return BayesianScorer(
+            dimensions=["profile", "kg", "distill"],
+            db_path=tmp_path / "bb.db",
+        )
 
-        bb = BetaBayesianFusion(["memos"])
-        score, conf = bb.fuse("memos", rule_prior=0.6, ml_likelihood=0.7, ml_confidence=0.8)
+    def test_fuse_returns_score_between_0_and_1(self, bb):
+        score, confidence = bb.fuse(
+            "profile",
+            rule_prior=0.6,
+            ml_likelihood=0.7,
+            ml_confidence=0.8,
+        )
         assert 0.0 <= score <= 1.0
-        assert 0.0 <= conf <= 1.0
+        assert 0.0 <= confidence <= 1.0
 
-    def test_batch_update(self):
-        from core.scoring.beta_bayesian import BetaBayesianFusion
+    @pytest.mark.parametrize(
+        ("operation", "expected_suffix"),
+        (
+            (
+                lambda scorer: scorer.update_from_ground_truth("profile", 1, confidence=1.0),
+                "bayesian_update_from_ground_truth",
+            ),
+            (
+                lambda scorer: scorer.batch_update("kg", [1, 1, 0, 1]),
+                "bayesian_batch_update",
+            ),
+        ),
+    )
+    def test_legacy_mutations_are_fail_closed(self, bb, operation, expected_suffix):
+        before = bb.state_to_dict()
+        with pytest.raises(
+            PermissionError,
+            match=f"training_admission_receipt_required:{expected_suffix}",
+        ):
+            operation(bb)
+        assert bb.state_to_dict() == before
 
-        bb = BetaBayesianFusion(["kg"])
-        bb.batch_update("kg", [1, 1, 0, 1])
-        assert bb.priors["kg"].total_samples == 4
-        assert bb.priors["kg"].mean > 0.5
-
-    def test_dimension_status(self):
-        from core.scoring.beta_bayesian import BetaBayesianFusion
-
-        bb = BetaBayesianFusion(["distill"])
-        bb.update_from_ground_truth("distill", 1)
+    def test_dimension_status_remains_cold(self, bb):
         status = bb.get_dimension_status("distill")
-        assert "mean" in status
-        assert "samples" in status
+        assert status["samples"] == 0
+        assert status["mean"] == pytest.approx(0.5)
 
 
 # ==================== lightweight_nb ====================
+
 
 class TestLightweightComplementNB:
     def test_fit_and_predict(self):
@@ -136,6 +146,7 @@ class TestLightweightComplementNB:
 
 # ==================== fallback ====================
 
+
 class TestScorerFallback:
     def test_guard_catches_exception_and_returns_rule_score(self):
         from core.scoring.fallback import ScorerFallback
@@ -145,7 +156,7 @@ class TestScorerFallback:
         def rule_fn():
             return 0.75
 
-        with fb.guard("memos", rule_fn) as try_ml:
+        with fb.guard("profile", rule_fn) as try_ml:
             result = try_ml(lambda: (_ for _ in ()).throw(ValueError("ml fail")))
 
         assert result == 0.75
@@ -168,51 +179,8 @@ class TestScorerFallback:
         assert not fb.should_degrade("sync")
 
 
-# ==================== training_scheduler ====================
-
-class TestScorerTrainingScheduler:
-    def test_on_buffer_full_triggers_training(self):
-        from core.scoring.training_scheduler import ScorerTrainingScheduler
-
-        calls = []
-
-        def mock_train(dim):
-            calls.append(dim)
-            return {"success": True, "version": "v1", "samples": 42}
-
-        sched = ScorerTrainingScheduler(train_fn=mock_train)
-        job = sched.on_buffer_full("memos")
-
-        assert job.status == "completed"
-        assert job.samples_used == 42
-        assert "memos" in calls
-
-    def test_manual_trigger(self):
-        from core.scoring.training_scheduler import ScorerTrainingScheduler
-
-        def mock_train(dim):
-            return {"success": True, "version": "v2", "samples": 10}
-
-        sched = ScorerTrainingScheduler(train_fn=mock_train)
-        job = sched.trigger_manual("kg")
-
-        assert job.triggered_by == "manual"
-        assert job.status == "completed"
-
-    def test_training_failure_recorded(self):
-        from core.scoring.training_scheduler import ScorerTrainingScheduler
-
-        def mock_train(dim):
-            raise RuntimeError("OOM")
-
-        sched = ScorerTrainingScheduler(train_fn=mock_train)
-        job = sched.on_buffer_full("distill")
-
-        assert job.status == "failed"
-        assert "OOM" in job.error_msg
-
-
 # ==================== adaptive_scorer_v2 ====================
+
 
 class TestAdaptiveScorerV2:
     def test_score_returns_scorecard(self):
@@ -221,12 +189,12 @@ class TestAdaptiveScorerV2:
         scorer = AdaptiveScorerV2()
         result = scorer.score(
             {"content": "Hello world", "frontmatter": {"heat": 0.8}},
-            dimensions=["memos", "sync"],
+            dimensions=["profile", "sync"],
         )
 
-        assert "memos" in result.scores
+        assert "profile" in result.scores
         assert "sync" in result.scores
-        assert 0.0 <= result.scores["memos"] <= 1.0
+        assert 0.0 <= result.scores["profile"] <= 1.0
         assert result.features["content_len"] == 11
 
     def test_extract_features_from_string(self):
@@ -237,49 +205,46 @@ class TestAdaptiveScorerV2:
         assert features["content"] == "Test content with # header"
         assert features["header_count"] == 1
 
-    def test_insert_ground_truth(self, tmp_path):
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-        import sqlite3
-
-        db = tmp_path / "test.db"
-        # 创建最小表结构
-        with sqlite3.connect(str(db)) as conn:
-            conn.execute("""
-                CREATE TABLE ground_truth_signals (
-                    id INTEGER PRIMARY KEY,
-                    session_id TEXT,
-                    signal_type TEXT,
-                    signal_value INTEGER,
-                    confidence REAL,
-                    latency_hours INTEGER,
-                    created_at TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE UNIQUE INDEX idx_gt_session ON ground_truth_signals(session_id, signal_type)
-            """)
-
-        AdaptiveScorerV2.insert_ground_truth(
-            session_id="s1",
-            signal_type="search_hit",
-            label=1,
-            db_path=db,
-        )
-
-        with sqlite3.connect(str(db)) as conn:
-            row = conn.execute("SELECT signal_value FROM ground_truth_signals WHERE session_id='s1'").fetchone()
-            assert row[0] == 1
-
-    def test_get_status(self):
+    def test_get_status_is_cold_without_governed_evidence(self):
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
-        scorer = AdaptiveScorerV2()
-        status = scorer.get_status()
+        status = AdaptiveScorerV2().get_status()
         assert status["domain"] == "mnemos"
         assert status["version"] == "v2-full"
+        assert status["mode"] == "cold"
+        assert status["ready_samples"] == 0
+
+    def test_legacy_writers_are_fail_closed(self, tmp_path):
+        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+
+        db = tmp_path / "scorer.db"
+        with pytest.raises(
+            PermissionError,
+            match="training_admission_receipt_required:insert_ground_truth",
+        ):
+            AdaptiveScorerV2.insert_ground_truth(
+                session_id="s1",
+                signal_type="search_hit",
+                label=1,
+                db_path=db,
+            )
+        with pytest.raises(
+            PermissionError,
+            match="training_admission_receipt_required:enqueue_training_sample",
+        ):
+            AdaptiveScorerV2.enqueue_training_sample(
+                session_id="push-1",
+                dimension="engagement",
+                features={"topic": "redis"},
+                expected_score=0.8,
+                source="test",
+                db_path=str(db),
+            )
+        assert not db.exists()
 
 
 # ==================== 新增：frontmatter 数值归一化 ====================
+
 
 class TestFrontmatterNormalization:
     """测试 _normalize_frontmatter_value 对各种输入形态的归一化。"""
@@ -350,15 +315,17 @@ class TestFrontmatterNormalization:
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
         scorer = AdaptiveScorerV2()
-        features = scorer._extract_features({
-            "content": "test",
-            "frontmatter": {
-                "heat": "hot",
-                "quality_score": 85,
-                "confidence": "75%",
-                "priority": "0.9",
-            },
-        })
+        features = scorer._extract_features(
+            {
+                "content": "test",
+                "frontmatter": {
+                    "heat": "hot",
+                    "quality_score": 85,
+                    "confidence": "75%",
+                    "priority": "0.9",
+                },
+            }
+        )
         assert features["fm_heat"] == pytest.approx(0.9)
         assert features["fm_quality_score"] == pytest.approx(0.85)
         assert features["fm_confidence"] == pytest.approx(0.75)
@@ -369,23 +336,28 @@ class TestFrontmatterNormalization:
 
         scorer = AdaptiveScorerV2()
         # heat=hot(0.9), quality_score=100(1.0) => (0.9*0.5 + 1.0*0.5) = 0.95
-        features = scorer._extract_features({
-            "content": "test",
-            "frontmatter": {"heat": "hot", "quality_score": 100},
-        })
-        score, conf = scorer._rule_score("memos", None, features)
+        features = scorer._extract_features(
+            {
+                "content": "test",
+                "frontmatter": {"heat": "hot", "quality_score": 100},
+            }
+        )
+        score, conf = scorer._rule_score("l1_storage", None, features)
         assert score == pytest.approx(0.95, abs=0.01)
 
-        # heat=cold(0.3), quality_score=0(0.0) => (0.3*0.5 + 0.0*0.5) = 0.15
-        features2 = scorer._extract_features({
-            "content": "test",
-            "frontmatter": {"heat": "cold", "quality_score": 0},
-        })
-        score2, _ = scorer._rule_score("memos", None, features2)
-        assert score2 == pytest.approx(0.15, abs=0.01)
+        # heat=cold(0.3), quality_score=0(0.0) => 0.5 + 0.3*0.22 + 0.0*0.25 = 0.566
+        features2 = scorer._extract_features(
+            {
+                "content": "test",
+                "frontmatter": {"heat": "cold", "quality_score": 0},
+            }
+        )
+        score2, _ = scorer._rule_score("l1_storage", None, features2)
+        assert score2 == pytest.approx(0.566, abs=0.01)
 
 
 # ==================== 新增：配置深合并 ====================
+
 
 class TestConfigDeepMerge:
     def test_deep_merge_preserves_untouched_nested_keys(self):
@@ -397,7 +369,7 @@ class TestConfigDeepMerge:
 
         assert cfg["training"]["min_samples_per_dimension"] == 50
         assert cfg["training"]["min_confidence"] == 0.7  # 默认值保留
-        assert cfg["training"]["max_queue_size"] == 500   # 默认值保留
+        assert cfg["training"]["max_queue_size"] == 500  # 默认值保留
 
     def test_user_overrides_yaml(self, monkeypatch):
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
@@ -409,7 +381,7 @@ class TestConfigDeepMerge:
                 "bayesian": {"rule_weight_cold": 3.0, "rule_weight_warm": 1.5},
                 "fallback": {"max_consecutive_failures": 3},
                 "persistence": {"format": "joblib"},
-                "dimensions": {"memos": True},
+                "dimensions": {"profile": True},
             }
             yaml_cfg = {"bayesian": {"rule_weight_cold": 5.0}}
             merged = AdaptiveScorerV2._deep_merge(defaults, yaml_cfg)
@@ -428,7 +400,7 @@ class TestConfigDeepMerge:
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
         calls = []
-        orig_validate = AdaptiveScorerV2.validate_scorer_config
+        AdaptiveScorerV2.validate_scorer_config
 
         def mock_validate(cfg):
             calls.append(cfg)
@@ -438,21 +410,23 @@ class TestConfigDeepMerge:
         # 同时 mock _load_all_models 避免 DB 依赖
         monkeypatch.setattr(AdaptiveScorerV2, "_load_all_models", lambda self: None)
 
-        scorer = AdaptiveScorerV2()
+        AdaptiveScorerV2()
         assert len(calls) == 1
         assert calls[0]["backend"] in ("standard", "lightweight")
 
 
 # ==================== 新增：模型加载安全护栏 ====================
 
+
 class TestModelLoadSecurity:
-    """测试 save_model / load_model 的安全元数据校验。"""
+    """Legacy model blobs are historical migration inputs, never runtime models."""
 
     @pytest.fixture
     def db_with_schema(self, tmp_path):
         db = tmp_path / "secure.db"
         with sqlite3.connect(str(db)) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 CREATE TABLE scorer_models (
                     id INTEGER PRIMARY KEY,
                     dimension TEXT NOT NULL,
@@ -465,200 +439,79 @@ class TestModelLoadSecurity:
                     created_at TEXT,
                     meta_json TEXT
                 )
-            """)
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO scorer_models (
+                    dimension, model_version, model_type, model_blob, model_hash,
+                    is_active, created_at, meta_json
+                ) VALUES ('profile', 'v1', 'pickle', X'8004', 'legacy', 1, ?, '{}')
+                """,
+                (datetime.now().isoformat(),),
+            )
+            conn.commit()
         return db
 
-    def _insert_model(self, db, dimension, blob, model_hash, meta):
-        with sqlite3.connect(str(db)) as conn:
-            conn.execute("""
-                INSERT INTO scorer_models
-                (dimension, model_version, model_type, model_blob, model_hash, is_active, created_at, meta_json)
-                VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-            """, (dimension, "v1", "lightweight_nb", blob, model_hash,
-                  datetime.now().isoformat(), json.dumps(meta)))
-            conn.commit()
-
-    def test_load_model_success(self, db_with_schema, monkeypatch):
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2, _SCHEMA_VERSION
-
-        model = {"dummy": "model"}
-        blob = pickle.dumps(model)
-        blob_hash = __import__("hashlib").sha256(blob).hexdigest()
-        meta = {
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.0",
-            "sklearn_version": "none",
-            "model_class": "dict",
-        }
-        self._insert_model(db_with_schema, "memos", blob, blob_hash, meta)
-
-        scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        loaded = scorer.load_model("memos")
-        assert loaded == {"dummy": "model"}
-        assert scorer._model_versions["memos"] == "latest"
-
-    def test_load_model_hash_mismatch_returns_none(self, db_with_schema, monkeypatch):
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2, _SCHEMA_VERSION
-
-        model = {"dummy": "model"}
-        blob = pickle.dumps(model)
-        meta = {
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.0",
-            "sklearn_version": "none",
-        }
-        # hash 故意写错
-        self._insert_model(db_with_schema, "memos", blob, "wrong_hash", meta)
-
-        scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        loaded = scorer.load_model("memos")
-        assert loaded is None
-        assert "memos" not in scorer._models
-
-    def test_load_model_schema_mismatch_returns_none(self, db_with_schema, monkeypatch):
+    def test_constructor_does_not_deserialize_or_activate_legacy_model(self, db_with_schema):
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
-        model = {"dummy": "model"}
-        blob = pickle.dumps(model)
-        blob_hash = __import__("hashlib").sha256(blob).hexdigest()
-        meta = {
-            "schema_version": "v0.0",  # 不匹配
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.0",
-        }
-        self._insert_model(db_with_schema, "memos", blob, blob_hash, meta)
-
         scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        loaded = scorer.load_model("memos")
-        assert loaded is None
+        assert scorer._models == {}
+        assert scorer._model_versions == {}
 
-    def test_load_model_python_version_mismatch_returns_none(self, db_with_schema, monkeypatch):
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2, _SCHEMA_VERSION
-
-        model = {"dummy": "model"}
-        blob = pickle.dumps(model)
-        blob_hash = __import__("hashlib").sha256(blob).hexdigest()
-        meta = {
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": "2.7",  # 不可能匹配当前 Python
-            "sklearn_version": "none",
-        }
-        self._insert_model(db_with_schema, "memos", blob, blob_hash, meta)
-
-        scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        loaded = scorer.load_model("memos")
-        assert loaded is None
-
-    def test_load_model_no_meta_still_loads(self, db_with_schema, monkeypatch):
-        """旧模型没有 meta_json 时，跳过校验直接加载（向后兼容）。"""
+    def test_legacy_load_and_save_are_fail_closed(self, db_with_schema):
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
-        model = {"legacy": True}
-        blob = pickle.dumps(model)
-        blob_hash = __import__("hashlib").sha256(blob).hexdigest()
-        with sqlite3.connect(str(db_with_schema)) as conn:
-            conn.execute("""
-                INSERT INTO scorer_models
-                (dimension, model_version, model_type, model_blob, model_hash, is_active, created_at, meta_json)
-                VALUES (?, ?, ?, ?, ?, 1, ?, NULL)
-            """, ("memos", "v1", "lightweight_nb", blob, blob_hash, datetime.now().isoformat()))
-            conn.commit()
-
         scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        loaded = scorer.load_model("memos")
-        assert loaded == {"legacy": True}
-
-    def test_init_load_failure_isolated(self, db_with_schema, monkeypatch):
-        """初始化时某维度模型加载失败，不影响其他维度继续尝试。"""
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2, _SCHEMA_VERSION
-
-        # memos 放一个有效的模型
-        model_ok = {"ok": True}
-        blob_ok = pickle.dumps(model_ok)
-        hash_ok = __import__("hashlib").sha256(blob_ok).hexdigest()
-        meta_ok = {
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.0",
-            "sklearn_version": "none",
-        }
-        self._insert_model(db_with_schema, "memos", blob_ok, hash_ok, meta_ok)
-
-        # sync 放一个 hash 错误的模型（会失败）
-        model_bad = {"bad": True}
-        blob_bad = pickle.dumps(model_bad)
-        meta_bad = {
-            "schema_version": _SCHEMA_VERSION,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.0",
-            "sklearn_version": "none",
-        }
-        self._insert_model(db_with_schema, "sync", blob_bad, "bad_hash", meta_bad)
-
-        scorer = AdaptiveScorerV2(db_path=str(db_with_schema))
-        # memos 应该加载成功
-        assert "memos" in scorer._models
-        # sync 应该加载失败但不抛异常
-        assert "sync" not in scorer._models
+        with pytest.raises(
+            PermissionError,
+            match="training_admission_receipt_required:load_model",
+        ):
+            scorer.load_model("profile")
+        with pytest.raises(
+            PermissionError,
+            match="training_admission_receipt_required:save_model",
+        ):
+            scorer.save_model("profile")
 
 
 # ==================== 新增：强制 sklearn 不可用时的纯 Python fallback ====================
 
+
 class TestSklearnUnavailableFallback:
-    def test_lightweight_backend_trains_and_predicts(self, monkeypatch, tmp_path):
-        """模拟 sklearn 不可用，验证 LightweightComplementNB 完整路径。"""
+    def test_lightweight_backend_trains_and_predicts(self, monkeypatch):
+        """Pure-Python scoring remains available without legacy persistence."""
         from core.scoring import adaptive_scorer_v2 as asv2
+        from core.scoring.lightweight_nb import LightweightComplementNB
 
-        # 强制 sklearn 不可用
         monkeypatch.setattr(asv2, "_SKLEARN_AVAILABLE", False)
-
-        db = tmp_path / "lightweight.db"
-        with sqlite3.connect(str(db)) as conn:
-            conn.execute("""
-                CREATE TABLE scorer_models (
-                    id INTEGER PRIMARY KEY,
-                    dimension TEXT, model_version TEXT, model_type TEXT,
-                    model_blob BLOB, model_hash TEXT, train_samples INTEGER,
-                    is_active INTEGER, created_at TEXT, meta_json TEXT
-                )
-            """)
-
-        # 显式指定 lightweight 后端（因为 _load_config 中的 _SKLEARN_AVAILABLE
-        # 在模块加载时解析，monkeypatch 不会 retroactive 影响已编译的 staticmethod）
-        scorer = asv2.AdaptiveScorerV2(db_path=str(db), config={"backend": "lightweight"})
+        scorer = asv2.AdaptiveScorerV2(config={"backend": "lightweight"})
         assert scorer.config["backend"] == "lightweight"
 
-        # 直接构造一个 LightweightComplementNB 训练（使用明显区分的特征）
-        from core.scoring.lightweight_nb import LightweightComplementNB
-        clf = LightweightComplementNB()
-        X = [
+        classifier = LightweightComplementNB()
+        features = [
             {"python": 5, "hello": 0},
             {"python": 4, "hello": 1},
             {"python": 0, "hello": 5},
             {"python": 1, "hello": 4},
         ]
-        y = [1, 1, 0, 0]
-        clf.fit(X, y)
+        labels = [1, 1, 0, 0]
+        classifier.fit(features, labels)
 
-        # 预测——不要求硬编码类别值，但同类应一致、异类应不同
-        preds = clf.predict(X)
-        assert preds[0] == preds[1]
-        assert preds[2] == preds[3]
-        assert preds[0] != preds[2]
+        predictions = classifier.predict(features)
+        assert predictions[0] == predictions[1]
+        assert predictions[2] == predictions[3]
+        assert predictions[0] != predictions[2]
+        probabilities = classifier.predict_proba([{"python": 5, "hello": 0}])[0]
+        assert pytest.approx(sum(probabilities.values()), abs=0.01) == 1.0
 
-        # predict_proba
-        probs = clf.predict_proba([{"python": 5, "hello": 0}])[0]
-        assert pytest.approx(sum(probs.values()), abs=0.01) == 1.0
-
-        # 保存到 scorer_models
-        scorer._models["memos"] = clf
-        version = scorer.save_model("memos", note="lightweight_test")
-        assert version.startswith("20")  # 时间戳格式
-
-        # 重新实例化并加载
-        scorer2 = asv2.AdaptiveScorerV2(db_path=str(db))
-        loaded = scorer2.load_model("memos")
-        assert loaded is not None
-        # 加载后应能继续预测
-        preds2 = loaded.predict([{"python": 5, "hello": 0}])
-        assert preds2[0] == preds[0]
+        scorer._models["profile"] = classifier
+        with pytest.raises(
+            PermissionError,
+            match="training_admission_receipt_required:save_model",
+        ):
+            scorer.save_model("profile", note="legacy-persistence-is-retired")
 
     def test_rule_score_works_without_sklearn(self, monkeypatch):
         """即使 sklearn 不可用，rule_score 仍应正常工作。"""
@@ -669,7 +522,52 @@ class TestSklearnUnavailableFallback:
         scorer = asv2.AdaptiveScorerV2()
         result = scorer.score(
             {"content": "test content", "frontmatter": {"heat": "warm"}},
-            dimensions=["memos"],
+            dimensions=["profile"],
         )
-        assert 0.0 <= result.scores["memos"] <= 1.0
+        assert 0.0 <= result.scores["profile"] <= 1.0
         assert result.model_version.startswith("v2")
+
+
+class TestSklearnPartialFit:
+    """[P1-3] 验证 standard backend 的 SklearnPartialFitNB 真正支持增量学习。"""
+
+    def test_sklearn_partial_fit_incremental(self, monkeypatch):
+        pytest.importorskip("sklearn")
+        from core.scoring.adaptive_scorer_v2 import SklearnPartialFitNB
+
+        # 第一批训练
+        model = SklearnPartialFitNB()
+        X1 = [{"a": 1, "b": 0}, {"a": 0, "b": 1}]
+        y1 = [0, 1]
+        model.fit(X1, y1)
+        preds1 = [model.predict([{"a": 1, "b": 0}])[0], model.predict([{"a": 0, "b": 1}])[0]]
+
+        # 第二批增量训练（加入新特征 c，验证旧特征不影响）
+        X2 = [{"a": 1, "b": 0, "c": 5}, {"a": 0, "b": 1, "c": 0}]
+        y2 = [0, 1]
+        model.partial_fit(X2, y2)
+
+        # 对旧样本的预测不应大幅退化
+        preds_after = [model.predict([{"a": 1, "b": 0}])[0], model.predict([{"a": 0, "b": 1}])[0]]
+        assert preds_after == preds1
+
+        # predict_proba 输出有效概率
+        proba = model.predict_proba([{"a": 1, "b": 0}])[0]
+        assert len(proba) == 2
+        assert pytest.approx(sum(proba), abs=0.01) == 1.0
+
+    def test_sklearn_partial_fit_survives_pickle(self, tmp_path):
+        pytest.importorskip("sklearn")
+        import pickle
+        from core.scoring.adaptive_scorer_v2 import SklearnPartialFitNB
+
+        model = SklearnPartialFitNB()
+        model.fit([{"x": 1}, {"x": 2}], [0, 1])
+
+        blob = pickle.dumps(model)
+        restored = pickle.loads(blob)
+
+        assert restored.is_fitted
+        restored.partial_fit([{"x": 3}], [1])
+        pred = restored.predict([{"x": 3}])
+        assert pred[0] == 1

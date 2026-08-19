@@ -1,0 +1,1412 @@
+{
+  "schema_version": "mnemos.cognitive_remediation_phase_0_ledger.v1",
+  "state": "COG025_SAFETY_REOPEN_IMPLEMENTED_PENDING_FINAL_EPOCH_AND_INCIDENT_AUTHORIZATION",
+  "recorded_at": "2026-07-12T17:19:48+0800",
+  "updated_at": "2026-07-24T16:00:00+0800",
+  "contract_authority_resolution_20260724": {
+    "record_type": "append_only_authority_resolution",
+    "legacy_field": "audit_contract.desktop_report",
+    "legacy_evidence_role": "historical_snapshot_not_current_gate",
+    "legacy_asset_id": "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+    "current_active_asset_id": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+    "current_active_path": "Mnemos-Phase0-7全局工程修复合同-2026-07-24.md",
+    "gate_owner": "document_asset_manifest.external_governing_assets"
+  },
+  "audit_contract": {
+    "desktop_report": "Mnemos认知链路审计与全量修复方案-2026-07-12.md",
+    "desktop_report_sha256": "5fed112e4dafc594b7bb64f971f0cbc26e3a7583a37cb5eba53ad600edac8498",
+    "baseline_commit": "dd60d1c7e4ee96f4982a7ec51acfe5b3bca6af6c",
+    "contract_test_commit": "c6e2fa23",
+    "implementation_commit": "4124100a",
+    "effective_config_sha256": "b8c752e62948b840a0e6564ee451522335a16dfb81e590b8fe875336f9102232",
+    "artifact_hashes": {
+      "cog025_frozen_baseline_source": {
+        "git_object": "dd60d1c7e4ee96f4982a7ec51acfe5b3bca6af6c:core/kia/ingest_helpers.py",
+        "sha256": "124dba725b66a7e8fb2c5b4afdee17169e5a4a8c91d1cff8a15a1c83ea8c5fdb"
+      },
+      "cog025_candidate_implementation": {
+        "path": "core/kia/ingest_helpers.py",
+        "sha256": "23006c97675a64eb1a7172847f26a8e506f19133bfa4375aa3a0cdba5358062b"
+      },
+      "cog025_contract_test": {
+        "path": "tests/unit/test_ingest_helpers_purity.py",
+        "sha256": "75370f157485e67f945f6451ff512221bfc226702c5ea91bc4ea902dd33533c2"
+      },
+      "cog046_manifest": {
+        "path": "docs/acceptance/cognitive_runtime_interface_manifest.json",
+        "sha256": "8d7834e6f141d3cab11f9ed9fe9af669cee849f9863920d5139f312505a7b1b3"
+      },
+      "cog046_auditor": {
+        "path": "scripts/audit_runtime_cognitive_interfaces.py",
+        "sha256": "8482c402efcc61daf1cba199c65e156513c197f4969711ad65cd9ea776e62dc3"
+      },
+      "cog046_mutation_tests": {
+        "path": "tests/unit/test_audit_runtime_cognitive_interfaces.py",
+        "sha256": "816925279762c2e751417778dbfcb99c1f17f05e5ee240016f4359cfcb512546"
+      }
+    }
+  },
+  "runtime_snapshot": {
+    "snapshot_id": "phase0-ledger-v1",
+    "daemon": {
+      "pid": 99678,
+      "command": "mnemos_daemon.py start",
+      "state": "running_pre_restart"
+    },
+    "agent_kit": {
+      "target_agents": 8,
+      "ready_agents": 8,
+      "conformant_agents": 8,
+      "runtime_full_power_agents": 0,
+      "status": "runtime_unverified"
+    },
+    "native_source_snapshot": {
+      "mode": "backfill_raw_event_store --dry-run",
+      "sessions": 989,
+      "turns": 86772,
+      "typed_empty": 19,
+      "failed": 0,
+      "by_agent": {
+        "claude": {
+          "sessions": 35,
+          "turns": 756,
+          "empty": 0
+        },
+        "codex": {
+          "sessions": 101,
+          "turns": 732,
+          "empty": 0
+        },
+        "crush": {
+          "sessions": 4,
+          "turns": 5,
+          "empty": 0
+        },
+        "hermes": {
+          "sessions": 384,
+          "turns": 5633,
+          "empty": 12
+        },
+        "kimi": {
+          "sessions": 416,
+          "turns": 79362,
+          "empty": 7
+        },
+        "kiro": {
+          "sessions": 1,
+          "turns": 3,
+          "empty": 0
+        },
+        "openclaw": {
+          "sessions": 8,
+          "turns": 14,
+          "empty": 0
+        },
+        "opencode": {
+          "sessions": 40,
+          "turns": 267,
+          "empty": 0
+        }
+      }
+    },
+    "integrity": {
+      "raw_events_db_readonly": "ok",
+      "producer_consumer_ledger_db_readonly": "ok",
+      "wiki_state_db": "ok_with_readonly_cli_open_failure",
+      "wiki_metrics_db": "ok_with_readonly_cli_open_failure"
+    },
+    "formal_state_warning": "A plain SQLite integrity fallback created or refreshed zero-length Wiki WAL/SHM sidecars after the read-only CLI could not open those files. No cleanup was performed; later production DB access is deferred until an explicitly read-only path is available."
+  },
+  "cog025_live_restart_snapshot": {
+    "snapshot_id": "phase0-cog025-live-20260712T184814+0800",
+    "authorization": "user explicitly authorized stop/restart and no-growth verification only",
+    "stop": {
+      "old_pid": 99678,
+      "command": "python3 mnemos_daemon.py stop",
+      "result": "SIGTERM unresponsive; identity-verified SIGKILL sent by the controlled daemon stop path; daemon then confirmed stopped",
+      "legacy_log_after_stop": {
+        "bytes": 72675706,
+        "lines": 170901,
+        "sha256": "354f0e46bd55bd18349e0b9052c3f595606fb8d42a74712b6d96b7b032901844",
+        "open_handle_count": 0
+      }
+    },
+    "start": {
+      "new_pid": 82215,
+      "command": "python3 mnemos_daemon.py start",
+      "daemon_status": "running",
+      "identity_match": true,
+      "running_commit": "8a5b572735cc",
+      "effective_config_sha256": "b8c752e62948b840a0e6564ee451522335a16dfb81e590b8fe875336f9102232"
+    },
+    "live_cycles": [
+      {
+        "cycle": 1,
+        "direct_helper_calls": 200000,
+        "backfill": {
+          "command": "backfill_raw_event_store.py --source codex,claude,hermes,opencode,openclaw,crush,kiro,kimi --dry-run --json",
+          "sessions": 991,
+          "turns": 86775,
+          "failed": 0,
+          "dry_run": true
+        },
+        "readiness": {
+          "command": "audit_cognitive_readiness.py --json --budget",
+          "ok": false,
+          "budget_ok": false,
+          "side_effects": "none",
+          "disposition": "pre-existing cognitive readiness gaps remain visible and were not repaired or hidden"
+        }
+      },
+      {
+        "cycle": 2,
+        "direct_helper_calls": 200000,
+        "backfill": {
+          "command": "backfill_raw_event_store.py --source codex,claude,hermes,opencode,openclaw,crush,kiro,kimi --dry-run --json",
+          "sessions": 991,
+          "turns": 86775,
+          "failed": 0,
+          "dry_run": true
+        },
+        "readiness": {
+          "command": "audit_cognitive_readiness.py --json --budget",
+          "ok": false,
+          "budget_ok": false,
+          "side_effects": "none",
+          "disposition": "pre-existing cognitive readiness gaps remain visible and were not repaired or hidden"
+        }
+      }
+    ],
+    "legacy_log_final": {
+      "bytes": 72675706,
+      "lines": 170901,
+      "sha256": "354f0e46bd55bd18349e0b9052c3f595606fb8d42a74712b6d96b7b032901844",
+      "open_handle_count": 0,
+      "matches_pre_restart_snapshot": true
+    },
+    "verdict": "COG-025 production verification passed; no cleanup or production reconcile apply was performed"
+  },
+  "rolling_log_snapshot": {
+    "classification": "rule_scorer_bypass_log",
+    "bytes": 72597623,
+    "lines": 170751,
+    "rolling_sha256": "ba9e6d647ea4fe3bfa243c616ad98173de232e74d058ca9f257a2bedb1d65ba4",
+    "writer_pid": 99678,
+    "stable_hash": false,
+    "retention_action": "none_without_user_authorization"
+  },
+  "production_reconcile_dry_runs": [
+    {
+      "command": "reconcile_distill_execution_checkpoints --json",
+      "mode": "dry_run",
+      "result": "ok",
+      "evidence": {
+        "affected_sessions": 9,
+        "legacy_rows": 111,
+        "schema_state": "execution_spec_v2"
+      }
+    },
+    {
+      "command": "reconcile_pipeline_receipts",
+      "mode": "dry_run",
+      "result": "gap",
+      "evidence": {
+        "reconciliation_gap": 2,
+        "duplicate_worker_raw_rows": 2,
+        "safe_to_remove": 2
+      }
+    },
+    {
+      "command": "reconcile_policy_patch_triggers --json",
+      "mode": "dry_run",
+      "result": "ok",
+      "evidence": {
+        "scanned": 140,
+        "changed": 0
+      }
+    },
+    {
+      "command": "reconcile_raw_revision_provenance --json",
+      "mode": "dry_run",
+      "result": "gap",
+      "evidence": {
+        "raw_turns": 10423,
+        "revisions": 10425,
+        "provenance_gaps": 760
+      }
+    },
+    {
+      "command": "reconcile_relation_evidence_schema --json",
+      "mode": "dry_run",
+      "result": "ok",
+      "evidence": {
+        "classification": "canonical",
+        "row_count": 10824,
+        "migration_required": false
+      }
+    },
+    {
+      "command": "reconcile_access_metadata",
+      "mode": "dry_run",
+      "result": "needs_apply",
+      "evidence": {
+        "total": 7028,
+        "proven": 4349,
+        "restricted": 2679,
+        "would_change": 7021,
+        "unresolved": 0
+      }
+    },
+    {
+      "command": "reconcile_recap_consumption --json",
+      "mode": "dry_run",
+      "result": "ok",
+      "evidence": {
+        "recap_tasks": 63,
+        "existing_consumption_plans": 0,
+        "schema_changes_required": 0
+      }
+    },
+    {
+      "command": "reconcile_wiki_projections --json",
+      "mode": "dry_run",
+      "result": "gap",
+      "evidence": {
+        "mutation_count": 29713,
+        "receipt_count": 137248,
+        "projection_gap": 7316
+      }
+    },
+    {
+      "command": "reconcile_wiki_quality --json",
+      "mode": "dry_run",
+      "result": "gap",
+      "evidence": {
+        "pages": 3374,
+        "broken_link": 41,
+        "missing_meta": 146,
+        "orphan": 1
+      }
+    }
+  ],
+  "functional_matrix_baseline": {
+    "command": "run_cognitive_behavior_scenarios.py --json",
+    "scenario_count": 10,
+    "test_file_count": 30,
+    "passed": 285,
+    "result": "pass",
+    "interpretation": "Frozen fixture behavior passes; this is not a production-effect certificate."
+  },
+  "performance_baseline": {
+    "kind": "same hermetic smoke dataset; insufficient for final COG-040 capacity certification",
+    "dataset": "tests/benchmark/test_benchmark_sync.py",
+    "dataset_sha256": "e490d978c77b80eaca397050f5c05fc11c6740b4f93940c5855338d24b39e68c",
+    "machine": {
+      "architecture": "arm64",
+      "os_version": "15.7.4",
+      "cpu": "Apple M4 Pro",
+      "python": "3.12.13"
+    },
+    "baseline_measurements": {
+      "sync_session_5_turn": {
+        "mean_ms": 5.3,
+        "p95_ms": 6.3,
+        "budget_ms": 500
+      },
+      "sync_batch_10x3": {
+        "elapsed_ms": 29.9,
+        "budget_ms": 3000
+      }
+    },
+    "candidate_measurements": {
+      "sync_session_5_turn": {
+        "mean_ms": 5.9,
+        "p95_ms": 6.7,
+        "budget_ms": 500
+      },
+      "sync_batch_10x3": {
+        "elapsed_ms": 34.7,
+        "budget_ms": 3000
+      }
+    },
+    "result": "pass_existing_smoke_only"
+  },
+  "root_status": {
+    "COG-025": {
+      "state": "PRODUCTION_VERIFIED",
+      "contract": "tests/unit/test_ingest_helpers_purity.py",
+      "old_code_reproducer": {
+        "contract_commit": "c6e2fa23",
+        "command": "pytest tests/unit/test_ingest_helpers_purity.py::test_ingest_helper_hot_paths_are_filesystem_pure_and_do_not_leak_content -q",
+        "result": "expected_fail",
+        "evidence": "macOS sandbox-exec denied the old Config path creating hermetic ~/.mnemos/logs with PermissionError"
+      },
+      "candidate_result": {
+        "command": "pytest tests/unit/test_ingest_helpers_purity.py -q",
+        "result": "2 passed",
+        "filesystem_write_count": 0,
+        "created_paths": 0,
+        "modified_paths": 0,
+        "content_preview_field": 0,
+        "raw_workload_occurrences": 0,
+        "os_write_guard": "macOS sandbox-exec deny file-write* plus Python audit hook"
+      },
+      "causal_boundary": "Default helper calls no longer construct RuleScorer or configure a FileHandler; explicit RuleScorer owners remain unchanged.",
+      "production_verification": "Authorized restart plus two live full-source backfill/readiness cycles, 400000 direct helper calls, exact legacy-log snapshot equality, and zero legacy-log handles.",
+      "remaining_boundary": "Longer soak and any old-log retention disposition remain separate work; this authorization did not include cleanup."
+    },
+    "COG-046": {
+      "state": "CONTRACT_LOCKED",
+      "manifest": "docs/acceptance/cognitive_runtime_interface_manifest.json",
+      "auditor": "scripts/audit_runtime_cognitive_interfaces.py",
+      "mutation_tests": "tests/unit/test_audit_runtime_cognitive_interfaces.py",
+      "baseline_result": {
+        "required_interfaces": 11,
+        "declared_runtime_receipts": 3,
+        "runtime_receipt_gap": 8,
+        "blocking_count": 11,
+        "ok": false
+      },
+      "contract": {
+        "scoped_callsites": true,
+        "unknown_registry_or_runtime_id_blocks": true,
+        "baseline_required_cannot_be_optional_or_contract_only": true,
+        "eligible_denominator_unknown_allowed": false,
+        "target_effect_requires_before_after_hash_and_reciprocal_receipt": true,
+        "release_gate": "contract_locked_deferred_until_COG-042"
+      },
+      "mutation_result": "9 passed",
+      "release_gate": "not integrated before COG-042; integration while intentionally red would be false completion"
+    }
+  },
+  "challenger_review": {
+    "standards_review": {
+      "finding": "CLI main docstring missing",
+      "disposition": "fixed before contract commit"
+    },
+    "spec_review": {
+      "findings": [
+        "COG-025 proof needed OS-level write guard, existing-file detection, plaintext/content-preview checks, and a frozen old-code reproducer.",
+        "COG-046 needed scoped callsites, unknown registry/runtime IDs as blockers, and mutations for optionality, eligibility, unchanged target, and gate runner.",
+        "Closure evidence needed immutable artifact hashes and challenger disposition."
+      ],
+      "disposition": "all Phase 0 contract findings addressed; no future target-store reader, full-score integration, or capacity certificate was falsely claimed complete"
+    }
+  },
+  "desktop_system_map_status": {
+    "command": "audit_desktop_system_map_facts --require-present --json",
+    "result": "preexisting_stale_current_state",
+    "findings": [
+      "stale_current_state_commit",
+      "missing_successful_validation_command"
+    ],
+    "document_asset_manifest": {
+      "unverified": 14,
+      "rules": [
+        "stale_desktop_generated_commit",
+        "stale_desktop_current_state"
+      ]
+    },
+    "disposition": "Do not hand-patch generated 86-99 scan artifacts. Regeneration requires a clean verified commit and a successful local-gate receipt; no generator is currently tracked in the repository."
+  },
+  "verification": {
+    "targeted": {
+      "command": "pytest ingest helpers, purity, runtime-interface audit, and sync paths",
+      "passed": 132
+    },
+    "behavior_matrix": {
+      "command": "run_cognitive_behavior_scenarios.py --json",
+      "passed": 285
+    },
+    "benchmark": {
+      "command": "pytest tests/benchmark/test_benchmark_sync.py -q -s",
+      "passed": 2
+    },
+    "quick": {
+      "command": "scripts/run_tests.py quick",
+      "passed": 5787,
+      "subtests": 15,
+      "duration_seconds": 711.26,
+      "environment_hash": "4b6ff79febe4c76a668b1a7cce1a14c7e9448ebc04b47574cebe815cb2947d32",
+      "outside_write_count": 0,
+      "formal_state_diff": []
+    },
+    "cog025_live_verification": {
+      "daemon_restart": "passed",
+      "direct_helper_calls": 400000,
+      "full_source_backfill_dry_run_cycles": 2,
+      "readiness_audit_cycles": 2,
+      "legacy_log_snapshot_unchanged": true,
+      "legacy_log_open_handle_count": 0
+    },
+    "expected_red_contract": {
+      "command": "audit_runtime_cognitive_interfaces.py --strict --json",
+      "ok": false,
+      "reason": "Phase 0 locks independent detection before runtime-effect remediation"
+    },
+    "supporting_gates": {
+      "test_suite_denominator": {
+        "command": "audit_test_suite_denominator.py --strict --json",
+        "ok": true,
+        "discovered": 482,
+        "assigned": 482,
+        "layers": {
+          "quick": 417,
+          "integration": 59,
+          "heavy": 6
+        }
+      },
+      "trusted_push_static_scan": {
+        "command": "python3 -m core.trust.static_scan --json",
+        "ok": true,
+        "direct_write_sites": 169,
+        "unknown": 0,
+        "stale_registry": 0
+      },
+      "sensitive_literal_audit": {
+        "command": "audit_repo_sensitive_literals.py --strict",
+        "ok": true
+      },
+      "document_asset_manifest": {
+        "command": "audit_document_asset_manifest.py --strict --desktop-mode required --json",
+        "ok": false,
+        "preexisting_findings": 14,
+        "disposition": "generated Desktop 86-99 evidence remains stale; no tracked generator exists, so no hand patch was made"
+      }
+    },
+    "unavailable_optional_linter": "python3 -m ruff is not installed in the active interpreter"
+  },
+  "authorization_boundary": {
+    "production_reconcile_apply": "not authorized and not performed",
+    "daemon_stop_or_restart": "explicitly authorized and performed solely for COG-025 verification; old PID 99678 stopped and PID 82215 started",
+    "backup_or_log_cleanup": "not authorized and not performed",
+    "production_db_or_raw_content_mutation": "no manual migration, reconcile apply, cleanup, or raw-content mutation was performed; authorized daemon startup ran its normal lifecycle initialization"
+  },
+  "phase0_reopen_20260724": {
+    "parent_root_id": "COG-025",
+    "work_package": "WP-COG-025-SAFETY",
+    "state": "SAFETY_SEAM_IMPLEMENTED_INCIDENT_AUTH_BLOCKED",
+    "trigger": "GLOB-001",
+    "contract_sha256": {
+      "handoff": "789f978ba397e7495780f4fa3b677c2dcdb4760c378de8329898fa7556d0936c",
+      "governing": "889adbe845210d6b204b07d1bc315a60b8214b166edee55a4d61f40ef97ec44b"
+    },
+    "frozen_repo_head": "875d37183db0704294d09298159a0d2ef6c0ad37",
+    "old_code_reproducer": {
+      "command": ".venv/bin/python -m pytest tests/unit/cognitive/test_calibration_lineage_audit.py::test_calibration_lineage_cli_does_not_fall_back_to_formal_state -q",
+      "runs": 2,
+      "result": "deterministic expected failure",
+      "observed_side_effect": "CLI report returned ok=true while the configured formal MNEMOS_DIR was created"
+    },
+    "implementation": {
+      "audit_execution_environment": {
+        "path": "core/ops/audit_run.py",
+        "sha256": "13e3d3bc3273ebfc256610222a20802b2e97c01e6e682e10febbec6bd6c34321",
+        "isolated_adapter": "reuses HermeticRunEnvironment and injects explicit WikiProjectionLedger, EventBus, lifecycle, ownership config, root and config",
+        "production_readonly_adapter": "explicit targets, typed uninitialized, content signatures for DB/WAL/SHM and projection files, directory-structure signatures, fail-closed post-check"
+      },
+      "direct_path": {
+        "path": "scripts/audit_cognitive_calibration_lineage.py",
+        "sha256": "f0934fdebc1d22ef2957eef438f32d4828659e17ad37490b738e2ecc87faae0c"
+      },
+      "event_bus_explicit_projection_path": {
+        "path": "core/mnemos_bus.py",
+        "sha256": "407d549da29248878b35b3ce2878d35b6f65a10a47a825d1c17556fb6b6dd1b5"
+      }
+    },
+    "verification": {
+      "targeted_tests": {
+        "result": "41 passed",
+        "scope": "audit run, calibration audit, EventBus reconciliation mode and Wiki projection lifecycle"
+      },
+      "test_suite_denominator": {
+        "result": "ok=true",
+        "discovered": 623,
+        "assigned": 623,
+        "missing": 0,
+        "extra": 0,
+        "overlap": 0
+      },
+      "macos_os_write_deny": {
+        "command": "sandbox-exec deny file-write* except the audit-owned run root; parent-created owner-writable sentinel is bound by device, inode and SHA-256 outside the allow root",
+        "result": "1 passed",
+        "formal_write_attempts": 0
+      },
+      "production_readonly_audit": {
+        "command": ".venv/bin/python scripts/audit_cognitive_calibration_lineage.py --strict --json",
+        "result": "ok=true",
+        "calibrated_observation_count": 1521,
+        "current_calibration_record_count": 1521,
+        "zero_budget_metric_failures": 0,
+        "synthetic_outside_write_count": 0,
+        "production_outside_write_count": 0,
+        "formal_state_diff": []
+      }
+    },
+    "incident_disposition_plan": {
+      "plan_id": "M-SAF-INCIDENT-GLOB-001-20260724",
+      "mode": "append_only_plan_only",
+      "authorization": "not granted",
+      "known_exact_rows": [
+        {
+          "generation_id": "projection-generation-cfb092a019c850740e631fba009ab917a051c520",
+          "mutation_id": "wiki-mut-f4103e402008883487dc918d",
+          "sequence_no": 41896,
+          "event_id": 111915,
+          "scope": "/private/var/folders/8x/yx74ydg91v7dkxdc0hv7g59h0000gn/T/mnemos-calibration-audit-toiy8ayk/wiki/L3-Observations"
+        },
+        {
+          "generation_id": "projection-generation-f90352fec69b0a96f960b53df5c41d0da00bcaa2",
+          "mutation_id": "wiki-mut-0ce9cd71d6007e7a759571a3",
+          "sequence_no": 41897,
+          "event_id": 111916,
+          "scope": "/private/var/folders/8x/yx74ydg91v7dkxdc0hv7g59h0000gn/T/mnemos-calibration-audit-yi7jw5xw/wiki/L3-Observations"
+        }
+      ],
+      "known_incomplete_evidence": {
+        "earlier_same_class_sequence_no": 41895,
+        "earlier_same_class_event_id": 111914,
+        "leased_event_count": 1000,
+        "lease_owner_snapshot": "eventbus-6ee259bf9a64450a9d4a337c49831f4e",
+        "disposition": "exact row set and current legal consumption state must be frozen under a separately authorized quiesced evidence epoch"
+      },
+      "forbidden_without_authorization": [
+        "DELETE",
+        "UPDATE",
+        "receipt fabrication",
+        "daemon stop or start",
+        "migration or reconciliation apply",
+        "cleanup"
+      ],
+      "authorized_future_sequence": [
+        "quiesce writers",
+        "SQLite backup API plus integrity evidence for events.db and wiki_projection.db",
+        "freeze exact generation, mutation, event and lease-affected rows",
+        "classify current consumption state",
+        "append-only correction or recovery plan",
+        "dry-run",
+        "first apply with conservation evidence",
+        "same-plan second apply delta=0",
+        "post-apply dry-run gap=0",
+        "integrity, foreign-key and restore-drill evidence"
+      ],
+      "current_action": "none"
+    },
+    "closure_boundary": {
+      "safety_seam": "implemented and locally verified",
+      "incident_disposition": "plan frozen; apply blocked by authorization",
+      "final_evidence_epoch": "not issued",
+      "root_claim": "not final release closure"
+    },
+    "desktop_sync": {
+      "handoff_sha256": "88a4bc0f29fab0570f52ee947682039c3afc5b176aac0bebca9db58a09d63f3a",
+      "governing_sha256": "b822af8c71c4e854b75f552e4dddd4b0118d179a3b490f074009095045988b67"
+    }
+  },
+  "phase0_cog040_baseline_20260724": {
+    "parent_root_id": "COG-040",
+    "work_package": "WP-COG-040-P0-BASELINE",
+    "source_commit": "848b6795c67b48f9e69c64cf55e09145bf3f8bd4",
+    "state": "BASELINE_CONTRACT_FROZEN_NOT_PHASE7_CLOSED",
+    "artifacts": {
+      "contract_owner": {
+        "path": "core/ops/cognitive_performance_baseline.py",
+        "sha256": "4997a5a097ebf54dfcb7030defa175c10013a5432d20ca587f2bfd3bef5a54f3"
+      },
+      "audit": {
+        "path": "scripts/audit_cognitive_performance_baseline.py",
+        "sha256": "2e55eea923453c44219f8117adb518d16a4d5b3890cc09ebbcf830dec75e3347"
+      },
+      "manifest": {
+        "path": "docs/acceptance/cognitive_performance_manifest.json",
+        "sha256": "b3fffae706e66d6b6de557cb3b85e32da08fea5b1c6c3feb33621a8b294fcbbf"
+      },
+      "tests": {
+        "path": "tests/unit/ops/test_cognitive_performance_baseline.py",
+        "sha256": "3652a7206a486e70cd49048e9c713d7298af0f388ea22804b5990897c31ec13d"
+      }
+    },
+    "frozen_contract": {
+      "datasets": 3,
+      "workloads": 3,
+      "hardware_fingerprint_sha256": "36a6c56963626d020f9c08f341fe07247a442de8ce0cfaebe9bcd57477fa8604",
+      "configuration_fingerprint_sha256": "00751bfd5882c02e67b286c23887c20df571da0419d40b678081703dadac072d",
+      "contract_fingerprint_sha256": "c5aa99b6a94d1a6fd7e2bf786e5e4c49a6d23c9c538c845ffab8ca82441ae134",
+      "cold_fresh_process_repetitions": 5,
+      "hot_repetitions": 12,
+      "independent_runs": 5,
+      "max_cv": 0.15,
+      "p95_relative_regression_budget": 0.1,
+      "peak_rss_relative_regression_budget": 0.15,
+      "api_credentials": "not_inherited",
+      "network": "disabled_by_contract",
+      "formal_state": "must_not_be_read_or_written"
+    },
+    "current_baseline": {
+      "benchmark_command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 plus the nine exact manifest node IDs",
+      "result": "9 passed in 316.53s",
+      "sync_session_5_turn_hot": {
+        "mean_ms": 20.8,
+        "p95_ms": 25.0,
+        "absolute_budget_ms": 500.0
+      },
+      "sync_batch_10x3_hot": {
+        "elapsed_ms": 132.0,
+        "absolute_budget_ms": 3000.0
+      },
+      "interpretation": "single-run hermetic smoke plus bounded functional capacity; not regression-certifying"
+    },
+    "denominators": {
+      "functional": {
+        "observed": 9,
+        "status": "hermetic_smoke_passed"
+      },
+      "recall": {
+        "observed": 0,
+        "status": "missing_phase7_evidence",
+        "release_blocking": true
+      },
+      "acl": {
+        "observed": 0,
+        "status": "missing_phase7_evidence",
+        "release_blocking": true
+      },
+      "effect": {
+        "observed": 0,
+        "status": "missing_phase7_evidence",
+        "release_blocking": true
+      }
+    },
+    "verification": {
+      "red": "module absent before implementation; contract test failed at collection",
+      "unit": "10 passed",
+      "audit": {
+        "ok": true,
+        "datasets": 3,
+        "workloads": 3,
+        "functional_observed": 9,
+        "missing_phase7_evidence": 4
+      },
+      "test_suite_denominator": {
+        "ok": true,
+        "discovered": 624,
+        "assigned": 624,
+        "missing": 0,
+        "extra": 0,
+        "overlap": 0
+      },
+      "format_lint_types": "black, flake8 and isolated mypy passed"
+    },
+    "challenger_review": {
+      "initial_findings": [
+        "25% relative regression budget weakened the governing 10% P95 and 15% RSS hard gates",
+        "functional denominator accepted shrinkage and nonexistent node IDs",
+        "workload, protocol, source commit and safe configuration fields were not fully fail-closed",
+        "pytest plugin auto-discovery could change the frozen nine-node population",
+        "invalid numeric protocol fields could raise instead of returning typed errors"
+      ],
+      "disposition": "fixed by exact canonical fingerprint, safe config and source binding, plugin-disabled exact node selector, AST node validation, exact 9/9 denominator and hard workload/protocol semantics",
+      "final_standards_review": "no remaining P0/P1 blocker",
+      "final_adversarial_review": "no remaining P0/P1 blocker"
+    },
+    "desktop_sync": {
+      "handoff_sha256": "bb450f2c8fc4c612a051852b9ec8986f5bfbf5e7f06ba94b281427f607d01a6d",
+      "governing_sha256": "a833887408d8e29a283ea4749a6dc15d0863012b05b2aa2cfbef1f25015ffe15"
+    },
+    "closure_boundary": {
+      "performance_certificate_eligible": false,
+      "phase7_root_closed": false,
+      "missing": [
+        "formal_performance_runner",
+        "recall_acl_effect_oracle",
+        "queue_fairness_starvation",
+        "2h_24h_soak"
+      ],
+      "next_allowed": "WP-COG-046-P0-DENOMINATOR-LOCK after local COG-040 contract commit"
+    }
+  },
+  "phase0_cog046_denominator_lock_20260724": {
+    "parent_root_id": "COG-046",
+    "work_package": "WP-COG-046-P0-DENOMINATOR-LOCK",
+    "source_commit": "92c832673059fe659269211d219a1af4caa59e70",
+    "implementation_commit": "566b73ac4189553dee824d881cdd28c69206ce3b",
+    "state": "P0_DENOMINATOR_LOCK_IMPLEMENTED_PHASE7_OPEN",
+    "execution_seam": {
+      "owner": {
+        "path": "core/ops/gate_execution.py",
+        "sha256": "6eac97abcd92b0d458fe9bca1ac63a5290c9739706aa5f7df224e775162d9939"
+      },
+      "gate_audit": {
+        "path": "scripts/audit_gate_hermeticity.py",
+        "sha256": "e953a46e8b3357c4b8753dc18d1c026fdb1320c0f0b786e81323b1c7913923c0"
+      },
+      "contract": [
+        "one absent unique HermeticRunEnvironment per gate",
+        "macOS sandbox-exec deny file-write outside the exact gate root",
+        "typed Python or exact pytest selector; skip and xfail are semantic failures",
+        "hash-bound structured baseline and candidate execute through one hash-bound oracle at neutralized input paths",
+        "only the declared exact semantic removal plus baseline-pass and candidate-kill can receive mutation credit"
+      ],
+      "targeted_result": "77 Phase 0 owner/gate/governance/document/interface/calibration tests passed"
+    },
+    "governance_generator": {
+      "path": "scripts/generate_phase0_governance_contracts.py",
+      "sha256": "240f4a5ef7ba4e5f38a164652ee1b07dfbbe0609b63679fc592724e22c079fd9",
+      "check_result": {
+        "ok": true,
+        "root_count": 50,
+        "finding_count": 38,
+        "interface_count": 13,
+        "release_eligible": false
+      }
+    },
+    "denominators": {
+      "root_dag": {
+        "count": 50,
+        "sha256": "97b8f4b7e2bd54fd72c878db9c64d7f81293b6daad5b07338153afea37cb8592"
+      },
+      "root_change_budgets": {
+        "count": 50,
+        "sha256": "7357fbe01a414f884ac077d197766e171229225d32b4cd36ebeecd67e3580caa"
+      },
+      "finding_overlay": {
+        "count": 38,
+        "sha256": "2859ddd1dc13258f7c3a2c137daca2d0ce2089f234fa92eed66048d62283aa5b"
+      },
+      "root_closure_projection": {
+        "count": 50,
+        "jsonl_sha256": "322d24b6b49893c3bfec1b4441c365ac7afd8da3cd4d2600cbf323e57ed73a94",
+        "index_sha256": "9f6389012664133b92280d016eb21af2caf2e95151726c3eb1d159ad0d50c364"
+      },
+      "runtime_interfaces": {
+        "required": 13,
+        "registry": 13,
+        "declared_runtime_receipts": 3,
+        "blocking_count": 13,
+        "status": "EXPECTED_RED_MISSING_INDEPENDENT_EFFECT_EVIDENCE",
+        "manifest_sha256": "19cbe6daebf7ccb139166659d08995278489cd70128f2070c854020aceeea7a2",
+        "auditor_sha256": "fbbe2fb06030c1ac92cb16d7b11ea67d645cca11e53248b621b719efbeb87998"
+      },
+      "schema_inventory": {
+        "count": 127,
+        "unregistered": 124,
+        "status": "EXPLICIT_RED",
+        "sha256": "fd5feb95459e117d602c53c6668d7782f534216dfe019475853f97e3066b4d49"
+      },
+      "requirement_test": {
+        "count": 126,
+        "status": "UNREGISTERED_RELEASE_BLOCKING",
+        "sha256": "d7ccf6d6b1afc359ef403121d8aa792166ac89fe4e0ef1f96a503025cedc7d72"
+      },
+      "audit_artifacts": {
+        "count": 82,
+        "unregistered": 82,
+        "status": "EXPLICIT_RED",
+        "sha256": "4ff16a9d4a6c8c0622ff36b53cae02150a9f4e61eb0e3c32bc80f82e05f2af42"
+      },
+      "migrations": {
+        "count": 100,
+        "status": "UNREGISTERED_RELEASE_BLOCKING",
+        "sha256": "3745d902a03a93cf4a0f37127cd950492bbe3addd4edf1f446ba96c894c4b93a"
+      },
+      "release_certificates": {
+        "required": 6,
+        "missing": 6,
+        "release_eligible": false,
+        "sha256": "26574ba2fbbffb2c9acf91a66e0d2af03f9c1e3ef62c615a3bd541e2f88e81ca"
+      }
+    },
+    "document_assets": {
+      "manifest_sha256": "bf45e6e45100e0f1349441ec49522d32d902b98db8a6dbbc8e37171353f56dbc",
+      "external_governing_assets": 2,
+      "final_byte_hash_owner": "detached_closure_bundle_only",
+      "preexisting_desktop_strict_status": "14 stale generated findings remain; no generated 86-99 hand patch"
+    },
+    "desktop_sync": {
+      "handoff_sha256": "c630cb1571c5b1d13bbe12582629075a9b17fcedba2371b97fda6935be5e50be",
+      "governing_sha256": "1faab67b9f91ba0d74e7eabd5a58d4acc42dad27936a6a10488708ee290bb19c"
+    },
+    "verification": {
+      "targeted": "77 passed",
+      "quick": {
+        "result": "7483 passed, 15 subtests passed",
+        "duration_seconds": 2201.73,
+        "profile": "isolated",
+        "environment_hash": "49da960a867bdc4f51c2af3ffab26d0716e76d4b958feff612b2f4c0d6da5b81",
+        "outside_write_count": 0,
+        "formal_state_diff": []
+      },
+      "test_suite_denominator": {
+        "ok": true,
+        "discovered": 626,
+        "assigned": 626,
+        "missing": 0,
+        "extra": 0,
+        "overlap": 0
+      },
+      "format_lint_types": "black, flake8 and isolated mypy passed"
+    },
+    "challenger_review": {
+      "standards_and_adversarial": "no remaining P0/P1 implementation or contract blocker",
+      "closed_counterexamples": [
+        "whole-file, nonexistent-node, argv, skip and xfail pytest selectors",
+        "name-only or filename-only mutation credit",
+        "self-certified Root order, finding owner, support and downstream governance",
+        "closure state, Phase 7, release and production-effect overclaim",
+        "shrinkable gate, interface, certificate, schema, requirement, artifact and mutation/migration denominators",
+        "stale ledger code, generated artifact, denominator and Desktop evidence"
+      ]
+    },
+    "closure_boundary": {
+      "phase0_minimum_trustworthy_seam": "implemented",
+      "cog046_phase7_closed": false,
+      "release_eligible": false,
+      "production_effect": "not verified",
+      "production_mutation": "not authorized and not performed",
+      "next_allowed": "Phase 1 COG-045 only after independent challenger, docs sync and local commit"
+    }
+  },
+  "contract_governance_migration_20260724": {
+    "record_type": "append_only_contract_governance_generation",
+    "recorded_at": "2026-07-24T22:15:00+08:00",
+    "scope": "contract_governance_only",
+    "observed_base_commit": "25b38511f4eb0624919aa865b15f84d636c5848c",
+    "implementation_commit_owner": "git_commit_and_detached_closure_bundle",
+    "supersedes_evidence_record": "phase0_cog046_denominator_lock_20260724",
+    "state": "SINGLE_ACTIVE_CONTRACT_GOVERNANCE_IMPLEMENTED_PHASE1_NOT_STARTED",
+    "historical_record_hashes": {
+      "phase0_reopen_20260724": "d3f4d2fa7b82870d4e5ae3e0ea90c10ed38b49d74f74d0073ae00766cb3d8c83",
+      "phase0_cog040_baseline_20260724": "70e8792a587f3382b61eb78c7bef3e40cef2b23bba12c9f85548aef1eefce2b2",
+      "phase0_cog046_denominator_lock_20260724": "86683ca60a4f2d421cfca2e96c19612acc9a653fac09391805e6330ea2f18555"
+    },
+    "projection_generation": {
+      "mutation_policy": "replaceable_generated_current_index_with_append_only_generation_chain",
+      "previous": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v1",
+        "count": 50,
+        "jsonl_sha256": "322d24b6b49893c3bfec1b4441c365ac7afd8da3cd4d2600cbf323e57ed73a94",
+        "index_sha256": "9f6389012664133b92280d016eb21af2caf2e95151726c3eb1d159ad0d50c364"
+      },
+      "current": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v2",
+        "count": 50,
+        "jsonl_sha256": "ee6455fb22005dec63d753a6f248e8347d768d017844256284f52858a6eaad7e",
+        "index_sha256": "7e356fd7d98bf6f83dce77ec52ea3c65da7efaae146214bd43b4260f410808db"
+      }
+    },
+    "governance_generator": {
+      "path": "scripts/generate_phase0_governance_contracts.py",
+      "sha256": "805039d9f932c2b6cde7796318035d6e9f4752df3cd6479388f5ecf9c689fc29",
+      "check_result": {
+        "ok": true,
+        "root_count": 50,
+        "finding_count": 38,
+        "interface_count": 13,
+        "release_eligible": false
+      }
+    },
+    "denominators": {
+      "root_dag": {
+        "count": 50,
+        "sha256": "97b8f4b7e2bd54fd72c878db9c64d7f81293b6daad5b07338153afea37cb8592"
+      },
+      "root_change_budgets": {
+        "count": 50,
+        "sha256": "7357fbe01a414f884ac077d197766e171229225d32b4cd36ebeecd67e3580caa"
+      },
+      "finding_overlay": {
+        "count": 38,
+        "sha256": "2859ddd1dc13258f7c3a2c137daca2d0ce2089f234fa92eed66048d62283aa5b"
+      },
+      "root_closure_projection": {
+        "count": 50,
+        "jsonl_sha256": "ee6455fb22005dec63d753a6f248e8347d768d017844256284f52858a6eaad7e",
+        "index_sha256": "7e356fd7d98bf6f83dce77ec52ea3c65da7efaae146214bd43b4260f410808db"
+      },
+      "runtime_interfaces": {
+        "required": 13,
+        "registry": 13,
+        "declared_runtime_receipts": 3,
+        "blocking_count": 13,
+        "status": "EXPECTED_RED_MISSING_INDEPENDENT_EFFECT_EVIDENCE",
+        "manifest_sha256": "19cbe6daebf7ccb139166659d08995278489cd70128f2070c854020aceeea7a2",
+        "auditor_sha256": "fbbe2fb06030c1ac92cb16d7b11ea67d645cca11e53248b621b719efbeb87998"
+      },
+      "schema_inventory": {
+        "count": 127,
+        "unregistered": 124,
+        "status": "EXPLICIT_RED",
+        "sha256": "5feae0b1d7c9e6324211b6acea4b08c4a2a0ba5a8a3589b108285520e36d22f5"
+      },
+      "requirement_test": {
+        "count": 126,
+        "status": "UNREGISTERED_RELEASE_BLOCKING",
+        "sha256": "d7ccf6d6b1afc359ef403121d8aa792166ac89fe4e0ef1f96a503025cedc7d72"
+      },
+      "audit_artifacts": {
+        "count": 82,
+        "unregistered": 82,
+        "status": "EXPLICIT_RED",
+        "sha256": "4ff16a9d4a6c8c0622ff36b53cae02150a9f4e61eb0e3c32bc80f82e05f2af42"
+      },
+      "migrations": {
+        "count": 100,
+        "status": "UNREGISTERED_RELEASE_BLOCKING",
+        "sha256": "3745d902a03a93cf4a0f37127cd950492bbe3addd4edf1f446ba96c894c4b93a"
+      },
+      "release_certificates": {
+        "required": 6,
+        "missing": 6,
+        "release_eligible": false,
+        "sha256": "26574ba2fbbffb2c9acf91a66e0d2af03f9c1e3ef62c615a3bd541e2f88e81ca"
+      }
+    },
+    "document_assets": {
+      "manifest_sha256": "f5516afeded5e0c9729180f961bf7e6f094a3f5742a255b1e499555b5b5d0595",
+      "external_governing_assets": 1,
+      "external_historical_assets": 1,
+      "renamed_predecessors": 1,
+      "final_byte_hash_owner": "detached_closure_bundle_only",
+      "preexisting_desktop_strict_status": "14 stale generated findings remain; no generated 86-99 hand patch"
+    },
+    "contract_authority": {
+      "active_asset_id": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+      "active_path": "Mnemos-Phase0-7全局工程修复合同-2026-07-24.md",
+      "active_source_section_sha256": "44bcadfbd368c85ac7a86f479134dff61300803d7178bda37cb7ecf0425c2c33",
+      "active_final_byte_hash_owner": "detached_closure_bundle_only",
+      "renamed_from_asset_id": "desktop:mnemos-phase0-7-global-handoff-2026-07-24",
+      "renamed_from_path": "Mnemos-Phase0-7全局深度审核与修复交接-2026-07-24.md",
+      "renamed_from_sha256": "c630cb1571c5b1d13bbe12582629075a9b17fcedba2371b97fda6935be5e50be",
+      "historical_asset_id": "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+      "historical_path": "Mnemos认知链路审计与全量修复方案-2026-07-12.md",
+      "historical_governance_role": "historical_provenance",
+      "historical_frozen_sha256": "ba8b60a688bfae22910e7ab3e9b258b715f8c57ed97c17e5d3d9421167fdb5e6"
+    },
+    "verification": {
+      "targeted": "57 passed",
+      "quick": "7497 passed, 15 subtests passed",
+      "quick_duration_seconds": 2306.18,
+      "quick_profile": "isolated",
+      "quick_environment_hash": "dd01bd1a11e53d974a454ad41f22e97d30154dce89d4d2ffab939e7c32bf143d",
+      "quick_outside_write_count": 0,
+      "quick_formal_state_diff": [],
+      "full": {
+        "result": "7897 passed, 15 subtests passed, 1 failed",
+        "duration_seconds": 3002.70,
+        "profile": "isolated",
+        "environment_hash": "49f4299b84e8073bc1af743156dd750f160bf272451e7820038d36b3138c8597",
+        "outside_write_count": 0,
+        "formal_state_diff": [],
+        "failed_node": "tests/integration/test_wiki_read_authorization.py::test_same_agent_private_page_remains_readable",
+        "failure": "SignalStore is uninitialized; use an explicit bootstrap or reconciliation command",
+        "fixed_point_reproduction": "25b38511f4eb0624919aa865b15f84d636c5848c reproduces the same traceback",
+        "status": "NON_GREEN_PREEXISTING_OUT_OF_SCOPE",
+        "scope_action": "not modified under contract-governance-only authorization",
+        "certifying": false
+      },
+      "active_governing_contracts": 1,
+      "historical_provenance_sources": 1,
+      "renamed_predecessors": 1,
+      "imported_root_definitions": "50/50",
+      "finding_overlay": "38/38",
+      "finding_owner_pairs": "76/76",
+      "production_mutation": "not authorized and not run",
+      "release_eligible": false
+    },
+    "closure_boundary": {
+      "phase1_started": false,
+      "production_effect": "not verified",
+      "production_mutation": "not authorized and not performed",
+      "readiness_certified": false,
+      "release_eligible": false
+    }
+  },
+  "phase0_cog025_evidence_revalidation_20260724": {
+    "record_type": "append_only_phase0_evidence_revalidation_generation",
+    "recorded_at": "2026-07-24T23:40:00+08:00",
+    "root_id": "COG-025",
+    "work_package": "WP-COG-025-SAFETY",
+    "implementation_commit_owner": "git_commit_and_detached_closure_bundle",
+    "supersedes_evidence_record": "contract_governance_migration_20260724",
+    "reason": "The frozen historical Phase 0 record remains byte-locked while the active calibration-lineage auditor has evolved. This generation binds the current direct path without rewriting historical evidence.",
+    "direct_path": {
+      "path": "scripts/audit_cognitive_calibration_lineage.py",
+      "sha256": "ec08b92efc0cf79fd7c1ad29d0b325b3dcdf8000098ab97794722b0e52cfd25b"
+    },
+    "verification": {
+      "command": ".venv/bin/python scripts/audit_cognitive_calibration_lineage.py --strict --json",
+      "result": "ok",
+      "outside_write_count": 0,
+      "formal_state_diff": []
+    },
+    "closure_boundary": {
+      "historical_closure_record_rewritten": false,
+      "production_effect": "not reverified",
+      "production_mutation": "not authorized and not performed",
+      "readiness_certified": false,
+      "release_eligible": false
+    }
+  },
+  "phase0_cog040_contract_revalidation_20260724": {
+    "record_type": "append_only_phase0_contract_revalidation_generation",
+    "recorded_at": "2026-07-24T23:50:00+08:00",
+    "root_id": "COG-040",
+    "work_package": "WP-COG-040-P0-BASELINE",
+    "implementation_commit_owner": "git_commit_and_detached_closure_bundle",
+    "supersedes_evidence_record": "phase0_cog025_evidence_revalidation_20260724",
+    "reason": "The public baseline-contract API now carries the repository-required documentation. Benchmark semantics, frozen denominators, and the Phase 7 boundary are unchanged.",
+    "baseline_contract": {
+      "path": "core/ops/cognitive_performance_baseline.py",
+      "sha256": "67e9771b3836e3115b6de139e376a8a799d012ad32cb70f7bdc18cb8216140b5"
+    },
+    "verification": {
+      "command": ".venv/bin/python scripts/audit_cognitive_performance_baseline.py --json",
+      "contract_mode": "baseline_only",
+      "performance_certificate_eligible": false,
+      "phase7_root_closed": false
+    },
+    "closure_boundary": {
+      "baseline_semantics_changed": false,
+      "performance_certificate_eligible": false,
+      "phase7_root_closed": false,
+      "production_mutation": "not authorized and not performed",
+      "release_eligible": false
+    }
+  },
+  "phase0_cog046_gate_hardening_20260724": {
+    "record_type": "append_only_phase0_gate_hardening_generation",
+    "recorded_at": "2026-07-24T23:55:00+08:00",
+    "root_id": "COG-046",
+    "work_package": "WP-COG-046-P0-DENOMINATOR-LOCK",
+    "implementation_commit_owner": "git_commit_and_detached_closure_bundle",
+    "supersedes_evidence_record": "phase0_cog040_contract_revalidation_20260724",
+    "reason": "Adversarial revalidation proved that pytest XPASS and a non-structural outside_write label could receive false-green credit. This generation binds the hardened direct paths while preserving the original Phase 0 and contract-governance records.",
+    "artifacts": {
+      "gate_execution": {
+        "path": "core/ops/gate_execution.py",
+        "sha256": "eb525dfed594b948ab4337eac6827b13d77784bf557a37ef6df010f69fbc654b"
+      },
+      "gate_execution_tests": {
+        "path": "tests/unit/ops/test_gate_execution.py",
+        "sha256": "76908bab8dda0597ff2704234ffe02545bf399f474aa7ce615a0673b7b8f78f4"
+      },
+      "governance_generator": {
+        "path": "scripts/generate_phase0_governance_contracts.py",
+        "sha256": "56b86f6a65391d55c6a519e69ea2f9cccc7864825466f566db44318b27d43290"
+      },
+      "governance_tests": {
+        "path": "tests/unit/ops/test_phase0_governance_contracts.py",
+        "sha256": "97d17230987883e17e223b6a7bf627ec2ee2a05fe31e6d4f54196bab30ac2034"
+      }
+    },
+    "verification": {
+      "xpass_false_green_test": "passed",
+      "outside_write_false_credit_test": "passed",
+      "real_outside_write_os_guard_test": "passed",
+      "production_mutation": "not authorized and not performed"
+    },
+    "denominator_revalidation": {
+      "root_closure_projection": {
+        "count": 50,
+        "jsonl_sha256": "20c43db371a52d211b8cda5beb05ce523b1c2625733ae1610f627afc41d6b85b",
+        "index_sha256": "c362b28eac5c7bd220f192019cbdf53bf1b5c9a00c26c85fbf4566fa62aaf496"
+      },
+      "schema_inventory": {
+        "count": 127,
+        "unregistered": 124,
+        "sha256": "3abbc37884a51f396e095b9e83cc8fb923f73285ba21b4ca226483e1c00d8c43"
+      }
+    },
+    "projection_revalidation": {
+      "mutation_policy": "replaceable_generated_current_index_with_append_only_generation_chain",
+      "previous": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v2",
+        "count": 50,
+        "jsonl_sha256": "ee6455fb22005dec63d753a6f248e8347d768d017844256284f52858a6eaad7e",
+        "index_sha256": "7e356fd7d98bf6f83dce77ec52ea3c65da7efaae146214bd43b4260f410808db"
+      },
+      "current": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v2",
+        "count": 50,
+        "jsonl_sha256": "20c43db371a52d211b8cda5beb05ce523b1c2625733ae1610f627afc41d6b85b",
+        "index_sha256": "c362b28eac5c7bd220f192019cbdf53bf1b5c9a00c26c85fbf4566fa62aaf496"
+      }
+    },
+    "closure_boundary": {
+      "cog046_phase7_closed": false,
+      "production_effect": "not verified",
+      "production_mutation": "not authorized and not performed",
+      "readiness_certified": false,
+      "release_eligible": false
+    }
+  },
+  "phase0_cog025_followup_repair_20260725": {
+    "record_type": "append_only_phase0_followup_repair_generation",
+    "recorded_at": "2026-07-25T12:00:00+08:00",
+    "root_id": "COG-025",
+    "work_package": "WP-COG-025-SAFETY",
+    "implementation_commit_owner": "local_commit_containing_this_generation",
+    "supersedes_evidence_record": "phase0_cog046_gate_hardening_20260724",
+    "reason": "Deep review found symmetric observation/state partial-schema false greens, a hidden live-state reopen after snapshot capture, multi-database reads without one frozen evidence epoch, static-only formal-state monitoring disabled, incomplete Darwin process details treated as inactive, failed-epoch cleanup gaps, and an unavailable required dependency inside the OS sandbox. Independent re-review then proved that the child-visible HMAC was self-authentication, a production constructor still exposed a test-only bypass, sandbox targets could escape the run root, malformed or absent argv could look inactive, tempfile cached its pre-HRE directory, a test could self-declare a replacement HRE, two macOS tests accepted either gate failure or successful live reads, and a native Darwin fallback could silently omit PIDs when its inventories diverged or truncated. This uncommitted append-only generation removes the production bypass and unsafe native process fallback, separates root-confined sandbox reads, binds the test process once before collection, refreshes tempfile ownership, labels the manifest digest as integrity-only, fails closed when the required process dependency or any process identity is incomplete, and requires an explicit active-writer failure without rewriting the frozen 2026-07-24 records.",
+    "artifacts": {
+      "audit_execution": {
+        "path": "core/ops/audit_run.py",
+      "sha256": "f4b034e0535f82bb59b7464b20eb4ea41c7a7744dcb7497212ba58ec7bdb1e3f"
+      },
+      "hermetic_run": {
+        "path": "core/ops/hermetic_run.py",
+      "sha256": "8fe9b5dc0cfbdc095abad66f0eadbf44be53fbf23b7bdff769c2dd35e446f7ca"
+      },
+      "calibration_audit": {
+        "path": "scripts/audit_cognitive_calibration_lineage.py",
+      "sha256": "da65dd765363c1114266a0bbf88f8c3d07bc0c2ab312c8c89e50f1e61d2c44e3"
+      },
+      "runtime_writer_gate": {
+        "path": "core/migrations/model_call_ledger_reconcile/runtime.py",
+      "sha256": "f6d3f0c646afcd827de99c0cc89937f4d6aaa60beb0826db57703d81700276d3"
+      },
+      "audit_execution_tests": {
+        "path": "tests/unit/ops/test_audit_run.py",
+      "sha256": "07c5b2c1ff7468615c5cb464612d1df3eea7fb82d5eab9fe3dc60fe92d9a92e5"
+      },
+      "hermetic_run_tests": {
+        "path": "tests/unit/test_hermetic_run_environment.py",
+      "sha256": "62a4f4ffa850d4b5529e4cb2fb5c978924090702842dc9f3611f981545d866a0"
+      },
+      "hermetic_test_harness": {
+        "path": "tests/conftest.py",
+      "sha256": "a09eeff1cc45f8098507ff833b52ed54d8eef426026905d46f033455f8d5a57a"
+      },
+      "calibration_audit_tests": {
+        "path": "tests/unit/cognitive/test_calibration_lineage_audit.py",
+      "sha256": "38fcd8fa2a8f07b4bbc418265500e3b9f446510b4227efe6167f3d0024a065f6"
+      },
+      "runtime_writer_gate_tests": {
+        "path": "tests/unit/test_migration_runtime_gate.py",
+      "sha256": "2739ce5164d462579ae450aecc6b3ef83015174fa4e72c4877834af7a4b6f0a3"
+      },
+      "hermetic_test_runner": {
+        "path": "scripts/run_tests.py",
+      "sha256": "66812686a1bf799fedf48e7f0f7e4012256dc2bcdcb808d18d8f1aa5de8a10e1"
+      },
+      "hermetic_test_runner_tests": {
+        "path": "tests/unit/test_run_tests_script.py",
+      "sha256": "80de0518bcfe6fc363b7086532ad6f29c9b71041c76060aac6dcbf52e690a3ca"
+      }
+    },
+    "evidence_epoch_contract": {
+      "schema_version": "mnemos.audit_evidence_epoch.v1",
+      "database_count": 2,
+      "same_common_cutoff_required": true,
+      "private_hash_bound_snapshots": true,
+      "live_immutable_forbidden": true,
+      "writer_quiescence_check": "before_and_after_backup"
+    },
+    "verification": {
+      "focused": "62 schema, evidence-epoch, positive/negative OS-guard, process-binding, tempfile/basetemp ownership, sandbox-confinement, manifest-integrity and runtime-writer regressions passed",
+      "snapshot_identity_substitution": "killed",
+      "production_test_bypass": "removed",
+      "sandbox_target_escape": "killed",
+      "child_self_authentication_claim": "removed",
+      "manifest_integrity_tamper": "killed",
+      "static_formal_state_write": "killed",
+      "incomplete_process_details": "fail_closed",
+      "psutil_none_cmdline": "fail_closed",
+      "missing_psutil_dependency": "fail_closed_before_platform_scan",
+      "darwin_native_pid_fallback": "removed_to_prevent_inventory_omission",
+      "self_declared_hre": "rejected",
+      "default_tempfile_directory": "run_owned",
+      "active_writer_dual_outcome_test": "replaced_by_exact_failure_contract",
+      "initialized_ledger_positive_read": "passed_under_real_os_guard_with_deterministic_quiescence_test_seam",
+      "external_pytest_basetemp": "rejected_by_runner_and_conftest",
+      "required_psutil_absence": "fail_closed",
+      "production_mutation": "not authorized and not performed",
+      "final_quick_full": {
+        "quick": {
+          "command": ".venv/bin/python scripts/run_tests.py quick",
+          "passed": 7573,
+          "subtests_passed": 15,
+          "duration_seconds": 2245.22,
+          "environment_hash": "fb2d4855c5893f337085fc0908dd202eecadba7c550ff1d8b25a47a1783c0f05",
+          "manifest_sha256": "04e6577066c34529c128bcba01d4b147bae134d536d39a28fafba7f29d3313d4",
+          "outside_write_count": 0,
+          "formal_state_diff": []
+        },
+        "full": {
+          "command": ".venv/bin/python scripts/run_tests.py full",
+          "passed": 7962,
+          "failed": 1,
+          "subtests_passed": 15,
+          "duration_seconds": 2955.89,
+          "failed_node": "tests/integration/test_wiki_read_authorization.py::test_same_agent_private_page_remains_readable",
+          "owner_phase": "Phase 5 COG-020",
+          "environment_hash": "5de3e4b6d219b36d6af7d1d3b731269c002701a30a0478b56db273753d910f27",
+          "manifest_sha256": "a28cc27993f3a8a787da619b4e0d1b777f2b97661a6e4cab9ccbbae5903ff670",
+          "outside_write_count": 0,
+          "formal_state_diff": []
+        }
+      }
+    },
+    "closure_boundary": {
+      "historical_closure_record_rewritten": false,
+      "production_effect": "not reverified",
+      "production_mutation": "not authorized and not performed",
+      "readiness_certified": false,
+      "release_eligible": false
+    }
+  },
+  "phase0_cog040_followup_revalidation_20260725": {
+    "record_type": "append_only_phase0_followup_revalidation_generation",
+    "recorded_at": "2026-07-25T12:05:00+08:00",
+    "root_id": "COG-040",
+    "work_package": "WP-COG-040-P0-BASELINE",
+    "implementation_commit_owner": "local_commit_containing_this_generation",
+    "supersedes_evidence_record": "phase0_cog025_followup_repair_20260725",
+    "reason": "The frozen Phase 0 performance baseline semantics and denominators remain unchanged; this generation only rebinds the documented public audit entrypoint after deep review.",
+    "artifacts": {
+      "baseline_audit": {
+        "path": "scripts/audit_cognitive_performance_baseline.py",
+        "sha256": "ebed31884a81ce949d13339d209b5cf467d3c95d39c32f6b8b775cbc31090689"
+      },
+      "baseline_tests": {
+        "path": "tests/unit/ops/test_cognitive_performance_baseline.py",
+        "sha256": "bc3a5f1721d1755b6e2ca25c5549be63c8546924311945f8d208345a5c0e531d"
+      }
+    },
+    "verification": {
+      "contract_mode": "baseline_only",
+      "baseline_semantics_changed": false,
+      "performance_certificate_eligible": false,
+      "phase7_root_closed": false
+    },
+    "closure_boundary": {
+      "baseline_semantics_changed": false,
+      "performance_certificate_eligible": false,
+      "phase7_root_closed": false,
+      "production_mutation": "not authorized and not performed",
+      "release_eligible": false
+    }
+  },
+  "phase0_cog046_followup_repair_20260725": {
+    "record_type": "append_only_phase0_followup_repair_generation",
+    "recorded_at": "2026-07-25T12:10:00+08:00",
+    "root_id": "COG-046",
+    "work_package": "WP-COG-046-P0-DENOMINATOR-LOCK",
+    "implementation_commit_owner": "local_commit_containing_this_generation",
+    "supersedes_evidence_record": "phase0_cog040_followup_revalidation_20260725",
+    "reason": "Deep review found 14 active Phase 0 Root/Finding requirements still marked UNREGISTERED, candidate-self-authored test bindings, only 26 exact nodes before the full-Quick and independent-review regressions were added, a whole gate-execution module skipped outside Darwin, a POSIX-only environment prefix in the Windows CI lane, CI invoking a production-only audit path, and Desktop topology coupled to one workstation. This generation binds 14 requirements to 41 exact hash-bound nodes, including independent-review mutations for sandbox bypass, process rebinding, tempfile/basetemp ownership, missing process-enumeration dependency, active-writer dual-outcome tests, Darwin PID-inventory omission, and deletion of the OS-guarded positive initialized-ledger read, while retaining all later-domain and release blockers.",
+    "artifacts": {
+      "ci_workflow": {
+        "path": ".github/workflows/ci.yml",
+        "sha256": "0afdff4fef942d9f3d24af6b64b78f1a5126690333c43b2fb08d602294267a71"
+      },
+      "governance_generator": {
+        "path": "scripts/generate_phase0_governance_contracts.py",
+      "sha256": "56b86f6a65391d55c6a519e69ea2f9cccc7864825466f566db44318b27d43290"
+      },
+      "gate_execution_tests": {
+        "path": "tests/unit/ops/test_gate_execution.py",
+        "sha256": "55107c875c95b4451c61747b4b70618628bd328b80aa739a3c4be9fdf7fc8b61"
+      },
+      "governance_tests": {
+        "path": "tests/unit/ops/test_phase0_governance_contracts.py",
+      "sha256": "ea8b0cce4bdbb7b8c42966b35e46b3bf9d8c48038ee88b21ddba23723db1d913"
+      },
+      "independent_denominator": {
+        "path": "docs/acceptance/cognitive_phase0_independent_denominator.json",
+      "sha256": "c3598fbace169446fecb6abecf2fda2ee3186a98e6b7c9c605938325475c9a4d"
+      }
+    },
+    "requirement_revalidation": {
+      "count": 126,
+      "unregistered": 112,
+      "phase0_support_requirement_count": 14,
+      "phase0_support_registered_count": 14,
+    "phase0_exact_node_count": 41,
+    "sha256": "4d1992c3c8b55fe27e9f6160d29e1db6ebec6780db1c1222fe2669d106e08380"
+    },
+    "portability_revalidation": {
+      "ci_calibration_mode": "isolated_static_contract",
+      "repo_governance_desktop_mode": "skip",
+      "local_desktop_mode": "required",
+      "production_mode_non_darwin": "fail_closed",
+      "platform_neutral_gate_tests_module_skipped": false
+    },
+    "projection_revalidation": {
+      "mutation_policy": "replaceable_generated_current_index_with_append_only_generation_chain",
+      "previous": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v2",
+        "count": 50,
+        "jsonl_sha256": "20c43db371a52d211b8cda5beb05ce523b1c2625733ae1610f627afc41d6b85b",
+        "index_sha256": "c362b28eac5c7bd220f192019cbdf53bf1b5c9a00c26c85fbf4566fa62aaf496"
+      },
+      "current": {
+        "schema_version": "mnemos.cognitive_root_closure_projection.v2",
+        "count": 50,
+      "jsonl_sha256": "ef0d2ee7ae8865e650e7a4c286f7b7eb4c8063953b3e3f8c7c995d0eca57c04c",
+      "index_sha256": "d34ad9f7c37854742b21a232a5cec9967e1eb94c824d9dae8d9419a74d2bbd76"
+      }
+    },
+    "residual_dispositions": [
+      {
+        "failed_node": "tests/integration/test_wiki_read_authorization.py::test_same_agent_private_page_remains_readable",
+        "failure": "SignalStore is uninitialized; use an explicit bootstrap or reconciliation command",
+        "root_cause": "authorized wiki_read unconditionally attempts persona SignalStore knowledge-signal persistence before that canonical store is initialized",
+        "owner_root_id": "COG-020",
+        "owner_phase_order": "P5-05",
+        "finding_ids": [
+          "P5-003",
+          "P5-006"
+        ],
+        "status": "DEFERRED_TO_OWNING_ROOT",
+        "next_allowed": "Phase 5 COG-020",
+        "invalidates": [
+          "COG-021",
+          "COG-024",
+          "COG-042"
+        ],
+        "phase0_action": "retain the failing test and fail-closed store boundary; do not seed, bootstrap, swallow, or mutate production state"
+      }
+    ],
+    "verification": {
+    "targeted": {
+      "focused_phase0_safety": 62,
+      "governance_and_schema": 61,
+      "phase0_exact_nodes": 41,
+      "exact_nodes_skipped_or_xfailed": 0,
+      "standards_review": "Hard 0 / Judgment 0",
+      "spec_review": "Hard 0 / Judgment 0"
+    },
+    "quick": {
+      "passed": 7573,
+      "subtests_passed": 15,
+      "duration_seconds": 2245.22,
+      "environment_hash": "fb2d4855c5893f337085fc0908dd202eecadba7c550ff1d8b25a47a1783c0f05",
+      "outside_write_count": 0,
+      "formal_state_diff": []
+    },
+    "full": {
+      "passed": 7962,
+      "failed": 1,
+      "subtests_passed": 15,
+      "duration_seconds": 2955.89,
+      "failed_node": "tests/integration/test_wiki_read_authorization.py::test_same_agent_private_page_remains_readable",
+      "owner_phase": "Phase 5 COG-020",
+      "environment_hash": "5de3e4b6d219b36d6af7d1d3b731269c002701a30a0478b56db273753d910f27",
+      "outside_write_count": 0,
+      "formal_state_diff": []
+    },
+      "known_full_residual_retained": true,
+      "production_mutation": "not authorized and not performed"
+    },
+    "closure_boundary": {
+      "cog046_phase7_closed": false,
+      "production_effect": "not verified",
+      "production_mutation": "not authorized and not performed",
+      "readiness_certified": false,
+      "release_eligible": false
+    }
+  },
+  "current_evidence_generation": "phase0_cog046_followup_repair_20260725",
+  "next_required_authorization": "Any old-log archive/truncate/delete decision still requires a separate authorization, a verified backup plan, and integrity checks. Future COG roots retain their own production authorization boundaries."
+}

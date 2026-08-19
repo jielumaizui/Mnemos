@@ -9,11 +9,6 @@ OnlineStats — 增量统计量测试（Welford 算法）
 - DimensionStats 字典封装
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from core.scoring.online_stats import OnlineStats, DimensionStats
 
 

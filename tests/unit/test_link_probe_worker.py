@@ -12,18 +12,15 @@ link_probe_worker 单元测试
 - update_wiki_frontmatter frontmatter 反写
 """
 
-import sys
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import unittest
 
 with patch("core.hephaestus.link_probe_worker.get_config") as _mock_cfg:
     _mock_cfg.return_value.data_dir = Path(tempfile.gettempdir())
+    _mock_cfg.return_value.database_dir = _mock_cfg.return_value.data_dir
     from core.hephaestus.link_probe_worker import LinkProbeWorker, _is_external_url
 
 
@@ -142,6 +139,7 @@ class TestProbeSingle(unittest.TestCase):
     def test_timeout(self):
         """超时返回 timeout"""
         import requests
+
         with patch.object(self.worker._session, "head", side_effect=requests.Timeout):
             status, http_status, err = self.worker.probe_single("https://slow.com")
         self.assertEqual(status, "timeout")
@@ -151,7 +149,10 @@ class TestProbeSingle(unittest.TestCase):
     def test_connection_error(self):
         """连接失败返回 broken"""
         import requests
-        with patch.object(self.worker._session, "head", side_effect=requests.ConnectionError("refused")):
+
+        with patch.object(
+            self.worker._session, "head", side_effect=requests.ConnectionError("refused")
+        ):
             status, http_status, err = self.worker.probe_single("https://down.com")
         self.assertEqual(status, "broken")
 
@@ -186,19 +187,22 @@ class TestProbeBatch(unittest.TestCase):
 
     def test_retryable_increments_retry_count(self):
         """retryable 状态增加 retry_count，达到 max_retries 后跳过"""
-        self.worker.enqueue("https://rate-limited.com", "wiki/X.md")
+        # [P1-FIX] Mock time.sleep to avoid exponential backoff delays
+        # (2^1 + 2^2 + 2^3 = 14s) during retryable link probing.
+        with patch("core.hephaestus.link_probe_worker.time.sleep"):
+            self.worker.enqueue("https://rate-limited.com", "wiki/X.md")
 
-        # 连续探测 3 次（max_retries=3），前 3 次都被选中
-        for i in range(3):
+            # 连续探测 3 次（max_retries=3），前 3 次都被选中
+            for i in range(3):
+                with patch.object(self.worker._session, "head", return_value=Mock(status_code=503)):
+                    stats = self.worker.probe_batch(batch_size=10)
+                self.assertEqual(stats["probed"], 1, f"第 {i+1} 次应被探测")
+                self.assertEqual(stats["retryable"], 1)
+
+            # 第 4 次：retry_count >= max_retries，被跳过
             with patch.object(self.worker._session, "head", return_value=Mock(status_code=503)):
                 stats = self.worker.probe_batch(batch_size=10)
-            self.assertEqual(stats["probed"], 1, f"第 {i+1} 次应被探测")
-            self.assertEqual(stats["retryable"], 1)
-
-        # 第 4 次：retry_count >= max_retries，被跳过
-        with patch.object(self.worker._session, "head", return_value=Mock(status_code=503)):
-            stats = self.worker.probe_batch(batch_size=10)
-        self.assertEqual(stats["probed"], 0)
+            self.assertEqual(stats["probed"], 0)
 
     def test_respects_batch_size(self):
         """batch_size 限制探测数量"""
@@ -225,9 +229,10 @@ class TestQueryInterface(unittest.TestCase):
         self.worker.enqueue("https://broken.com", "wiki/Tech.md")
         # 手动模拟探测结果（直接改 DB）
         import sqlite3
+
         with sqlite3.connect(str(self.worker.db_path)) as conn:
             conn.execute(
-                "UPDATE link_probe_queue SET status='broken', http_status=404, probe_error='Not Found', last_probed='2024-01-01T00:00:00' WHERE url=?",
+                "UPDATE link_probe_queue SET status='broken', http_status=404, probe_error='Not Found', last_probed='2024-01-01T00:00:00' WHERE url=?",  # noqa: E501
                 ("https://broken.com",),
             )
             conn.commit()
@@ -270,7 +275,10 @@ class TestRunOnce(unittest.TestCase):
 class TestUpdateWikiFrontmatter(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.worker = LinkProbeWorker(db_path=str(Path(self.tmpdir.name) / "links.db"))
+        self.worker = LinkProbeWorker(
+            db_path=str(Path(self.tmpdir.name) / "links.db"),
+            wiki_base=self.tmpdir.name,
+        )
 
     def tearDown(self):
         self.tmpdir.cleanup()
@@ -278,7 +286,8 @@ class TestUpdateWikiFrontmatter(unittest.TestCase):
     def test_updates_frontmatter_with_broken_links(self):
         """将失效链接写入 wiki 页面 frontmatter"""
         wiki_file = Path(self.tmpdir.name) / "Redis.md"
-        wiki_file.write_text("""---
+        wiki_file.write_text(
+            """---
 title: Redis
 tags: ["redis"]
 ---
@@ -286,15 +295,23 @@ tags: ["redis"]
 # Redis
 
 See https://redis.io/docs
-""", encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
 
         # 手动插入 broken 记录
         import sqlite3
+
         with sqlite3.connect(str(self.worker.db_path)) as conn:
-            conn.execute("""
-                INSERT INTO link_probe_queue (url, page_path, status, http_status, probe_error, last_probed)
+            conn.execute(
+                """
+                INSERT INTO link_probe_queue (
+                    url, page_path, status, http_status, probe_error, last_probed
+                )
                 VALUES (?, ?, 'broken', 404, 'Not Found', '2024-01-01T00:00:00')
-            """, ("https://redis.io/docs", str(wiki_file)))
+            """,
+                ("https://redis.io/docs", str(wiki_file)),
+            )
             conn.commit()
 
         ok = self.worker.update_wiki_frontmatter(str(wiki_file))

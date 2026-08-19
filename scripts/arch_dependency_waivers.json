@@ -1,0 +1,79 @@
+[
+  {
+    "cycle": [
+      "core.config",
+      "core.utils"
+    ],
+    "reason": "core.utils contains function-level lazy imports of core.config (LazyPath._resolve, _get_wiki_dir). There is no import-time cycle at runtime; the static analyzer flags the textual import.",
+    "issue": "arch-debt-utils-config-lazy-import",
+    "runtime_only": true,
+    "owner": "core-platform",
+    "target_interface": "core.application.ports.runtime_paths",
+    "resolution": "Move LazyPath path resolution behind an injectable runtime-path port when the next config boundary refactor touches core.utils."
+  },
+  {
+    "cycle": [
+      "core.cli",
+      "core.cli.commands",
+      "core.cli.commands.daemon",
+      "core.cli.commands.scheduler",
+      "mnemos_cli"
+    ],
+    "reason": "CLI entry point imports the command package while daemon/scheduler subcommands defer-import the entry module; accepted for CLI bootstrapping.",
+    "issue": "CLI-bootstrap"
+  },
+  {
+    "cycle": [
+      "core.hephaestus.distillation_engine",
+      "core.hephaestus.fragment_merger"
+    ],
+    "reason": "Distillation engine and fragment merger use deferred imports to cooperate; split shared merge contracts into a lower-level port before promoting imports to top level.",
+    "issue": "arch-debt-distill-fragment-merge-port"
+  },
+  {
+    "cycle": [
+      "integrations.active",
+      "integrations.apollon"
+    ],
+    "reason": "Agent activation and Apollon adapter use deferred imports to bootstrap each other; acceptable integration pattern.",
+    "issue": "integrations-bootstrap"
+  },
+  {
+    "cycle": [
+      "core.kia.chronos",
+      "core.hephaestus.evolution_tracker"
+    ],
+    "reason": "Runtime cycle caused by deferred/attribute access imports between scheduler code and evolution tracking.",
+    "issue": "arch-debt-evolution-scheduler-port",
+    "runtime_only": true,
+    "owner": "hephaestus-kia",
+    "target_interface": "core.application.ports.evolution_events",
+    "resolution": "Move evolution event DTOs and scheduler callback contracts to the application port, then make Chronos and EvolutionTracker depend on that port only."
+  },
+  {
+    "cycle": [
+      "core.app.blindspot_discovery",
+      "core.kia.kg_event_handler"
+    ],
+    "reason": "Runtime cycle between core.kia and core.app event handling.",
+    "issue": "arch-debt-blindspot-kg-event-port",
+    "runtime_only": true,
+    "owner": "kia-app",
+    "target_interface": "core.application.ports.kg_events",
+    "resolution": "Move blindspot/KG event payloads and handler registration to the KG event port so app services and KIA no longer import each other."
+  },
+  {
+    "cycle": [
+      "core.hephaestus.distillation_engine",
+      "core.app",
+      "core.kia",
+      "core.hephaestus"
+    ],
+    "reason": "Three-package runtime loop between distillation engine, app services, and KIA.",
+    "issue": "arch-debt-app-kia-hephaestus-ports",
+    "runtime_only": true,
+    "owner": "architecture",
+    "target_interface": "core.application.ports.distillation_events",
+    "resolution": "Move shared distillation event DTOs, service interfaces, and KG handoff contracts under application ports/contracts; each package should depend on the port instead of another package's concrete module."
+  }
+]

@@ -5,26 +5,64 @@ CrossAgentLinker — 跨 Agent 知识关联器
 在原页面添加双向链接，不生成合成页。
 
 设计来源：08-功能梳理/34-跨Agent知识关联.md
-ADR-019: 优先 hnswlib 双索引融合检索，DNAEngine/SimHash 作为兼容降级。
+ADR-019: 优先 hnswlib 双索引融合检索；无索引时使用关键词倒排和零依赖文本相似度兜底。
 """
 
 import logging
+import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import yaml
 
 from core.config import get_config
-from core.kia.genos import DNAEngine
-
-
-
+from core.cognitive.state_contract import sha256_json
+from core.trust.formal_markdown import (
+    TrustedMarkdownDecisionPolicy,
+    submit_or_write_markdown_with_decision,
+)
+from core.trust.markdown_adapter import read_markdown_text
+from core.trust.models import sha256_text
 logger = logging.getLogger(__name__)
+
+CROSS_AGENT_LINK_MARKDOWN_POLICY = TrustedMarkdownDecisionPolicy(
+    contract_id="project-contract:cross-agent-link-projection",
+    contract_revision_id="mnemos.cross_agent_link_projection.v1",
+    contract_text=(
+        "CrossAgentLinker may append one exact link only when its exact source page, "
+        "target page, similarity, and link reason are the reviewed linkage result."
+    ),
+    source_namespace="cross-agent-link-projection",
+    producer="cross-agent-linker",
+    producer_code_hash=sha256_json(
+        {
+            "module": "core.kia.cross_agent_linker",
+            "producer": "_append_link",
+            "version": "mnemos.cross_agent_link_projection.v1",
+        }
+    ),
+    evaluator_id="cross-agent-link-evaluator",
+    constraints=(
+        "Source, destination, source-page preimage, reason, similarity, and output remain exact.",
+        "The action may not create a link that was already present at decision time.",
+    ),
+    approved_candidate_key="append_exact_cross_agent_link",
+    approved_candidate_summary="Append the exact reviewed cross-agent link.",
+    rejected_candidate_key="retain_page_without_cross_agent_link",
+    rejected_candidate_summary="Retain the page when linkage evidence or bytes drift.",
+    approved_reason_code="cross_agent_link_binding_verified",
+    rejected_reason_code="cross_agent_link_binding_rejected",
+    committed_metric="cross_agent_link_committed",
+    rejected_metric="unbound_cross_agent_link_count",
+)
+
+
 @dataclass
 class LinkAction:
     """链接操作"""
+
     from_page: Path
     to_page: Path
     reason: str
@@ -32,8 +70,9 @@ class LinkAction:
 
 
 @dataclass
-class WikiPage:
+class LinkedWikiPage:
     """用于跨 Agent 分歧检测的轻量页面表示"""
+
     path: Path
     frontmatter: Dict
     content: str
@@ -42,6 +81,7 @@ class WikiPage:
 @dataclass
 class AgentConclusion:
     """单个 Agent 在某个主题上的结论"""
+
     agent: str
     session_id: str
     date_str: str
@@ -53,6 +93,7 @@ class AgentConclusion:
 @dataclass
 class DivergenceReport:
     """跨 Agent 认知分歧报告"""
+
     topic: str
     divergences: List[AgentConclusion]
     severity: str
@@ -76,17 +117,76 @@ class CrossAgentLinker:
     """
 
     VECTOR_SIMILARITY_THRESHOLD = 0.75
-    DNA_SIMILARITY_THRESHOLD = 0.30
+    TEXT_SIMILARITY_THRESHOLD = 0.30
     MAX_LINKS_PER_PAGE = 3
     WORKSPACE_NAMES = ["claude", "hermes", "kimi", "codex", "gpt", "shared"]
 
-    def __init__(self, wiki_root: Path = None, vector_index=None):
+    def __init__(self, wiki_root: Path | None = None, vector_index=None):
         self.wiki_root = wiki_root or get_config().wiki_dir
         self.vector_index = vector_index
-        self.dna = None
         self._keyword_index: Optional[Dict[str, List[Tuple[Path, str]]]] = None
 
     # ── 主入口 ──
+
+    def link_after_distill_for_fragment(self, fragment) -> List[LinkAction]:
+        """
+        为尚未写入 Wiki 的知识片段寻找跨 Agent 关联。
+
+        通过构造临时页面路径并复用关键词索引，返回候选链接列表，
+        不修改任何现有 Wiki 文件。
+        """
+        try:
+            keywords = getattr(fragment, "keywords", []) or []
+            if not keywords:
+                title = getattr(fragment, "title", "") or ""
+                core = getattr(fragment, "core_content", "") or ""
+                keywords = [
+                    w.lower()
+                    for w in re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}", f"{title} {core}")
+                ]
+                keywords = list(dict.fromkeys(keywords))[:20]
+            if not keywords:
+                return []
+
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".md",
+                dir=self.wiki_root / "shared",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                # 写临时 frontmatter 以便 _find_similar_by_keywords 读取
+                fm = {"关键词": keywords}
+                tmp.write("---\n")
+                tmp.write(yaml.safe_dump(fm, allow_unicode=True))
+                tmp.write("---\n\n")
+                tmp.write(getattr(fragment, "core_content", "") or "")
+                tmp_path = Path(tmp.name)
+
+            try:
+                similar = self._find_similar_by_keywords(tmp_path, "shared")
+                links = []
+                for sim_page, score in similar[: self.MAX_LINKS_PER_PAGE]:
+                    other_agent = self._extract_agent_from_path(sim_page) or "unknown"
+                    links.append(
+                        LinkAction(
+                            from_page=tmp_path,
+                            to_page=sim_page,
+                            reason=f"跨Agent关联（shared ↔ {other_agent}）",
+                            similarity=score,
+                        )
+                    )
+                return links
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("[cross_agent_linker] OSError suppressed", exc_info=True)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, yaml.YAMLError) as e:
+            logger.debug("[CrossAgentLinker] 片段跨 Agent 关联失败: %s", e, exc_info=True)
+            return []
 
     def link_after_distill(self, new_page_path: Path) -> List[LinkAction]:
         """
@@ -100,35 +200,39 @@ class CrossAgentLinker:
         """
         new_agent = self._extract_agent_from_path(new_page_path)
         if not new_agent:
-            logger.debug(f"无法识别页面 agent 来源: {new_page_path}")
+            logger.debug("无法识别页面 agent 来源: %s", new_page_path)
             return []
 
         similar = self._find_cross_workspace_similar(new_page_path, new_agent)
 
         links = []
-        for sim_page, score in similar[:self.MAX_LINKS_PER_PAGE]:
+        for sim_page, score in similar[: self.MAX_LINKS_PER_PAGE]:
             other_agent = self._extract_agent_from_path(sim_page)
             if other_agent and other_agent != new_agent:
                 if not self._link_exists(new_page_path, sim_page):
-                    links.append(LinkAction(
-                        from_page=new_page_path,
-                        to_page=sim_page,
-                        reason=f"跨Agent关联（{new_agent} ↔ {other_agent}）",
-                        similarity=score,
-                    ))
+                    links.append(
+                        LinkAction(
+                            from_page=new_page_path,
+                            to_page=sim_page,
+                            reason=f"跨Agent关联（{new_agent} ↔ {other_agent}）",
+                            similarity=score,
+                        )
+                    )
                 if not self._link_exists(sim_page, new_page_path):
-                    links.append(LinkAction(
-                        from_page=sim_page,
-                        to_page=new_page_path,
-                        reason=f"跨Agent关联（{other_agent} ↔ {new_agent}）",
-                        similarity=score,
-                    ))
+                    links.append(
+                        LinkAction(
+                            from_page=sim_page,
+                            to_page=new_page_path,
+                            reason=f"跨Agent关联（{other_agent} ↔ {new_agent}）",
+                            similarity=score,
+                        )
+                    )
 
         for action in links:
             self._append_link(action)
 
         if links:
-            logger.info(f"跨Agent关联: {new_page_path.name} ↔ {len(links)//2} 个页面")
+            logger.info("跨Agent关联: %s ↔ %s 个页面", new_page_path.name, len(links) // 2)
 
         return links
 
@@ -154,8 +258,14 @@ class CrossAgentLinker:
 
         index: Dict[str, List[Tuple[Path, str]]] = {}
         search_dirs = [
-            "01-People", "02-Projects", "03-Tech", "04-Concepts",
-            "05-MOCs", "06-Retrospectives", "07-Shadow", "00-Inbox",
+            "01-People",
+            "02-Projects",
+            "03-Tech",
+            "04-Concepts",
+            "05-MOCs",
+            "06-Retrospectives",
+            "07-Shadow",
+            "00-Inbox",
         ] + self.WORKSPACE_NAMES
         for d in search_dirs:
             dir_path = self.wiki_root / d
@@ -168,8 +278,9 @@ class CrossAgentLinker:
                     if isinstance(keywords, str):
                         try:
                             import json
+
                             keywords = json.loads(keywords)
-                        except Exception:
+                        except ImportError:
                             keywords = [keywords]
                     if not isinstance(keywords, list):
                         continue
@@ -178,24 +289,30 @@ class CrossAgentLinker:
                         kw_clean = str(kw).strip().lower()
                         if kw_clean:
                             index.setdefault(kw_clean, []).append((md_file, agent))
-                except Exception:
+                # DEBT(S8): 容错跳过，避免单条记录中断批量处理
+                except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
                     continue
 
         self._keyword_index = index
-        logger.info(f"[CrossAgentLinker] 关键词索引构建完成: {len(index)} 个关键词, "
-                    f"{sum(len(v) for v in index.values())} 条映射")
+        logger.info(
+            "[CrossAgentLinker] 关键词索引构建完成: %s 个关键词, %s 条映射",
+            len(index),
+            sum((len(v) for v in index.values())),
+        )
         return index
 
-    def _find_similar_by_keywords(self, page_path: Path,
-                                  exclude_agent: str) -> List[Tuple[Path, float]]:
+    def _find_similar_by_keywords(
+        self, page_path: Path, exclude_agent: str
+    ) -> List[Tuple[Path, float]]:
         """基于关键词倒排索引 + Jaccard 系数查找跨 Agent 相似页面"""
         fm = self._read_frontmatter(page_path)
         page_keywords = fm.get("关键词", [])
         if isinstance(page_keywords, str):
             try:
                 import json
+
                 page_keywords = json.loads(page_keywords)
-            except Exception:
+            except ImportError:
                 page_keywords = [page_keywords]
         if not isinstance(page_keywords, list):
             return []
@@ -224,8 +341,9 @@ class CrossAgentLinker:
                 if isinstance(cand_keywords, str):
                     try:
                         import json
+
                         cand_keywords = json.loads(cand_keywords)
-                    except Exception:
+                    except ImportError:
                         cand_keywords = [cand_keywords]
                 if not isinstance(cand_keywords, list):
                     continue
@@ -236,75 +354,104 @@ class CrossAgentLinker:
                 score = overlap / union
                 if score >= 0.05:  # Jaccard 阈值 — 关键词更稀疏，允许更低的重叠
                     results.append((cand_path, score))
-            except Exception:
+            # DEBT(S8): 容错跳过，避免单条记录中断批量处理
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
                 continue
 
         return sorted(results, key=lambda x: x[1], reverse=True)
 
-    def _find_cross_workspace_similar(self, page_path: Path,
-                                      exclude_agent: str) -> List[Tuple[Path, float]]:
+    def _find_cross_workspace_similar(
+        self, page_path: Path, exclude_agent: str
+    ) -> List[Tuple[Path, float]]:
         """跨 workspace 查找相似页面"""
-        results = []
-
-        # 方案 A：优先使用向量索引（ADR-019）
-        if self.vector_index and hasattr(self.vector_index, 'hybrid_search'):
-            try:
-                query = page_path.read_text(encoding="utf-8")[:2000]
-                search_results = self.vector_index.hybrid_search(
-                    query=query,
-                    filters={
-                        "workspace": [
-                            w for w in self.WORKSPACE_NAMES
-                            if w != exclude_agent and w != "shared"
-                        ]
-                    },
-                    top_k=self.MAX_LINKS_PER_PAGE * 3,
-                )
-                for r in search_results:
-                    md_file = Path(r["path"])
-                    score = float(r.get("score", 0))
-                    if score < self.VECTOR_SIMILARITY_THRESHOLD:
-                        continue
-                    if md_file.exists() and md_file != page_path:
-                        other_agent = self._extract_agent_from_path(md_file)
-                        if other_agent and other_agent != exclude_agent:
-                            results.append((md_file, score))
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
-                pass
-
-        # 方案 B：关键词倒排索引（替代 DNAEngine/SimHash O(n²) 降级）
+        results = self._vector_search_candidates(page_path, exclude_agent)
         if not results:
-            results = self._find_similar_by_keywords(page_path, exclude_agent)
-
-        # 方案 C：文本相似度最终兜底（限制在同名/内容相关文件附近，避免全库扫描）
+            results = self._keyword_fallback_candidates(page_path, exclude_agent)
         if not results:
-            stem = page_path.stem.lower()
-            try:
-                page_content = page_path.read_text(encoding="utf-8").lower()
-            except Exception:
-                page_content = ""
-            for search_path in [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]:
-                if not search_path.exists():
+            results = self._text_similarity_fallback_candidates(page_path, exclude_agent)
+        return self._dedupe_and_limit_results(results)
+
+    def _vector_search_candidates(
+        self, page_path: Path, exclude_agent: str
+    ) -> List[Tuple[Path, float]]:
+        """方案 A：优先使用向量索引（ADR-019）。"""
+        results: List[Tuple[Path, float]] = []
+        if not (self.vector_index and hasattr(self.vector_index, "hybrid_search")):
+            return results
+
+        try:
+            query = page_path.read_text(encoding="utf-8")[:2000]
+            search_results = self.vector_index.hybrid_search(
+                query=query,
+                filters={
+                    "workspace": [
+                        w for w in self.WORKSPACE_NAMES if w != exclude_agent and w != "shared"
+                    ]
+                },
+                top_k=self.MAX_LINKS_PER_PAGE * 3,
+            )
+            for r in search_results:
+                md_file = Path(r["path"])
+                score = float(r.get("score", 0))
+                if score < self.VECTOR_SIMILARITY_THRESHOLD:
                     continue
-                for md_file in search_path.rglob("*.md"):
-                    if md_file == page_path:
-                        continue
+                if md_file.exists() and md_file != page_path:
                     other_agent = self._extract_agent_from_path(md_file)
-                    if not other_agent or other_agent == exclude_agent:
-                        continue
-                    cand_stem = md_file.stem.lower()
-                    # 放宽条件：文件名互相包含，或页面内容中提到候选文件名
-                    if (stem not in cand_stem and cand_stem not in stem
-                            and cand_stem not in page_content):
-                        continue
-                    try:
-                        score = self._text_similarity(page_path, md_file)
-                        if score >= self.DNA_SIMILARITY_THRESHOLD:
-                            results.append((md_file, score))
-                    except Exception:
-                        continue
+                    if other_agent and other_agent != exclude_agent:
+                        results.append((md_file, score))
+        except (OSError, IOError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at cross_agent_linker.py", exc_info=True
+            )
+        return results
 
+    def _keyword_fallback_candidates(
+        self, page_path: Path, exclude_agent: str
+    ) -> List[Tuple[Path, float]]:
+        """方案 B：关键词倒排索引（替代 DNAEngine/SimHash O(n²) 降级）。"""
+        return self._find_similar_by_keywords(page_path, exclude_agent)
+
+    def _text_similarity_fallback_candidates(
+        self, page_path: Path, exclude_agent: str
+    ) -> List[Tuple[Path, float]]:
+        """方案 C：文本相似度最终兜底（限制在同名/内容相关文件附近）。"""
+        results: List[Tuple[Path, float]] = []
+        stem = page_path.stem.lower()
+        try:
+            page_content = page_path.read_text(encoding="utf-8").lower()
+        except (OSError, IOError):
+            page_content = ""
+
+        for search_path in [self.wiki_root / ws for ws in self.WORKSPACE_NAMES]:
+            if not search_path.exists():
+                continue
+            for md_file in search_path.rglob("*.md"):
+                if md_file == page_path:
+                    continue
+                other_agent = self._extract_agent_from_path(md_file)
+                if not other_agent or other_agent == exclude_agent:
+                    continue
+                cand_stem = md_file.stem.lower()
+                # 放宽条件：文件名互相包含，或页面内容中提到候选文件名
+                if (
+                    stem not in cand_stem
+                    and cand_stem not in stem
+                    and cand_stem not in page_content
+                ):
+                    continue
+                try:
+                    score = self._text_similarity(page_path, md_file)
+                    if score >= self.TEXT_SIMILARITY_THRESHOLD:
+                        results.append((md_file, score))
+                # DEBT(S8): 容错跳过，避免单条记录中断批量处理
+                except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                    continue
+        return results
+
+    def _dedupe_and_limit_results(
+        self, results: List[Tuple[Path, float]]
+    ) -> List[Tuple[Path, float]]:
+        """去重并按分数降序返回，限制数量。"""
         seen = set()
         unique_results = []
         for md_file, score in sorted(results, key=lambda x: x[1], reverse=True):
@@ -312,29 +459,19 @@ class CrossAgentLinker:
             if key not in seen:
                 seen.add(key)
                 unique_results.append((md_file, score))
-
-        return unique_results[:self.MAX_LINKS_PER_PAGE * 3]
-
-    def _get_dna(self) -> Optional[DNAEngine]:
-        """懒加载 DNAEngine，避免旧库结构问题阻断向量路径"""
-        if self.dna is not None:
-            return self.dna
-        try:
-            self.dna = DNAEngine()
-            return self.dna
-        except Exception as exc:
-            logger.warning("DNAEngine 初始化失败，跳过跨 Agent 降级检索: %s", exc)
-            return None
+        return unique_results[: self.MAX_LINKS_PER_PAGE * 3]
 
     def _text_similarity(self, left: Path, right: Path) -> float:
-        """DNA 不可用时的零依赖文本相似度降级"""
+        """零依赖文本相似度兜底。"""
         import re
 
         try:
             left_text = left.read_text(encoding="utf-8")[:2000].lower()
             right_text = right.read_text(encoding="utf-8")[:2000].lower()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
+        except (OSError, IOError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at cross_agent_linker.py", exc_info=True
+            )
             return 0.0
         left_terms = set(re.findall(r"[a-z0-9_]{3,}|[\u4e00-\u9fa5]{2,4}", left_text))
         right_terms = set(re.findall(r"[a-z0-9_]{3,}|[\u4e00-\u9fa5]{2,4}", right_text))
@@ -353,7 +490,7 @@ class CrossAgentLinker:
             if first_part in self.WORKSPACE_NAMES:
                 return first_part
         except ValueError:
-            pass
+            logger.warning("[cross_agent_linker] ValueError suppressed", exc_info=True)
 
         # frontmatter 推断（优先）
         try:
@@ -361,14 +498,15 @@ class CrossAgentLinker:
             # 先查蓝图标准字段 "来源"
             agent = fm.get("来源") or fm.get("source")
             if agent and agent != "unknown":
-                return agent.lower()
-            # 兼容旧字段
+                return agent.lower()  # type: ignore[no-any-return]
+            # Accept the source-agent field emitted by session projection pages.
             agent = fm.get("source_agent")
             if agent:
-                return agent.lower()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
-            pass
+                return agent.lower()  # type: ignore[no-any-return]
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at cross_agent_linker.py", exc_info=True
+            )
 
         # 文件名推断
         stem = page_path.stem.lower()
@@ -382,14 +520,15 @@ class CrossAgentLinker:
         """检查链接是否已存在"""
         if not from_page.exists():
             return False
-        content = from_page.read_text(encoding="utf-8")
+        content = read_markdown_text(from_page)
         rel_link = self._make_relative_link(from_page, to_page)
         abs_link = str(to_page)
         return rel_link in content or abs_link in content
 
     def _append_link(self, action: LinkAction):
         """在页面末尾添加链接"""
-        content = action.from_page.read_text(encoding="utf-8")
+        existing_content = read_markdown_text(action.from_page)
+        content = existing_content
         rel_link = self._make_relative_link(action.from_page, action.to_page)
         link_line = f"- {rel_link} <!-- 跨Agent关联: {action.reason} -->\n"
 
@@ -398,7 +537,34 @@ class CrossAgentLinker:
         else:
             content = content.rstrip() + f"\n\n## 相关链接\n{link_line}"
 
-        action.from_page.write_text(content, encoding="utf-8")
+        evidence_refs = []
+        for label, page in (("from", action.from_page), ("to", action.to_page)):
+            try:
+                evidence_refs.append(f"{label}:{page.relative_to(self.wiki_root)}")
+            except ValueError:
+                evidence_refs.append(f"{label}:{page}")
+        submit_or_write_markdown_with_decision(
+            decision_policy=CROSS_AGENT_LINK_MARKDOWN_POLICY,
+            decision_facts={
+                "schema_version": "mnemos.cross_agent_link_facts.v1",
+                "from_page": str(action.from_page.resolve(strict=False)),
+                "to_page": str(action.to_page.resolve(strict=False)),
+                "reason": action.reason,
+                "similarity": action.similarity,
+            },
+            decision_task=f"Append cross-agent link to {action.from_page.name}",
+            decision_goal="Expose the exact reviewed relation between two agent pages.",
+            decision_created_at=datetime.now(timezone.utc).isoformat(),
+            wiki_base=self.wiki_root,
+            target_path=action.from_page,
+            content=content,
+            source="cross_agent_linker",
+            actor="system",
+            evidence_refs=evidence_refs,
+            proposed_action="append_cross_agent_link",
+            expected_existing_hash=sha256_text(existing_content),
+            metadata={"reason": action.reason, "similarity": action.similarity},
+        )
 
     def _make_relative_link(self, from_page: Path, to_page: Path) -> str:
         """生成 Obsidian 兼容的相对链接"""
@@ -407,7 +573,7 @@ class CrossAgentLinker:
             rel = to_page.relative_to(self.wiki_root)
             return f"[[{rel.with_suffix('').as_posix()}]]"
         except ValueError:
-            pass
+            logger.warning("[cross_agent_linker] ValueError suppressed", exc_info=True)
         # 回退：从源文件所在目录生成
         try:
             rel = to_page.relative_to(from_page.parent)
@@ -423,7 +589,7 @@ class CrossAgentLinker:
         try:
             _, yaml_block, _ = content.split("---", 2)
             return yaml.safe_load(yaml_block.strip()) or {}
-        except Exception:
+        except (yaml.YAMLError, ValueError):
             # 降级：简单 key: value 解析
             fm = {}
             try:
@@ -432,8 +598,8 @@ class CrossAgentLinker:
                     if ":" in line and not line.strip().startswith("-"):
                         k, v = line.split(":", 1)
                         fm[k.strip()] = v.strip()
-            except Exception:
-                pass
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logging.getLogger(__name__).warning("Unexpected error", exc_info=True)
             return fm
 
 
@@ -458,7 +624,7 @@ class CrossAgentDivergenceDetector:
 
     NEGATION_SIGNALS = ["不要", "不推荐", "避免", "有问题", "缺点", "不适合"]
 
-    def __init__(self, wiki_root: Path = None):
+    def __init__(self, wiki_root: Path | None = None):
         self.wiki_root = wiki_root or get_config().wiki_dir
         self.linker = CrossAgentLinker(wiki_root=self.wiki_root)
 
@@ -466,20 +632,24 @@ class CrossAgentDivergenceDetector:
         pages = self._find_pages_by_topic(topic)
         conclusions = []
         for page in pages:
-            agent = page.frontmatter.get("source_agent") or self.linker._extract_agent_from_path(page.path)
+            agent = page.frontmatter.get("source_agent") or self.linker._extract_agent_from_path(
+                page.path
+            )
             if not agent:
                 continue
             conclusion = self._extract_conclusion(page)
             if not conclusion:
                 continue
-            conclusions.append(AgentConclusion(
-                agent=str(agent).lower(),
-                session_id=self._first_session_id(page.frontmatter.get("source_sessions")),
-                date_str=self._format_date(page.frontmatter.get("distilled_at", "")),
-                conclusion=conclusion,
-                confidence=float(page.frontmatter.get("confidence", 0.5) or 0.5),
-                source_page=str(page.path),
-            ))
+            conclusions.append(
+                AgentConclusion(
+                    agent=str(agent).lower(),
+                    session_id=self._first_session_id(page.frontmatter.get("source_sessions")),
+                    date_str=self._format_date(page.frontmatter.get("distilled_at", "")),
+                    conclusion=conclusion,
+                    confidence=float(page.frontmatter.get("confidence", 0.5) or 0.5),
+                    source_page=str(page.path),
+                )
+            )
 
         conclusions = self._dedup_by_agent(conclusions)
         if len(conclusions) < 2 or not self._are_contradictory(conclusions):
@@ -492,7 +662,7 @@ class CrossAgentDivergenceDetector:
             detected_at=datetime.now(),
         )
 
-    def _find_pages_by_topic(self, topic: str) -> List[WikiPage]:
+    def _find_pages_by_topic(self, topic: str) -> List[LinkedWikiPage]:
         topic_lower = topic.lower()
         pages = []
         for md_file in self.wiki_root.rglob("*.md"):
@@ -500,22 +670,26 @@ class CrossAgentDivergenceDetector:
                 continue
             try:
                 content = md_file.read_text(encoding="utf-8")
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at cross_agent_linker.py", exc_info=True)
+            except (OSError, IOError):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at cross_agent_linker.py", exc_info=True
+                )
                 continue
             fm = self.linker._read_frontmatter(md_file)
-            haystack = " ".join([
-                md_file.stem,
-                str(fm.get("topic", "")),
-                str(fm.get("title", "")),
-                str(fm.get("tags", "")),
-                content[:2000],
-            ]).lower()
+            haystack = " ".join(
+                [
+                    md_file.stem,
+                    str(fm.get("topic", "")),
+                    str(fm.get("title", "")),
+                    str(fm.get("tags", "")),
+                    content[:2000],
+                ]
+            ).lower()
             if topic_lower in haystack:
-                pages.append(WikiPage(md_file, fm, content))
+                pages.append(LinkedWikiPage(md_file, fm, content))
         return pages
 
-    def _extract_conclusion(self, page: WikiPage) -> Optional[str]:
+    def _extract_conclusion(self, page: LinkedWikiPage) -> Optional[str]:
         for key in ["decision", "conclusion", "recommendation"]:
             value = page.frontmatter.get(key)
             if value:
@@ -536,7 +710,7 @@ class CrossAgentDivergenceDetector:
         return None
 
     def _dedup_by_agent(self, conclusions: List[AgentConclusion]) -> List[AgentConclusion]:
-        latest = {}
+        latest = {}  # type: ignore[var-annotated]
         for item in conclusions:
             current = latest.get(item.agent)
             if current is None or item.date_str >= current.date_str:
@@ -546,7 +720,9 @@ class CrossAgentDivergenceDetector:
     def _are_contradictory(self, conclusions: List[AgentConclusion]) -> bool:
         texts = [item.conclusion.lower() for item in conclusions]
         for left, right in self.CONTRADICTION_PAIRS:
-            if any(left.lower() in text for text in texts) and any(right.lower() in text for text in texts):
+            if any(left.lower() in text for text in texts) and any(
+                right.lower() in text for text in texts
+            ):
                 return True
 
         for i, left in enumerate(texts):
@@ -588,7 +764,7 @@ class CrossAgentDivergenceDetector:
         raw = str(value).strip().strip('"')
         for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m-%d"):
             try:
-                dt = datetime.strptime(raw[:len(fmt)], fmt)
+                dt = datetime.strptime(raw[: len(fmt)], fmt)
                 return f"{dt.month}/{dt.day}"
             except ValueError:
                 continue

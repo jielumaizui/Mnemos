@@ -1,0 +1,2320 @@
+{
+  "discovery": "all core/**/*.py, scripts/**/*.py and daemon/**/*.py files containing CREATE/ALTER/DROP TABLE/INDEX/VIEW/TRIGGER DDL",
+  "entries": [
+    {
+      "ddl_objects": [
+        "agent_authorizations",
+        "mcp_launch_capabilities",
+        "mcp_principal_grants"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/agent_kit/authorization.py",
+      "release_blocking": false,
+      "source_sha256": "e475884b3ee9583be695087aafe6e53e989cad042db3e04a6ff6b20a70bae964"
+    },
+    {
+      "ddl_objects": [
+        "prompt_sanitizer_events"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/agent_kit/prompt_sanitizer.py",
+      "release_blocking": true,
+      "source_sha256": "ee3fc2fadcda5750c85fbbf5695fc24aad2c2b78a16385c1b91c3854e93debdf"
+    },
+    {
+      "ddl_objects": [
+        "agent_health_roundtrips",
+        "agent_runtime_receipts",
+        "agent_source_capture_receipts"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/agent_kit/runtime_receipts.py",
+      "release_blocking": false,
+      "source_sha256": "d9d8144a2a8c0fec70e6c16ea9f0a878ec3427995c4a272c55ca7134c3f8cf36"
+    },
+    {
+      "ddl_objects": [
+        "agent_shadow_config"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/agent_kit/shadow_eval.py",
+      "release_blocking": true,
+      "source_sha256": "3c7254d8b12b58e56b31cc292bd8cec5b93f6c6936ba808403469ec3169f7e99"
+    },
+    {
+      "ddl_objects": [
+        "hub_meta",
+        "idx_oh_dedup",
+        "output_history",
+        "push_penalties",
+        "push_penalty_feedback_events"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/application_hub.py",
+      "release_blocking": true,
+      "source_sha256": "7f069cc345bdd4456f289dae137a84608b324003e9495e7ab8adf9e264e216ef"
+    },
+    {
+      "ddl_objects": [
+        "application_signals",
+        "idx_application_signals_kind",
+        "idx_application_signals_last_seen",
+        "idx_application_signals_status"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/application_signal_service.py",
+      "release_blocking": true,
+      "source_sha256": "3b6581fe9edcd0ebc38b6d89839d9d812a4be70e64d79195deb7aa87ab1040d1"
+    },
+    {
+      "ddl_objects": [
+        "blindspots",
+        "idx_knowledge_gap_current_topic",
+        "idx_knowledge_gap_status",
+        "trg_"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/blindspot_asset_schema.py",
+      "release_blocking": true,
+      "source_sha256": "02e377dd156ad74ee3ed48d39b7e8663dc331afc652437f62e6addbdd546f1dc"
+    },
+    {
+      "ddl_objects": [
+        "idx_recap_task_events_task",
+        "recap_task_events",
+        "recap_tasks"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/forced_retrospective.py",
+      "release_blocking": true,
+      "source_sha256": "3146496ef3ff52ca6ac7f0bc6af3c8c3ba5e43a89ac96b3b83d17a8478cfea9a"
+    },
+    {
+      "ddl_objects": [
+        "idx_ic_input",
+        "intent_corrections"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/intent_router.py",
+      "release_blocking": true,
+      "source_sha256": "b1be48fe66833cfa66e7bfdc06d5a1580ad3cd14d53044677cb9defbc6e71afe"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_date",
+        "idx_raw_mtime",
+        "idx_raw_session",
+        "idx_raw_tags_file",
+        "idx_raw_tags_tag",
+        "raw_index",
+        "raw_tags"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/app/raw_search.py",
+      "release_blocking": false,
+      "source_sha256": "a248c95afdcd016bba895adb90bf562cbb8767f6115d216ea5abb98859495578"
+    },
+    {
+      "ddl_objects": [
+        "idx_recap_consumption_command_status",
+        "idx_recap_consumption_plan_recap",
+        "idx_recap_consumption_plan_status",
+        "idx_recap_consumption_receipt_plan",
+        "recap_consumption_commands",
+        "recap_consumption_plans",
+        "recap_consumption_receipts"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/recap_consumption.py",
+      "release_blocking": true,
+      "source_sha256": "99f3b2b3f6c4f8a39fac23ae46778e2281299022b5ac2a42ca9ee00701022618"
+    },
+    {
+      "ddl_objects": [
+        "idx_recap_correction_status",
+        "idx_recap_feedback_recap",
+        "recap_correction_commands",
+        "recap_correction_receipts",
+        "recap_effect_states",
+        "recap_feedback_canonical_bindings",
+        "recap_feedback_canonical_bindings_no_delete",
+        "recap_feedback_canonical_bindings_no_update",
+        "recap_feedback_events"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/recap_feedback.py",
+      "release_blocking": true,
+      "source_sha256": "9d6aa1cd0c07c02ae8fc5d1433b168bdd2f9c13b8cca85d054093e08e6fd2ec8"
+    },
+    {
+      "ddl_objects": [
+        "idx_recap_outcome_source_event",
+        "recap_consumption_outcomes",
+        "recap_scheduler_corrections",
+        "recap_scheduler_effects"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/retrospective_consumption_router.py",
+      "release_blocking": true,
+      "source_sha256": "8e9a18f9a43035ebac430666ccc067a459e45cb0a438c31c896afed286e3eced"
+    },
+    {
+      "ddl_objects": [
+        "idx_retrospective_sessions_task",
+        "retrospective_sessions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/retrospective_session_manager.py",
+      "release_blocking": true,
+      "source_sha256": "ce81497e3d7d53a6d61d0c481a875524cdbf92492499843a995e7cc447d46a44"
+    },
+    {
+      "ddl_objects": [
+        "recap_skip_events"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/retrospective_skip_event_store.py",
+      "release_blocking": true,
+      "source_sha256": "614665b24df5b285757d448447866b8737415d6c51099803766dfd779a793cfe"
+    },
+    {
+      "ddl_objects": [
+        "recap_action_status"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/app/retrospective_store.py",
+      "release_blocking": true,
+      "source_sha256": "acccbac7fbfe7f5441f1a829dd9ad2b06a61e4103359de31273d386d16d8bc7f"
+    },
+    {
+      "ddl_objects": [
+        "IF"
+      ],
+      "ddl_operations": [
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/cognition_episode_event_schema.py",
+      "release_blocking": true,
+      "source_sha256": "d516b70fa28557ed7dfcd2658760de32271ab64561b53b1d297f3907d1ba205f"
+    },
+    {
+      "ddl_objects": [
+        "cognition_episode_projection_effects",
+        "cognition_episode_projection_omissions",
+        "evidence_edges",
+        "evidence_nodes",
+        "idx_episode_projection_omission_revision"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/cognition_episode_projection_schema.py",
+      "release_blocking": true,
+      "source_sha256": "9e1a73771d2fadc24adc62bbc7d15f780ef7959d56026ea1cc6d1a8f73409220"
+    },
+    {
+      "ddl_objects": [
+        "consolidation_coverage",
+        "consolidation_coverage_receipts",
+        "consolidation_runs",
+        "consolidation_trusted_pages"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/consolidator.py",
+      "release_blocking": true,
+      "source_sha256": "35ae3ddd5ae791e073ad12ed073053c7134466ae545c66220e570b5e7ce0636a"
+    },
+    {
+      "ddl_objects": [
+        "delivery_events",
+        "delivery_presentation_receipts",
+        "idx_delivery_events_budget"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/delivery_router.py",
+      "release_blocking": true,
+      "source_sha256": "8f2142e035f4b8df9ac7de83241d8fee67d15c52b66ed419e79f21f78378e96b"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/feedback_domain_proposal.py",
+      "release_blocking": true,
+      "source_sha256": "32b30e48eb429554bf029a4dd9b027514570bd5ff320103e051249f63506bcb4"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/material_effect_schema.py",
+      "release_blocking": true,
+      "source_sha256": "3c7f2057ec7bfb774cc1bef7fc7863395a5a5cff04e764017c52ab40b2ddfb04"
+    },
+    {
+      "ddl_objects": [
+        "idx_obs_calibration_revision",
+        "observations"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "DROP INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/observation_calibration_schema.py",
+      "release_blocking": true,
+      "source_sha256": "33ab084cb8d48ac609d8177fc68e6c9330e3114dc4723e6ce4131c1acf79b410"
+    },
+    {
+      "ddl_objects": [
+        "idx_obs_dimension",
+        "idx_obs_period",
+        "idx_obs_source",
+        "idx_obs_updated",
+        "idx_observation_subject_deletion_scope",
+        "observation_source_cursors",
+        "observations"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/observation_store.py",
+      "release_blocking": true,
+      "source_sha256": "88b82648b8f5e93ddc7c4ded8f2f6c95a356dfca0ac3708f6c6471b9d736f934"
+    },
+    {
+      "ddl_objects": [
+        "idx_policy_patch_feedback_patch",
+        "idx_policy_patch_feedback_source_event",
+        "idx_policy_patches_lookup",
+        "idx_policy_patches_scope_lookup",
+        "idx_policy_patches_source",
+        "policy_patch_feedback",
+        "policy_patches"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/policy_patch.py",
+      "release_blocking": true,
+      "source_sha256": "ff67bdd73c62140f4925ef80797de5a412966db27a965d89646d0f0c7a2aabcd"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_search_exclusion_registry",
+        "cognitive_search_exclusions",
+        "cognitive_search_exclusions_no_delete",
+        "cognitive_search_exclusions_no_update",
+        "idx_cognitive_search_exclusions_lookup"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/search_exclusion_ledger.py",
+      "release_blocking": true,
+      "source_sha256": "b5572f884405dba1b06962f107e06c9c182fb413b37d848bf22c77dafe6922b9"
+    },
+    {
+      "ddl_objects": [
+        "idx_typed_search_state_headers_object",
+        "idx_typed_search_state_headers_scope",
+        "typed_search_state_exclusions",
+        "typed_search_state_exclusions_no_delete",
+        "typed_search_state_exclusions_no_update",
+        "typed_search_state_header_registry",
+        "typed_search_state_headers",
+        "typed_search_state_headers_no_delete",
+        "typed_search_state_headers_no_update",
+        "typed_search_state_headers_revision_binding",
+        "typed_search_state_revision_bindings",
+        "typed_search_state_revision_bindings_no_delete",
+        "typed_search_state_revision_bindings_no_update",
+        "typed_search_state_revision_bindings_revision_binding"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "DROP TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/cognitive/search_state_headers.py",
+      "release_blocking": false,
+      "source_sha256": "198c654e0f2479dcb3507585dbae5edfd84c9e78a4aa1e81f175d4b08d4e181c"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "DROP TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/cognitive/stage_receipt_schema_upgrade.py",
+      "release_blocking": false,
+      "source_sha256": "dbb98df22ef1850b25d82c9386f0194da52522a028bef0f075a4d7a3bd1f797c"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "DROP INDEX",
+        "DROP TABLE",
+        "DROP TRIGGER"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/cognitive/state_schema.py",
+      "release_blocking": false,
+      "source_sha256": "23e7f945e9222532f882945668a2b00d1da420fd13f4e4518657912e899992e8"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_data_consumer_heads",
+        "cognitive_data_consumptions",
+        "cognitive_data_consumptions_no_delete",
+        "cognitive_data_consumptions_no_update",
+        "cognitive_data_events",
+        "cognitive_data_events_no_delete",
+        "cognitive_data_events_no_update",
+        "cognitive_data_reconciliations",
+        "cognitive_data_reconciliations_no_delete",
+        "cognitive_data_reconciliations_no_update",
+        "cognitive_feedback_command_attempts",
+        "cognitive_feedback_command_attempts_no_delete",
+        "cognitive_feedback_command_attempts_no_update",
+        "cognitive_state_effect_receipts",
+        "cognitive_state_effect_receipts_no_delete",
+        "cognitive_state_effect_receipts_no_update",
+        "cognitive_state_heads",
+        "cognitive_state_migration_quarantine",
+        "cognitive_state_migration_quarantine_no_delete",
+        "cognitive_state_migration_quarantine_no_update",
+        "cognitive_state_outbox",
+        "cognitive_state_outbox_no_delete",
+        "cognitive_state_outbox_no_update",
+        "cognitive_state_revisions",
+        "cognitive_state_revisions_no_delete",
+        "cognitive_state_revisions_no_update",
+        "idx_cognitive_data_consumptions_event",
+        "idx_cognitive_data_events_dedupe",
+        "idx_cognitive_data_events_subject",
+        "idx_cognitive_data_reconciliations_relation",
+        "idx_cognitive_feedback_attempts_command",
+        "idx_cognitive_state_outbox_command_type",
+        "idx_cognitive_state_outbox_consumer",
+        "idx_cognitive_state_outbox_pending_order",
+        "idx_cognitive_state_revisions_scope",
+        "idx_cognitive_state_revisions_source",
+        "idx_runtime_flow_events_created_at",
+        "idx_runtime_flow_events_flow_direction",
+        "idx_runtime_flow_events_idempotency",
+        "idx_runtime_flow_events_item",
+        "idx_runtime_flow_receipts_event",
+        "idx_runtime_flow_receipts_flow",
+        "runtime_flow_events",
+        "runtime_flow_receipts",
+        "runtime_flow_registry"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/cognitive/state_schema_ddl.py",
+      "release_blocking": false,
+      "source_sha256": "676eb78b40122587985d1fd8b54867e158bd15a82525cd2eb77d1cabdc844e99"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/training_governance_static_audit.py",
+      "release_blocking": true,
+      "source_sha256": "cb08e209a1cb5af944aef5a1f1b527405f0cbe7d2b2e7afb28011fe71b8dcc36"
+    },
+    {
+      "ddl_objects": [
+        "idx_negative_evidence_scope",
+        "idx_trust_decisions_subject",
+        "negative_evidence",
+        "trust_decisions"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/trust_scorer.py",
+      "release_blocking": true,
+      "source_sha256": "ac2a8c6e221c7aca421e97052cda8ae5ec45c6a1fa8f95a32db575993bb6a73d"
+    },
+    {
+      "ddl_objects": [
+        "idx_",
+        "trg_"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/user_model_asset_store.py",
+      "release_blocking": true,
+      "source_sha256": "9086fab963f9340776eb51521f7748ace430e75bf7f8c157994c5e608e7aa278"
+    },
+    {
+      "ddl_objects": [
+        "idx_verification_queue_source",
+        "idx_verification_queue_status",
+        "verification_queue",
+        "verification_runs"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive/verification_queue.py",
+      "release_blocking": true,
+      "source_sha256": "ed137ff7412a7ad18390b2853ed8225d3dd1f8ec7e9fc01c780348e09dd71ce9"
+    },
+    {
+      "ddl_objects": [
+        "canonical_nodes",
+        "cognitive_graph_deletion_receipts",
+        "cognitive_relations",
+        "idx_canonical_name",
+        "idx_cog_rel_source",
+        "idx_cog_rel_stale",
+        "idx_cog_rel_target",
+        "idx_cog_rel_type",
+        "idx_cognitive_graph_deletion_request",
+        "idx_outbox_processed",
+        "sync_outbox"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/cognitive_graph/store.py",
+      "release_blocking": true,
+      "source_sha256": "f8fe3e736d38759c10667c4035815fea5c9c2255960a2c52e6c0bf24e3027b5c"
+    },
+    {
+      "ddl_objects": [
+        "embedding_cache",
+        "idx_cache_last_used",
+        "idx_cache_model"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/embeddings/cache.py",
+      "release_blocking": true,
+      "source_sha256": "489ca721772cc82bf629cd82f64805f70eb09eee61514720facb4137b9973256"
+    },
+    {
+      "ddl_objects": [
+        "relation_context_embeddings",
+        "relation_embedding_state"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/embeddings/relation_manager.py",
+      "release_blocking": true,
+      "source_sha256": "7efa752d79823e5f304cfca212a0a2707f3599de7fe819aa4dac4542e79da917"
+    },
+    {
+      "ddl_objects": [
+        "events",
+        "idx_events_lease"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/event_bus_lease.py",
+      "release_blocking": true,
+      "source_sha256": "55d5d3455b1632488583d6b559c86b69eb3278132f78ee68dface0e584c88570"
+    },
+    {
+      "ddl_objects": [
+        "evidence_edges",
+        "evidence_nodes",
+        "idx_ev_edge_relation",
+        "idx_ev_edge_source",
+        "idx_ev_edge_target",
+        "idx_ev_node_type"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/evidence/evidence_graph.py",
+      "release_blocking": true,
+      "source_sha256": "49b5f7763642267204d8865f03a86919fea98851db30e4fe19431da42ff4c517"
+    },
+    {
+      "ddl_objects": [
+        "distill_chunk_results",
+        "distill_chunk_results_v1_backup",
+        "idx_distill_chunk_results_status"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "DROP TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/chunk_checkpoint.py",
+      "release_blocking": true,
+      "source_sha256": "a505cceb0c25979bd7630ce690138b91eabfa1dc2ea79a947f2314f4a7b0f282"
+    },
+    {
+      "ddl_objects": [
+        "cognition_asset_commits",
+        "cognitive_decision_asset_proposals",
+        "cognitive_decision_proposal_attempts",
+        "idx_cognition_assets_session",
+        "idx_cognitive_proposals_asset"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/cognition_asset_store.py",
+      "release_blocking": true,
+      "source_sha256": "c64edf12807b95917a5ffca0d7ea3c9b7f7d6537d1f4892e9f57eff88a3c1f00"
+    },
+    {
+      "ddl_objects": [
+        "trg_cognitive_action_state_reconcile_batch_no_delete",
+        "trg_cognitive_action_state_reconcile_batch_no_update",
+        "trg_cognitive_action_state_reconciliation_no_delete",
+        "trg_cognitive_action_state_reconciliation_no_update"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/cognitive_action_state_reconcile_contracts.py",
+      "release_blocking": true,
+      "source_sha256": "634e427559a63d8c5ab1581f05fc89271139e2f482ee6f2bd3876ada4f33bd0b"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_action_target_effect_intents",
+        "cognitive_action_target_receipts"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/cognitive_action_targets.py",
+      "release_blocking": true,
+      "source_sha256": "2bda1e0dd60b7bf14ab7037aec97da9383c553b53c9b90e9a51cbf8ed8812e5a"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "DROP INDEX",
+        "DROP TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/distill_action_reconciliation.py",
+      "release_blocking": true,
+      "source_sha256": "1abd937352f402c69ecdb8969b8dfb2c34b575a91f81453528afd958648f5a04"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_action_attempt_events",
+        "cognitive_action_consumptions",
+        "cognitive_action_effects",
+        "cognitive_action_events",
+        "cognitive_action_intents",
+        "cognitive_action_log",
+        "distill_action_events",
+        "distill_action_log",
+        "distill_action_schema_registry",
+        "idx_cognitive_action_attempts_action",
+        "idx_cognitive_action_events_action",
+        "idx_cognitive_action_intents_parent",
+        "idx_cognitive_action_log_distill",
+        "idx_cognitive_action_log_state",
+        "idx_distill_action_log_session",
+        "idx_knowledge_action_log_action",
+        "knowledge_action_log"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/distill_action_store.py",
+      "release_blocking": true,
+      "source_sha256": "f2a703be1a7ebc797cb0532b3820683327d0cb7ecbfcfea46192de2434c4b8a5"
+    },
+    {
+      "ddl_objects": [
+        "distill_json_parse_events",
+        "idx_distill_json_parse_events_created_at",
+        "idx_distill_json_parse_events_path"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/distillation_metrics.py",
+      "release_blocking": true,
+      "source_sha256": "e43f3a716168b1b616b5b3d2ac7a3e0e415e28ccef5da6ef297272d6c9a62a39"
+    },
+    {
+      "ddl_objects": [
+        "distillation_pause_state"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/distillation_pause.py",
+      "release_blocking": true,
+      "source_sha256": "58bb4089a2627bb2eccd74db28b8c0521c3ccbd29fcae37c078238e45906fef8"
+    },
+    {
+      "ddl_objects": [
+        "document_wiki_link"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/document_pipeline.py",
+      "release_blocking": true,
+      "source_sha256": "903815a75a5d82066aead940f8364444f364d3e8d62b198c57e56a0e0ce6c6a2"
+    },
+    {
+      "ddl_objects": [
+        "evolution_alerts",
+        "proactive_distill_log"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/evolution_tracker.py",
+      "release_blocking": true,
+      "source_sha256": "ff4737ab3540de2eea79fe6c175b690f05ba2b9bd6b65eab2d434b2d6ab86a83"
+    },
+    {
+      "ddl_objects": [
+        "idx_link_probe_page",
+        "idx_link_probe_status",
+        "link_probe_queue"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/link_probe_worker.py",
+      "release_blocking": true,
+      "source_sha256": "69c7d4bb4d2fb2cd4f842451159464768249fc31254c2dffffcbccf0d2231229"
+    },
+    {
+      "ddl_objects": [
+        "processed_sessions",
+        "wiki_pages"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/hephaestus/wiki_builder.py",
+      "release_blocking": true,
+      "source_sha256": "1a33958908a4fd2eb8929d299fb9d6c8bcfa2f646ba18cbd069e29355a092a88"
+    },
+    {
+      "ddl_objects": [
+        "config_adaptation_log",
+        "usage_metrics"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/adaptive_config.py",
+      "release_blocking": true,
+      "source_sha256": "a8e64e6551c4bf2d20cc3f2e0e6afa847b067c2077584fc9010f709f577787ce"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/aegis.py",
+      "release_blocking": true,
+      "source_sha256": "e557262669f3d0a39c655da70df8e5b53d17cd7d76c4fdab304ada3e11c0b88b"
+    },
+    {
+      "ddl_objects": [
+        "capsules",
+        "idx_capsule_date",
+        "idx_capsule_page",
+        "idx_capsule_status",
+        "idx_capsule_unique"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/aion.py",
+      "release_blocking": true,
+      "source_sha256": "4f45e6d5dae6afd31e25fbd9ed1b79c8d7057914e644a48f97d88d672fa2efd1"
+    },
+    {
+      "ddl_objects": [
+        "amphora_provenance_migrations",
+        "amphora_provenance_migrations_no_delete",
+        "amphora_provenance_migrations_no_update",
+        "amphora_source_span_migrations",
+        "amphora_source_span_migrations_no_delete",
+        "amphora_source_span_migrations_no_update",
+        "distillation_tasks",
+        "idx_distill_input_revision",
+        "idx_retry",
+        "idx_session_id",
+        "idx_status_priority"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX",
+        "DROP TRIGGER"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/kia/amphora.py",
+      "release_blocking": false,
+      "source_sha256": "69da988a35296bad3eb9f606775713cd9fec544091ee6a2c82898d1d9e784bfb"
+    },
+    {
+      "ddl_objects": [
+        "idx_trail_page",
+        "idx_trail_session",
+        "idx_trail_time",
+        "idx_trail_type",
+        "page_stats",
+        "trail_events"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/ariadne.py",
+      "release_blocking": true,
+      "source_sha256": "ca13738e3ffbb709f06adc29266097463884bc43a0e2b7aa14be661f5299babf"
+    },
+    {
+      "ddl_objects": [
+        "co_occurrence_relations",
+        "idx_coocc_entity_a",
+        "idx_coocc_entity_b"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/charon.py",
+      "release_blocking": true,
+      "source_sha256": "6418f0e341f1453586b351cec40667af6810971c85aa2cccf6c4773a151886a4"
+    },
+    {
+      "ddl_objects": [
+        "idx_kst_priority_reminder",
+        "idx_kst_reminder",
+        "idx_kst_status",
+        "knowledge_scheduled_tasks",
+        "scheduler_step_effects",
+        "scheduler_step_log",
+        "scheduler_step_state"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/chronos_scheduler_support.py",
+      "release_blocking": true,
+      "source_sha256": "7e3e92568081a19293c53cb7fd2b18abb12fcf08771ca54f1c0dd1866352fb27"
+    },
+    {
+      "ddl_objects": [
+        "task_history"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/cognitive_decision_assets.py",
+      "release_blocking": true,
+      "source_sha256": "7afae1a4ac310eefcf6614c53be2cf3e41f7bae7043d4ba8f264323f3c6dcb36"
+    },
+    {
+      "ddl_objects": [
+        "dialog_reminder_corrections",
+        "dialog_reminders",
+        "idx_reminders_defer",
+        "idx_reminders_issue",
+        "idx_reminders_page",
+        "idx_reminders_severity",
+        "idx_reminders_status"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/dialog_reminder.py",
+      "release_blocking": true,
+      "source_sha256": "84e392f32bf64d9c126a146bd6eb24ba87b7e45e403eab7b0b7d1420e523bbba"
+    },
+    {
+      "ddl_objects": [
+        "classification_feedback",
+        "idx_history_type",
+        "keyword_weights",
+        "task_classification_history"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/dike.py",
+      "release_blocking": true,
+      "source_sha256": "717b137c6f926f592755c88c8b0df211e5d43ac495ab91d054c893299e53552c"
+    },
+    {
+      "ddl_objects": [
+        "entities",
+        "entity_aliases",
+        "entity_sources",
+        "idx_entities_quality",
+        "idx_entities_status",
+        "idx_entities_type",
+        "idx_entities_visit"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/entity_manager.py",
+      "release_blocking": true,
+      "source_sha256": "b8411dba4e1c67329d051f5ca96d5f38fbe16749fbae89068d2d0cf2d48d4961"
+    },
+    {
+      "ddl_objects": [
+        "idx_dna_domain_type",
+        "idx_dna_md5",
+        "idx_dna_signature",
+        "idx_dna_simhash",
+        "knowledge_dna"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/genos.py",
+      "release_blocking": true,
+      "source_sha256": "86a4bca505b90d04c569e69da04a77de2ccf40ae32dc34fb4165dfccad2489f3"
+    },
+    {
+      "ddl_objects": [
+        "auto_fix_log",
+        "idx_fix_log_issue",
+        "idx_ignore_type",
+        "idx_issues_detected",
+        "idx_issues_page",
+        "idx_issues_severity",
+        "idx_issues_status",
+        "issue_ignore_rules",
+        "knowledge_issues"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/issue_pipeline.py",
+      "release_blocking": true,
+      "source_sha256": "951aaffdfcb841685c3192822e9f202e0958ee9902b453fb21e680e137891238"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_decision_assets",
+        "idx_skill_usage",
+        "idx_wiki_usage",
+        "persona_flywheel_logs",
+        "skill_paths",
+        "skill_usage_logs",
+        "skill_verification_tasks",
+        "skill_versions",
+        "skills",
+        "wiki_usage_logs"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/ixion_schema.py",
+      "release_blocking": true,
+      "source_sha256": "b30f2de4e71332f7ff1326a2b637990a17fa9e5220422d781c1d6785b26d3a60"
+    },
+    {
+      "ddl_objects": [
+        "entropy_suggestions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/kia_event_consumer.py",
+      "release_blocking": true,
+      "source_sha256": "e5bdb3a36b9abfd2a444621b406692570223fc76102d60105bd0cf47b0c80631"
+    },
+    {
+      "ddl_objects": [
+        "idx_rel_confidence",
+        "idx_rel_source",
+        "idx_rel_target",
+        "idx_rel_type",
+        "relation_stats",
+        "relations"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/knowledge_graph.py",
+      "release_blocking": true,
+      "source_sha256": "caf9d8093f8db5ae055fce34020c53c218b4f9727a3954ec9da2ab78b4a932fb"
+    },
+    {
+      "ddl_objects": [
+        "kg_embedding_outbox"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/knowledge_graph_projection.py",
+      "release_blocking": true,
+      "source_sha256": "73b4c803344d84a14655f68545865005fd66f7b267e39878d6c44754a8dbc622"
+    },
+    {
+      "ddl_objects": [
+        "processed_files",
+        "scan_log"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/knowledge_inbox.py",
+      "release_blocking": true,
+      "source_sha256": "80d435bfb8268084233a8aa435c6e8f44007f668f62e78a8f5f0d132e64ef2d8"
+    },
+    {
+      "ddl_objects": [
+        "knowledge_profiles"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/metis.py",
+      "release_blocking": true,
+      "source_sha256": "027e6af3cb486b1bf28d965b6a73e7936d1aeeb6efec5e02315711124890a804"
+    },
+    {
+      "ddl_objects": [
+        "policy_shadow"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/policy.py",
+      "release_blocking": true,
+      "source_sha256": "9d831caad79aa49246adc86cc5559bd59a3cfdcde47ff5e56d001cf622818ff0"
+    },
+    {
+      "ddl_objects": [
+        "checklist_cache"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/prophasis.py",
+      "release_blocking": true,
+      "source_sha256": "53dd54cadce27e57c1577b919f51077fb43dfc3cee27c9dcdfb8f32067ee6b21"
+    },
+    {
+      "ddl_objects": [
+        "idx_evidence_relation",
+        "relation_evidence",
+        "relation_evidence__legacy"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "DROP TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/kia/relation_evidence_schema.py",
+      "release_blocking": false,
+      "source_sha256": "8be9792647f63add4a72c99b1f40465f7eb11dde837a16cceb8be3f46f831a84"
+    },
+    {
+      "ddl_objects": [
+        "idx_rel_source",
+        "idx_rel_target",
+        "relations"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/relation_manager.py",
+      "release_blocking": true,
+      "source_sha256": "0a6f0dc6888c9da00657280795f0ef98fc2e715951a841950bca583c63d21cee"
+    },
+    {
+      "ddl_objects": [
+        "cooldowns"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/reminder_engine.py",
+      "release_blocking": true,
+      "source_sha256": "03643eefed146c6f4acd043ab064bb6798fb3d2c6012eada7f243667a0517ea0"
+    },
+    {
+      "ddl_objects": [
+        "idx_stc_result",
+        "idx_str_page",
+        "stress_test_challenges",
+        "stress_test_results"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/stress_test.py",
+      "release_blocking": true,
+      "source_sha256": "534594a625aeb7d6047d4f282682f6f33fe69769d2f4aa4f2b4c7f47d463f9fd"
+    },
+    {
+      "ddl_objects": [
+        "push_history"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/kia/teiresias.py",
+      "release_blocking": true,
+      "source_sha256": "7cb71eca9cf91f2d8bbd22b7bd75cc10a982606941be4826bd5c4450e8a2780c"
+    },
+    {
+      "ddl_objects": [
+        "can"
+      ],
+      "ddl_operations": [
+        "DROP TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/migrations/model_call_ledger_reconcile/cleanup.py",
+      "release_blocking": true,
+      "source_sha256": "67c7da22828f0ad890bbaeb4934d927d0cfead98d5a0a8602f85b64753612088"
+    },
+    {
+      "ddl_objects": [
+        "idx_migration_ledger_migration",
+        "migration_ledger"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/migrations/registry.py",
+      "release_blocking": true,
+      "source_sha256": "42859c41cc805d8081d3bc7e058610b5e4c3069e30240546e16d841942d593f6"
+    },
+    {
+      "ddl_objects": [
+        "dead_letters",
+        "event_deferred_keys",
+        "event_resolved_deferred_keys",
+        "event_trace_claims",
+        "events",
+        "handler_receipts",
+        "idx_dead_letters_type",
+        "idx_event_deferred_key",
+        "idx_events_lease",
+        "idx_events_status",
+        "idx_events_type",
+        "idx_handler_receipts_mutation",
+        "idx_handler_receipts_trace"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/mnemos_bus.py",
+      "release_blocking": true,
+      "source_sha256": "407d549da29248878b35b3ce2878d35b6f65a10a47a825d1c17556fb6b6dd1b5"
+    },
+    {
+      "ddl_objects": [
+        "__legacy__action_ledger",
+        "action_ledger",
+        "action_ledger_no_delete",
+        "action_ledger_no_update",
+        "idx_action_ledger_type_status"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "DROP INDEX",
+        "DROP TABLE",
+        "DROP TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/ops/action_ledger_schema.py",
+      "release_blocking": true,
+      "source_sha256": "d42cda01c0b1dd5f97ab8b6e9b65b44bb46d89d519db4e61c4910a6cd95c57ce"
+    },
+    {
+      "ddl_objects": [
+        "action_ledger_subject_tombstone_no_delete",
+        "action_ledger_subject_tombstone_no_update",
+        "idx_action_ledger_subject_links_scope",
+        "idx_action_ledger_subject_receipt_pending",
+        "idx_action_ledger_subject_receipt_scope"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/ops/action_ledger_subject_provenance.py",
+      "release_blocking": true,
+      "source_sha256": "87cb4b0ddc9e3629dd92e42d0ccb2ee2204cfe283ddf3cfb7c73c5164dccc960"
+    },
+    {
+      "ddl_objects": [
+        "event_subject_tombstone_no_delete",
+        "event_subject_tombstone_no_update",
+        "idx_event_subject_links_scope",
+        "idx_event_subject_receipts_pending",
+        "idx_event_subject_receipts_scope"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/ops/event_subject_provenance.py",
+      "release_blocking": true,
+      "source_sha256": "9e7eb6686d03e5ac7c69941b0b15fa1dc54ebb4edeb391d251ea6482c3d027dd"
+    },
+    {
+      "ddl_objects": [
+        "diagnostic_tasks",
+        "incident_artifact_access_events",
+        "incident_artifact_access_events_no_delete",
+        "incident_artifact_access_events_no_update",
+        "incident_diagnostic_evidence",
+        "incident_diagnostic_evidence_no_delete",
+        "incident_diagnostic_evidence_no_update",
+        "incident_ingest_receipts",
+        "incident_ingest_receipts_no_delete",
+        "incident_ingest_receipts_no_update",
+        "incident_notification_attempts",
+        "incident_notification_attempts_no_delete",
+        "incident_notification_attempts_no_update",
+        "incident_notification_commands",
+        "incident_notification_receipts",
+        "incident_occurrences",
+        "incident_occurrences_by_incident",
+        "incident_occurrences_no_delete",
+        "incident_occurrences_no_update",
+        "incident_replay_commands",
+        "incident_replay_receipts",
+        "incident_replay_receipts_no_delete",
+        "incident_replay_receipts_no_update",
+        "incident_resolutions",
+        "incident_resolutions_no_delete",
+        "incident_resolutions_no_update",
+        "incident_retrospectives",
+        "incident_retrospectives_no_delete",
+        "incident_retrospectives_no_update",
+        "legacy_incident_migration_events",
+        "legacy_incident_migration_events_no_delete",
+        "legacy_incident_migration_events_no_update",
+        "legacy_incident_migrations",
+        "legacy_incident_migrations_no_delete",
+        "legacy_incident_migrations_no_update",
+        "legacy_incident_quarantine",
+        "legacy_incident_quarantine_no_delete",
+        "legacy_incident_quarantine_no_update",
+        "one_active_operational_incident_per_fingerprint",
+        "operational_incident_schema_registry",
+        "operational_incidents",
+        "root_cause_reports",
+        "root_cause_reports_no_delete",
+        "root_cause_reports_no_update"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/ops/operational_incident.py",
+      "release_blocking": true,
+      "source_sha256": "503ee2890d45668873941d34cb75384d7c4acfe0a170a4dcef0c3ad64f5897d5"
+    },
+    {
+      "ddl_objects": [
+        "behavior_prompt_signals",
+        "idx_behavior_prompt_agent",
+        "idx_behavior_prompt_source",
+        "idx_behavior_prompt_time"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/behavior_tracker.py",
+      "release_blocking": true,
+      "source_sha256": "a32fc4f8bec82443bd0be60dac35670574564fdfc3e64e0bedee8e4fe1dec35d"
+    },
+    {
+      "ddl_objects": [
+        "idx_profile_read_authorizations_status",
+        "idx_profile_signals_dimension",
+        "idx_profile_signals_source",
+        "idx_profile_signals_source_identity_unique",
+        "idx_profile_signals_status",
+        "idx_profile_usage_consumer",
+        "idx_profile_usage_created_at",
+        "idx_profile_usage_idempotency",
+        "idx_profile_usage_outbox_status",
+        "idx_profile_usage_target_receipt",
+        "profile_read_authorizations",
+        "profile_signals",
+        "profile_usage_log",
+        "profile_usage_outbox"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/cognitive_profile.py",
+      "release_blocking": true,
+      "source_sha256": "a3d87662fcc40e42f5f4e57912e17c27be80ee376be4d8e107334546b547b80d"
+    },
+    {
+      "ddl_objects": [
+        "idx_profile_read_authorizations_status",
+        "idx_profile_usage_idempotency",
+        "idx_profile_usage_outbox_status",
+        "idx_profile_usage_target_receipt",
+        "profile_read_authorizations",
+        "profile_usage_log",
+        "profile_usage_outbox"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/profile_access_schema.py",
+      "release_blocking": true,
+      "source_sha256": "3530b35530915b4fe5d8cac5e1a5c52e3e79ef4a5be6702c16c6a0c03353a91a"
+    },
+    {
+      "ddl_objects": [
+        "idx_profile_assertion_revisions_assertion",
+        "idx_profile_assertion_revisions_status",
+        "idx_profile_assertions_dimension",
+        "idx_profile_assertions_status",
+        "profile_assertion_heads",
+        "profile_assertion_revision_delete_permits",
+        "profile_assertion_revisions",
+        "profile_assertion_revisions_no_delete",
+        "profile_assertion_revisions_no_update",
+        "profile_assertions"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/profile_assertion_schema.py",
+      "release_blocking": true,
+      "source_sha256": "0336e68904423f2ab5d576b83fb1adedc05dcbce819caf99064435f24375eb8e"
+    },
+    {
+      "ddl_objects": [
+        "idx_profile_subject_deletion_scope"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/profile_subject_deletion.py",
+      "release_blocking": true,
+      "source_sha256": "a9b76f57ee1d009973c9a2f741f8011b0f2fa39bf0856500c9ed3d4fc02f2e65"
+    },
+    {
+      "ddl_objects": [
+        "persona_versions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/psyche.py",
+      "release_blocking": true,
+      "source_sha256": "35e001107222621c3ff95c8abef66fe248431c9b91fce61bf0a04834a865fbd2"
+    },
+    {
+      "ddl_objects": [
+        "behavior_prompt_signals",
+        "document_signals",
+        "file_system_signals",
+        "git_signals",
+        "idx_behavior_prompt_agent",
+        "idx_behavior_prompt_source",
+        "idx_behavior_prompt_time",
+        "idx_daily_date",
+        "idx_doc_category",
+        "idx_doc_processed",
+        "idx_doc_time",
+        "idx_fs_time",
+        "idx_git_repo",
+        "idx_git_time",
+        "idx_knowledge_page",
+        "idx_knowledge_time",
+        "idx_meta_processed",
+        "idx_meta_table_id",
+        "idx_note_ai",
+        "idx_note_time",
+        "idx_persona_blindspot_events_supersedes",
+        "idx_persona_calibration_events_supersedes",
+        "idx_persona_revisions_supersedes",
+        "idx_persona_version",
+        "idx_reflection_signal_dim",
+        "idx_reflection_signal_source",
+        "idx_reflection_signal_suppressions_signal",
+        "idx_session_task",
+        "idx_session_time",
+        "idx_wechat_hash",
+        "idx_wechat_time",
+        "knowledge_signals",
+        "note_signals",
+        "persona_blindspot_events",
+        "persona_blindspot_events_immutable_delete",
+        "persona_blindspot_events_immutable_update",
+        "persona_calibration_events",
+        "persona_calibration_events_immutable_delete",
+        "persona_calibration_events_immutable_update",
+        "persona_revision_heads",
+        "persona_revisions",
+        "persona_revisions_immutable_delete",
+        "persona_revisions_immutable_update",
+        "persona_versions",
+        "reflection_signal_suppressions",
+        "reflection_signal_suppressions_no_delete",
+        "reflection_signal_suppressions_no_update",
+        "reflection_signals",
+        "session_signals",
+        "signal_daily_index",
+        "signal_metadata",
+        "wechat_signals"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/psyche_schema.py",
+      "release_blocking": true,
+      "source_sha256": "f7b247c8140195d45fa7f034236f1ac5ebc4149cc63fa1310b5a2d05dc716986"
+    },
+    {
+      "ddl_objects": [
+        "idx_reflection_signal_source_event",
+        "reflection_signals"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/persona/reflection_signal_persistence.py",
+      "release_blocking": true,
+      "source_sha256": "ae906cb4de4475144945278ff7da821fa0dd4b6faaa9d5e4598e6294bc7d1fb0"
+    },
+    {
+      "ddl_objects": [
+        "data_ownership_requests",
+        "idx_data_ownership_scope"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/privacy/data_ownership.py",
+      "release_blocking": true,
+      "source_sha256": "b132062a5e29143b6b86a499a421498394683962b57810e2f3274372ad827d8e"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_shifts",
+        "idx_layer5_experience_dim",
+        "idx_layer5_experience_type",
+        "idx_layer5_source_event",
+        "idx_reflection_created",
+        "idx_reflection_deletion_request",
+        "idx_reflection_trigger",
+        "idx_shift_detected",
+        "idx_shift_dimension",
+        "idx_shift_source_event",
+        "layer5_experiences",
+        "reflection_records"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/reflection/reflection_store.py",
+      "release_blocking": true,
+      "source_sha256": "9cfd43e022ea2c2a4770eb9a979d4453def8773b3f51b3f8f29ad27777c91333"
+    },
+    {
+      "ddl_objects": [
+        "search_sessions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/scoring/adaptive_scorer_v2.py",
+      "release_blocking": true,
+      "source_sha256": "7dc8ebd199c5c1f0e801419ee81688e706c7f64686041fcfda9d33279d515292"
+    },
+    {
+      "ddl_objects": [
+        "feedback_prompt_state"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/scoring/feedback_channel.py",
+      "release_blocking": true,
+      "source_sha256": "d7df8db2028b6aad5ca92f866cd83801dbd5d49903890a7b4d366db16e5ae2e1"
+    },
+    {
+      "ddl_objects": [
+        "idx_scoring_object_lineage_source",
+        "idx_scoring_subject_links_scope",
+        "idx_scoring_subject_receipts_pending",
+        "idx_scoring_subject_receipts_scope",
+        "scoring_subject_tombstone_no_delete",
+        "scoring_subject_tombstone_no_update"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/scoring/subject_provenance.py",
+      "release_blocking": true,
+      "source_sha256": "23eb097d36610d15047ec9a5008d8fd1cc0e936a882deb63a3910a258e6146eb"
+    },
+    {
+      "ddl_objects": [
+        "governed_scorer_model_heads",
+        "governed_scorer_models",
+        "governed_scorer_models_no_delete",
+        "governed_scorer_models_no_update",
+        "governed_training_aux_effects",
+        "governed_training_aux_effects_no_delete",
+        "governed_training_aux_effects_no_update",
+        "governed_training_aux_receipts",
+        "governed_training_aux_receipts_no_delete",
+        "governed_training_aux_receipts_no_update",
+        "governed_training_run_receipts",
+        "governed_training_run_receipts_no_delete",
+        "governed_training_run_receipts_no_update",
+        "governed_training_sample_actions",
+        "governed_training_sample_actions_no_delete",
+        "governed_training_sample_actions_no_update",
+        "governed_training_sample_receipts",
+        "governed_training_sample_receipts_no_delete",
+        "governed_training_sample_receipts_no_update",
+        "governed_training_samples",
+        "governed_training_samples_no_delete",
+        "governed_training_samples_no_update",
+        "idx_governed_scorer_models_dimension",
+        "idx_governed_training_aux_effects_run",
+        "idx_governed_training_aux_receipts_run",
+        "idx_governed_training_run_receipts_run",
+        "idx_governed_training_sample_actions_sample",
+        "idx_governed_training_sample_receipts_admission",
+        "idx_governed_training_samples_dimension_split",
+        "idx_governed_training_samples_group",
+        "mnemos_schema_registry"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/scoring/training_schema.py",
+      "release_blocking": true,
+      "source_sha256": "616572054fd160545332a68aff19777110d805d758290b7a0cb3ae77932a45ae"
+    },
+    {
+      "ddl_objects": [
+        "idx_agent_source_metadata_delete_pending_scope",
+        "idx_agent_source_metadata_deletion_scope"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/agent_source_metadata_deletion.py",
+      "release_blocking": false,
+      "source_sha256": "b98059e6cdf0f3134e662e207e3944b85e1065e2e70f7d4fb9b8564908196677"
+    },
+    {
+      "ddl_objects": [
+        "capture_distillation_handoffs",
+        "capture_events",
+        "capture_idempotency_receipts",
+        "capture_maintenance_receipts",
+        "capture_raw_failures",
+        "capture_schema_meta",
+        "idx_capture_handoff_status",
+        "idx_capture_idempotency_event",
+        "idx_capture_raw_failures_session",
+        "idx_dedupe_key",
+        "idx_session_turn",
+        "idx_source_status",
+        "idx_status",
+        "idx_status_deferred",
+        "session_end_events",
+        "source_backoff"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/capture_schema.py",
+      "release_blocking": false,
+      "source_sha256": "6db7d05e3b23cb7702a89d79923f20766a248fa647548b775b59762a6242a842"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_native_contract_observations_by_event",
+        "idx_raw_native_contract_observations_latest",
+        "raw_native_contract_observations"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/native_raw_contract_ledger.py",
+      "release_blocking": false,
+      "source_sha256": "98e85967e4e093ae552c3f44b4332323fd96f76e1412a89e5a2a2cffa2290700"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_event_identity_aliases_canonical"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/raw_event_identity_aliases.py",
+      "release_blocking": false,
+      "source_sha256": "cba3fedce1983dc341515bad50ee6ba622fe726eccd3390da2fd13c28879ef00"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_provenance_orphan_consumer",
+        "idx_raw_turns_source_session",
+        "idx_raw_turns_source_session_turn",
+        "idx_raw_turns_status",
+        "raw_turns",
+        "raw_turns_identity_v2"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "DROP TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/raw_event_identity_schema.py",
+      "release_blocking": false,
+      "source_sha256": "8a52cb7f2c2f63ac7a4810a111f92fc24fc2244317128500fdacc151864e9f37"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_access_event_time",
+        "idx_raw_provenance_gap_status",
+        "idx_raw_provenance_source",
+        "idx_raw_revisions_logical_number",
+        "idx_raw_turns_source_session",
+        "idx_raw_turns_source_session_turn",
+        "idx_raw_turns_status",
+        "raw_access_log",
+        "raw_lifecycle_state",
+        "raw_metrics",
+        "raw_provenance_edges",
+        "raw_provenance_gaps",
+        "raw_turn_revisions",
+        "raw_turns"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/raw_event_store.py",
+      "release_blocking": false,
+      "source_sha256": "fc3a85fcc761f049b2fa4cdb3bddd8b83ca3c3c69431ae293093c6849843e18d"
+    },
+    {
+      "ddl_objects": [
+        "raw_session_identity_reconciliations",
+        "raw_session_identity_reconciliations_no_delete",
+        "raw_session_identity_reconciliations_no_update"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/raw_session_identity_reconciliation.py",
+      "release_blocking": false,
+      "source_sha256": "79c9060565e5c01ca3a70923ec5346ebb3c4facf312f0285c1bc71f7dde32b2e"
+    },
+    {
+      "ddl_objects": [
+        "idx_raw_subject_deletion_request"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/sync_framework/raw_subject_deletion.py",
+      "release_blocking": true,
+      "source_sha256": "cc6c388adf7496d766753134b2ee6150c8a378af5b155170ddd5af35f87ff4d7"
+    },
+    {
+      "ddl_objects": [
+        "idx_sync_audit_source_time",
+        "idx_sync_content_hash",
+        "idx_sync_log_dedup",
+        "idx_sync_lookup",
+        "sync_audit",
+        "sync_log",
+        "user_signals"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/sync_engine.py",
+      "release_blocking": false,
+      "source_sha256": "8f537c0b43d8fda6301996e03722370f64263ddf4869a524fe9fd182e99f06e9"
+    },
+    {
+      "ddl_objects": [
+        "polling_state"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/sync_framework/triggers.py",
+      "release_blocking": false,
+      "source_sha256": "a99721e7e49c78b91ea43d8fe84cde13747dab329320a4887d5c1c728f9c42be"
+    },
+    {
+      "ddl_objects": [
+        "model_call_entries"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/telemetry/model_call_ledger/migration.py",
+      "release_blocking": true,
+      "source_sha256": "4093db297dc0f9efe4f8c87a3433b1155d91063ae84186d612c201f93d2adf46"
+    },
+    {
+      "ddl_objects": [
+        "idx_model_call_entries_created",
+        "idx_model_call_entries_run",
+        "idx_model_call_entries_state",
+        "idx_model_call_entry_subjects_scope",
+        "idx_model_call_run_subjects_scope",
+        "model_call_daily_spend_tombstones",
+        "model_call_entries",
+        "model_call_entry_subjects",
+        "model_call_frozen_subjects",
+        "model_call_ledger_reconciliation_dispositions",
+        "model_call_run_spend_tombstones",
+        "model_call_run_subjects",
+        "model_call_runs"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "DROP TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/telemetry/model_call_ledger/schema_reconciliation.py",
+      "release_blocking": true,
+      "source_sha256": "b664b08fcb9c9e37ef35a53767320c5f2164bc224c72340ce71755aa123743dd"
+    },
+    {
+      "ddl_objects": [
+        "dialog_push_events"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/dialog_push.py",
+      "release_blocking": true,
+      "source_sha256": "dc6d1832e67a58ff9e52b0ff2fbe62e15a5325489c16930c23576eb7660d7c4c"
+    },
+    {
+      "ddl_objects": [
+        "formal_cognitive_mutations",
+        "idx_formal_mutation_asset",
+        "idx_formal_mutation_target"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/formal_cognitive_mutation.py",
+      "release_blocking": true,
+      "source_sha256": "02f7ef96454fad212ed5950173ecc281b5e2e1fda120698e57921a07be0af609"
+    },
+    {
+      "ddl_objects": [
+        "native_store"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/knowledge_vault_writer.py",
+      "release_blocking": true,
+      "source_sha256": "fd9c8af86ff7e9303ee17756f6db6d930b742fba333a959c386907dd3d6a36e0"
+    },
+    {
+      "ddl_objects": [
+        "evidence_ledger",
+        "proposal_revisions",
+        "proposals",
+        "user_decisions"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/proposal_queue.py",
+      "release_blocking": true,
+      "source_sha256": "a91b031ed8f4aec6e8ff1e794b3f7d3e5b8b24ee78997f7abedd628941589487"
+    },
+    {
+      "ddl_objects": [
+        "trusted_markdown_effect_intents"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/vault_mutation_service.py",
+      "release_blocking": true,
+      "source_sha256": "7d08947b7d3850b13d9180efe7e968cfdba66cd406ffe269b37b1a26ce3800d3"
+    },
+    {
+      "ddl_objects": [
+        "journal_events"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/trust/write_journal.py",
+      "release_blocking": true,
+      "source_sha256": "07c3448cab3526019b9622d23daafc536a148bb3f80626080bb1b345c5d27544"
+    },
+    {
+      "ddl_objects": [
+        "derived_projection_generation_items",
+        "derived_projection_generations",
+        "idx_derived_projection_generation_scope",
+        "idx_derived_projection_item_mutation",
+        "idx_derived_projection_item_target"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/wiki_derived_projection.py",
+      "release_blocking": true,
+      "source_sha256": "543736b9624bcbfa5b0f8b4714627a9654c1207cb84af0841dd55e0693f3522d"
+    },
+    {
+      "ddl_objects": [
+        "idx_rel_to",
+        "page_metrics",
+        "page_relations",
+        "query_log"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "core/wiki_metrics.py",
+      "release_blocking": true,
+      "source_sha256": "9a54dc7e096d075d9bb924aaa539d41e19dcc64e92a774a74b4ba4cb13b77276"
+    },
+    {
+      "ddl_objects": [
+        "idx_projection_receipts_outcome",
+        "idx_wiki_mutations_event",
+        "idx_wiki_mutations_page",
+        "idx_wiki_mutations_sequence",
+        "idx_wiki_pages_content",
+        "idx_wiki_pages_state",
+        "idx_wiki_projection_material_status",
+        "idx_wiki_subject_deletion_path",
+        "idx_wiki_subject_deletion_request",
+        "projection_receipts",
+        "wiki_mutations",
+        "wiki_pages",
+        "wiki_projection_material_effects",
+        "wiki_subject_deletion_receipts"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE UNIQUE INDEX"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "core/wiki_projection_lifecycle.py",
+      "release_blocking": false,
+      "source_sha256": "e9bb79aeb9b58431004a825b2e38c4003e8db0fd45fa01cab8216e0a5c1d3a51"
+    },
+    {
+      "ddl_objects": [
+        "cognitive_relations",
+        "profile_assertions",
+        "reflection_records"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/audit_belief_revision_lineage.py",
+      "release_blocking": true,
+      "source_sha256": "17e848909e7162b2f3b2e5f5cd17506258d622c9f4b67f0d83aa75aced79857b"
+    },
+    {
+      "ddl_objects": [
+        "capture_events"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/audit_capture_status_purity.py",
+      "release_blocking": true,
+      "source_sha256": "caf759039e8e3f96bca85605d23e90d24b623f1b52ba1c43c6dc97686fde5b91"
+    },
+    {
+      "ddl_objects": [
+        "bayesian_feedback",
+        "bayesian_scorer_state",
+        "ground_truth_signals",
+        "scorer_feedback_events",
+        "scorer_models",
+        "scorer_training_queue"
+      ],
+      "ddl_operations": [
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/cognitive_acl_deletion_effect_fixtures.py",
+      "release_blocking": true,
+      "source_sha256": "f6cdca9c793dea613cbf90b78ad52903094709e531b2264f123e6014d5d8e7bb"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/generate_phase0_governance_contracts.py",
+      "release_blocking": true,
+      "source_sha256": "a0669019b79596f137f8285eb78dbc3ce88a7ed0a63673b4d51840d0a0afd742"
+    },
+    {
+      "ddl_objects": [
+        "entities",
+        "health_issues",
+        "idx_entity_type",
+        "idx_health_type",
+        "idx_proc_session",
+        "idx_wiki_status",
+        "idx_wiki_type",
+        "ingest_fingerprints",
+        "knowledge_units",
+        "processed_sessions",
+        "scheduled_tasks",
+        "session_status",
+        "sync_positions",
+        "wiki_pages"
+      ],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/init_wiki_state_db.py",
+      "release_blocking": true,
+      "source_sha256": "642d90218309881ee919d357f22f14fba53bf4ec50a07c9412f52e6ddcb48bef"
+    },
+    {
+      "ddl_objects": [
+        "bayesian_weights",
+        "blind_spots",
+        "cross_agent_links",
+        "disputes",
+        "distill_feedback",
+        "distill_outcomes",
+        "distillation_drafts",
+        "entities",
+        "entity_aliases",
+        "event_log",
+        "evolution_alerts",
+        "feedback_log",
+        "idx_blind_spot_state",
+        "idx_entity_aliases_alias",
+        "idx_event_time",
+        "idx_event_trace",
+        "idx_feedback_memory",
+        "idx_knowledge_memory",
+        "idx_l1_uid",
+        "idx_memories_checksum",
+        "idx_memories_created",
+        "idx_relations_source",
+        "idx_relations_target",
+        "idx_score_cards_memory",
+        "idx_sessions_agent",
+        "idx_turns_session",
+        "idx_wiki_path",
+        "incremental_drafts",
+        "intent_corrections",
+        "knowledge_evolution",
+        "knowledge_fragments",
+        "l1_wiki_link",
+        "memories",
+        "memories_insert",
+        "persona_profiles",
+        "recirculation_guard",
+        "relation_context_embeddings",
+        "relations",
+        "schema_version",
+        "score_cards",
+        "score_models",
+        "sessions",
+        "sync_log",
+        "sync_queue",
+        "topic_interests",
+        "turns",
+        "weight_switch_log"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/migrate_db.py",
+      "release_blocking": true,
+      "source_sha256": "407e397e958eea1fcd9e6394bf37f98cc502e44f69826cf64513ef3d0e92fb10"
+    },
+    {
+      "ddl_objects": [
+        "retrospective_sessions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/reconcile_pipeline_receipts.py",
+      "release_blocking": true,
+      "source_sha256": "c9bbeabf4461b10d922016c2cca2407bf45eec9dc41ab95fab45ef28b8ed644c"
+    },
+    {
+      "ddl_objects": [
+        "profile_assertions"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "DROP INDEX",
+        "DROP TABLE"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/reconcile_profile_assertion_revisions.py",
+      "release_blocking": true,
+      "source_sha256": "fea2e230263a82c2a104d603bbe68ef3f931619c022a50107fc6d22e626ba520"
+    },
+    {
+      "ddl_objects": [],
+      "ddl_operations": [
+        "CREATE INDEX",
+        "CREATE TABLE",
+        "CREATE TRIGGER"
+      ],
+      "owner_status": "UNREGISTERED",
+      "path": "scripts/reconcile_user_model_asset_stores.py",
+      "release_blocking": true,
+      "source_sha256": "5e97a710e3752b19ff0ad533bd6f41201b6e955a495281cd83b9d75f1f9e5440"
+    },
+    {
+      "ddl_objects": [
+        "cursor_schema",
+        "idx_capture_expected_turns_source_generation",
+        "idx_capture_raw_receipts_source_generation",
+        "idx_denominator_sessions_source_roster",
+        "session_raw_cursors",
+        "source_capture_expected_turns",
+        "source_capture_generations",
+        "source_capture_raw_receipts",
+        "source_denominator_sessions",
+        "source_denominator_state",
+        "source_reconciliation_cursors"
+      ],
+      "ddl_operations": [
+        "ALTER TABLE",
+        "CREATE INDEX",
+        "CREATE TABLE"
+      ],
+      "owner_status": "REGISTERED",
+      "path": "daemon/agent_sync_cursor.py",
+      "release_blocking": false,
+      "source_sha256": "10699d8551d1354310a8e44bd8bb6511bb03248670cecddc630d6de870d040a5"
+    }
+  ],
+  "inventory_count": 129,
+  "parent_root_id": "COG-046",
+  "release_eligible": false,
+  "schema_version": "mnemos.schema_owner_manifest.v1",
+  "unregistered_count": 109
+}

@@ -25,6 +25,7 @@ venv/
 ENV/
 env/
 .venv
+.audit_venv/
 
 # IDEs
 .vscode/
@@ -46,6 +47,10 @@ user_signals.db
 # Wiki content (user's private knowledge)
 wiki/
 
+# Coverage
+.coverage
+htmlcov/
+
 # Logs
 *.log
 
@@ -57,3 +62,12 @@ Thumbs.db
 prompts/__pycache__/
 scripts/bulk_reset_memos.py
 scripts/bulk_reset_memos.out
+
+# Test artifacts (MagicMock temp files from mocked Path operations)
+\<MagicMock*
+\<function*
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

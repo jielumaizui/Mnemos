@@ -1,126 +1,185 @@
-"""
-bayesian_scorer 单元测试
+"""COG-048 cold/stateless Bayesian fusion contract tests."""
 
-覆盖项：
-- BetaDimensionScorer 后验计算
-- BayesianScorer 评分 + 反馈闭环
-- 置信度随样本增加而提升
-- 数据库持久化
-"""
+from __future__ import annotations
 
-import sys
-import tempfile
+import math
+import unittest
+from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import pytest
 
-import unittest
-from core.kia.bayesian_scorer import (
-    BetaDimensionScorer, BayesianScorer, DimensionScore,
+from core.scoring.bayesian_scorer import (
+    BetaDimensionScorer,
+    BayesianScorer,
+    DimensionPrior,
+    DimensionScore,
 )
 
 
+ERROR = "training_admission_receipt_required"
+
+
 class TestBetaDimensionScorer(unittest.TestCase):
-    def test_posterior_mean_uniform_prior(self):
-        """均匀先验 α=β=2，无观测时后验均值为 0.5"""
-        scorer = BetaDimensionScorer("test", alpha=2.0, beta=2.0)
-        self.assertAlmostEqual(scorer.posterior_mean(), 0.5)
+    """The standalone in-memory math helper remains available."""
 
-    def test_posterior_after_positive_observation(self):
-        """正例观测后后验均值上升"""
-        scorer = BetaDimensionScorer("test", alpha=2.0, beta=2.0)
-        scorer.observe(True)
-        self.assertGreater(scorer.posterior_mean(), 0.5)
+    def test_posterior_moves_with_observations(self) -> None:
+        positive = BetaDimensionScorer("positive")
+        negative = BetaDimensionScorer("negative")
 
-    def test_posterior_after_negative_observation(self):
-        """负例观测后后验均值下降"""
-        scorer = BetaDimensionScorer("test", alpha=2.0, beta=2.0)
-        scorer.observe(False)
-        self.assertLess(scorer.posterior_mean(), 0.5)
+        positive.observe(True)
+        negative.observe(False)
 
-    def test_confidence_increases_with_samples(self):
-        """样本越多，置信度越高"""
-        scorer = BetaDimensionScorer("test", alpha=2.0, beta=2.0)
-        low_conf = scorer.posterior_confidence()
+        self.assertGreater(positive.posterior_mean(), 0.5)
+        self.assertLess(negative.posterior_mean(), 0.5)
+
+    def test_confidence_increases_with_samples_and_reset_restores_prior(self) -> None:
+        scorer = BetaDimensionScorer("test")
+        cold = scorer.posterior_confidence()
         for _ in range(20):
             scorer.observe(True)
-        high_conf = scorer.posterior_confidence()
-        self.assertGreater(high_conf, low_conf)
+        self.assertGreater(scorer.posterior_confidence(), cold)
 
-    def test_reset(self):
-        """重置后回到先验"""
-        scorer = BetaDimensionScorer("test", alpha=2.0, beta=2.0)
-        scorer.observe(True)
-        scorer.observe(True)
         scorer.reset()
         self.assertAlmostEqual(scorer.posterior_mean(), 0.5)
 
+    def test_pseudo_observations_clamp_inputs(self) -> None:
+        rule = BetaDimensionScorer("rule")
+        rule.observe_rule_prior(1.5, weight=2.0)
+        self.assertEqual((rule.alpha, rule.beta), (4.0, 2.0))
 
-class TestBayesianScorer(unittest.TestCase):
-    def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.db_path = Path(self.tmpdir.name) / "test_bayesian.db"
-        self.scorer = BayesianScorer(db_path=self.db_path)
+        likelihood = BetaDimensionScorer("likelihood")
+        likelihood.observe_likelihood(-0.5, weight=2.0)
+        self.assertEqual((likelihood.alpha, likelihood.beta), (2.0, 4.0))
 
-    def tearDown(self):
-        self.tmpdir.cleanup()
 
-    def test_score_returns_dimension_score(self):
-        """评分返回 DimensionScore"""
-        result = self.scorer.score("quality", rule_prior=0.6)
-        self.assertIsInstance(result, DimensionScore)
-        self.assertEqual(result.dimension, "quality")
-        self.assertAlmostEqual(result.prior, 0.6)
+class TestBayesianScorerColdBoundary:
+    def test_score_and_multi_score_remain_stateless(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "historical-bayesian.db"
+        scorer = BayesianScorer(dimensions=["quality"], db_path=db_path, persistent=True)
 
-    def test_score_with_ml_likelihood(self):
-        """融合 ML 似然后评分"""
-        result = self.scorer.score("quality", rule_prior=0.5, ml_likelihood=0.8)
-        self.assertIsInstance(result, DimensionScore)
-        self.assertIsNotNone(result.likelihood)
-
-    def test_feedback_updates_posterior(self):
-        """反馈后后验更新"""
-        before = self.scorer.score("quality", rule_prior=0.5)
-        self.scorer.feedback("quality", is_positive=True, weight=1.0)
-        after = self.scorer.score("quality", rule_prior=0.5)
-        self.assertNotEqual(before.score, after.score)
-
-    def test_persistence(self):
-        """状态持久化到数据库"""
-        self.scorer.feedback("quality", is_positive=True, weight=5.0)
-
-        # 新建实例，应该加载之前的状态
-        scorer2 = BayesianScorer(db_path=self.db_path)
-        status = scorer2.get_dimension_status("quality")
-        self.assertEqual(status["sample_count"], 5)
-
-    def test_dimension_status_cold_warm_hot(self):
-        """维度状态随样本数变化"""
-        # COLD
-        status = self.scorer.get_dimension_status("new_dim")
-        self.assertEqual(status["status"], "cold")
-
-        # WARM
-        for _ in range(10):
-            self.scorer.feedback("new_dim", is_positive=True)
-        status = self.scorer.get_dimension_status("new_dim")
-        self.assertEqual(status["status"], "warm")
-
-        # HOT
-        for _ in range(50):
-            self.scorer.feedback("new_dim", is_positive=True)
-        status = self.scorer.get_dimension_status("new_dim")
-        self.assertEqual(status["status"], "hot")
-
-    def test_score_multi(self):
-        """多维度批量评分"""
-        card = self.scorer.score_multi(
-            dimensions=["noise", "quality"],
-            rule_priors={"noise": 0.2, "quality": 0.8},
+        result = scorer.score("quality", rule_prior=0.6, ml_likelihood=0.8)
+        card = scorer.score_multi(
+            dimensions=["quality", "noise"],
+            rule_priors={"quality": 0.6, "noise": 0.2},
         )
-        self.assertIn("noise", card.scores)
-        self.assertIn("quality", card.scores)
+
+        assert isinstance(result, DimensionScore)
+        assert result.dimension == "quality"
+        assert result.sample_count == 0
+        assert set(card.scores) == {"quality", "noise"}
+        assert scorer.get_dimension_status("quality")["samples"] == 0
+        assert not db_path.exists()
+
+    def test_unknown_dimension_falls_back_to_ml_input(self) -> None:
+        scorer = BayesianScorer(dimensions=["known"])
+
+        score, confidence = scorer.fuse(
+            "unknown",
+            rule_prior=0.5,
+            ml_likelihood=0.9,
+            ml_confidence=0.8,
+        )
+
+        assert score == pytest.approx(0.9)
+        assert confidence == pytest.approx(0.8)
+
+    def test_all_legacy_state_mutations_fail_closed_without_writes(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        db_path = tmp_path / "bayesian.db"
+        scorer = BayesianScorer(dimensions=["kg"], db_path=db_path, persistent=True)
+        before = scorer.state_to_dict()
+
+        calls = (
+            lambda: scorer.update_from_ground_truth("kg", 1),
+            lambda: scorer.batch_update("kg", [1, 0]),
+            lambda: scorer.set_neg_likelihood("kg", 0.1),
+            lambda: scorer.restore_state({"kg": {"alpha": 9.0}}),
+            lambda: scorer.feedback("kg", is_positive=True),
+            lambda: scorer.reset_dimension("kg"),
+        )
+        for call in calls:
+            with pytest.raises(PermissionError, match=ERROR):
+                call()
+
+        assert scorer.state_to_dict() == before
+        assert not db_path.exists()
+
+    def test_dimension_prior_records_local_helper_update_time(self) -> None:
+        prior = DimensionPrior()
+        before = datetime.now().isoformat()
+        prior.update(1)
+        after = datetime.now().isoformat()
+
+        assert before <= prior.last_updated <= after
 
 
-if __name__ == "__main__":
-    unittest.main()
+def _reference_fuse(
+    prior: DimensionPrior,
+    rule_prior: float,
+    ml_likelihood: float,
+    ml_confidence: float,
+    neg_likelihood: float,
+) -> tuple[float, float]:
+    def clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
+        return max(lo, min(hi, value))
+
+    if prior.total_samples <= 0:
+        rule_weight = 3.0
+    else:
+        rule_weight = round(
+            0.5 + 2.5 * math.exp(-prior.total_samples / 30.0),
+            2,
+        )
+    pseudo_alpha = rule_prior * rule_weight
+    pseudo_beta = (1.0 - rule_prior) * rule_weight
+    p_h = clamp(rule_prior, 0.01, 0.99)
+    p_e_h = clamp(ml_likelihood, 0.01, 0.99)
+    p_e_not_h = clamp(neg_likelihood, 0.01, 0.99)
+    evidence = p_e_h * p_h + p_e_not_h * (1.0 - p_h)
+    evidence_posterior = clamp((p_e_h * p_h) / evidence if evidence > 1e-12 else p_h)
+    ml_weight = ml_confidence * 2.0
+    if evidence_posterior >= 0.5:
+        obs_alpha = evidence_posterior * ml_weight
+        obs_beta = (1.0 - evidence_posterior) * ml_weight * 0.5
+    else:
+        obs_alpha = evidence_posterior * ml_weight * 0.5
+        obs_beta = (1.0 - evidence_posterior) * ml_weight
+    fused_alpha = prior.alpha + pseudo_alpha + obs_alpha
+    fused_beta = prior.beta + pseudo_beta + obs_beta
+    posterior = fused_alpha / (fused_alpha + fused_beta)
+    variance = (fused_alpha * fused_beta) / (
+        (fused_alpha + fused_beta) ** 2 * (fused_alpha + fused_beta + 1.0)
+    )
+    confidence = clamp((1.0 - variance * 4.0) * 0.5 + ml_confidence * 0.5)
+    return posterior, confidence
+
+
+@pytest.mark.parametrize(
+    "samples, rule_prior, ml_like, ml_conf, neg",
+    [
+        (0, 0.5, 0.8, 0.5, 0.3),
+        (5, 0.3, 0.9, 0.7, 0.3),
+        (10, 0.6, 0.4, 0.6, 0.1),
+        (30, 0.7, 0.2, 0.5, 0.9),
+        (100, 0.2, 0.5, 0.4, 0.5),
+    ],
+)
+def test_fuse_matches_reference_implementation(
+    samples: int,
+    rule_prior: float,
+    ml_like: float,
+    ml_conf: float,
+    neg: float,
+) -> None:
+    scorer = BayesianScorer(dimensions=["x"], neg_likelihood=neg)
+    prior = DimensionPrior(alpha=1.0, beta=1.0, total_samples=samples)
+    scorer.priors["x"] = prior
+
+    expected = _reference_fuse(prior, rule_prior, ml_like, ml_conf, neg)
+    actual = scorer.fuse("x", rule_prior, ml_like, ml_conf)
+
+    assert actual[0] == pytest.approx(expected[0], abs=1e-9)
+    assert actual[1] == pytest.approx(expected[1], abs=1e-9)

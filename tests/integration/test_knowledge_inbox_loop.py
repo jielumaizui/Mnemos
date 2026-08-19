@@ -2,14 +2,13 @@
 """
 P2-2 长链路测试 — KnowledgeInbox 摄入链路
 
-链路：file → KnowledgeInboxProcessor.process_file() → MemosClient.save()
+链路：file → KnowledgeInboxProcessor.process_file() → StorageBackend.save()
       → state_db 记录 → 文件移动到 processed_dir
 
-策略：临时目录 + mock MemosClient，真实文件操作。
+策略：临时目录 + mock StorageBackend，真实文件操作。
 断言目标：文件被处理、source_id 被记录、去重生效、重试不重复。
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,11 +19,24 @@ class TestKnowledgeInboxLoop:
 
     @pytest.fixture
     def inbox_processor(self, tmp_path):
-        """返回配置为临时目录的 KnowledgeInboxProcessor（MemosClient 被 mock）。"""
+        """返回配置为临时目录的 KnowledgeInboxProcessor（StorageBackend 被 mock）。"""
         from core.kia.knowledge_inbox import KnowledgeInboxProcessor
+        from core.sync_framework.storage_backend import StorageResult
 
-        with patch('core.kia.knowledge_inbox.MemosClient') as _mock_memos_cls, \
-             patch('core.hephaestus.document_processor.MemosClient') as _mock_doc_memos_cls:
+        with patch("integrations.backends.ObsidianBackend") as _mock_obs_cls:
+            mock_backend = MagicMock()
+            mock_backend.save.return_value = [
+                StorageResult(
+                    uid="test-backend-uid-001",
+                    content="test content",
+                    tags=["test"],
+                    metadata={},
+                    created_at="",
+                    updated_at="",
+                )
+            ]
+            _mock_obs_cls.return_value = mock_backend
+
             processor = KnowledgeInboxProcessor()
 
             # 替换为临时路径
@@ -34,15 +46,13 @@ class TestKnowledgeInboxLoop:
             processor.report_dir = tmp_path / "reports"
             processor.state_db = tmp_path / "inbox_state.db"
 
-            for d in [processor.inbox_dir, processor.processed_dir,
-                      processor.failed_dir, processor.report_dir]:
+            for d in [
+                processor.inbox_dir,
+                processor.processed_dir,
+                processor.failed_dir,
+                processor.report_dir,
+            ]:
                 d.mkdir(exist_ok=True)
-
-            # 替换 client 为 mock
-            processor.client = MagicMock()
-            mock_result = MagicMock()
-            mock_result.uid = "test-memos-uid-001"
-            processor.client.save.return_value = mock_result
 
             # 重新初始化状态数据库（因为路径已变更）
             processor._init_state_db()
@@ -68,7 +78,7 @@ class TestKnowledgeInboxLoop:
         result = inbox_processor.process_file(inbox_file)
 
         assert result["success"] is True
-        assert result["memos_uid"] == "test-memos-uid-001"
+        assert result["storage_uid"] == "test-backend-uid-001"
         # 文件应被移动到 processed
         assert not test_file.exists()
         assert len(list(inbox_processor.processed_dir.iterdir())) >= 1
@@ -154,9 +164,7 @@ class TestKnowledgeInboxLoop:
 
         # 验证 DB
         with sqlite3.connect(str(inbox_processor.state_db)) as conn:
-            rows = conn.execute(
-                "SELECT filename, status FROM processed_files"
-            ).fetchall()
+            rows = conn.execute("SELECT filename, status FROM processed_files").fetchall()
 
         assert len(rows) >= 1
         statuses = {status for _, status in rows}

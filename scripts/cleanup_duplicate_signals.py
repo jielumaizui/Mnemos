@@ -4,7 +4,7 @@
 策略:
 - session_signals: 按 session_id 去重，保留最新
 - git_signals: 按 commit_hash 去重，保留最新
-- memos_signals: 按 memo_uid 去重(memo_uid 为空时按 timestamp+content_length)，保留最新
+- l1_storage_signals: 按 l1_uid 去重(l1_uid 为空时按 timestamp+content_length)，保留最新
 - wechat_signals: 按 content_hash 去重，保留最新
 - file_system_signals: 按 file_path 去重(30天内)，保留最新
 
@@ -19,8 +19,16 @@ from pathlib import Path
 from datetime import datetime
 
 from core.config import get_config
+from core.db_utils import validate_sql_identifier
 
-DB_PATH = get_config().claude_data_dir / "user_signals.db"
+
+def _get_signals_db_path() -> Path:
+    cfg = get_config()
+    data_dir = getattr(cfg, "claude_data_dir", None) or (Path.home() / ".claude")
+    return data_dir / "user_signals.db"
+
+
+DB_PATH = _get_signals_db_path()
 
 
 def backup_db() -> Path:
@@ -32,7 +40,9 @@ def backup_db() -> Path:
 
 def get_counts(conn: sqlite3.Connection, table: str) -> dict:
     """获取表的记录数统计"""
-    total = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM {validate_sql_identifier(table)}"  # nosec B608
+    ).fetchone()[0]
     return {"total": total}
 
 
@@ -62,33 +72,33 @@ def deduplicate_git(conn: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
-def deduplicate_memos(conn: sqlite3.Connection) -> int:
-    """去重 memos_signals。
-    有 memo_uid 的按 memo_uid 分组; 没有的按 timestamp+content_length 分组。
-    同时清理 memo_uid 为空的重复记录(这些是因为之前的 bug 产生的)。
+def deduplicate_l1_storage(conn: sqlite3.Connection) -> int:
+    """去重 l1_storage_signals。
+    有 l1_uid 的按 l1_uid 分组; 没有的按 timestamp+content_length 分组。
+    同时清理 l1_uid 为空的重复记录(这些是因为之前的 bug 产生的)。
     """
-    # 1. 先删除 memo_uid 为空且完全重复的记录(timestamp + content_length 相同)
+    # 1. 先删除 l1_uid 为空且完全重复的记录(timestamp + content_length 相同)
     cursor1 = conn.execute("""
-        DELETE FROM memos_signals
-        WHERE memo_uid = ''
+        DELETE FROM l1_storage_signals
+        WHERE l1_uid = ''
         AND id NOT IN (
             SELECT MAX(id)
-            FROM memos_signals
-            WHERE memo_uid = ''
+            FROM l1_storage_signals
+            WHERE l1_uid = ''
             GROUP BY timestamp, content_length
         )
     """)
     removed_empty = cursor1.rowcount
 
-    # 2. 有 memo_uid 的按 memo_uid 去重
+    # 2. 有 l1_uid 的按 l1_uid 去重
     cursor2 = conn.execute("""
-        DELETE FROM memos_signals
-        WHERE memo_uid != ''
+        DELETE FROM l1_storage_signals
+        WHERE l1_uid != ''
         AND id NOT IN (
             SELECT MAX(id)
-            FROM memos_signals
-            WHERE memo_uid != ''
-            GROUP BY memo_uid
+            FROM l1_storage_signals
+            WHERE l1_uid != ''
+            GROUP BY l1_uid
         )
     """)
     removed_uid = cursor2.rowcount
@@ -133,11 +143,16 @@ def main():
 
     with sqlite3.connect(str(DB_PATH), timeout=10) as conn:
         # 统计清理前
-        tables = ["session_signals", "git_signals", "memos_signals",
-                  "wechat_signals", "file_system_signals"]
+        tables = [
+            "session_signals",
+            "git_signals",
+            "l1_storage_signals",
+            "wechat_signals",
+            "file_system_signals",
+        ]
         before = {t: get_counts(conn, t)["total"] for t in tables}
 
-        print(f"\n[清理前统计]")
+        print("\n[清理前统计]")
         for t, c in before.items():
             print(f"  {t}: {c}")
 
@@ -145,7 +160,7 @@ def main():
         results = {}
         results["session"] = deduplicate_sessions(conn)
         results["git"] = deduplicate_git(conn)
-        results["memos"] = deduplicate_memos(conn)
+        results["l1_storage"] = deduplicate_l1_storage(conn)
         results["wechat"] = deduplicate_wechat(conn)
         results["file_system"] = deduplicate_file_system(conn)
 
@@ -154,7 +169,7 @@ def main():
         # 统计清理后
         after = {t: get_counts(conn, t)["total"] for t in tables}
 
-        print(f"\n[清理结果]")
+        print("\n[清理结果]")
         for source, removed in results.items():
             table = f"{source}_signals"
             print(f"  {table}: 删除 {removed} 条重复 (剩余 {after[table]})")

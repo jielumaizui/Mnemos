@@ -6,12 +6,20 @@ L3 层：知识版本迭代追踪 + L4 层：知识新鲜度检查
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import logging
 import re
+
+from core.kia.policy import get_effective_policy
+
+# Constants extracted from magic numbers
+KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_QUARTER_DAYS = 90
+KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_HALF_YEAR_DAYS = 180
+KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_MONTH_DAYS = 30
+SAFE_NAME = 30
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +27,11 @@ logger = logging.getLogger(__name__)
 # L4 层：知识新鲜度检查器
 # ─────────────────────────────────────────────
 
+
 @dataclass
 class FreshnessAlert:
     """新鲜度告警结果"""
+
     type: str
     severity: str
     message: str = ""
@@ -35,10 +45,15 @@ class KnowledgeFreshnessChecker:
     生成可选的过时/新版本提醒。
     """
 
-    STALE_DAYS = 90
-    VERSION_BOUND_STALE_DAYS = 180
+    STALE_DAYS = KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_QUARTER_DAYS
+    VERSION_BOUND_STALE_DAYS = KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_HALF_YEAR_DAYS
 
-    def __init__(self, half_life_days: int = 30):
+    def __init__(self, half_life_days: int | None = None):
+        if half_life_days is None:
+            half_life_days = get_effective_policy().get(
+                "knowledge_graph.freshness_decay_half_life_days",
+                KNOWLEDGE_FRESHNESS_CHECKER_DURATION_BUCKET_MONTH_DAYS,
+            )
         self.half_life_days = half_life_days
 
     def check(self, page: Dict) -> Optional[FreshnessAlert]:
@@ -84,13 +99,13 @@ class KnowledgeFreshnessChecker:
                         action="确认有效性",
                     )
             except (ValueError, TypeError):
-                pass
+                logger.warning("[proteus] (ValueError, TypeError) suppressed", exc_info=True)
 
         return None
 
     def scan_all(self, wiki_base: str) -> List[Dict]:
         """扫描整个 wiki，返回所有过期页面列表"""
-        alerts = []
+        alerts = []  # type: ignore[var-annotated]
         wiki_path = Path(wiki_base).expanduser()
         if not wiki_path.exists():
             return alerts
@@ -106,13 +121,16 @@ class KnowledgeFreshnessChecker:
                 fm = self._extract_frontmatter(content)
                 alert = self.check({"frontmatter": fm, "path": str(md_file)})
                 if alert:
-                    alerts.append({
-                        "path": str(md_file),
-                        "type": alert.type,
-                        "severity": alert.severity,
-                        "message": alert.message,
-                    })
-            except Exception:
+                    alerts.append(
+                        {
+                            "path": str(md_file),
+                            "type": alert.type,
+                            "severity": alert.severity,
+                            "message": alert.message,
+                        }
+                    )
+            # DEBT(S8): 容错跳过，避免单条记录中断批量处理
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
                 continue
         return alerts
 
@@ -120,6 +138,12 @@ class KnowledgeFreshnessChecker:
         """解析日期并计算天数"""
         if isinstance(raw, str):
             raw = raw.strip()
+            # 优先处理 ISO 8601（含微秒/时区）
+            try:
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return (datetime.now() - dt.replace(tzinfo=None)).days
+            except ValueError:
+                logger.warning("[proteus] ValueError suppressed", exc_info=True)
             for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
                 try:
                     dt = datetime.strptime(raw, fmt)
@@ -140,8 +164,9 @@ class KnowledgeFreshnessChecker:
             return {}
         try:
             import yaml
+
             return yaml.safe_load(content[3:end]) or {}
-        except Exception:
+        except ImportError:
             return {}
 
 
@@ -149,9 +174,11 @@ class KnowledgeFreshnessChecker:
 # L3 层：知识版本迭代追踪器
 # ─────────────────────────────────────────────
 
+
 @dataclass
 class VersionSnapshot:
     """版本快照"""
+
     date_str: str
     summary: str
     key_concepts: List[str] = field(default_factory=list)
@@ -161,19 +188,23 @@ class VersionSnapshot:
 @dataclass
 class KnowledgeEvolutionReport:
     """知识演进报告"""
+
     topic: str
     session_count: int = 0
     versions: List[VersionSnapshot] = field(default_factory=list)
     evolution_path: str = ""
 
     def to_markdown(self) -> str:
+        session_count = self.session_count or len(self.versions)
         lines = [
             f"# 知识演化 — {self.topic}",
-            f"",
+            "",
             f"**演进路径**: {self.evolution_path}",
-            f"",
+            "",
+            f"**会话数**: {session_count}",
+            "",
             f"**版本数**: {len(self.versions)}",
-            f"",
+            "",
         ]
         for i, v in enumerate(self.versions, 1):
             lines.append(f"### v{i} ({v.date_str})")
@@ -198,13 +229,15 @@ class IterationTracker:
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else None
         self._iterations: List[Dict] = []
 
-    def record_iteration(self, page_path: str, delta: dict = None) -> None:
+    def record_iteration(self, page_path: str, delta: dict | None = None) -> None:
         """记录一次迭代"""
-        self._iterations.append({
-            "page_path": page_path,
-            "delta": delta or {},
-            "timestamp": datetime.now().isoformat(),
-        })
+        self._iterations.append(
+            {
+                "page_path": page_path,
+                "delta": delta or {},
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
     def get_stats(self) -> dict:
         """返回迭代统计"""
@@ -246,12 +279,15 @@ class IterationTracker:
                 )
                 if cluster_key not in clusters:
                     clusters[cluster_key] = []
-                clusters[cluster_key].append({
-                    "path": str(md_file),
-                    "frontmatter": fm,
-                    "content": content,
-                })
-            except Exception:
+                clusters[cluster_key].append(
+                    {
+                        "path": str(md_file),
+                        "frontmatter": fm,
+                        "content": content,
+                    }
+                )
+            # DEBT(S8): 容错跳过，避免单条记录中断批量处理
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
                 continue
 
         generated = 0
@@ -261,9 +297,17 @@ class IterationTracker:
                 continue
             report = self._build_evolution_report(cluster_key, pages)
             if report and report.versions:
-                safe_name = re.sub(r"[^\w\u4e00-\u9fff-]", "-", str(cluster_key))[:30]
+                safe_name = re.sub(r"[^\w\u4e00-\u9fff-]", "-", str(cluster_key))[:SAFE_NAME]
                 path = reports_dir / f"知识演化-{safe_name}.md"
                 path.write_text(report.to_markdown(), encoding="utf-8")
+                for page in pages:
+                    self.record_iteration(
+                        page["path"],
+                        {
+                            "topic": cluster_key,
+                            "report_path": str(path),
+                        },
+                    )
                 generated += 1
                 generated_topics.append(cluster_key)
 
@@ -276,25 +320,24 @@ class IterationTracker:
             "topics": generated_topics,
         }
 
-    def _build_evolution_report(self, topic: str, pages: List[Dict]) -> Optional[KnowledgeEvolutionReport]:
+    def _build_evolution_report(
+        self, topic: str, pages: List[Dict]
+    ) -> Optional[KnowledgeEvolutionReport]:
         """为单个主题构建演化报告"""
         versions = []
         for page in pages:
             fm = page.get("frontmatter", {})
-            updated = (
-                fm.get("updated_at")
-                or fm.get("修改日期")
-                or fm.get("创建日期")
-                or ""
-            )
+            updated = fm.get("updated_at") or fm.get("修改日期") or fm.get("创建日期") or ""
             summary = fm.get("摘要") or fm.get("summary") or ""
             concepts = self._extract_concepts(page.get("content", ""))
-            versions.append(VersionSnapshot(
-                date_str=updated[:10] if updated else "?",
-                summary=summary or f"{topic} 笔记",
-                key_concepts=concepts,
-                complexity_score=self._calculate_complexity(concepts, summary),
-            ))
+            versions.append(
+                VersionSnapshot(
+                    date_str=self._format_version_date(updated),
+                    summary=summary or f"{topic} 笔记",
+                    key_concepts=concepts,
+                    complexity_score=self._calculate_complexity(concepts, summary),
+                )
+            )
 
         if len(versions) < 2:
             return None
@@ -320,6 +363,14 @@ class IterationTracker:
             versions=versions,
             evolution_path=evolution,
         )
+
+    @staticmethod
+    def _format_version_date(updated) -> str:
+        if not updated:
+            return "?"
+        if hasattr(updated, "isoformat"):
+            return str(updated.isoformat())[:10]
+        return str(updated)[:10]
 
     def _extract_concepts(self, content: str) -> List[str]:
         """从内容中提取关键概念（[[wikilink]] 和代码术语）"""

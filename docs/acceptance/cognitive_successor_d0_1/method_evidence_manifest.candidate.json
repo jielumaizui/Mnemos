@@ -1,0 +1,665 @@
+{
+  "schema_version": "mnemos.cognitive_successor_method_evidence_manifest.v2",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_evidence_manifest",
+  "schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+    "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "artifact_id": "cognitive-successor-method-evidence-manifest",
+  "artifact_status": "NON_GOVERNING_EVIDENCE_INPUT",
+  "question_binding": {
+    "question_id": "COGNITIVE-SUCCESSOR-DECISION-001",
+    "exact_text": "How should successor design conflicts be adjudicated without granting prior authority to legacy contracts, preserved designs, user directions, code evidence, cognitive theory, reviewers, agents or majority agreement; and which results may become constitution clauses?",
+    "exact_text_sha256": "sha256:3ef025f277667650f07703282d38a4f8a2875d742d33d38e94b67d64dbd2f495",
+    "scope": "SUCCESSOR_DESIGN_METHOD_ONLY",
+    "materiality_profile": {
+      "selected_profile": "HIGH",
+      "scope": "DECISION_001_SUCCESSOR_DESIGN_METHOD_BOOTSTRAP",
+      "rationale": "The method can shape safety, cognition, migration, public Interfaces and later irreversible decisions; use HIGH until a new exact question generation proves a narrower scope.",
+      "invalidation_conditions": [
+        "THE_EXACT_QUESTION_OR_SCOPE_CHANGES",
+        "A_NEW_GENERATION_PROVES_ALL_EFFECTS_LOW_IMPACT_AND_REVERSIBLE",
+        "APPLICABLE_SAFETY_PRIVACY_AGENCY_MIGRATION_OR_PUBLIC_INTERFACE_SCOPE_CHANGES"
+      ]
+    }
+  },
+  "dependency_policy": {
+    "cluster_unit": "COMMON_UPSTREAM_PAPER_DATASET_MODEL_FAMILY_OR_SYNTHESIS",
+    "duplicate_weight_rule": "REPETITION_WITHIN_A_CLUSTER_ADDS_NO_INDEPENDENT_WEIGHT",
+    "mutable_source_rule": "RECHECK_AND_REBIND_EXACT_SNAPSHOT_BEFORE_ACTIVATION"
+  },
+  "entries": {
+    "METHOD-EVID-001": {
+      "title": "Current user's exact design-stage precedence and implementation-quality directions",
+      "source_kind": "CURRENT_USER_VALUE_DIRECTION",
+      "dependency_cluster_id": "METHOD-CLUSTER-001",
+      "source_binding": {
+        "binding_kind": "EXACT_USER_BYTES",
+        "source_ref": "current_conversation.user_messages",
+        "locator": "current_conversation.user_messages",
+        "exact_excerpts": [
+          {
+            "exact_text": "现阶段，不是谁必须遵守谁，应该是谁是对的，遵守谁",
+            "exact_text_sha256": "sha256:ba88bf72c5023a61629c8b486ce7634d91c97fbb533173c2a85b13a05dc57b3f",
+            "interpretation": "During successor design, earlier authority is not an automatic correctness rule."
+          },
+          {
+            "exact_text": "我刚才说的对错说针对现阶段整个系统处于设计阶段，不一定非得遵守之前确定的宪法或者合同，而应该是综合考虑，最终谁是对的就按照谁说的来，懂了吗？",
+            "exact_text_sha256": "sha256:d168dc19b7695b72ce35978225184a2f93a1433b13259ad677e7ad5b7aaad302",
+            "interpretation": "The rule applies to design-stage adjudication and permits revising earlier constitutions or contracts after holistic comparison."
+          },
+      {
+        "exact_text": "同意，最终的代码要以功能完整，性能与体验较优的前提下，代码更简介，更优雅",
+        "exact_text_sha256": "sha256:d68b3c98233334cc74a9b5b7ba3d1d206af16e402cb7dd85bb1419f15e2383af",
+        "interpretation": "The original byte '简介' is preserved; in context it is interpreted as the requested preference for code that is more concise and elegant, only after complete functionality and better performance and experience."
+      },
+      {
+        "exact_text": "有bug的功能不一定是不要的，可能在做mnemos的时候留下的，只是没修好，所以现在要做的是查清楚mnemos到底有哪些功能，这些功能是怎样的，至于后续的拼接，应该是参考现有的mnemos系统然后看看是否有更简洁更优雅的方案",
+        "exact_text_sha256": "sha256:c8d0467cd484deb4f2551fc2fb54835638bd534b6fe3be00a95033b1f78a39b4",
+        "interpretation": "Capability intent and implementation health are separate. A broken or incomplete Mnemos realization may still represent a required capability; first reconstruct the complete capability model and intended behavior, then use the existing system as a realization reference while comparing simpler and more elegant complete implementations."
+      }
+        ],
+        "encoding": "UTF-8"
+      },
+      "candidate_associations": {
+    "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+      "effects": [
+        "SUPPORT",
+        "REFUTE",
+        "LIMIT"
+      ],
+      "claims": [
+        "The existing Mnemos system is a required capability-discovery and implementation reference, but current habit, implementation health or a single designer's authority is not automatically correct."
+          ]
+        },
+        "AUTHORITY_HIERARCHY": {
+          "effects": [
+            "REFUTE"
+          ],
+          "claims": [
+            "Earlier constitutions, contracts, reviewers and agents have no automatic successor-design truth precedence."
+          ]
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Reviewer agreement can inform but cannot replace claim-specific correctness."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+      "claims": [
+        "A method should compare competing claims without fixed precedence, separate capability intent from realization health, and preserve the user's legitimate product-value role without treating that role as empirical proof."
+          ]
+        }
+      },
+      "limitations": [
+        "These bytes establish user product values and design authorization scope. They do not prove empirical, safety, architecture, performance or migration claims."
+      ],
+      "freshness": {
+        "status": "CURRENT_AS_OF",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "Exact user bytes are bound; current value scope and the interpretation of 简介 as 简洁 must be reconfirmed before final exact-byte authorization."
+      }
+    },
+    "METHOD-EVID-002": {
+      "title": "NASA Systems Engineering Decision Analysis",
+      "source_kind": "OFFICIAL_ENGINEERING_METHOD",
+      "dependency_cluster_id": "METHOD-CLUSTER-002",
+      "source_binding": {
+        "binding_kind": "MUTABLE_OFFICIAL_SNAPSHOT",
+        "source_ref": "NASA Systems Engineering Decision Analysis",
+        "locator": "https://www.nasa.gov/reference/6-8-decision-analysis/",
+        "version_or_date": "retrieved_during_2026-08-01_design_research",
+        "snapshot_binding": null,
+        "captured_at": null
+      },
+      "candidate_associations": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Decision analysis retains expert judgment but asks it to operate over explicit objectives, alternatives and criteria."
+          ]
+        },
+        "AUTHORITY_HIERARCHY": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "A responsible decision authority is legitimate, but the technical rationale, uncertainty and alternatives remain explicit."
+          ]
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Structured criteria and sensitivity can aid selection when assumptions and mandatory criteria remain visible."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT"
+          ],
+          "claims": [
+            "Freeze objectives, alternatives, mandatory criteria, assumptions, uncertainty and rationale before selection."
+          ]
+        }
+      },
+      "limitations": [
+        "NASA guidance is contextual engineering guidance, not a universal truth algorithm or this system's claim ontology."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The official locator was reviewed during design research, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-003": {
+      "title": "CMU SEI Architecture Tradeoff Analysis Method",
+      "source_kind": "OFFICIAL_ENGINEERING_METHOD",
+      "dependency_cluster_id": "METHOD-CLUSTER-003",
+      "source_binding": {
+        "binding_kind": "MUTABLE_OFFICIAL_SNAPSHOT",
+        "source_ref": "CMU SEI Architecture Tradeoff Analysis Method",
+        "locator": "https://www.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/",
+        "version_or_date": "retrieved_during_2026-08-01_design_research",
+        "snapshot_binding": null,
+        "captured_at": null
+      },
+      "candidate_associations": {
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Multi-stakeholder scenario review can expose risks, sensitivity points and tradeoffs."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT"
+          ],
+          "claims": [
+            "Architecture mechanisms should be challenged through scenarios and quality attributes rather than paper cleanliness or a single score."
+          ]
+        }
+      },
+      "limitations": [
+        "ATAM identifies risks and tradeoffs; it does not prove functional completeness or authorize a production action."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The official locator was reviewed during design research, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-004": {
+      "title": "OMG Structured Assurance Case Metamodel 2.3",
+      "source_kind": "OFFICIAL_STANDARD_OR_FRAMEWORK",
+      "dependency_cluster_id": "METHOD-CLUSTER-004",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "OMG Structured Assurance Case Metamodel 2.3",
+        "locator": "https://www.omg.org/spec/SACM/2.3/PDF",
+        "version_or_date": "SACM 2.3",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Material claims, evidence, assumptions, counterarguments and defeated states should remain inspectable rather than only narrative."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Machine-readable assurance structure can preserve claim and counterclaim relations, but representation alone is not proof."
+          ]
+        }
+      },
+      "limitations": [
+        "SACM structures assurance arguments but does not decide source reliability, evidence sufficiency or product values."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-005": {
+      "title": "John R. Platt, Strong Inference",
+      "source_kind": "PRIMARY_RESEARCH",
+      "dependency_cluster_id": "METHOD-CLUSTER-005",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "John R. Platt, Strong Inference",
+        "locator": "https://doi.org/10.1126/science.146.3642.347",
+        "version_or_date": "Science 146(3642), 1964",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Competing hypotheses and discriminating tests expose narrative confirmation bias."
+          ]
+        },
+        "AUTHORITY_HIERARCHY": {
+          "effects": [
+            "REFUTE"
+          ],
+          "claims": [
+            "Empirical discrimination depends on tests, not claimant authority."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Preserve multiple candidates and seek tests that can discriminate or falsify them."
+          ]
+        }
+      },
+      "limitations": [
+        "Complex socio-technical designs may lack one crucial experiment and must allow partial evidence and provisional outcomes."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-006": {
+      "title": "NASA Independent Verification and Validation overview",
+      "source_kind": "OFFICIAL_ENGINEERING_METHOD",
+      "dependency_cluster_id": "METHOD-CLUSTER-006",
+      "source_binding": {
+        "binding_kind": "MUTABLE_OFFICIAL_SNAPSHOT",
+        "source_ref": "NASA Independent Verification and Validation overview",
+        "locator": "https://www.nasa.gov/ivv-overview/",
+        "version_or_date": "retrieved_during_2026-08-01_design_research",
+        "snapshot_binding": null,
+        "captured_at": null
+      },
+      "candidate_associations": {
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Independent technical perspectives can expose developer blind spots, but nominal reviewer plurality is not sufficient independence."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Verification and validation should be detached and independence rigor should scale with material risk."
+          ]
+        }
+      },
+      "limitations": [
+        "Full high-assurance IV&V is too costly for every reversible design choice; rigor must be risk-proportionate."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The official locator was reviewed during design research, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-007": {
+      "title": "NIST Artificial Intelligence Risk Management Framework 1.0",
+      "source_kind": "OFFICIAL_STANDARD_OR_FRAMEWORK",
+      "dependency_cluster_id": "METHOD-CLUSTER-007",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "NIST Artificial Intelligence Risk Management Framework 1.0",
+        "locator": "https://doi.org/10.6028/NIST.AI.100-1",
+        "version_or_date": "AI RMF 1.0, 2023",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "AUTHORITY_HIERARCHY": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Human accountability, risk ownership and scoped tolerance are legitimate decision roles, but they remain contextual."
+          ]
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Rights, risk and contextual tolerances should not disappear inside an undifferentiated scalar score."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Risk, uncertainty, rights and human responsibility should remain explicit across the lifecycle."
+          ]
+        }
+      },
+      "limitations": [
+        "The framework does not prescribe this artifact graph or adjudication algorithm."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-008": {
+      "title": "Ralph L. Keeney, Value-focused thinking",
+      "source_kind": "PRIMARY_RESEARCH",
+      "dependency_cluster_id": "METHOD-CLUSTER-008",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "Ralph L. Keeney, Value-focused thinking",
+        "locator": "https://doi.org/10.1016/0377-2217(96)00004-5",
+        "version_or_date": "European Journal of Operational Research 92(3), 1996",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Clarifying values and objectives before alternatives improves preference modeling; objectives are not empirical evidence."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT"
+          ],
+          "claims": [
+            "Product values should be explicit and separated from the means used to achieve them."
+          ]
+        }
+      },
+      "limitations": [
+        "Value-focused thinking helps form preferences but cannot make empirical or safety findings true."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-009": {
+      "title": "Herbert A. Simon, A Behavioral Model of Rational Choice",
+      "source_kind": "PRIMARY_RESEARCH",
+      "dependency_cluster_id": "METHOD-CLUSTER-009",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "Herbert A. Simon, A Behavioral Model of Rational Choice",
+        "locator": "https://doi.org/10.2307/1884852",
+        "version_or_date": "Quarterly Journal of Economics 69(1), 1955",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "STATUS_QUO_INFORMED_HOLISTIC_JUDGMENT": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Real decisions operate under bounded information and computation, which favors proportionate judgment and explicit reopening."
+          ]
+        },
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "A complete utility model and candidate universe cannot be assumed under bounded information."
+          ]
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "More participants do not remove bounded information or shared cognitive limits."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "A formal denominator cannot claim universal completeness; search budgets, saturation and proportionate process must be explicit."
+          ]
+        }
+      },
+      "limitations": [
+        "Bounded rationality does not itself choose among the candidate methods."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-010": {
+      "title": "IETF RFC 7282, On Consensus and Humming in the IETF",
+      "source_kind": "OFFICIAL_ENGINEERING_METHOD",
+      "dependency_cluster_id": "METHOD-CLUSTER-010",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "IETF RFC 7282, On Consensus and Humming in the IETF",
+        "locator": "https://www.rfc-editor.org/rfc/rfc7282.html",
+        "version_or_date": "RFC 7282, Informational, June 2014",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "AUTHORITY_HIERARCHY": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Technical concerns should be addressed rather than closed solely by hierarchical command."
+          ]
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Reasoned consensus can surface and resolve objections, but vote counts are not a technical proof."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Over-formalization can suppress useful rough consensus; the method must keep a proportionate low-impact path."
+          ]
+        }
+      },
+      "limitations": [
+        "IETF rough consensus is a community engineering process, not a universal architecture or safety adjudicator."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-011": {
+      "title": "UK Government Multi-criteria analysis: a manual",
+      "source_kind": "OFFICIAL_ENGINEERING_METHOD",
+      "dependency_cluster_id": "METHOD-CLUSTER-011",
+      "source_binding": {
+        "binding_kind": "MUTABLE_OFFICIAL_SNAPSHOT",
+        "source_ref": "UK Government Multi-criteria analysis: a manual",
+        "locator": "https://www.gov.uk/government/publications/multi-criteria-analysis-manual-for-making-government-policy",
+        "version_or_date": "2009 manual; mutable landing page",
+        "snapshot_binding": null,
+        "captured_at": null
+      },
+      "candidate_associations": {
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "MCDA can structure objectives, criteria, scores, weights and sensitivity, but modeling assumptions and uncertainty must remain visible."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "A method that refuses every compensatory preference loses useful analysis inside a legitimately feasible set."
+          ]
+        }
+      },
+      "limitations": [
+        "MCDA supports structured preference analysis; it does not turn non-compensable constraints or unknown facts into a valid scalar trade."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The official locator was reviewed during design research, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    },
+    "METHOD-EVID-012": {
+      "title": "Kenneth J. Arrow, A Difficulty in the Concept of Social Welfare",
+      "source_kind": "PRIMARY_RESEARCH",
+      "dependency_cluster_id": "METHOD-CLUSTER-012",
+      "source_binding": {
+        "binding_kind": "IMMUTABLE_PRIMARY",
+        "source_ref": "Kenneth J. Arrow, A Difficulty in the Concept of Social Welfare",
+        "locator": "https://doi.org/10.1086/256963",
+        "version_or_date": "Journal of Political Economy 58(4), 1950",
+        "snapshot_binding": null
+      },
+      "candidate_associations": {
+        "MULTI_CRITERIA_SCALAR_AGGREGATION": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "Aggregating ordinal preferences cannot be assumed to yield a universally fair social ordering under all desirable conditions."
+          ]
+        },
+        "DELIBERATIVE_COMMITTEE": {
+          "effects": [
+            "REFUTE",
+            "LIMIT"
+          ],
+          "claims": [
+            "A group ordering or vote does not automatically become a uniquely correct collective preference."
+          ]
+        },
+        "CONSTRAINT_FIRST_TYPED_EVIDENCE": {
+          "effects": [
+            "SUPPORT",
+            "LIMIT"
+          ],
+          "claims": [
+            "Residual value aggregation should remain an explicit owner choice rather than be misrepresented as objective truth."
+          ]
+        }
+      },
+      "limitations": [
+        "Arrow's theorem applies to a formal social-choice setting and does not by itself reject all deliberation, MCDA or engineering selection."
+      ],
+      "freshness": {
+        "status": "UNKNOWN",
+        "assessed_at": "2026-08-01T00:00:00+08:00",
+        "recheck_before_activation": true,
+        "valid_until": null,
+        "scope_note": "The DOI, RFC or edition identity is declared, but no local exact snapshot is bound in this non-terminal generation."
+      }
+    }
+  },
+  "known_evidence_gaps": [
+    "Mutable official sources lack archived content hashes in this authoring generation and must not support a final ADOPT until refreshed and bound.",
+    "No primary source proves that one adjudication form is optimal for every successor-design decision or risk level.",
+    "The five-family denominator has bounded candidate saturation only; an independent challenger must search for materially distinct missing methods.",
+    "Implementation performance, experience and complexity measurements require ticket-specific exact workload, baseline and change-scenario profiles.",
+    "No detached challenger, executable structural verifier or exact-byte user authorization has assessed this revised generation."
+  ],
+  "hash_policy": {
+    "algorithm": "SHA-256",
+    "byte_domain": "RAW_FILE_BYTES",
+    "normalization": "NONE",
+    "binding_granularity": "EXACT_WHOLE_FILE",
+    "embedded_self_hash": false,
+    "dependency_change_semantics": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"
+  },
+  "schema_capability_boundary": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS"
+}

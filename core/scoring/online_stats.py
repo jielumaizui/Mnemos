@@ -81,8 +81,12 @@ class OnlineStats:
 
     def to_dict(self) -> Dict:
         return {
-            "n": self._n, "mean": self._mean, "variance": self.variance,
-            "std": self.std, "min": self._min, "max": self._max,
+            "n": self._n,
+            "mean": self._mean,
+            "variance": self.variance,
+            "std": self.std,
+            "min": self._min,
+            "max": self._max,
         }
 
 

@@ -1,0 +1,708 @@
+{
+  "finding_count": 38,
+  "findings": [
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-025"
+      ],
+      "finding_id": "GLOB-001",
+      "invalidated_downstream_roots": [
+        "COG-049"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-025-SAFETY"
+      ]
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-042"
+      ],
+      "finding_id": "GLOB-002",
+      "invalidated_downstream_roots": [],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "GLOB-003",
+      "invalidated_downstream_roots": [],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "GLOB-004",
+      "invalidated_downstream_roots": [],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-044"
+      ],
+      "finding_id": "P12-001",
+      "invalidated_downstream_roots": [
+        "COG-027",
+        "COG-010",
+        "COG-011",
+        "COG-012",
+        "COG-013",
+        "COG-014",
+        "COG-019",
+        "COG-020",
+        "COG-021",
+        "COG-032",
+        "COG-035",
+        "COG-036",
+        "COG-037",
+        "COG-038",
+        "COG-048",
+        "COG-049"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-008",
+        "COG-047"
+      ],
+      "finding_id": "P12-002",
+      "invalidated_downstream_roots": [
+        "COG-027",
+        "COG-010",
+        "COG-030",
+        "COG-014",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-009",
+        "COG-026"
+      ],
+      "finding_id": "P12-003",
+      "invalidated_downstream_roots": [
+        "COG-027",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-045",
+        "COG-003",
+        "COG-039",
+        "COG-034"
+      ],
+      "finding_id": "P12-004",
+      "invalidated_downstream_roots": [
+        "COG-001",
+        "COG-024",
+        "COG-040",
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-008",
+        "COG-027",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-024"
+      ],
+      "finding_id": "P12-005",
+      "invalidated_downstream_roots": [
+        "COG-034",
+        "COG-039",
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "P12-006",
+      "invalidated_downstream_roots": [],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-025",
+        "COG-047",
+        "COG-010"
+      ],
+      "finding_id": "P12-007",
+      "invalidated_downstream_roots": [
+        "COG-025",
+        "COG-045",
+        "COG-001",
+        "COG-002",
+        "COG-004",
+        "COG-005",
+        "COG-006",
+        "COG-007",
+        "COG-008",
+        "COG-003",
+        "COG-009",
+        "COG-026",
+        "COG-027",
+        "COG-018",
+        "COG-011",
+        "COG-028",
+        "COG-029",
+        "COG-044",
+        "COG-047",
+        "COG-010",
+        "COG-012",
+        "COG-013",
+        "COG-049",
+        "COG-043",
+        "COG-035",
+        "COG-036",
+        "COG-037",
+        "COG-038",
+        "COG-048",
+        "COG-014",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-039",
+        "COG-034",
+        "COG-031",
+        "COG-024",
+        "COG-016",
+        "COG-017",
+        "COG-019",
+        "COG-032",
+        "COG-020",
+        "COG-021",
+        "COG-022",
+        "COG-023",
+        "COG-033",
+        "COG-040",
+        "COG-041",
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-025-SAFETY"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-035",
+        "COG-037",
+        "COG-038",
+        "COG-048"
+      ],
+      "finding_id": "P3-001",
+      "invalidated_downstream_roots": [
+        "COG-014",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-039",
+        "COG-034",
+        "COG-031",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-036",
+        "COG-014"
+      ],
+      "finding_id": "P3-002",
+      "invalidated_downstream_roots": [
+        "COG-030",
+        "COG-034",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-035",
+        "COG-036",
+        "COG-037",
+        "COG-038",
+        "COG-048"
+      ],
+      "finding_id": "P3-003",
+      "invalidated_downstream_roots": [
+        "COG-014",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-039",
+        "COG-034",
+        "COG-031",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-030"
+      ],
+      "finding_id": "P4-001",
+      "invalidated_downstream_roots": [
+        "COG-015",
+        "COG-050",
+        "COG-039",
+        "COG-034",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-015"
+      ],
+      "finding_id": "P4-002",
+      "invalidated_downstream_roots": [
+        "COG-039",
+        "COG-034",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-050"
+      ],
+      "finding_id": "P4-003",
+      "invalidated_downstream_roots": [
+        "COG-039",
+        "COG-034",
+        "COG-031",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-039",
+        "COG-034"
+      ],
+      "finding_id": "P4-004",
+      "invalidated_downstream_roots": [
+        "COG-024",
+        "COG-040",
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-034",
+        "COG-031",
+        "COG-024"
+      ],
+      "finding_id": "P4-005",
+      "invalidated_downstream_roots": [
+        "COG-016",
+        "COG-017",
+        "COG-019",
+        "COG-032",
+        "COG-020",
+        "COG-021",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-019",
+        "COG-032"
+      ],
+      "finding_id": "P5-001",
+      "invalidated_downstream_roots": [
+        "COG-020",
+        "COG-021"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-019",
+        "COG-044"
+      ],
+      "finding_id": "P5-002",
+      "invalidated_downstream_roots": [
+        "COG-020",
+        "COG-021"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-020"
+      ],
+      "finding_id": "P5-003",
+      "invalidated_downstream_roots": [
+        "COG-021",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-017"
+      ],
+      "finding_id": "P5-004",
+      "invalidated_downstream_roots": [
+        "COG-016",
+        "COG-024",
+        "COG-040"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-017"
+      ],
+      "finding_id": "P5-005",
+      "invalidated_downstream_roots": [
+        "COG-016",
+        "COG-024"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-016",
+        "COG-020",
+        "COG-021"
+      ],
+      "finding_id": "P5-006",
+      "invalidated_downstream_roots": [
+        "COG-034",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "P5-007",
+      "invalidated_downstream_roots": [
+        "COG-016",
+        "COG-017",
+        "COG-019",
+        "COG-032",
+        "COG-020",
+        "COG-021"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-022",
+        "COG-023"
+      ],
+      "finding_id": "P6-001",
+      "invalidated_downstream_roots": [
+        "COG-033",
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-033"
+      ],
+      "finding_id": "P6-002",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-022",
+        "COG-023",
+        "COG-033"
+      ],
+      "finding_id": "P6-003",
+      "invalidated_downstream_roots": [
+        "COG-024",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-033",
+        "COG-042"
+      ],
+      "finding_id": "P6-004",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-040"
+      ],
+      "finding_id": "P7-001",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-040-P0-BASELINE"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-040"
+      ],
+      "finding_id": "P7-002",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-040-P0-BASELINE"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-041"
+      ],
+      "finding_id": "P7-003",
+      "invalidated_downstream_roots": [
+        "COG-040",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-041"
+      ],
+      "finding_id": "P7-004",
+      "invalidated_downstream_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": []
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "P7-005",
+      "invalidated_downstream_roots": [
+        "COG-025",
+        "COG-045",
+        "COG-001",
+        "COG-002",
+        "COG-004",
+        "COG-005",
+        "COG-006",
+        "COG-007",
+        "COG-008",
+        "COG-003",
+        "COG-009",
+        "COG-026",
+        "COG-027",
+        "COG-018",
+        "COG-011",
+        "COG-028",
+        "COG-029",
+        "COG-044",
+        "COG-047",
+        "COG-010",
+        "COG-012",
+        "COG-013",
+        "COG-049",
+        "COG-043",
+        "COG-035",
+        "COG-036",
+        "COG-037",
+        "COG-038",
+        "COG-048",
+        "COG-014",
+        "COG-030",
+        "COG-015",
+        "COG-050",
+        "COG-039",
+        "COG-034",
+        "COG-031",
+        "COG-024",
+        "COG-016",
+        "COG-017",
+        "COG-019",
+        "COG-032",
+        "COG-020",
+        "COG-021",
+        "COG-022",
+        "COG-023",
+        "COG-033",
+        "COG-040",
+        "COG-041",
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-042"
+      ],
+      "finding_id": "P7-006",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": true,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "P7-007",
+      "invalidated_downstream_roots": [
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    },
+    {
+      "applies_to_all": false,
+      "direct_owner_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "finding_id": "P7-008",
+      "invalidated_downstream_roots": [
+        "COG-046",
+        "COG-042"
+      ],
+      "status": "OPEN",
+      "support_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ]
+    }
+  ],
+  "parent_root_id": "COG-046",
+  "schema_version": "mnemos.cognitive_finding_overlay.v1"
+}

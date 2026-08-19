@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 Background Review — 人工确认 CLI
 交互式确认审查建议
 """
 
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 from core.config import get_config
 
-
-APPROVAL_LOG_PATH = get_config().data_dir / "logs/review_approvals.jsonl"
-REJECTION_LOG_PATH = get_config().data_dir / "logs/review_rejections.jsonl"
+APPROVAL_LOG_PATH = get_config().database_dir / "logs/review_approvals.jsonl"
+REJECTION_LOG_PATH = get_config().database_dir / "logs/review_rejections.jsonl"
 
 
 class ApprovalCLI:
@@ -41,14 +40,16 @@ class ApprovalCLI:
         """检查是否在自动执行白名单"""
         # 简单规则：info + xs/s + maintainability 维度
         return (
-            finding.get("severity") == "info" and
-            finding.get("effort") in ["xs", "s"] and
-            finding.get("dimension") == "maintainability"
+            finding.get("severity") == "info"
+            and finding.get("effort") in ["xs", "s"]
+            and finding.get("dimension") == "maintainability"
         )
 
     def display_item(self, finding: Dict, index: int, total: int):
         """显示单个建议"""
-        emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(finding.get("severity"), "⚪")
+        emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(
+            str(finding.get("severity", "")), "⚪"
+        )
         print(f"\n{'='*60}")
         print(f"[{index}/{total}] {emoji} {finding.get('id')}")
         print(f"{'='*60}")
@@ -78,7 +79,7 @@ class ApprovalCLI:
             "action": "approved",
             "timestamp": datetime.now().isoformat(),
             "file": finding.get("file"),
-            "severity": finding.get("severity")
+            "severity": finding.get("severity"),
         }
         self._append_log(self.approval_log, log_entry)
         print(f"  已确认: {finding['id']}")
@@ -91,7 +92,7 @@ class ApprovalCLI:
             "action": "rejected",
             "timestamp": datetime.now().isoformat(),
             "file": finding.get("file"),
-            "reason": reason or None
+            "reason": reason or None,
         }
         self._append_log(self.rejection_log, log_entry)
         print(f"  已拒绝: {finding['id']}")
@@ -114,7 +115,7 @@ class ApprovalCLI:
             "timestamp": datetime.now().isoformat(),
             "file": finding.get("file"),
             "new_suggestion": finding.get("suggestion"),
-            "new_effort": finding.get("effort")
+            "new_effort": finding.get("effort"),
         }
         self._append_log(self.approval_log, log_entry)
         print(f"   已修改并确认: {finding['id']}")
@@ -187,6 +188,7 @@ class ApprovalCLI:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Background Review Approval CLI")
     parser.add_argument("--input", "-i", required=True, help="审查 JSON 文件路径")
     args = parser.parse_args()

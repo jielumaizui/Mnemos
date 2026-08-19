@@ -1,0 +1,35 @@
+{
+  "schema_version": "mnemos.phase5_baseline_failure_evidence.v1",
+  "captured_at": "2026-07-23T18:42:23Z",
+  "baseline_commit": "7717765323920af9a9abb19d3fa5aef1046c2884",
+  "frozen_audit_sha256": "sha256:2e5d803de70304765f3d1cc0a6c2573514c318951416bede08181aae76770e66",
+  "baseline_contract_snapshot_hash": "sha256:29fde45f6a7db2afc1b4788919e37c74288797abc3dd456b540146380f2eb116",
+  "baseline_wrong_legacy_behavior_expected_by_runtime_test": 6,
+  "baseline_old_production_caller_residual": 0,
+  "baseline_static_green_production_red": 1,
+  "baseline_failed_contracts": [
+    "cooldown_100_instances_and_multiprocess",
+    "enabled_disabled_counterfactual",
+    "migration_crash_restore_contracts",
+    "old_alias_config_dynamic_scan",
+    "producer_assertion_consumer_target_e2e",
+    "real_challenge_positive_contract"
+  ],
+  "baseline_setup_command": [
+    "git",
+    "worktree",
+    "add",
+    "--detach",
+    "<baseline-worktree>",
+    "7717765323920af9a9abb19d3fa5aef1046c2884"
+  ],
+  "reproduction_command": [
+    "python",
+    "scripts/audit_phase5_failure_contracts.py",
+    "--root",
+    "<baseline-worktree>",
+    "--skip-baseline-evidence",
+    "--json"
+  ],
+  "evidence_boundary": "The frozen candidate-side audit was run read-only against the detached baseline worktree. The recorded snapshot proves the named contracts failed on that baseline; it is not production runtime evidence."
+}

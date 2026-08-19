@@ -1,0 +1,67 @@
+{
+  "type": "object",
+  "required": [
+    "skill_name",
+    "skill_purpose",
+    "asset_schema",
+    "asset_type",
+    "evidence_refs",
+    "applicability",
+    "failure_modes",
+    "verification_recipe",
+    "automation_derivative_allowed"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "skill_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "兼容字段：建议的认知决策资产标题"
+    },
+    "skill_purpose": {
+      "type": "string",
+      "minLength": 1,
+      "description": "兼容字段：该资产解决的判断、验证、反模式或方法论问题"
+    },
+    "asset_schema": {
+      "type": "string",
+      "const": "cognitive_decision_asset.v1",
+      "description": "认知决策资产 schema"
+    },
+    "asset_type": {
+      "type": "string",
+      "enum": [
+        "methodology",
+        "pitfall_pattern",
+        "decision_heuristic",
+        "verification_recipe",
+        "automation_skill_candidate"
+      ],
+      "description": "认知决策资产类型"
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "支撑该资产的证据引用"
+    },
+    "applicability": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "适用条件"
+    },
+    "failure_modes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "失败样本、边界或反模式"
+    },
+    "verification_recipe": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "后续验证步骤"
+    },
+    "automation_derivative_allowed": {
+      "type": "boolean",
+      "description": "是否允许从成熟资产派生 automation skill"
+    }
+  }
+}

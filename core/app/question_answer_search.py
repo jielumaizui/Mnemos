@@ -1,3 +1,5 @@
+import logging
+
 """
 QuestionAnswerSearch — 问答式检索引擎
 
@@ -7,20 +9,40 @@ QuestionAnswerSearch — 问答式检索引擎
 
 import math
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable, Tuple, cast
 from pathlib import Path
 
+from core.access_policy import AccessNarrowing, PrincipalEnvelope
 from core.app.context_search import ContextAwareSearch, SearchResult
+from core.frontmatter import parse_frontmatter
+
+# Constants extracted from magic numbers
+
+logger = logging.getLogger(__name__)
+QUESTION_ANSWER_SEARCH__SCORE_PARAGRAPH_LENGTH = 30
+
+
+def _default_wiki_dir() -> Path:
+    from core.config import get_config
+
+    return Path(get_config().wiki_dir).expanduser()
 
 
 class QuestionAnswerSearch:
     """问答式检索：将用户问题转换为结构化查询并返回答案片段"""
 
-    def __init__(self, wiki_dir: Path = None, retriever=None):
-        self.wiki_dir = wiki_dir or Path.home() / "Documents" / "Obsidian Vault" / "wiki"
+    def __init__(self, wiki_dir: Path | None = None, retriever=None):
+        self.wiki_dir = Path(wiki_dir).expanduser() if wiki_dir is not None else _default_wiki_dir()
         self.retriever = retriever or ContextAwareSearch(wiki_base=str(self.wiki_dir))
 
-    def search(self, question: str, top_k: int = 5) -> List[Dict]:
+    def search(
+        self,
+        question: str,
+        top_k: int = 5,
+        *,
+        principal: PrincipalEnvelope | None = None,
+        narrowing: AccessNarrowing | None = None,
+    ) -> List[Dict]:
         """
         问答式检索
 
@@ -31,15 +53,27 @@ class QuestionAnswerSearch:
         Returns:
             [{"answer_snippet": str, "source": str, "confidence": float, "question_type": str}]
         """
+        if principal is None:
+            return []
+        narrowing = narrowing or AccessNarrowing()
         qtype = self.extract_question_type(question)
 
         # 1. 复用画像感知搜索召回相关页面
-        results = self._search_results(question, top_k=top_k * 2)
+        results = self._search_results(
+            question,
+            top_k=top_k * 2,
+            principal=principal,
+            narrowing=narrowing,
+        )
 
         if not results:
             return []
 
-        context = self._results_to_context(results)
+        context = self._results_to_context(
+            results,
+            principal=principal,
+            narrowing=narrowing,
+        )
         snippets = self._extract_answer_snippets(context, question, qtype)
 
         # Fallback：如果搜索结果明显相关但 snippet 评分不够，至少返回 top result 摘要
@@ -47,44 +81,62 @@ class QuestionAnswerSearch:
             top = results[0]
             # 检查标题是否包含 query 核心 token（强相关信号）
             title_lower = (top.title or "").lower()
-            q_core = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', self._normalize_question(question)))
+            q_core = set(
+                re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}", self._normalize_question(question))
+            )
             if q_core and any(kw in title_lower for kw in q_core):
                 fallback_text = top.snippet or top.title or ""
                 if len(fallback_text) > 500:
                     fallback_text = fallback_text[:500] + "..."
-                snippets.append({
-                    "text": fallback_text,
-                    "source": str(top.page_path),
-                    "score": 0.55,
-                })
+                snippets.append(
+                    {
+                        "text": fallback_text,
+                        "source": str(top.page_path),
+                        "score": 0.55,
+                    }
+                )
 
         # 4. 排序和格式化
         results = []
         for snippet in snippets[:top_k]:
-            results.append({
-                "answer_snippet": snippet["text"],
-                "source": snippet.get("source", "unknown"),
-                "confidence": round(snippet["score"], 3),
-                "question_type": qtype,
-            })
-
-        return results
-
-    def _search_results(self, question: str, top_k: int) -> List[SearchResult]:
-        if hasattr(self.retriever, "search"):
-            return self.retriever.search(question, limit=top_k)
-        context = self.retriever.assemble(question, top_k=top_k)
-        return [
-            SearchResult(
-                page_path="unknown",
-                title="unknown",
-                snippet=context,
-                score=0.5,
+            results.append(
+                {  # type: ignore[arg-type]
+                    "answer_snippet": snippet["text"],
+                    "source": snippet.get("source", "unknown"),
+                    "confidence": round(snippet["score"], 3),
+                    "question_type": qtype,
+                }
             )
-        ] if context else []
 
-    def _results_to_context(self, results: List[SearchResult]) -> str:
-        """将搜索结果转换为 QA 上下文，回读页面正文（过滤 frontmatter）"""
+        return results  # type: ignore[return-value]
+
+    def _search_results(
+        self,
+        question: str,
+        top_k: int,
+        *,
+        principal: PrincipalEnvelope,
+        narrowing: AccessNarrowing,
+    ) -> List[SearchResult]:
+        if hasattr(self.retriever, "search"):
+            return self.retriever.search(
+                question,
+                limit=top_k,
+                principal=principal,
+                narrowing=narrowing,
+            )
+        # Assemble-only backends have no principal-bound retrieval
+        # contract and cannot construct prompt context.
+        return []
+
+    def _results_to_context(
+        self,
+        results: List[SearchResult],
+        *,
+        principal: PrincipalEnvelope,
+        narrowing: AccessNarrowing,
+    ) -> str:
+        """Convert results into QA context through the authorization seam."""
         lines = []
         for result in results:
             lines.append(f"### {result.title}")
@@ -94,23 +146,18 @@ class QuestionAnswerSearch:
             # 优先使用 snippet，但如果 snippet 过短或像是 frontmatter，尝试回读正文
             snippet = result.snippet or ""
             if len(snippet) < 100 or snippet.startswith("---"):
-                try:
-                    page_path = self.wiki_dir / result.page_path
-                    if page_path.exists():
-                        full = page_path.read_text(encoding="utf-8", errors="ignore")
-                        # 去掉 frontmatter
-                        if full.startswith("---"):
-                            parts = full.split("---", 2)
-                            if len(parts) >= 3:
-                                full = parts[2]
-                        # 去掉 ## 来源追踪 等尾部区域
-                        for marker in ["## 来源追踪", "## AI 关联扩充"]:
-                            idx = full.find(marker)
-                            if idx > 0:
-                                full = full[:idx]
-                        snippet = full.strip()
-                except Exception:
-                    pass
+                body = self._read_page_body(
+                    result.page_path,
+                    principal=principal,
+                    narrowing=narrowing,
+                )
+                if body is not None:
+                    # 去掉 ## 来源追踪 等尾部区域
+                    for marker in ["## 来源追踪", "## AI 关联扩充"]:
+                        idx = body.find(marker)
+                        if idx > 0:
+                            body = body[:idx]
+                    snippet = body.strip()
             lines.append(snippet)
             lines.append("")
         return "\n".join(lines)
@@ -137,8 +184,7 @@ class QuestionAnswerSearch:
             return "selection"
         return "general"
 
-    def _extract_answer_snippets(self, context: str, question: str,
-                                 qtype: str) -> List[Dict]:
+    def _extract_answer_snippets(self, context: str, question: str, qtype: str) -> List[Dict]:
         """从上下文中抽取答案片段"""
         # 分割为段落
         paragraphs = self._split_into_paragraphs(context)
@@ -147,11 +193,13 @@ class QuestionAnswerSearch:
         for para in paragraphs:
             score = self._score_paragraph(para, question, qtype)
             if score > 0.2:
-                scored_snippets.append({
-                    "text": para["text"][:500],
-                    "source": para.get("source", ""),
-                    "score": score,
-                })
+                scored_snippets.append(
+                    {
+                        "text": para["text"][:500],
+                        "source": para.get("source", ""),
+                        "score": score,
+                    }
+                )
 
         scored_snippets.sort(key=lambda x: x["score"], reverse=True)
         return scored_snippets
@@ -179,46 +227,226 @@ class QuestionAnswerSearch:
                 continue
 
             if len(line) > 8:
-                paragraphs.append({
-                    "text": line,
-                    "source": current_source,
-                    "heading": current_heading,
-                })
+                paragraphs.append(
+                    {
+                        "text": line,
+                        "source": current_source,
+                        "heading": current_heading,
+                    }
+                )
 
         return paragraphs
 
     # 中文问题停用词：这些词不应参与关键词匹配，避免稀释关键实体
-    _QUESTION_STOP_WORDS = {
-        "如何", "怎么", "怎样", "什么", "为什么", "为啥", "为何",
-        "哪里", "哪个", "哪些", "谁", "多少", "几", "是否", "能不能",
-        "可以", "应该", "需要", "必须", "一定", "可能", "也许",
-        "解决", "处理", "应对", "处理", "办", "做", "用", "使用",
-        "关于", "对于", "有关", "涉及", "针对", "按照", "根据",
-        "时候", "时间", "时候", "情况", "场景", "问题", "冲突",
-        "错误", "异常", "故障", "报错", "失败", "无法", "不能",
-        "没有", "缺失", "缺少", "丢失", "遗漏", "忽略", "忘记",
-        "知道", "了解", "明白", "理解", "清楚", "熟悉", "掌握",
-        "建议", "推荐", "提示", "注意", "小心", "谨慎", "避免",
-        "最好", "最优", "最佳", "合适", "适合", "适用", "恰当",
-        "一般", "通常", "普遍", "常见", "经常", "往往", "大多",
-        "请问", "请教", "咨询", "求助", "帮助", "帮忙", "协助",
-        "一下", "一些", "一点", "一次", "一种", "一个", "一条",
-        "给我", "给我", "帮我", "给我", "让我", "让我", "帮我",
-        "详细", "具体", "详细", "深入", "全面", "完整", "系统",
-        "简单", "容易", "方便", "快捷", "快速", "高效", "有效",
-        "正确", "准确", "精确", "标准", "规范", "统一", "一致",
-        "不同", "差异", "区别", "对比", "比较", "相比", "相对",
-        "之前", "之后", "以前", "以后", "当时", "现在", "目前",
-        "首先", "然后", "接着", "最后", "最终", "总之", "综上所述",
-        "另外", "此外", "而且", "并且", "同时", "同样", "也一样",
-        "虽然", "尽管", "但是", "可是", "然而", "不过", "只是",
-        "因为", "由于", "因此", "所以", "因而", "从而", "于是",
-        "如果", "假如", "假设", "要是", "若是", "倘若", "除非",
-        "即使", "即便", "哪怕", "尽管", "不管", "无论", "不论",
-        "不仅", "不只", "不但", "不光", "不单", "而且", "并且",
-        "要么", "或者", "还是", "要么", "否则", "不然", "要不",
-        "与其", "不如", "宁可", "宁愿", "宁肯", "情愿", "甘愿",
-    }
+    _QUESTION_STOP_WORDS: frozenset[str] = frozenset(
+        {
+            "如何",
+            "怎么",
+            "怎样",
+            "什么",
+            "为什么",
+            "为啥",
+            "为何",
+            "哪里",
+            "哪个",
+            "哪些",
+            "谁",
+            "多少",
+            "几",
+            "是否",
+            "能不能",
+            "可以",
+            "应该",
+            "需要",
+            "必须",
+            "一定",
+            "可能",
+            "也许",
+            "解决",
+            "处理",
+            "应对",
+            "处理",
+            "办",
+            "做",
+            "用",
+            "使用",
+            "关于",
+            "对于",
+            "有关",
+            "涉及",
+            "针对",
+            "按照",
+            "根据",
+            "时候",
+            "时间",
+            "时候",
+            "情况",
+            "场景",
+            "问题",
+            "冲突",
+            "错误",
+            "异常",
+            "故障",
+            "报错",
+            "失败",
+            "无法",
+            "不能",
+            "没有",
+            "缺失",
+            "缺少",
+            "丢失",
+            "遗漏",
+            "忽略",
+            "忘记",
+            "知道",
+            "了解",
+            "明白",
+            "理解",
+            "清楚",
+            "熟悉",
+            "掌握",
+            "建议",
+            "推荐",
+            "提示",
+            "注意",
+            "小心",
+            "谨慎",
+            "避免",
+            "最好",
+            "最优",
+            "最佳",
+            "合适",
+            "适合",
+            "适用",
+            "恰当",
+            "一般",
+            "通常",
+            "普遍",
+            "常见",
+            "经常",
+            "往往",
+            "大多",
+            "请问",
+            "请教",
+            "咨询",
+            "求助",
+            "帮助",
+            "帮忙",
+            "协助",
+            "一下",
+            "一些",
+            "一点",
+            "一次",
+            "一种",
+            "一个",
+            "一条",
+            "给我",
+            "给我",
+            "帮我",
+            "给我",
+            "让我",
+            "让我",
+            "帮我",
+            "详细",
+            "具体",
+            "详细",
+            "深入",
+            "全面",
+            "完整",
+            "系统",
+            "简单",
+            "容易",
+            "方便",
+            "快捷",
+            "快速",
+            "高效",
+            "有效",
+            "正确",
+            "准确",
+            "精确",
+            "标准",
+            "规范",
+            "统一",
+            "一致",
+            "不同",
+            "差异",
+            "区别",
+            "对比",
+            "比较",
+            "相比",
+            "相对",
+            "之前",
+            "之后",
+            "以前",
+            "以后",
+            "当时",
+            "现在",
+            "目前",
+            "首先",
+            "然后",
+            "接着",
+            "最后",
+            "最终",
+            "总之",
+            "综上所述",
+            "另外",
+            "此外",
+            "而且",
+            "并且",
+            "同时",
+            "同样",
+            "也一样",
+            "虽然",
+            "尽管",
+            "但是",
+            "可是",
+            "然而",
+            "不过",
+            "只是",
+            "因为",
+            "由于",
+            "因此",
+            "所以",
+            "因而",
+            "从而",
+            "于是",
+            "如果",
+            "假如",
+            "假设",
+            "要是",
+            "若是",
+            "倘若",
+            "除非",
+            "即使",
+            "即便",
+            "哪怕",
+            "尽管",
+            "不管",
+            "无论",
+            "不论",
+            "不仅",
+            "不只",
+            "不但",
+            "不光",
+            "不单",
+            "而且",
+            "并且",
+            "要么",
+            "或者",
+            "还是",
+            "要么",
+            "否则",
+            "不然",
+            "要不",
+            "与其",
+            "不如",
+            "宁可",
+            "宁愿",
+            "宁肯",
+            "情愿",
+            "甘愿",
+        }
+    )
 
     def _normalize_question(self, question: str) -> str:
         """中文问题归一化：过滤停用词，保留关键实体"""
@@ -228,130 +456,181 @@ class QuestionAnswerSearch:
             q = q.replace(w, " ")
         return q.strip()
 
+    def _compute_base_score(self, text: str, q_keywords: set[str]) -> float:
+        """BM25-like 基础匹配分。"""
+        total_hits = sum(text.count(kw) for kw in q_keywords)
+        avg_len = max(1, len(text))
+        return min(1.0, (total_hits / len(q_keywords)) / (math.log(avg_len + 10) / 3))
+
+    def _compute_exact_bonus(self, text: str, core_terms: List[str]) -> float:
+        """关键 token 直接命中奖励。"""
+        bonus = sum(0.2 for kw in core_terms if kw in text)
+        return min(0.6, bonus)
+
+    def _compute_position_bonus(self, text: str, core_terms: List[str]) -> float:
+        """核心词出现在靠前句子的位置奖励。"""
+        bonus = 0.0
+        sentences = re.split(r"[。！？\n]", text)
+        for idx, sent in enumerate(sentences[:3]):
+            if any(kw in sent for kw in core_terms):
+                bonus += 0.05 * (3 - idx)
+        return min(0.15, bonus)
+
+    def _type_bonus_definition(self, text: str, q_keywords: set[str]) -> float:
+        bonus = 0.0
+        if any(p in text for p in ["是", "指的是", "定义为", "meaning", "refers to", "is a"]):
+            bonus = 0.3
+        core = next(iter(q_keywords), "")
+        if core and core in text:
+            bonus += 0.2
+        return bonus
+
+    def _type_bonus_causation(self, text: str, q_keywords: set[str]) -> float:
+        del q_keywords
+        if any(
+            p in text
+            for p in ["因为", "由于", "导致", "原因", "because", "since", "due to", "causes"]
+        ):
+            return 0.3
+        return 0.0
+
+    def _type_bonus_procedure(self, text: str, q_keywords: set[str]) -> float:
+        del q_keywords
+        bonus = 0.0
+        if any(
+            p in text
+            for p in ["步骤", "首先", "然后", "最后", "1.", "2.", "step", "first", "then"]
+        ):
+            bonus = 0.3
+        if re.search(r"^\s*[-*\d]\s+", text):
+            bonus += 0.2
+        return bonus
+
+    def _type_bonus_comparison(self, text: str, q_keywords: set[str]) -> float:
+        del q_keywords
+        patterns = [
+            "区别",
+            "差异",
+            "优势",
+            "劣势",
+            "对比",
+            "vs",
+            "difference",
+            "compared",
+            "advantage",
+            "disadvantage",
+        ]
+        if any(p in text for p in patterns):
+            return 0.3
+        return 0.0
+
+    def _type_bonus_temporal(self, text: str, q_keywords: set[str]) -> float:
+        del q_keywords
+        bonus = 0.0
+        if re.search(r"\d{4}[年/-]\d{1,2}[月/-]?\d{0,2}", text):
+            bonus = 0.3
+        if any(p in text for p in ["时间", "日期", "when", "date", "period", "duration"]):
+            bonus += 0.2
+        return bonus
+
+    def _type_bonus_entity(self, text: str, q_keywords: set[str]) -> float:
+        del q_keywords
+        if re.search(r"[A-Z][a-z]+\s+[A-Z][a-z]+", text):
+            return 0.2
+        return 0.0
+
+    def _compute_type_bonus(self, text: str, qtype: str, q_keywords: set[str]) -> float:
+        """根据问题类型计算额外奖励。"""
+        handler = getattr(self, f"_type_bonus_{qtype}", None)
+        if handler is None:
+            return 0.0
+        return cast(Callable[[str, set[str]], float], handler)(text, q_keywords)
+
+    def _compute_heading_penalty(self, para_text: str) -> float:
+        """标题/短句段落惩罚。"""
+        penalty = 0.0
+        text_stripped = para_text.strip()
+        if text_stripped.startswith(("#", "**", "---")):
+            penalty = 0.3
+        if len(text_stripped) < 40 and not re.search(r"[。！？\.\!\?]", text_stripped):
+            penalty = max(penalty, 0.15)
+        return penalty
+
+    def _compute_code_bonus(self, para_text: str, qtype: str) -> float:
+        """命令/代码/步骤段落加权。"""
+        bonus = 0.0
+        if re.search(
+            r"`[^`]+`|\$\s+\w|python\s+|docker\s+|git\s+|pip\s+|curl\s+|unset\s+|export\s+",
+            para_text,
+        ):
+            bonus = 0.15
+        if qtype == "procedure" and re.search(r"^\s*[-*\d]\s+", para_text):
+            bonus += 0.1
+        return bonus
+
+    def _compute_length_factor(self, length: int) -> float:
+        """段落长度惩罚因子。"""
+        if length < QUESTION_ANSWER_SEARCH__SCORE_PARAGRAPH_LENGTH:
+            return 0.7
+        if length > 300:
+            return 0.9
+        return 1.0
+
     def _score_paragraph(self, para: Dict, question: str, qtype: str) -> float:
         """根据问题类型对段落评分"""
         text = para["text"].lower()
         question_normalized = self._normalize_question(question)
-        q_keywords = set(re.findall(r'[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}', question_normalized))
+        q_keywords = set(re.findall(r"[\u4e00-\u9fa5]{2,}|[a-zA-Z]{3,}", question_normalized))
 
         if not q_keywords:
             return 0.0
 
-        # 基础匹配分：BM25-like（query token 命中次数 / 段落长度归一化）
-        # 比 Jaccard 更适合长段落
-        total_hits = 0
-        for kw in q_keywords:
-            total_hits += text.count(kw)
-        # 平均每个 query token 在段落中的命中次数，除以 log(段落长度) 做长度归一化
-        avg_len = max(1, len(text))
-        base_score = min(1.0, (total_hits / len(q_keywords)) / (math.log(avg_len + 10) / 3))
-
-        # exact match 保护：关键 token 直接命中给予强 boost
-        exact_bonus = 0.0
         core_terms = [kw for kw in q_keywords if len(kw) >= 3]
-        for kw in core_terms:
-            if kw in text:
-                exact_bonus += 0.2
-        exact_bonus = min(0.6, exact_bonus)
 
-        # 位置加分：段落中包含 query 核心词的句子更靠前时加分
-        position_bonus = 0.0
-        sentences = re.split(r'[。！？\n]', text)
-        for idx, sent in enumerate(sentences[:3]):
-            if any(kw in sent for kw in core_terms):
-                position_bonus += 0.05 * (3 - idx)
-        position_bonus = min(0.15, position_bonus)
+        base_score = self._compute_base_score(text, q_keywords)
+        exact_bonus = self._compute_exact_bonus(text, core_terms)
+        position_bonus = self._compute_position_bonus(text, core_terms)
+        type_bonus = self._compute_type_bonus(text, qtype, q_keywords)
+        heading_penalty = self._compute_heading_penalty(para["text"])
+        code_bonus = self._compute_code_bonus(para["text"], qtype)
+        length_factor = self._compute_length_factor(len(para["text"]))
 
-        # 问题类型加分
-        type_bonus = 0.0
-
-        if qtype == "definition":
-            # 定义类问题：寻找 "是"、"指的是"、"定义为" 等句式
-            if any(p in text for p in ["是", "指的是", "定义为", "meaning", "refers to", "is a"]):
-                type_bonus = 0.3
-            # 优先选择包含问题核心概念的句子
-            core = next(iter(q_keywords), "")
-            if core and core in text:
-                type_bonus += 0.2
-
-        elif qtype == "causation":
-            # 因果类问题：寻找 "因为"、"由于"、"导致" 等
-            if any(p in text for p in ["因为", "由于", "导致", "原因", "because", "since", "due to", "causes"]):
-                type_bonus = 0.3
-
-        elif qtype == "procedure":
-            # 步骤类问题：寻找列表、数字序号、"首先"、"然后"
-            if any(p in text for p in ["步骤", "首先", "然后", "最后", "1.", "2.", "step", "first", "then"]):
-                type_bonus = 0.3
-            if re.search(r'^\s*[-*\d]\s+', para["text"]):
-                type_bonus += 0.2
-
-        elif qtype == "comparison":
-            # 对比类问题：寻找 "vs"、"区别"、"优势"、"劣势"
-            patterns = ["区别", "差异", "优势", "劣势", "对比", "vs",
-                        "difference", "compared", "advantage", "disadvantage"]
-            if any(p in text for p in patterns):
-                type_bonus = 0.3
-
-        elif qtype == "temporal":
-            # 时间类问题：寻找日期、时间表达
-            if re.search(r'\d{4}[年/-]\d{1,2}[月/-]?\d{0,2}', para["text"]):
-                type_bonus = 0.3
-            if any(p in text for p in ["时间", "日期", "when", "date", "period", "duration"]):
-                type_bonus += 0.2
-
-        elif qtype == "entity":
-            # 实体类问题：优先包含人名或组织名
-            if re.search(r'[A-Z][a-z]+\s+[A-Z][a-z]+', para["text"]):  # 英文人名
-                type_bonus = 0.2
-
-        # 标题段落惩罚：纯标题（如 "## 结论"、"### 方案一"）不应作为答案
-        heading_penalty = 0.0
-        text_stripped = para["text"].strip()
-        if text_stripped.startswith(("#", "**", "---")):
-            heading_penalty = 0.3
-        # 如果段落很短且看起来像列表标题或短句，也适当降权
-        if len(text_stripped) < 40 and not re.search(r'[。！？\.\!\?]', text_stripped):
-            heading_penalty = max(heading_penalty, 0.15)
-
-        # 命令/代码/步骤段落加权
-        code_bonus = 0.0
-        if re.search(r'`[^`]+`|\$\s+\w|python\s+|docker\s+|git\s+|pip\s+|curl\s+|unset\s+|export\s+', para["text"]):
-            code_bonus = 0.15
-        if qtype == "procedure" and re.search(r'^\s*[-*\d]\s+', para["text"]):
-            code_bonus += 0.1
-
-        # 长度惩罚：过长或过短的段落降低分数
-        length = len(para["text"])
-        length_factor = 1.0
-        if length < 30:
-            length_factor = 0.7
-        elif length > 300:
-            length_factor = 0.9
-
-        raw_score = (base_score * 0.4 + exact_bonus + position_bonus + type_bonus + code_bonus - heading_penalty) * length_factor
+        raw_score = (
+            base_score * 0.4
+            + exact_bonus
+            + position_bonus
+            + type_bonus
+            + code_bonus
+            - heading_penalty
+        ) * length_factor
         return max(0.0, min(1.0, raw_score))
 
-    def _extract_solution_blocks(self, source: str, question: str, max_blocks: int = 4) -> List[str]:
-        """从命中页面中优先抽取可执行方案、步骤和命令。"""
+    def _read_page_body(
+        self,
+        source: str,
+        *,
+        principal: PrincipalEnvelope,
+        narrowing: AccessNarrowing,
+    ) -> Optional[str]:
+        """Read one body through the principal-bound retrieval seam."""
         if not source or source == "unknown":
-            return []
-        page_path = self.wiki_dir / source
-        if not page_path.exists():
-            return []
+            return None
+        reader = getattr(self.retriever, "read_authorized_page", None)
+        if not callable(reader):
+            return None
         try:
-            text = page_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            return []
-        if text.startswith("---"):
-            parts = text.split("---", 2)
-            if len(parts) >= 3:
-                text = parts[2]
+            text = reader(source, principal=principal, narrowing=narrowing)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
+        if not isinstance(text, str) or not text:
+            return None
+        _, body = parse_frontmatter(text)
+        return body
 
-        wanted_headings = (
-            "解决", "方案", "操作", "步骤", "命令", "修复", "处理",
-            "直接", "结论", "怎么做", "如何做",
-        )
+    def _collect_heading_blocks(
+        self, text: str, wanted_headings: Tuple[str, ...]
+    ) -> List[str]:
+        """按二级至四级标题收集命中关键词的段落块。"""
         blocks: List[str] = []
         current_heading = ""
         current_lines: List[str] = []
@@ -380,26 +659,72 @@ class QuestionAnswerSearch:
                     current_lines.append(line)
         if current_heading and any(k in current_heading for k in wanted_headings):
             flush()
+        return blocks
 
+    def _collect_command_lines(self, text: str) -> List[str]:
+        """收集文本中疑似命令行的内容。"""
         command_lines = []
         for line in text.splitlines():
             stripped = line.strip()
             if re.search(r"`[^`]+`|^(unset|export|git|python|pip|docker|curl|mnemos)\b", stripped):
                 command_lines.append(stripped)
-        if command_lines:
-            blocks.insert(0, "\n".join(command_lines[:6]))
+        return command_lines
 
-        # 去重并保序
-        deduped = []
-        seen = set()
+    def _dedupe_blocks(self, blocks: List[str]) -> List[str]:
+        """按压缩后前 120 字符去重并保序。"""
+        deduped: List[str] = []
+        seen: set = set()
         for block in blocks:
             key = re.sub(r"\s+", " ", block)[:120]
             if key not in seen:
                 seen.add(key)
                 deduped.append(block)
-        return deduped[:max_blocks]
+        return deduped
 
-    def answer(self, question: str) -> Optional[Dict]:
+    def _extract_solution_blocks(
+        self,
+        source: str,
+        question: str,
+        max_blocks: int = 4,
+        *,
+        principal: PrincipalEnvelope,
+        narrowing: AccessNarrowing,
+    ) -> List[str]:
+        """从命中页面中优先抽取可执行方案、步骤和命令。"""
+        text = self._read_page_body(
+            source,
+            principal=principal,
+            narrowing=narrowing,
+        )
+        if text is None:
+            return []
+
+        wanted_headings = (
+            "解决",
+            "方案",
+            "操作",
+            "步骤",
+            "命令",
+            "修复",
+            "处理",
+            "直接",
+            "结论",
+            "怎么做",
+            "如何做",
+        )
+        blocks = self._collect_heading_blocks(text, wanted_headings)
+        command_lines = self._collect_command_lines(text)
+        if command_lines:
+            blocks.insert(0, "\n".join(command_lines[:6]))
+        return self._dedupe_blocks(blocks)[:max_blocks]
+
+    def answer(
+        self,
+        question: str,
+        *,
+        principal: PrincipalEnvelope | None = None,
+        narrowing: AccessNarrowing | None = None,
+    ) -> Optional[Dict]:
         """
         直接返回答案。
         对 procedure 类问题做轻量合成（合并 top 步骤段落），
@@ -408,13 +733,26 @@ class QuestionAnswerSearch:
         Returns:
             {"answer": str, "source": str, "heading": str, "confidence": float} 或 None
         """
-        results = self.search(question, top_k=5)
+        if principal is None:
+            return None
+        narrowing = narrowing or AccessNarrowing()
+        results = self.search(
+            question,
+            top_k=5,
+            principal=principal,
+            narrowing=narrowing,
+        )
         if not results:
             return None
 
         qtype = self.extract_question_type(question)
         best = max(results, key=lambda x: x["confidence"])
-        solution_blocks = self._extract_solution_blocks(best["source"], question)
+        solution_blocks = self._extract_solution_blocks(
+            best["source"],
+            question,
+            principal=principal,
+            narrowing=narrowing,
+        )
         if solution_blocks and qtype in ("procedure", "general", "causation"):
             return {
                 "answer": "\n\n".join(solution_blocks),
@@ -452,17 +790,3 @@ class QuestionAnswerSearch:
             "confidence": best["confidence"],
             "question_type": best["question_type"],
         }
-
-    def answer_markdown(self, question: str, context: Dict = None) -> str:
-        """返回适合直接展示给用户的结构化 Markdown 答案。"""
-        results = self.search(question, top_k=5)
-        if not results:
-            return "根据当前 Wiki，没有找到足够相关的答案。"
-
-        lines = ["根据你的知识库：", ""]
-        for item in results[:3]:
-            lines.append(f"**{item['source'] or '未命名来源'}**")
-            lines.append(f"- {item['answer_snippet'][:240]}")
-            lines.append(f"- 置信度：{item['confidence']:.2f}")
-            lines.append("")
-        return "\n".join(lines).strip()

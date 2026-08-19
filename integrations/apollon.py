@@ -1,12 +1,12 @@
+#!/usr/bin/env python3
 # Apollon — 阿波罗/预言之神 — Claude Code 专属适配
 # 原模块: claude_integration.py
 
-#!/usr/bin/env python3
 """
-Claude Code Memos 集成脚本
+Claude Code 适配器
 
 意图判定规则：
-1. 【上下文回忆类】→ 仅读取Memos
+1. 【上下文回忆类】→ 仅读取 L1 存储
    - 历史对话、过往沟通细节、会话接续、任务复盘
    - 关键词：上次、之前、刚才、回忆、继续、复盘
 
@@ -18,690 +18,191 @@ Claude Code Memos 集成脚本
    - 两类不混合滥用
    - 无意义重复检索
    - 随意交叉调用
+
+Hook/CLI 只降级已知 I/O、配置、SQLite、存储与运行时故障；未知编程错误保持可见。
 """
 
+import importlib
 import os
 import logging
 import sqlite3
+import time
+import shutil
+import tempfile
+from dataclasses import asdict
 
 logger = logging.getLogger(__name__)
-import sys
-import json
-import argparse
-from pathlib import Path
+import sys  # noqa: E402
+import json  # noqa: E402
+import argparse  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 # 确保从任意工作目录执行时都能找到 core 模块
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from datetime import datetime, timedelta, timezone, timezone
-from typing import Dict, List, Optional, Tuple
-from enum import Enum
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from typing import Any, Dict, List, Optional, Tuple  # noqa: E402
+
+try:
+    import fcntl
+except (OSError, ValueError, TypeError, ImportError, AttributeError):  # pragma: no cover - Windows 没有 fcntl
+    fcntl = None  # type: ignore[assignment]
 
 
-from integrations.styx import MemosClient
-from integrations.xenios import AIContextReader
-from integrations.oracle import WikiReader
-from integrations.active import (
+def _import_optional_class(module_path: str, class_name: str):
+    """尝试导入可选模块中的类；缺失时返回 None 而不是让调用方执行 None()。"""
+    from core.import_guard import assert_allowed_module
+
+    try:
+        assert_allowed_module(module_path)
+        module = importlib.import_module(module_path)
+        return getattr(module, class_name)
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):
+        logger.debug("可选模块未加载: %s.%s", module_path, class_name, exc_info=True)
+        return None
+
+
+from integrations.active import (  # noqa: E402
     json_mcp_configured,
     upsert_json_mcp_server,
     write_active_context,
 )
+from integrations.preflight_builder import (  # noqa: E402
+    build_kia_section,
+    build_l1_section,
+    build_lightweight_preflight,
+    build_observation_section,
+    build_persona_section,
+    build_predictive_push_section,
+    build_wiki_section,
+    _guard_state_file,
+)
+from integrations.apollon_context import (  # noqa: E402,F401
+    ContextProviders,
+    IntentClassifier,
+    QueryIntent,
+    build_context_for_agent,
+    detect_private_keywords,
+)
+from integrations.thread_call import run_daemon_call as _run_daemon_call  # noqa: E402
 
 # Knowledge-in-Action 闭环系统
-from core.kia.dike import TaskClassifier
-from core.kia.kairos import TimeParser, should_load_knowledge
-from core.kia.prophasis import PreFlightInjector
-from core.kia.aegis import InProcessGuard, GuardLevel
-from core.kia.epimetheus import AutoRetrospective, should_retrospect
-from core.kia.proteus import IterationTracker
-from core.kia.chronos import KnowledgeScheduler
+from core.kia.dike import TaskClassifier  # noqa: E402
+from core.kia.prophasis import PreFlightInjector  # noqa: E402
+from core.kia.epimetheus import generate_retrospective, should_retrospect  # noqa: E402
+from core.kia.proteus import IterationTracker  # noqa: E402
+from core.kia.chronos import KnowledgeScheduler  # noqa: E402
 
 # 用户画像闭环系统
-from core.persona.psyche import SignalStore, get_signal_store, SessionSignal
-from core.persona.daimon import SignalCollector
-from core.persona.pythia import PreferenceAnalyzer
-from core.persona.delphi import PersonaStore
-from core.persona.hamartia import BlindSpotProfileManager
-from core.config import get_config
+from core.persona.psyche import get_signal_store, SessionSignal, log_session_signal  # noqa: E402
+from core.persona.daimon import SignalCollector  # noqa: E402
+from core.persona.pythia import PreferenceAnalyzer  # noqa: E402
+from core.persona.delphi import PersonaStore  # noqa: E402
+from core.persona.hamartia import BlindSpotProfileManager  # noqa: E402
+from core.config import get_config  # noqa: E402
+from core.sync_framework.storage_backend import StorageError  # noqa: E402
 
 
-class QueryIntent(Enum):
-    """查询意图类型"""
-    CONTEXT_RECALL = "context_recall"  # 上下文回忆类 → Memos
-    KNOWLEDGE_QUERY = "knowledge_query"  # 知识查询类 → Wiki
-    UNKNOWN = "unknown"
+APOLLON_OPERATION_ERRORS = (
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+    StorageError,
+)
 
 
-class IntentClassifier:
-    """意图分类器"""
-
-    # 【上下文回忆类】关键词
-    CONTEXT_KEYWORDS = [
-        # 时间指代
-        "上次", "之前", "刚才", "刚才说的", "早些时候",
-        "昨天", "今天早些时候", "刚才的",
-        # 会话相关
-        "继续", "接着", "回到", "刚才那个", "之前那个",
-        # 回忆/复盘
-        "回忆", "复盘", "回顾一下", "总结一下", "之前做过",
-        "做到哪了", "进度", "状态",
-        # 特定记录
-        "聊天记录", "对话记录", "会话", "说过",
-    ]
-
-    # 【知识查询类】关键词
-    KNOWLEDGE_KEYWORDS = [
-        # 概念定义
-        "是什么", "什么叫", "什么是", "定义", "概念",
-        "解释一下", "介绍一下", "说明",
-        # 架构/规则
-        "架构", "结构", "设计", "原理", "机制",
-        "规则", "规范", "约定", "标准",
-        # 流程/方法
-        "如何", "怎么", "怎样", "流程", "步骤",
-        "方法", "方式", "做法", "实现",
-        # 专业知识点
-        "为什么", "原理是什么", "底层", "核心",
-        "关键点", "注意事项", "最佳实践",
-        # 系统/框架
-        "系统", "框架", "模块", "组件", "接口",
-    ]
-
-    @classmethod
-    def classify(cls, user_message: str) -> Tuple[QueryIntent, float, List[str]]:
-        """
-        判定用户意图
-
-        Returns:
-            (意图类型, 置信度, 匹配到的关键词)
-        """
-        if not user_message:
-            return QueryIntent.UNKNOWN, 0.0, []
-
-        msg_lower = user_message.lower()
-
-        # 统计匹配
-        context_matches = [kw for kw in cls.CONTEXT_KEYWORDS if kw in msg_lower]
-        knowledge_matches = [kw for kw in cls.KNOWLEDGE_KEYWORDS if kw in msg_lower]
-
-        context_score = len(context_matches)
-        knowledge_score = len(knowledge_matches)
-
-        # 判定逻辑
-        if context_score > 0 and knowledge_score == 0:
-            # 只有上下文关键词 → 明确是上下文回忆
-            return QueryIntent.CONTEXT_RECALL, min(0.9, 0.5 + context_score * 0.1), context_matches
-
-        elif knowledge_score > 0 and context_score == 0:
-            # 只有知识关键词 → 明确是知识查询
-            return QueryIntent.KNOWLEDGE_QUERY, min(0.9, 0.5 + knowledge_score * 0.1), knowledge_matches
-
-        elif context_score > 0 and knowledge_score > 0:
-            # 两者都有 → 需要看哪个更强
-            if context_score > knowledge_score * 1.5:
-                return QueryIntent.CONTEXT_RECALL, 0.7, context_matches
-            elif knowledge_score > context_score * 1.5:
-                return QueryIntent.KNOWLEDGE_QUERY, 0.7, knowledge_matches
-            else:
-                # 混合意图 → 默认按上下文处理（更安全）
-                return QueryIntent.CONTEXT_RECALL, 0.6, context_matches + knowledge_matches
-
-        else:
-            # 无明确关键词 → 未知，默认不查Wiki
-            return QueryIntent.UNKNOWN, 0.0, []
+def get_wiki_knowledge(user_message: str, agent: str = "claude") -> Optional[str]:
+    """【知识查询类】专用 - 检索Wiki知识（热力值控制深度）。"""
+    result = build_wiki_section(user_message, mode="deep", agent=agent)
+    return result if result else None
 
 
-def get_wiki_knowledge(user_message: str) -> Optional[str]:
-    """
-    【知识查询类】专用 - 检索Wiki知识（热力值控制深度）
-
-    流程：
-    1. 搜索所有相关页面（不限数量）
-    2. 按热力值分组
-    3. 根据热力值读取对应深度：
-       - L0: 元数据
-       - L1-L3: 摘要100字
-       - L4-L6: 段落500字
-       - L7-L8: 全文+关联
-       - L9: 全文+深度追踪
-    """
-    reader = WikiReader()
-
-    # 获取Wiki知识（自动按热力值分层）
-    result = reader.get_knowledge(user_message, include_related=True)
-
-    # 记录查询轨迹（供暗知识挖掘使用）
-    if result["found"]:
-        try:
-            try:
-                from core.knowledge_trail import KnowledgeTrail
-            except ImportError:
-                KnowledgeTrail = None  # module not available
-            trail = KnowledgeTrail()
-            for page in result.get("pages", []):
-                page_path = page.get("path", "")
-                if page_path:
-                    trail.log_query(page_path, context=user_message)
-        except Exception:
-            pass  # 轨迹记录失败不影响主流程
-
-    if not result["found"]:
-        return None
-
-    # 组装上下文
-    context_parts = [
-        f"\n## Wiki知识参考（【知识查询类】自动检索）",
-        f"查询: {result['query']}",
-        f"找到 {result['total_pages']} 个相关页面，按热力值分层读取:\n"
-    ]
-
-    # 按热力值分组显示
-    for level_group in ["L9", "L7-L8", "L4-L6", "L1-L3", "L0"]:
-        if level_group in result["by_heat_level"]:
-            group = result["by_heat_level"][level_group]
-            if group["count"] > 0:
-                context_parts.append(f"\n### [{level_group}] {group['count']}个页面 - {group['depth']}")
-                for page in group["pages"][:3]:  # 每个等级最多3个
-                    content = page["content"]
-                    lines = [f"\n**{content.get('title', page['title'])}** [{page['heat_level']}]"]
-
-                    if "content" in content:
-                        lines.append(content["content"][:1500])
-                    elif "summary" in content:
-                        lines.append(content["summary"])
-
-                    if content.get("related"):
-                        lines.append(f"\n关联: {', '.join([r['page_id'] for r in content['related'][:3]])}")
-
-                    context_parts.append("\n".join(lines))
-
-    # 添加分隔线
-    context_parts.append("\n---\n")
-
-    # 【Context Fencing】标记 Wiki 引用，防止回流污染
-    # 蒸馏层检测到此标记会跳过该消息，避免 AI 复述的 Wiki 内容又进入 Wiki
-    full_context = "\n".join(context_parts)
-    return f"""<wiki-context source="knowledge-query">
-{full_context}
-</wiki-context>"""
+def get_l1_context(
+    working_dir: str,
+    authorize_cross: List[str] | None = None,
+    agent: str = "claude",
+) -> str:
+    """【上下文回忆类】专用 - 读取 StorageBackend 历史记录。"""
+    return build_l1_section(working_dir, agent, authorize_cross)
 
 
-def get_memos_context(working_dir: str, authorize_cross: List[str] = None) -> str:
-    """
-    【上下文回忆类】专用 - 读取Memos历史记录
-
-    权限控制：
-    - 同框架默认可读
-    - 跨框架默认根据配置 cross_agent_share 决定（默认开启）
-    - private 标签的记录不共享（由 read_cross_agent 内部过滤）
-    """
-    from core.config import get_config
-
-    reader = AIContextReader(agent="claude")
-
-    # 跨 Agent 共享默认由配置控制
-    all_agents = ["claude", "hermes", "openclaw", "opencode", "codex"]
-    if authorize_cross is None:
-        if get_config().cross_agent_share:
-            authorize_cross = all_agents
-        else:
-            authorize_cross = []
-
-    if authorize_cross:
-        reader.authorize_cross_agent(authorize_cross, duration_minutes=60)
-
-    context_parts = []
-
-    # 1. 读取自己的上下文
-    my_memories = reader.read_my_context(limit=30, days=7)
-    if my_memories:
-        context_parts.append(f"\n## 最近会话上下文（{len(my_memories)}条）\n")
-        for mem in my_memories[:10]:
-            session_id = "unknown"
-            for tag in mem.tags:
-                if tag.startswith("session:"):
-                    session_id = tag.split(":", 1)[1]
-                    break
-            content_preview = mem.content[:200].replace('\n', ' ')
-            context_parts.append(f"- Session `{session_id}`: {content_preview}...")
-
-    # 2. 读取跨框架上下文（如有授权）
-    if authorize_cross:
-        cross_context = reader.read_cross_agent(authorize_cross, limit=10)
-        for agent, memories in cross_context.items():
-            if memories:
-                context_parts.append(f"\n## {agent} 框架共享记忆（{len(memories)}条）\n")
-                for mem in memories[:5]:
-                    content_preview = mem.content[:150].replace('\n', ' ')
-                    context_parts.append(f"- {content_preview}...")
-
-    # 3. 搜索与工作目录相关的上下文
-    dir_name = Path(working_dir).name
-    related = reader.search_context(dir_name, limit=10)
-    if related:
-        context_parts.append(f"\n## 相关记忆（{len(related)}条）\n")
-        for r in related[:5]:
-            mem = r['memory']
-            source = r['source']
-            content_preview = mem.content[:150].replace('\n', ' ')
-            context_parts.append(f"- [{source}] {content_preview}...")
-
-    if not context_parts:
-        return "\n（暂无相关上下文）\n"
-
-    return '\n'.join(context_parts)
+def _get_persona_behavior_prompt(working_dir: str | None = None) -> str:
+    """根据用户画像生成行为策略提示（统一使用 build_persona_section）。"""
+    return build_persona_section("claude", working_dir=working_dir or "")
 
 
-# A/B 测试状态：当前 session 是否使用画像驱动
-_ab_test_persona_driven = None
-
-def _ensure_ab_test_group() -> bool:
-    """确保 A/B 测试分组已确定（每个 session 只随机一次）"""
-    global _ab_test_persona_driven
-    if _ab_test_persona_driven is None:
-        import random
-        _ab_test_persona_driven = random.random() < 0.5
-    return _ab_test_persona_driven
-
-def _get_persona_behavior_prompt() -> str:
-    """
-    根据用户画像生成行为策略提示。
-    将画像维度映射为具体的 AI 交互策略。
-    支持 A/B 测试：50% 概率使用画像驱动，50% 概率不使用。
-    """
-    try:
-        # A/B 分组：每个 session 只确定一次
-        if not _ensure_ab_test_group():
-            return "\n[Persona-Driven Behavior]\n- A/B 对照组：本次 session 不使用画像驱动策略"
-
-        from core.persona.delphi import PersonaStore
-        pstore = PersonaStore()
-        profile, _ = pstore.load_persona()
-        if not profile:
-            _ab_test_persona_driven = False
-            return ""
-
-        lines = ["\n[Persona-Driven Behavior]"]
-        ins_energy = set(profile.energy.insufficient_dimensions or [])
-        ins_cognitive = set(profile.cognitive.insufficient_dimensions or [])
-        ins_value = set(profile.value.insufficient_dimensions or [])
-
-        # 能量层映射
-        if "focus_depth" not in ins_energy:
-            fd = profile.energy.focus_depth
-            if fd > 0.6:
-                lines.append("- 用户专注深度高：提供结构化、层次化的深度回复，避免碎片化信息")
-            elif fd < 0.4:
-                lines.append("- 用户专注深度低：提供简短、可快速消化的信息，多用列表和要点")
-
-        if "startup_difficulty" not in ins_energy:
-            sd = profile.energy.startup_difficulty
-            if sd > 0.6:
-                lines.append("- 用户启动难度高：主动提供框架、模板或选项，降低决策成本")
-            elif sd < 0.4:
-                lines.append("- 用户启动容易：可以用开放性问题开场，给用户更多探索空间")
-
-        if "switching_flexibility" not in ins_energy:
-            sf = profile.energy.switching_flexibility
-            if sf > 0.6:
-                lines.append("- 用户切换弹性高：允许话题自然切换，不必强行锁定当前主题")
-            elif sf < 0.4:
-                lines.append("- 用户切换弹性低：坚持当前主线，切换话题时明确提示和确认")
-
-        # 认知层映射
-        if "abstraction" not in ins_cognitive:
-            ab = profile.cognitive.abstraction
-            if ab > 0.6:
-                lines.append("- 用户偏抽象思维：先说原理/框架，再用案例佐证")
-            elif ab < 0.4:
-                lines.append("- 用户偏具象思维：先给具体案例，再归纳原理")
-
-        if "system_view" not in ins_cognitive:
-            sv = profile.cognitive.system_view
-            if sv > 0.6:
-                lines.append("- 用户偏好系统视角：先给全貌和关联，再深入细节")
-            elif sv < 0.4:
-                lines.append("- 用户偏好单点视角：聚焦当前问题，全局背景简要提及")
-
-        if "skepticism" not in ins_cognitive:
-            sk = profile.cognitive.skepticism
-            if sk > 0.6:
-                lines.append("- 用户质疑倾向强：主动展示推理过程、证据和局限性")
-            elif sk < 0.4:
-                lines.append("- 用户信任倾向强：直接给结论和建议，不必过度解释前提")
-
-        # 价值层映射
-        if "correctness_vs_efficiency" not in ins_value:
-            ce = profile.value.correctness_vs_efficiency
-            if ce > 0.6:
-                lines.append("- 用户重视正确性：确保信息准确，不确定时明确说明")
-            elif ce < 0.4:
-                lines.append("- 用户重视效率：快速给出可行方案，不必追求完美")
-
-        if "perfection_vs_completion" not in ins_value:
-            pc = profile.value.perfection_vs_completion
-            if pc > 0.6:
-                lines.append("- 用户追求完美：提供详尽、完整的方案，考虑边界情况")
-            elif pc < 0.4:
-                lines.append("- 用户追求完成：先给 MVP 方案，细节后续补充")
-
-        if "depth_vs_breadth" not in ins_value:
-            db = profile.value.depth_vs_breadth
-            if db > 0.6:
-                lines.append("- 用户偏好深度：深入一个点，不必面面俱到")
-            elif db < 0.4:
-                lines.append("- 用户偏好广度：提供多种选择和视角，不必深入每个细节")
-
-        if len(lines) > 1:
-            return "\n".join(lines)
-        return ""
-    except Exception:
-        _ab_test_persona_driven = False
-        return ""
-
-
-def get_ab_test_stats(days: int = 30) -> dict:
-    """
-    获取 A/B 测试统计。
-    对比画像驱动组 vs 对照组的 session 表现。
-    """
-    try:
-        import sqlite3
-        from core.persona.psyche import SIGNAL_DB_PATH
-
-        db_path = str(SIGNAL_DB_PATH)
-        with sqlite3.connect(db_path, timeout=10) as conn:
-            # 获取画像驱动组的 session 指标
-            driven = conn.execute("""
-                SELECT
-                    AVG(correction_count),
-                    COUNT(CASE WHEN termination_type = 'satisfied' THEN 1 END),
-                    COUNT(*)
-                FROM session_signals s
-                JOIN signal_metadata m ON m.signal_table = 'session' AND m.signal_id = s.id
-                WHERE s.timestamp >= date('now', ?)
-                  AND json_extract(m.session_context, '$.persona_driven') = 1
-            """, (f'-{days} days',)).fetchone()
-
-            # 获取对照组的 session 指标
-            control = conn.execute("""
-                SELECT
-                    AVG(correction_count),
-                    COUNT(CASE WHEN termination_type = 'satisfied' THEN 1 END),
-                    COUNT(*)
-                FROM session_signals s
-                JOIN signal_metadata m ON m.signal_table = 'session' AND m.signal_id = s.id
-                WHERE s.timestamp >= date('now', ?)
-                  AND (
-                    json_extract(m.session_context, '$.persona_driven') IS NULL
-                    OR json_extract(m.session_context, '$.persona_driven') = 0
-                  )
-            """, (f'-{days} days',)).fetchone()
-
-        result = {"days": days}
-        if driven[2] and driven[2] > 0:
-            result["driven"] = {
-                "count": driven[2],
-                "avg_correction": round(driven[0] or 0, 2),
-                "satisfaction_rate": round((driven[1] or 0) / driven[2], 2),
-            }
-        if control[2] and control[2] > 0:
-            result["control"] = {
-                "count": control[2],
-                "avg_correction": round(control[0] or 0, 2),
-                "satisfaction_rate": round((control[1] or 0) / control[2], 2),
-            }
-        return result
-    except Exception:
-        return {}
+def get_context_for_agent(
+    agent: str,
+    working_dir: str | None = None,
+    user_message: str | None = None,
+    authorize_cross: List[str] | None = None,
+    mode: str | None = None,
+) -> str:
+    """Build intent-routed preflight context through the extracted core."""
+    resolved_working_dir = working_dir or os.getcwd()
+    resolved_mode = mode or get_config().get("preflight.mode", "full")
+    providers = ContextProviders(
+        classify_intent=IntentClassifier.classify,
+        detect_private_keywords=detect_private_keywords,
+        get_l1_context=get_l1_context,
+        get_wiki_knowledge=get_wiki_knowledge,
+        load_knowledge_in_action=load_knowledge_in_action,
+        build_lightweight_preflight=build_lightweight_preflight,
+        build_predictive_push_section=(
+            lambda user_message: build_predictive_push_section(
+                user_message,
+                agent=agent,
+            )
+        ),
+        build_observation_section=(
+            lambda: build_observation_section(agent=agent)
+        ),
+        get_persona_behavior_prompt=_get_persona_behavior_prompt,
+        build_persona_section=build_persona_section,
+    )
+    return build_context_for_agent(
+        agent=agent,
+        working_dir=resolved_working_dir,
+        user_message=user_message or "",
+        authorize_cross=authorize_cross,
+        mode=str(resolved_mode).lower(),
+        providers=providers,
+    )
 
 
 def get_context_for_claude(
-    working_dir: str = None,
-    user_message: str = None,
-    authorize_cross: List[str] = None
+    working_dir: str | None = None,
+    user_message: str | None = None,
+    authorize_cross: List[str] | None = None,
 ) -> str:
-    """
-    主入口：根据意图判定选择数据源
-
-    【严格分离原则】
-    - 上下文回忆类 → 仅Memos
-    - 知识查询类 → 仅Wiki
-    - 禁止混合滥用
-    """
-    if working_dir is None:
-        working_dir = os.getcwd()
-
-    # 1. 意图判定
-    intent, confidence, keywords = IntentClassifier.classify(user_message or "")
-
-    print(f"[Intent] 用户意图: {intent.value}, 置信度: {confidence:.2f}, 关键词: {keywords[:3]}")
-
-    context_parts = []
-
-    # 2. 根据意图选择数据源（严格分离）
-    if intent == QueryIntent.CONTEXT_RECALL:
-        # 【上下文回忆类】→ 仅Memos
-        print(f"[Context] 判定为【上下文回忆类】，仅读取Memos...")
-        memos_context = get_memos_context(working_dir, authorize_cross)
-        context_parts.append(memos_context)
-
-    elif intent == QueryIntent.KNOWLEDGE_QUERY:
-        # 【知识查询类】→ 仅Wiki
-        print(f"[Context] 判定为【知识查询类】，仅检索Wiki...")
-        wiki_context = get_wiki_knowledge(user_message)
-        if wiki_context:
-            context_parts.append(wiki_context)
-        else:
-            context_parts.append("\n（Wiki中未找到相关知识）\n")
-
-    elif intent == QueryIntent.UNKNOWN:
-        # 未知意图 → 保守策略，仅读取Memos上下文
-        print(f"[Context] 意图不明确，保守策略：仅读取Memos...")
-        memos_context = get_memos_context(working_dir, authorize_cross)
-        context_parts.append(memos_context)
-
-    # 3. Knowledge-in-Action：装载历史经验
-    # 仅在非上下文回忆类查询时加载（避免干扰回忆类查询）
-    if intent != QueryIntent.CONTEXT_RECALL:
-        kia_context = load_knowledge_in_action(user_message or "")
-        if kia_context:
-            context_parts.append(kia_context)
-
-    # 4. Predictive Push：主动推送可能相关的知识
-    if intent != QueryIntent.CONTEXT_RECALL and user_message:
-        try:
-            from core.predictive_push import PredictivePushEngine
-            push_engine = PredictivePushEngine()
-            push_decision = push_engine.decide_push(user_message)
-            if push_decision and push_decision.should_push:
-                context_parts.append(
-                    f"\n[Predictive Push] 基于上下文主动推荐:\n"
-                    f"  相关页面: {push_decision.page_title}\n"
-                    f"  推荐理由: {push_decision.reason}\n"
-                    f"  匹配度: {push_decision.match_score:.2f}\n"
-                )
-        except Exception as e:
-            logger.warning(f"PredictivePush 失败: {e}")
-
-    # 5. 画像驱动行为策略
-    persona_behavior = _get_persona_behavior_prompt()
-    if persona_behavior:
-        context_parts.append(persona_behavior)
-
-    # 6. 添加意图标记（用于调试和追踪）
-    # 【第4层防护】标记上下文回忆，防止后续Ingest提取时循环污染
-    if intent == QueryIntent.CONTEXT_RECALL:
-        context_parts.append(f"\n<!-- Intent: {intent.value}, Confidence: {confidence:.2f}, ContainsContextRecall: true -->")
-    else:
-        context_parts.append(f"\n<!-- Intent: {intent.value}, Confidence: {confidence:.2f} -->")
-
-    return '\n'.join(context_parts)
+    """Claude Code 兼容入口，代理到 :func:`get_context_for_agent`。"""
+    return get_context_for_agent("claude", working_dir, user_message, authorize_cross)
 
 
 def load_knowledge_in_action(user_message: str) -> str:
-    """
-    Knowledge-in-Action 闭环系统 - 会话开始时装载历史经验
-
-    流程：
-    1. 识别任务类型（AI建议 + 关键词匹配）
-    2. 解析时间窗口
-    3. 即时/短期任务 → 装载历史校验清单
-    4. 中期/长期任务 → 记入调度器，本次不装载
-    """
-    if not user_message:
-        return ""
-
-    try:
-        classifier = TaskClassifier()
-        injector = PreFlightInjector()
-        scheduler = KnowledgeScheduler()
-
-        # 1. 分类任务
-        messages = [{"role": "user", "content": user_message}]
-        result = classifier.classify(messages)
-
-        if result.confidence < 0.7:
-            return ""  # 不确定，不干扰
-
-        task_label = classifier.get_task_type_label(result.task_type, result.subtype)
-        print(f"[KIA] 识别任务: {task_label} (置信度: {result.confidence:.2f})")
-
-        # 2. 解析时间窗口
-        parser = TimeParser()
-        time_window = parser.parse(user_message)
-
-        # 3. 根据时间窗口决定策略
-        if not parser.should_load_now(time_window):
-            # 中期/长期任务，记入调度器
-            if time_window.due_date:
-                task_id = scheduler.schedule(
-                    result.task_type, result.subtype,
-                    time_window.due_date, context=user_message,
-                    is_periodic=time_window.is_periodic,
-                    period=time_window.period
-                )
-                print(f"[KIA] 任务已记入调度器: {task_id}，提前 {parser.get_reminder_days_before(time_window)} 天提醒")
-            return ""
-
-        # 4. 装载知识
-        knowledge = injector.inject(
-            result.task_type, result.subtype,
-            time_window, context_text=user_message
-        )
-
-        if not knowledge:
-            print(f"[KIA] 暂无历史经验 ({task_label})")
-            return ""
-
-        # 5. 格式化输出
-        knowledge_text = injector.format_for_context(knowledge)
-
-        # 6. 启动 InProcessGuard 并检查用户消息
-        guard = InProcessGuard(knowledge)
-        alert = guard.check(user_message, "")
-
-        guard_lines = []
-        if alert:
-            emoji = {"interrupt": "🛑", "hint": "💡", "silent": "📝"}.get(alert.level.value, "⚠️")
-            guard_lines.append(f"{emoji} [Guard Alert] {alert.checklist_item.item}")
-            if alert.suggestion:
-                guard_lines.append(f"   {alert.suggestion}")
-            print(f"[KIA-Guard] {alert.level.value.upper()}: {alert.checklist_item.item}")
-
-            # INTERRUPT 级别直接返回告警（阻止继续）
-            if alert.level == GuardLevel.INTERRUPT:
-                _guard_text = '\n'.join(guard_lines)
-                return f"\n{knowledge_text}\n\n{_guard_text}\n"
-        else:
-            # 静默记录（轻微偏差不打扰用户，只记录供复盘使用）
-            silent_records = guard.check_silent(user_message, "")
-            if silent_records:
-                print(f"[KIA-Guard] 静默记录 {len(silent_records)} 条")
-
-        # 7. 保存 Guard 会话状态供复盘使用
-        _save_guard_state(guard, result.task_type, result.subtype)
-
-        # 8. 附加静态 Guard Rules（作为参考，不基于实时检测）
-        static_guard_lines = ["[Guard Rules]"]
-        for item in knowledge.checklist:
-            if item.severity in ["critical", "high"]:
-                static_guard_lines.append(f"⚠️ {item.item}")
-        guard_text = "\n".join(static_guard_lines) if len(static_guard_lines) > 1 else ""
-
-        print(f"[KIA] 已装载 {task_label} v{knowledge.version}，{len(knowledge.checklist)} 条经验")
-
-        if guard_lines or guard_text:
-            parts = [knowledge_text]
-            if guard_lines:
-                parts.append("\n".join(guard_lines))
-            if guard_text:
-                parts.append(guard_text)
-            return "\n\n".join(parts) + "\n"
-        return f"\n{knowledge_text}\n"
-
-    except Exception as e:
-        print(f"[KIA] 知识装载失败: {e}")
-        return ""
-
-
-# ========== Guard 状态持久化（跨轮次保持） ==========
-
-def _guard_state_file() -> Path:
-    """Guard 状态文件路径（统一在 ~/.mnemos/ 下）"""
-    from core.config import get_config
-    return get_config().data_dir / "guard_state.json"
-
-
-def _save_guard_state(guard: InProcessGuard, task_type: str, subtype: str):
-    """保存 Guard 会话状态到文件，供复盘时使用"""
-    if not guard or not guard.session:
-        return
-
-    try:
-        state = {
-            "task_type": task_type,
-            "subtype": subtype,
-            "checklist": [
-                {
-                    "item": item.item,
-                    "severity": item.severity,
-                    "trigger_keywords": item.trigger_keywords,
-                    "risk_patterns": item.risk_patterns,
-                    "detail": item.detail,
-                }
-                for item in guard.session.checklist
-            ],
-            "triggered_alerts": [
-                {
-                    "level": alert.level.value,
-                    "item": alert.checklist_item.item,
-                    "triggered_by": alert.triggered_by,
-                    "trigger_text": alert.trigger_text,
-                }
-                for alert in guard.session.triggered_alerts
-            ],
-            "silent_records": guard.session.silent_records,
-            "timestamp": datetime.now().isoformat(),
-        }
-        _guard_state_file().parent.mkdir(parents=True, exist_ok=True)
-        _guard_state_file().write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    except Exception as e:
-        print(f"[KIA-Guard] 状态保存失败: {e}")
+    """Knowledge-in-Action 闭环系统 - 会话开始时装载历史经验。"""
+    return build_kia_section(user_message, mode="full")
 
 
 def _load_guard_state() -> Optional[Dict]:
     """加载 Guard 会话状态"""
     try:
         if _guard_state_file().exists():
-            return json.loads(_guard_state_file().read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning(f"加载 Guard 状态失败: {e}")
+            # type: ignore[no-any-return]
+            return json.loads(_guard_state_file().read_text(encoding="utf-8"))  # type: ignore[no-any-return]  # noqa: E501
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("加载 Guard 状态失败: %s", e)
     return None
 
 
-def _build_checklist_usage_from_guard(messages: List[Dict], task_type: str, subtype: str) -> List[Dict]:
+def _build_checklist_usage_from_guard(
+    messages: List[Dict], task_type: str, subtype: str
+) -> List[Dict]:
     """
     基于消息历史和 Guard 状态构建 checklist 使用情况
     在 session_end 时调用，模拟 Guard 检查整个对话历史
@@ -715,25 +216,29 @@ def _build_checklist_usage_from_guard(messages: List[Dict], task_type: str, subt
         if state.get("task_type") == task_type and state.get("subtype") == subtype:
             # 从状态恢复告警记录
             for alert in state.get("triggered_alerts", []):
-                usage.append({
-                    "item": alert["item"],
-                    "loaded": True,
-                    "used": True,
-                    "triggered": alert["level"] in ("interrupt", "hint"),
-                    "level": alert["level"],
-                    "severity": "high",  # 被触发的通常级别较高
-                    "reason_ignored": "",
-                })
+                usage.append(
+                    {
+                        "item": alert["item"],
+                        "loaded": True,
+                        "used": True,
+                        "triggered": alert["level"] in ("interrupt", "hint"),
+                        "level": alert["level"],
+                        "severity": "high",  # 被触发的通常级别较高
+                        "reason_ignored": "",
+                    }
+                )
             for record in state.get("silent_records", []):
-                usage.append({
-                    "item": record["item"],
-                    "loaded": True,
-                    "used": True,
-                    "triggered": False,
-                    "level": "silent",
-                    "severity": record.get("severity", "medium"),
-                    "reason_ignored": "",
-                })
+                usage.append(
+                    {
+                        "item": record["item"],
+                        "loaded": True,
+                        "used": True,
+                        "triggered": False,
+                        "level": "silent",
+                        "severity": record.get("severity", "medium"),
+                        "reason_ignored": "",
+                    }
+                )
 
     # 2. 如果没有历史状态，基于消息内容做简化推断
     if not usage:
@@ -741,155 +246,165 @@ def _build_checklist_usage_from_guard(messages: List[Dict], task_type: str, subt
         all_text = " ".join([m.get("content", "") for m in messages])
         # 简化：如果消息中提到了"已注意""已检查"等，认为 checklist 被使用了
         if "注意" in all_text or "检查了" in all_text or "确认" in all_text:
-            usage.append({
-                "item": "用户声明已注意风险",
-                "loaded": True,
-                "used": True,
-                "triggered": False,
-                "level": "none",
-                "severity": "medium",
-                "reason_ignored": "",
-            })
+            usage.append(
+                {
+                    "item": "用户声明已注意风险",
+                    "loaded": True,
+                    "used": True,
+                    "triggered": False,
+                    "level": "none",
+                    "severity": "medium",
+                    "reason_ignored": "",
+                }
+            )
 
     return usage
 
 
 # ========== 用户画像闭环 ==========
 
-PERSONA_MIN_SIGNALS = 10       # 最小信号数才分析
-PERSONA_MIN_DAYS = 7           # 最少间隔天数
+PERSONA_MIN_SIGNALS = 10  # 最小信号数才分析
+PERSONA_MIN_DAYS = 7  # 最少间隔天数
 
 
-def _collect_session_signal(messages: List[Dict], working_dir: str,
-                            task_type: str = "", task_subtype: str = "") -> int:
+def _extract_user_metrics(messages: List[Dict]) -> tuple[float, int, int]:
+    """提取用户消息平均长度、纠正次数、追问深度。"""
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    user_contents = [m.get("content", "") for m in user_msgs]
+    avg_len = sum(len(c) for c in user_contents) / max(len(user_contents), 1)
+
+    correction_keywords = ["不对", "错了", "不是", "应该", "换个", "不对，"]
+    correction_count = sum(
+        1 for c in user_contents if any(kw in c for kw in correction_keywords)
+    )
+
+    follow_up_depth = 0
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user" and i > 0:
+            prev = messages[:i]
+            if any(m.get("role") == "assistant" for m in prev):
+                follow_up_depth += 1
+
+    return avg_len, correction_count, follow_up_depth
+
+
+def _infer_termination_type(messages: List[Dict]) -> str:
+    """基于最后一条用户消息推断终止类型。"""
+    last_user = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            last_user = m.get("content", "").lower()
+            break
+
+    if any(kw in last_user for kw in ["好的", "完美", "可以", "ok", "谢谢", "搞定了"]):
+        return "satisfied"
+    if any(kw in last_user for kw in ["开始吧", "执行", "推进", "下一步", "继续"]):
+        return "progress"
+    if any(kw in last_user for kw in ["你决定", "你来", "按你的"]):
+        return "delegated"
+    if any(kw in last_user for kw in ["算了", "放弃", "不做了", "先这样吧"]):
+        return "abandoned"
+    return "unknown"
+
+
+def _infer_output_type(messages: List[Dict]) -> str:
+    """基于消息内容推断产出类型。"""
+    all_text = " ".join(m.get("content", "") for m in messages)
+    if "```" in all_text or "def " in all_text or "class " in all_text:
+        return "code"
+    if "# " in all_text and len(all_text) > 500:
+        return "document"
+    return "discussion"
+
+
+def _derive_session_id(messages: List[Dict], working_dir: str, session_id: str | None) -> str:
+    """优先使用外部传入的 session_id，否则用内容 hash 生成。"""
+    if session_id:
+        return session_id
+    import hashlib
+
+    all_text = " ".join(m.get("content", "") for m in messages)
+    content_hash = hashlib.md5(all_text.encode(), usedforsecurity=False).hexdigest()[:16]
+    dir_hash = hashlib.md5(
+        (working_dir or os.getcwd()).encode(), usedforsecurity=False
+    ).hexdigest()[:8]
+    return f"{dir_hash}:{content_hash}"
+
+
+def _build_session_signal(
+    messages: List[Dict],
+    working_dir: str,
+    task_type: str,
+    task_subtype: str,
+    session_id: str | None,
+) -> "SessionSignal":
+    """根据消息内容构造 SessionSignal。"""
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    avg_len, correction_count, follow_up_depth = _extract_user_metrics(messages)
+    termination_type = _infer_termination_type(messages)
+    output_type = _infer_output_type(messages)
+    sid = _derive_session_id(messages, working_dir, session_id)
+
+    return SessionSignal(
+        session_id=sid,
+        timestamp=datetime.now().isoformat(),
+        task_type=task_type,
+        task_subtype=task_subtype,
+        user_msg_count=len(user_msgs),
+        avg_user_msg_length=avg_len,
+        correction_count=correction_count,
+        follow_up_depth=follow_up_depth,
+        termination_type=termination_type,
+        output_type=output_type,
+        working_dir=working_dir or os.getcwd(),
+        agent="claude",
+    )
+
+
+def _collect_session_signal(
+    messages: List[Dict],
+    working_dir: str,
+    task_type: str = "",
+    task_subtype: str = "",
+    session_id: str | None = None,
+) -> int:
     """
     从本次会话提取行为信号并入库。
     在 session_end 时调用。
+
+    Args:
+        session_id: 外部传入的统一 session_id（如 JSONL stem）。
+                    若未提供，回退到 hash 生成的内部 session_id。
     """
     if not messages:
         return 0
 
     try:
-        store = get_signal_store()
-
-        user_msgs = [m for m in messages if m.get("role") == "user"]
-        assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
-
-        if not user_msgs:
+        if not any(m.get("role") == "user" for m in messages):
             return 0
 
-        user_contents = [m.get("content", "") for m in user_msgs]
-        avg_len = sum(len(c) for c in user_contents) / max(len(user_contents), 1)
-
-        # 纠正检测
-        correction_keywords = ["不对", "错了", "不是", "应该", "换个", "不对，"]
-        correction_count = sum(
-            1 for c in user_contents
-            if any(kw in c for kw in correction_keywords)
+        signal = _build_session_signal(
+            messages, working_dir, task_type, task_subtype, session_id
         )
-
-        # 追问深度
-        follow_up_depth = 0
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "user" and i > 0:
-                prev = messages[:i]
-                if any(m.get("role") == "assistant" for m in prev):
-                    follow_up_depth += 1
-
-        # 终止类型推断
-        termination_type = "unknown"
-        last_user = ""
-        for m in reversed(messages):
-            if m.get("role") == "user":
-                last_user = m.get("content", "").lower()
-                break
-
-        if any(kw in last_user for kw in ["好的", "完美", "可以", "ok", "谢谢", "搞定了"]):
-            termination_type = "satisfied"
-        elif any(kw in last_user for kw in ["开始吧", "执行", "推进", "下一步", "继续"]):
-            termination_type = "progress"
-        elif any(kw in last_user for kw in ["你决定", "你来", "按你的"]):
-            termination_type = "delegated"
-        elif any(kw in last_user for kw in ["算了", "放弃", "不做了", "先这样吧"]):
-            termination_type = "abandoned"
-
-        # 产出类型推断
-        all_text = " ".join(m.get("content", "") for m in messages)
-        output_type = "discussion"
-        if "```" in all_text or "def " in all_text or "class " in all_text:
-            output_type = "code"
-        elif "# " in all_text and len(all_text) > 500:
-            output_type = "document"
-
-        # 使用内容哈希生成稳定的 session_id，避免同一 session 多次保存产生重复
-        import hashlib
-        content_hash = hashlib.md5(all_text.encode()).hexdigest()[:16]
-        dir_hash = hashlib.md5((working_dir or os.getcwd()).encode()).hexdigest()[:8]
-        session_id = f"{dir_hash}:{content_hash}"
-
-        signal = SessionSignal(
-            session_id=session_id,
-            timestamp=datetime.now().isoformat(),
-            task_type=task_type,
-            task_subtype=task_subtype,
-            user_msg_count=len(user_msgs),
-            avg_user_msg_length=avg_len,
-            correction_count=correction_count,
-            follow_up_depth=follow_up_depth,
-            termination_type=termination_type,
-            output_type=output_type,
-            working_dir=working_dir or os.getcwd(),
-            agent="claude",
-        )
-
-        # 记录 A/B 测试分组信息
-        ab_context = {"persona_driven": bool(_ab_test_persona_driven)}
 
         # 盲区反馈闭环：分析用户对挑战的反应
         _analyze_blindspot_feedback(messages)
 
-        store.insert_session_signal(signal, session_context=ab_context)
+        log_session_signal(**asdict(signal))
         return 1
-    except Exception as e:
-        print(f"[Persona] Session signal collection failed: {e}")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("[Persona] Session signal collection failed: %s", e, exc_info=True)
         return 0
 
 
-def _analyze_blindspot_feedback(messages: List[Dict]):
-    """
-    分析 session 消息，检测用户对盲区挑战的反应。
-    简化版：通过关键词匹配推断接受/忽略/拒绝。
-    """
-    try:
-        from core.persona.hamartia import ChallengeBalancer, BlindSpotProfileManager
+def _analyze_blindspot_feedback(_messages: List[Dict]) -> Dict[str, object]:
+    """Reject transcript inference; feedback requires an exact delivery API call."""
 
-        # 收集所有文本
-        all_text = " ".join(m.get("content", "") for m in messages).lower()
-        if not all_text:
-            return
-
-        # 接受挑战的信号
-        accept_signals = ["你说得对", "确实", "有道理", "采纳", "按你说的", "好主意", "明白了", "懂了"]
-        # 拒绝挑战的信号
-        reject_signals = ["不对", "不是这样", "我不同意", "不用了", "算了", "没必要", "过虑了", "不需要"]
-        # 忽略挑战的信号（直接回到原话题，没有对挑战的回应）
-        # 简化处理：如果没有接受/拒绝信号，就认为是忽略
-
-        reaction = "ignored"
-        if any(s in all_text for s in accept_signals):
-            reaction = "accepted"
-        elif any(s in all_text for s in reject_signals):
-            reaction = "rejected"
-
-        # 只有检测到明确反应时才记录
-        if reaction != "ignored":
-            manager = BlindSpotProfileManager()
-            balancer = manager.balancer
-            balancer.record_reaction("auto_detected", reaction)
-            # 保存更新后的盲区画像
-            manager._save_profile()
-    except Exception as e:
-        logger.warning(f"记录盲区反应失败: {e}")
+    return {
+        "status": "noop",
+        "reason": "exact_delivery_feedback_required",
+        "recorded": 0,
+    }
 
 
 def _should_analyze_persona() -> bool:
@@ -910,67 +425,24 @@ def _should_analyze_persona() -> bool:
                 days_since = (datetime.now(timezone.utc) - last).days
                 if days_since < PERSONA_MIN_DAYS:
                     return False
-            except Exception as e:
-                logger.warning(f"日期解析失败: {e}")
+            except (TypeError, ValueError) as e:
+                logger.warning("日期解析失败: %s", e)
 
         return True
-    except Exception as e:
-        logger.warning(f"检查画像分析触发条件失败: {e}")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("检查画像分析触发条件失败: %s", e)
         return False
 
 
 def _run_persona_cycle() -> str:
+    """Keep session-end hooks observation-only.
+
+    Persona persistence is owned solely by the daemon application command;
+    this hook has neither a sealed signal batch nor a decision context for a
+    blindspot admission.
     """
-    运行画像分析闭环：分析 → 保存 → 输出摘要。
-    在 session_end 或 run_kia_cycles 中调用。
-    """
-    try:
-        store = get_signal_store()
 
-        # 1. 加载上一周期画像（用于对比变化）
-        pstore = PersonaStore(signal_store=store)
-        previous_profile, previous_blindspot = pstore.load_persona()
-
-        # 2. 分析偏好画像（有历史画像时用增量模式，只处理新信号）
-        analyzer = PreferenceAnalyzer(store)
-        profile = analyzer.analyze(
-            days=90,
-            previous_profile=previous_profile,
-            incremental=previous_profile is not None
-        )
-
-        # 3. 检测盲区
-        bs_manager = BlindSpotProfileManager(store)
-        blindspots = bs_manager.analyze_and_update(
-            session_context={"task_type": "general"},
-            user_options=[],
-            persona=profile
-        )
-
-        # 4. 漂移检测
-        alerts = analyzer.detect_drift(profile, previous_profile)
-
-        # 5. 保存画像
-        pstore.save_persona(profile, bs_manager.balancer.profile)
-
-        # 6. 输出摘要
-        lines = [
-            f"[Persona] 画像分析完成 v{profile.version}",
-            f"  信号数: {profile.signal_count}",
-            f"  能量置信度: {profile.energy.confidence:.0%}",
-            f"  认知置信度: {profile.cognitive.confidence:.0%}",
-            f"  价值置信度: {profile.value.confidence:.0%}",
-        ]
-        if blindspots:
-            lines.append(f"  盲区挑战: {len(blindspots)} 个")
-        if alerts:
-            lines.append(f"  漂移警报: {len(alerts)} 个")
-            for a in alerts[:3]:
-                lines.append(f"    - {a['dimension']}: {a['previous']} → {a['current']} ({a['type']})")
-
-        return "\n".join(lines)
-    except Exception as e:
-        return f"[Persona] 画像分析失败: {e}"
+    return "[Persona] deferred to daemon canonical revision command"
 
 
 def run_retrospective(messages_json: str) -> str:
@@ -992,8 +464,7 @@ def run_retrospective(messages_json: str) -> str:
             return ""
 
         classifier = TaskClassifier()
-        injector = PreFlightInjector()
-        retrospective = AutoRetrospective()
+        _ = PreFlightInjector()
         tracker = IterationTracker()
 
         # 识别任务类型
@@ -1008,12 +479,10 @@ def run_retrospective(messages_json: str) -> str:
         checklist_usage = _build_checklist_usage_from_guard(messages, task_type, subtype)
 
         # 生成复盘
-        retro_result = retrospective.generate(
-            task_type, subtype, messages, checklist_usage
-        )
+        retro_result = generate_retrospective(task_type, subtype, messages, checklist_usage)
 
         # 创建新版本
-        new_path = tracker.create_next_version(retro_result)
+        new_path = tracker.create_next_version(retro_result)  # type: ignore[attr-defined]
 
         if new_path:
             return (
@@ -1024,290 +493,135 @@ def run_retrospective(messages_json: str) -> str:
 
         return ""
 
-    except Exception as e:
-        print(f"[KIA] 复盘失败: {e}")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("[KIA] 复盘失败: %s", e, exc_info=True)
         return ""
 
 
-def detect_private_keywords(user_message: str) -> bool:
-    """
-    检测用户是否要求私有记录
-    【上下文回忆类】中的特殊标记
-    """
-    private_keywords = [
-        "私有", "保密", "私密", "隐私",
-        "private", "personal", "confidential",
-        "不要共享", "不要分享", "仅你可见", "仅自己",
-        "别让别人看到", "别共享", "别分享"
-    ]
+def _run_cognitive_decision_flywheel(results: List[str]) -> None:
+    """运行认知决策飞轮，加载画像并汇总认知决策资产候选。"""
+    CognitiveDecisionFlywheel = _import_optional_class("core.kia.ixion", "CognitiveDecisionFlywheel")  # noqa: E501
+    if CognitiveDecisionFlywheel is None:
+        results.append("认知决策飞轮: 模块未安装/已移除")
+        return
 
-    message_lower = user_message.lower()
-    return any(kw in message_lower or kw in user_message for kw in private_keywords)
+    try:
+        # 加载用户画像并传入飞轮，启用画像驱动闭环
+        profile, blindspot = None, None
+        try:
+            from core.persona.delphi import PersonaStore
+
+            profile, blindspot = PersonaStore().load_persona()
+        except (OSError, ValueError, TypeError, ImportError, AttributeError, RuntimeError):
+            logger.debug("[apollon] 加载画像失败，飞轮将使用默认画像", exc_info=True)
+
+        flywheel = CognitiveDecisionFlywheel(persona=profile, blindspot=blindspot)
+        flywheel_results = flywheel.run_cycle()
+        assets = flywheel_results.get(
+            "wiki_to_cognitive_decision", []
+        ) + flywheel_results.get("behavior_to_cognitive_decision", [])
+        persona_driven = flywheel_results.get("persona_driven", {})
+        executed = flywheel_results.get("executed", {})
+        report_path = flywheel_results.get("report_path", "")
+
+        summary_parts = []
+        if assets:
+            summary_parts.append(f"{len(assets)} 个认知决策资产候选")
+        if persona_driven:
+            summary_parts.append("画像驱动分析已执行")
+        if executed.get("count", 0):
+            summary_parts.append(f"{executed['count']} 项自动操作")
+        if report_path:
+            summary_parts.append(f"报告: {Path(report_path).name}")
+
+        if summary_parts:
+            results.append(f"认知决策飞轮: {', '.join(summary_parts)}")
+        else:
+            results.append("认知决策飞轮: 无新资产候选")
+    except APOLLON_OPERATION_ERRORS as e:
+        results.append(f"认知决策飞轮: 失败 ({e})")
 
 
-def run_kia_cycles():
+def run_kia_cycles_light():
+    """KIA Orchestrator 超轻量周期任务（session_end hook 专用）
+
+    Hook 有执行时间限制，只运行最关键且轻量的子系统：
+    1. 关联周期（dry_run 模式，只分析不写入）
+    2. 调度提醒（只检查到期，不执行全量扫描）
+    3. 用户画像（仅检查条件，满足才触发）
     """
-    KIA Orchestrator 轻量周期任务（session_end 时触发）
-    执行不依赖 Memos 的子系统周期：关联、维护、调度提醒
-    """
-    print("[KIA-Orchestrator] 启动轻量周期任务...")
+    print("[KIA-Orchestrator-Light] 启动轻量周期...")
     results = []
 
-    # 1. 关联周期 (L2 → L3)
+    # 1. 轻量关联（dry_run）
     try:
         try:
-            from core.connect_worker import run_connect_cycle
+            from core.kia.charon import run_connect_cycle
         except ImportError:
-            run_connect_cycle = None  # module not available
-        stats = run_connect_cycle(dry_run=False)
-        results.append(f"关联: {stats.get('pages_processed', 0)} 页, "
-                      f"{stats.get('links_created', 0)} 链接")
-    except Exception as e:
-        results.append(f"关联: 失败 ({e})")
-
-    # 2a. 维护周期 (P/L 序列)
-    try:
-        tracker = IterationTracker()
-        maint = tracker.run_maintenance()
-        results.append(f"维护: promoted={maint.get('promoted', 0)}, "
-                      f"demoted={maint.get('demoted', 0)}")
-    except Exception as e:
-        results.append(f"维护: 失败 ({e})")
-
-    # 2b. 免疫系统健康扫描
-    try:
-        try:
-            from core.knowledge_immune import KnowledgeImmuneSystem
-        except ImportError:
-            KnowledgeImmuneSystem = None  # module not available
-        immune = KnowledgeImmuneSystem()
-        report = immune.full_scan()
-        health_score = report.health_score
-        issue_count = len(report.issues)
-        if issue_count > 0:
-            results.append(f"免疫: {issue_count} 问题, 健康分 {health_score:.0f}")
-            # 尝试自动修复
-            if report.auto_fixable_count > 0:
-                fixes = immune.auto_fix(report)
-                results.append(f"免疫修复: {len(fixes)} 项")
+            run_connect_cycle = None
+        if run_connect_cycle:  # type: ignore[truthy-function]
+            timed_out, stats = _run_daemon_call(
+                lambda: run_connect_cycle(dry_run=True),
+                timeout=30,
+            )
+            if timed_out:
+                results.append("关联(dry): 超时跳过")
+            else:
+                results.append(f"关联(dry): {stats.get('pages_processed', 0)} 页待处理")
         else:
-            results.append(f"免疫: 健康分 {health_score:.0f}")
-    except Exception as e:
-        results.append(f"免疫: 失败 ({e})")
+            results.append("关联(dry): 模块不可用")
+    except APOLLON_OPERATION_ERRORS as e:
+        results.append(f"关联(dry): 失败 ({e})")
 
-    # 3. DNA 指纹扫描（去重 + 相似度检测）
-    try:
-        try:
-            from core.knowledge_dna import DNAEngine
-        except ImportError:
-            DNAEngine = None  # module not available
-        dna_engine = DNAEngine()
-        dna_stats = dna_engine.scan_all_pages()
-        total_dna = dna_engine.get_stats().get("total_fingerprints", 0)
-        results.append(f"DNA: {dna_stats.get('computed', 0)} 新指纹, 库共 {total_dna}")
-
-        # 检测相似页面
-        if total_dna > 1:
-            import sqlite3
-            dup_count = 0
-            with sqlite3.connect(str(dna_engine.db_path), timeout=10) as conn:
-                rows = conn.execute("SELECT page_path FROM knowledge_dna").fetchall()
-                checked = set()
-                for (page_path,) in rows:
-                    dna = dna_engine.load_dna(page_path)
-                    if dna and page_path not in checked:
-                        dups = dna_engine.find_duplicates(dna)
-                        for dup in dups:
-                            checked.add(dup.page_path)
-                        if dups:
-                            dup_count += len(dups)
-                        checked.add(page_path)
-            if dup_count > 0:
-                results.append(f"DNA去重: 发现 {dup_count} 对疑似重复")
-    except Exception as e:
-        results.append(f"DNA: 失败 ({e})")
-
-    # 4. 暗知识挖掘（需要 trail 数据，无条件运行但可能为空）
-    try:
-        try:
-            from core.dark_knowledge import DarkKnowledgeMiner
-        except ImportError:
-            DarkKnowledgeMiner = None  # module not available
-        miner = DarkKnowledgeMiner()
-        associations = miner.mine_hidden_associations(min_confidence=0.5)
-        gaps = miner.mine_knowledge_gaps(min_frequency=3)
-        if associations or gaps:
-            results.append(f"暗知识: {len(associations)} 关联, {len(gaps)} 缺口")
-        else:
-            results.append("暗知识: 无 trail 数据")
-    except Exception as e:
-        results.append(f"暗知识: 失败 ({e})")
-
-    # 5. 知识图谱增强（间接关联发现）
-    try:
-        try:
-            from core.quantum_entanglement import QuantumEntanglement
-        except ImportError:
-            QuantumEntanglement = None  # module not available
-        qe = QuantumEntanglement()
-        indirect = qe.discover_indirect_paths(max_depth=2, min_strength=0.3)
-        cross = qe.discover_cross_domain()
-        if indirect or cross:
-            results.append(f"量子纠缠: {len(indirect)} 间接路径, {len(cross)} 跨域关联")
-        else:
-            results.append("量子纠缠: 无新发现")
-    except Exception as e:
-        results.append(f"量子纠缠: 失败 ({e})")
-
-    # 6. Skill-Wiki 双飞轮扫描
-    try:
-        try:
-            from core.skill_wiki_flywheel import SkillWikiFlywheel
-        except ImportError:
-            SkillWikiFlywheel = None  # module not available
-        flywheel = SkillWikiFlywheel()
-        insights = flywheel.scan_wiki_for_skills()
-        if insights:
-            results.append(f"Skill飞轮: {len(insights)} 个 skill 提案")
-        else:
-            results.append("Skill飞轮: 无新提案")
-    except Exception as e:
-        results.append(f"Skill飞轮: 失败 ({e})")
-
-    # 7. 可证伪性标记扫描
-    try:
-        try:
-            from core.falsifiability_marker import FalsifiabilityMarker
-        except ImportError:
-            FalsifiabilityMarker = None  # module not available
-        marker = FalsifiabilityMarker()
-        marks = marker.scan_all_marks(days_since_last_test=30)
-        if marks:
-            results.append(f"证伪: {len(marks)} 项待验证")
-        else:
-            results.append("证伪: 无待验证")
-    except Exception as e:
-        results.append(f"证伪: 失败 ({e})")
-
-    # 8. 知识画像生成
-    try:
-        try:
-            from core.knowledge_profile import ProfileGenerator
-        except ImportError:
-            ProfileGenerator = None  # module not available
-        gen = ProfileGenerator()
-        profile = gen.generate()
-        results.append(f"画像: {profile.total_knowledge} 页, 质量分 {profile.quality_score:.0f}")
-    except Exception as e:
-        results.append(f"画像: 失败 ({e})")
-
-    # 9. 时间胶囊（自动扫描时效性知识）
-    try:
-        try:
-            from core.time_capsule import TimeCapsule
-        except ImportError:
-            TimeCapsule = None  # module not available
-        capsule = TimeCapsule()
-        new_reminders = capsule.scan_for_auto_reminders()
-        due = capsule.get_due_reminders(days_ahead=7)
-        if new_reminders > 0 or due:
-            results.append(f"时间胶囊: {new_reminders} 新提醒, {len(due)} 到期")
-        else:
-            results.append("时间胶囊: 无到期")
-    except Exception as e:
-        results.append(f"时间胶囊: 失败 ({e})")
-
-    # 10. 熵引擎（知识混乱度扫描）
-    try:
-        try:
-            from core.entropy_engine import EntropyEngine
-        except ImportError:
-            EntropyEngine = None  # module not available
-        entropy = EntropyEngine()
-        report = entropy.scan()
-        if report.duplicate_count > 0 or report.mergeable_count > 0:
-            results.append(f"熵: {report.duplicate_count} 重复, {report.mergeable_count} 可合并")
-        else:
-            results.append("熵: 正常")
-    except Exception as e:
-        results.append(f"熵: 失败 ({e})")
-
-    # 11. 版本时间旅行（全量快照）
-    try:
-        try:
-            from core.version_time_travel import VersionTimeTravel
-        except ImportError:
-            VersionTimeTravel = None  # module not available
-        vtt = VersionTimeTravel()
-        snap_stats = vtt.scan_and_snapshot_all()
-        total_snaps = sum(snap_stats.values())
-        if total_snaps > 0:
-            results.append(f"快照: {total_snaps} 个新版本")
-        else:
-            results.append("快照: 无变更")
-    except Exception as e:
-        results.append(f"快照: 失败 ({e})")
-
-    # 12. 影子页面（外部验证，需 Tavily API）
-    try:
-        try:
-            from core.shadow_page import ShadowPageManager
-        except ImportError:
-            ShadowPageManager = None  # module not available
-        spm = ShadowPageManager()
-        shadows = spm.list_shadows()
-        if shadows:
-            results.append(f"影子: {len(shadows)} 个跟踪中")
-        else:
-            results.append("影子: 未配置")
-    except Exception as e:
-        results.append(f"影子: 失败 ({e})")
-
-    # 13. 调度提醒
+    # 2. 调度提醒
     try:
         scheduler = KnowledgeScheduler()
-        missed = scheduler.startup_compensation()
         pending = scheduler.get_pending_reminders()
-        all_tasks = missed + pending
-        for task in all_tasks:
-            scheduler.mark_reminded(task.task_id)
-        results.append(f"调度: {len(all_tasks)} 个提醒")
-    except Exception as e:
+        results.append(f"调度: {len(pending)} 个提醒")
+    except APOLLON_OPERATION_ERRORS as e:
         results.append(f"调度: 失败 ({e})")
 
-    # 14. 用户画像分析闭环
+    # 3. 用户画像（仅条件检查）
     try:
         if _should_analyze_persona():
-            persona_result = _run_persona_cycle()
-            # 只输出摘要第一行，详情在 _run_persona_cycle 里已打印
-            first_line = persona_result.split('\n')[0] if persona_result else "画像: 无输出"
+            timed_out, persona_result = _run_daemon_call(
+                _run_persona_cycle,
+                timeout=60,
+            )
+            if timed_out:
+                persona_result = "画像: 分析超时，跳过"
+            first_line = persona_result.split("\n")[0] if persona_result else "画像: 无输出"
             results.append(first_line.replace("[Persona] ", "画像: "))
         else:
-            store = get_signal_store()
-            stats = store.get_signal_stats(days=30)
-            total = sum(v for v in stats.values() if v > 0)
-            results.append(f"画像: 信号不足 ({total}/{PERSONA_MIN_SIGNALS}) 或间隔太短")
-    except Exception as e:
+            results.append("画像: 跳过")
+    except APOLLON_OPERATION_ERRORS as e:
         results.append(f"画像: 失败 ({e})")
 
-    print(f"[KIA-Orchestrator] 周期完成: {' | '.join(results)}")
+    print(f"[KIA-Orchestrator-Light] 完成: {' | '.join(results)}")
 
 
 def show_stats():
-    """显示 Mnemos v6.0 系统统计"""
+    """显示 Mnemos v2.0.0 系统统计"""
     from core.kia.proteus import IterationTracker
     from core.kia.chronos import KnowledgeScheduler
 
     WIKI_DIR = get_config().wiki_dir
 
     print("=" * 50)
-    print("Mnemos v6.0 系统统计")
+    print("Mnemos v2.0.0 系统统计")
     print("=" * 50)
 
     # 1. Wiki 文件统计
     if WIKI_DIR.exists():
-        for subdir in ["00-Inbox", "01-People", "02-Projects", "03-Tech",
-                       "04-Concepts", "05-MOCs", "retrospectives"]:
+        for subdir in [
+            "00-Inbox",
+            "01-People",
+            "02-Projects",
+            "03-Tech",
+            "04-Concepts",
+            "05-MOCs",
+            "retrospectives",
+        ]:
             path = WIKI_DIR / subdir
             if path.exists():
                 count = len(list(path.rglob("*.md")))
@@ -1317,11 +631,11 @@ def show_stats():
     try:
         tracker = IterationTracker()
         stats = tracker.get_stats()
-        print(f"\n知识状态统计:")
+        print("\n知识状态统计:")
         print(f"  总知识条目: {stats['total']}")
         print(f"  P序列分布: {stats['p_distribution']}")
         print(f"  L序列分布: {stats['l_distribution']}")
-    except Exception as e:
+    except APOLLON_OPERATION_ERRORS as e:
         print(f"\n知识状态统计: 获取失败 ({e})")
 
     # 3. 调度任务统计
@@ -1331,170 +645,544 @@ def show_stats():
         status_count = {}
         for t in tasks:
             status_count[t.status] = status_count.get(t.status, 0) + 1
-        print(f"\n调度任务统计:")
+        print("\n调度任务统计:")
         for status, count in sorted(status_count.items()):
             print(f"  {status}: {count}")
-    except Exception as e:
+    except APOLLON_OPERATION_ERRORS as e:
         print(f"\n调度任务统计: 获取失败 ({e})")
 
     print()
 
 
-def save_session(working_dir: str = None, summary: str = ""):
+def _get_session_id_from_jsonl(working_dir: str) -> str:
+    """从 Claude Code JSONL 文件名提取 session uuid，用于和 LiveSync 统一 session_id。"""
+    try:
+        from pathlib import Path
+
+        wd = Path(working_dir).resolve()
+        project_name = "-" + str(wd).lstrip("/").replace("/", "-")
+        projects_dir = get_config().claude_data_dir / "projects"
+
+        candidate_dirs = [projects_dir / project_name]
+        if not candidate_dirs[0].exists():
+            for child in projects_dir.iterdir():
+                if child.is_dir() and project_name.startswith(child.name):
+                    candidate_dirs.append(child)
+
+        all_jsonls = []  # type: ignore[var-annotated]
+        for proj_dir in candidate_dirs:
+            if proj_dir.exists():
+                all_jsonls.extend(proj_dir.glob("*.jsonl"))
+
+        if not all_jsonls:
+            return ""
+
+        latest = max(all_jsonls, key=lambda p: p.stat().st_mtime)
+        # 文件名即 uuid，如 e8b8161d-41ae-4963-a0ff-6a23bd831ea6.jsonl
+        return f"claude:{latest.stem}"
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):  # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
+        return ""
+
+
+def _write_sync_trigger(working_dir: str) -> Optional[Path]:
+    """写入 sync trigger 文件，通知 LiveSync 立即处理该 session。"""
+    try:
+        triggers_dir = get_config().data_dir / "claude_sync_triggers"
+        triggers_dir.mkdir(parents=True, exist_ok=True)
+
+        sid = _get_session_id_from_jsonl(working_dir)
+        if not sid:
+            return None
+
+        trigger_path = triggers_dir / f"{sid.replace(':', '_')}.trigger"
+        trigger_path.write_text(datetime.now().isoformat(), encoding="utf-8")
+        return trigger_path
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):  # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
+        return None
+
+
+def _get_latest_jsonl(working_dir: str) -> Optional[Path]:
+    """找到对应工作目录的最新 JSONL 文件路径。"""
+    try:
+        from pathlib import Path
+
+        wd = Path(working_dir).resolve()
+        project_name = "-" + str(wd).lstrip("/").replace("/", "-")
+        projects_dir = get_config().claude_data_dir / "projects"
+
+        candidate_dirs = [projects_dir / project_name]
+        if not candidate_dirs[0].exists():
+            for child in projects_dir.iterdir():
+                if child.is_dir() and project_name.startswith(child.name):
+                    candidate_dirs.append(child)
+
+        all_jsonls = []  # type: ignore[var-annotated]
+        for proj_dir in candidate_dirs:
+            if proj_dir.exists():
+                all_jsonls.extend(proj_dir.glob("*.jsonl"))
+
+        if not all_jsonls:
+            return None
+        return max(all_jsonls, key=lambda p: p.stat().st_mtime)  # type: ignore[no-any-return]
+    except (OSError, ValueError, TypeError, ImportError, AttributeError):  # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
+        return None
+
+
+def _read_session_from_jsonl(working_dir: str, max_retries: int = 3) -> List[Dict]:
+    """从 Claude Code JSONL 文件中读取当前会话消息。
+
+    Claude Code 不提供 $SESSION_MESSAGES 环境变量，但会在
+    {claude_data_dir}/projects/{project}/ 下写入 JSONL 文件。
+    我们找到对应工作目录的最新 JSONL 文件并解析。
+
+    由于 JSONL 文件可能在 Hook 触发时仍在写入中，
+    采用"加共享锁 + 拷贝到临时文件 + 重试"策略降低竞态风险，
+    避免并发 truncate 导致整段会话丢失。
+    """
+    from integrations.sources.claude_source import ClaudeSource
+
+    latest = _get_latest_jsonl(working_dir)
+    if not latest:
+        return []
+
+    def _copy_latest_to_temp() -> Optional[Path]:
+        """加共享锁后将文件拷贝到临时文件，返回临时路径。"""
+        if not latest.exists():
+            return None
+        temp_fd, temp_path = tempfile.mkstemp(
+            suffix=".jsonl.tmp", prefix=latest.stem + "_", dir=str(latest.parent)
+        )
+        try:
+            with os.fdopen(temp_fd, "wb") as tmp_fout:
+                with open(latest, "rb") as fin:
+                    if fcntl is not None:
+                        try:
+                            fcntl.flock(fin.fileno(), fcntl.LOCK_SH)
+                        except OSError:
+                            pass
+                    shutil.copyfileobj(fin, tmp_fout)
+                    if fcntl is not None:
+                        try:
+                            fcntl.flock(fin.fileno(), fcntl.LOCK_UN)
+                        except OSError:
+                            pass
+            return Path(temp_path)
+        except (OSError, ValueError, TypeError, ImportError, AttributeError):
+            try:
+                os.close(temp_fd)
+            except (OSError, ValueError, TypeError, ImportError, AttributeError):
+                logger.debug("关闭临时文件描述符失败", exc_info=True)
+            Path(temp_path).unlink(missing_ok=True)
+            return None
+
+    for attempt in range(max_retries):
+        temp_path: Optional[Path] = None
+        try:
+            # 检查文件是否仍在增长（最后写入期间 mtime 变化说明正在写入）
+            if latest.exists():
+                mtime_before = latest.stat().st_mtime
+                time.sleep(0.1 * (attempt + 1))
+                mtime_after = latest.stat().st_mtime
+                if mtime_after != mtime_before:
+                    # 文件仍在写入，等待更久
+                    time.sleep(0.3)
+
+            temp_path = _copy_latest_to_temp()
+            if temp_path is None:
+                # 文件可能刚刚被删除或不可读，重试
+                time.sleep(0.2 * (attempt + 1))
+                continue
+
+            source = ClaudeSource()
+            turns = source.parse_turns(temp_path)
+
+            # 完整性校验：JSONL 文件如果损坏通常返回空 turns
+            if not turns and latest.stat().st_size > 0:
+                logger.debug(
+                    "JSONL 读取得到空 turns，文件大小 %s，重试 %s/%s",
+                    latest.stat().st_size,
+                    attempt + 1,
+                    max_retries,
+                )
+                continue
+
+            messages = []
+            for turn in turns:
+                if turn.user_content:
+                    messages.append({"role": "user", "content": turn.user_content})
+                if turn.assistant_content:
+                    messages.append({"role": "assistant", "content": turn.assistant_content})
+            return messages
+        except APOLLON_OPERATION_ERRORS as e:
+            logger.debug(
+                "JSONL 读取尝试 %s/%s 失败: %s", attempt + 1, max_retries, e, exc_info=True
+            )
+            if attempt < max_retries - 1:
+                time.sleep(0.2 * (attempt + 1))
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+
+    return []
+
+
+def save_session(working_dir: str | None = None, summary: str = ""):
     """保存当前会话"""
-    token = os.getenv("MEMOS_TOKEN")
-    if not token:
-        raise ValueError("MEMOS_TOKEN 环境变量未设置")
-    client = MemosClient(token=token, agent="claude")
+    from core.sync_framework.storage_backend import create_storage_backend
+
+    backend = create_storage_backend()
 
     if working_dir is None:
         working_dir = os.getcwd()
 
-    client.save_session(working_dir, summary)
+    session_content = f"[SESSION] claude\n工作目录: {working_dir}\n摘要: {summary}"
+    backend.save(session_content, tags=["type=session", "agent=claude"], title="session")
     print(f"Session saved: {working_dir}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Claude Code Memos Integration")
-    parser.add_argument("--session-start", action="store_true",
-                        help="Session start - load context")
-    parser.add_argument("--session-end", action="store_true",
-                        help="Session end - save context")
-    parser.add_argument("--working-dir", default=None,
-                        help="Working directory")
-    parser.add_argument("--user-message", default=None,
-                        help="用户输入（用于意图判定）")
-    parser.add_argument("--summary", default="",
-                        help="Session summary")
-    parser.add_argument("--authorize", nargs="+", default=None,
-                        help="授权读取的跨agent列表，如 hermes openclaw")
-    parser.add_argument("--session-messages", default=None,
-                        help="会话消息历史(JSON格式)，用于自动复盘")
-    parser.add_argument("--kia-check", action="store_true",
-                        help="检查Knowledge-in-Action调度器中的到期提醒")
-    parser.add_argument("--stats", action="store_true",
-                        help="显示Mnemos系统统计")
+def _extract_last_user_message(messages: List[Dict]) -> str:
+    """从消息列表中提取最后一条用户消息。"""
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                return content
+    return ""
+
+
+def _extract_session_start_time(messages: List[Dict]) -> Optional[datetime]:
+    """从消息列表中提取最早时间戳。"""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        ts = msg.get("timestamp") or msg.get("created_at")
+        if ts:
+            try:
+                if isinstance(ts, (int, float)):
+                    return datetime.fromtimestamp(ts, tz=timezone.utc)
+                return datetime.fromisoformat(str(ts))
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
+def _run_observation_on_session_end(messages: List[Dict]) -> Dict:
+    """Session end 时增量运行 Observation Engine。"""
+    result = {"ran": False, "observations": 0}
+    try:
+        cfg = get_config()
+        if not cfg.get("observation.enabled", True):
+            return result
+
+        from core.cognitive.observation_engine import (
+            ObservationEngine,
+            canonical_raw_engine_kwargs,
+        )
+
+        since = _extract_session_start_time(messages)
+        engine = ObservationEngine(
+            wiki_dir=str(cfg.wiki_dir),
+            **canonical_raw_engine_kwargs(cfg),
+        )
+        if since:
+            batch = engine.run_incremental(since=since, persist=True)
+        else:
+            batch = engine.run(persist=True)
+        result["ran"] = True
+        observation_total = batch.total_observations
+        result["observations"] = observation_total
+        if observation_total:
+            print(f"[Observation] 增量提取 {observation_total} 条观察")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.debug("[Observation] session end 运行失败: %s", e, exc_info=True)
+    return result
+
+
+def _run_reflection_on_session_end(messages: List[Dict]) -> Dict:
+    """Session end 时按 Router 决策自动触发 Reflection。"""
+    result = {"triggered": False, "route": None, "record_id": None}
+    try:
+        cfg = get_config()
+        if not cfg.get("reflection.enabled", True):
+            return result
+        if not cfg.get("reflection.auto_trigger_on_session_end", True):
+            return result
+
+        from core.reflection.reflection_engine import ReflectionEngine
+        from core.reflection.reflection_router import ReflectionRouter
+        from core.mnemos_bus import get_event_bus
+
+        last_msg = _extract_last_user_message(messages)
+        if not last_msg:
+            return result
+
+        router = ReflectionRouter()
+        route = router.route(last_msg)
+        result["route"] = route.to_dict()
+        if not route.should_reflect:
+            logger.debug("[Reflection] Router 判定不触发: %s", route.reason)
+            return result
+
+        engine = ReflectionEngine()
+        reflection_result = engine.reflect_on_user_input(last_msg)
+        # 如果 Router 判定应该反射但触发器未命中，fallback 到手动反射
+        if route.should_reflect and not reflection_result.triggered:
+            reflection_result = engine.reflect_manually(last_msg)
+        result["triggered"] = reflection_result.triggered
+        if reflection_result.record:
+            result["record_id"] = reflection_result.record.id  # type: ignore[assignment]
+
+        get_event_bus().publish(
+            "reflection.completed",
+            payload={
+                "triggered": reflection_result.triggered,
+                "route": route.to_dict(),
+                "record_id": reflection_result.record.id if reflection_result.record else None,
+                "insight_summary": (
+                    reflection_result.insight.summary if reflection_result.insight else ""
+                ),
+                "feedback_messages": reflection_result.feedback_messages,
+            },
+        )
+        if reflection_result.triggered:
+            print(f"[Reflection] 自动触发: {route.reason}")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.debug("[Reflection] session end 运行失败: %s", e, exc_info=True)
+    return result
+
+
+def _run_feedback_prompt_on_session_end() -> Dict:
+    """Session end 时检查 pending feedback 并提示用户。"""
+    result = {"pending_count": 0}
+    try:
+        cfg = get_config()
+        if not cfg.get("feedback.enabled", True):
+            return result
+
+        from core.reflection.reflection_engine import ReflectionEngine
+        from core.mnemos_bus import get_event_bus
+
+        engine = ReflectionEngine()
+        pending = engine.get_pending_feedback(
+            hours_since=cfg.get("feedback.pending_hours", 24),
+            limit=cfg.get("feedback.pending_limit", 10),
+        )
+        result["pending_count"] = len(pending)
+        if pending:
+            get_event_bus().publish(
+                "feedback.prompt_due",
+                payload={
+                    "pending_count": len(pending),
+                    "reflection_ids": [r.id for r in pending],
+                    "trigger": "session_end",
+                },
+            )
+            print(f"[Feedback] {len(pending)} 条 Reflection 等待你的反馈")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.debug("[Feedback] session end 检查失败: %s", e, exc_info=True)
+    return result
+
+
+def _resolve_working_dir(args) -> str:
+    """从命令行参数解析工作目录，未指定时使用当前目录。"""
+    return args.working_dir or os.getcwd()
+
+
+def _handle_stats() -> None:
+    """处理 --stats 子命令。"""
+    show_stats()
+
+
+def _handle_session_start(args) -> None:
+    """处理 --session-start 子命令：加载并输出上下文。"""
+    wd = _resolve_working_dir(args)
+    context = get_context_for_claude(
+        wd, user_message=args.user_message, authorize_cross=args.authorize
+    )
+    try:
+        write_active_context("claude", wd, args.user_message or "")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.debug("写入 Claude active context 失败: %s", e, exc_info=True)
+    print(context)
+
+
+def _load_session_end_messages(
+    args,
+) -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str]]:
+    """为 session-end 加载消息，返回 (messages, json_str, session_id)。
+
+    优先使用 --session-messages；否则从 JSONL 文件读取。
+    session_id 从最新 JSONL 文件名推导。
+    """
+    wd = _resolve_working_dir(args)
+    session_messages_json: Optional[str] = args.session_messages
+    messages: List[Dict[str, Any]] = []
+    if session_messages_json:
+        messages = json.loads(session_messages_json)
+    else:
+        messages = _read_session_from_jsonl(wd)
+        if messages:
+            session_messages_json = json.dumps(messages, ensure_ascii=False)
+            print(f"[Capture] 从 JSONL 文件读取 {len(messages)} 条消息")
+
+    session_id = None
+    if messages:
+        latest_jsonl = _get_latest_jsonl(wd)
+        session_id = latest_jsonl.stem if latest_jsonl else None
+    return messages, session_messages_json, session_id
+
+
+def _maybe_enqueue_session(
+    messages: List[Dict[str, Any]], wd: str, session_id: Optional[str]
+) -> Optional[str]:
+    """尝试通过统一链路把 session 入队蒸馏，返回成功时的 session_id。"""
+    try:
+        from integrations.active_bridge import _enqueue_session
+
+        latest_jsonl = _get_latest_jsonl(wd)
+        sid = latest_jsonl.stem if latest_jsonl else session_id
+        return _enqueue_session("claude", wd, messages, session_id=sid)
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("[L1] 统一链路入队失败: %s", e)
+        return None
+
+
+def _run_retrospective_if_present(session_messages_json: Optional[str]) -> str:
+    """若存在会话 JSON，则运行自动复盘并输出结果。"""
+    if not session_messages_json:
+        return ""
+    retro_result = run_retrospective(session_messages_json)
+    if retro_result:
+        print(retro_result)
+    return retro_result
+
+
+def _collect_persona_signals_from_messages(
+    messages: List[Dict[str, Any]],
+    wd: str,
+    session_id: Optional[str],
+    session_messages_json: Optional[str],
+) -> None:
+    """从会话消息中采集用户画像信号。"""
+    if not session_messages_json:
+        return
+    try:
+        messages = json.loads(session_messages_json)
+        task_type = ""
+        task_subtype = ""
+        try:
+            classifier = TaskClassifier()
+            result = classifier.classify(messages)
+            if result.confidence >= 0.7:
+                task_type = result.task_type
+                task_subtype = result.subtype
+        except APOLLON_OPERATION_ERRORS as e:
+            logger.warning("任务分类失败: %s", e)
+
+        sig_count = _collect_session_signal(
+            messages,
+            working_dir=wd,
+            task_type=task_type,
+            task_subtype=task_subtype,
+            session_id=session_id,
+        )
+        if sig_count > 0:
+            print(f"[Persona] Session signal collected: {sig_count}")
+    except APOLLON_OPERATION_ERRORS as e:
+        print(f"[Persona] Signal collection error: {e}")
+
+
+def _handle_session_end(args) -> None:
+    """处理 --session-end 子命令：保存、入队、复盘、信号采集与 KIA 周期。"""
+    wd = _resolve_working_dir(args)
+    save_session(wd, args.summary)
+
+    messages, session_messages_json, session_id = _load_session_end_messages(args)
+
+    if messages:
+        sid = _maybe_enqueue_session(messages, wd, session_id)
+        if sid:
+            print(f"[L1] Session queued for sync & distillation: {sid}")
+    else:
+        print("[L1] 无消息数据，跳过同步")
+
+    _run_retrospective_if_present(session_messages_json)
+    _collect_persona_signals_from_messages(messages, wd, session_id, session_messages_json)
+
+    try:
+        trigger_path = _write_sync_trigger(wd)
+        if trigger_path:
+            print(f"[Distill] Sync trigger written: {trigger_path.name}")
+    except APOLLON_OPERATION_ERRORS as e:
+        logger.warning("写入 sync trigger 失败: %s", e, exc_info=True)
+
+    # CaptureWorkerPool.flush_session() 已在 L1 写入成功后自动入队 amphora，
+    # 实际蒸馏处理由 daemon watchdog / HephaestusWorker 定期轮询完成。
+    run_kia_cycles_light()
+
+    # L3/L4/L5 自动触发（失败隔离，不影响主链路）
+    if messages:
+        _run_observation_on_session_end(messages)
+        _run_reflection_on_session_end(messages)
+    _run_feedback_prompt_on_session_end()
+
+
+def _handle_kia_check() -> None:
+    """处理 --kia-check 子命令：检查到期提醒。"""
+    scheduler = KnowledgeScheduler()
+    reminders = scheduler.get_pending_reminders()
+    missed = scheduler.startup_compensation()
+    all_reminders = reminders + missed
+    if all_reminders:
+        print(f"[KIA] 发现 {len(all_reminders)} 个到期提醒:")
+        for task in all_reminders:
+            print(f"  - {task.task_type}/{task.subtype}: {task.due_date[:10]}")
+            print(f"    {scheduler.format_reminder(task)}")
+            scheduler.mark_reminded(task.task_id)
+    else:
+        print("[KIA] 暂无到期提醒")
+
+
+def _handle_default(parser: argparse.ArgumentParser) -> None:
+    """默认输出帮助信息。"""
+    parser.print_help()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Claude Code Mnemos Integration")
+    parser.add_argument("--session-start", action="store_true", help="Session start - load context")
+    parser.add_argument("--session-end", action="store_true", help="Session end - save context")
+    parser.add_argument("--working-dir", default=None, help="Working directory")
+    parser.add_argument("--user-message", default=None, help="用户输入（用于意图判定）")
+    parser.add_argument("--summary", default="", help="Session summary")
+    parser.add_argument(
+        "--authorize", nargs="+", default=None, help="授权读取的跨agent列表，如 hermes openclaw"
+    )
+    parser.add_argument(
+        "--session-messages", default=None, help="会话消息历史(JSON格式)，用于自动复盘"
+    )
+    parser.add_argument(
+        "--kia-check", action="store_true", help="检查Knowledge-in-Action调度器中的到期提醒"
+    )
+    parser.add_argument("--stats", action="store_true", help="显示Mnemos系统统计")
 
     args = parser.parse_args()
 
     if args.stats:
-        show_stats()
-        return
-
-    if args.session_start:
-        context = get_context_for_claude(
-            args.working_dir,
-            user_message=args.user_message,
-            authorize_cross=args.authorize
-        )
-        try:
-            write_active_context("claude", args.working_dir or os.getcwd(), args.user_message or "")
-        except Exception as e:
-            logger.debug(f"写入 Claude active context 失败: {e}")
-        print(context)
+        _handle_stats()
+    elif args.session_start:
+        _handle_session_start(args)
     elif args.session_end:
-        save_session(args.working_dir, args.summary)
-
-        # Knowledge-in-Action 自动复盘
-        retro_result = ""
-        if args.session_messages:
-            retro_result = run_retrospective(args.session_messages)
-            if retro_result:
-                print(retro_result)
-
-        # 子 Agent 蒸馏：将 session 消息加入队列
-        session_task_type = ""
-        session_task_subtype = ""
-        if args.session_messages:
-            try:
-                from core.kia.amphora import enqueue
-                messages = json.loads(args.session_messages)
-                # 生成 session_id（与 save_session 保持一致）
-                wd = args.working_dir or os.getcwd()
-                dir_hash = __import__('hashlib').md5(wd.encode()).hexdigest()[:8]
-                ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-                sid = f"claude:{dir_hash}:{ts}"
-                enqueue(
-                    session_id=sid,
-                    messages=messages,
-                    meta={
-                        "source": "claude",
-                        "working_dir": wd,
-                        "summary": args.summary,
-                        "has_retrospective": bool(retro_result),
-                    }
-                )
-                print(f"[Distill] Session queued for agent distillation: {sid}")
-                pending_count = len(__import__('core.kia.amphora', fromlist=['list_pending']).list_pending())
-                print(f"[Distill] Pending tasks: {pending_count}")
-
-                # 尝试识别任务类型（用于信号采集）
-                try:
-                    classifier = TaskClassifier()
-                    result = classifier.classify(messages)
-                    if result.confidence >= 0.7:
-                        session_task_type = result.task_type
-                        session_task_subtype = result.subtype
-                except Exception as e:
-                    logger.warning(f"任务分类失败: {e}")
-            except Exception as e:
-                print(f"[Distill] Queue failed: {e}")
-
-        # ========== 用户画像闭环：信号采集 ==========
-        if args.session_messages:
-            try:
-                messages = json.loads(args.session_messages)
-                sig_count = _collect_session_signal(
-                    messages,
-                    working_dir=args.working_dir or os.getcwd(),
-                    task_type=session_task_type,
-                    task_subtype=session_task_subtype,
-                )
-                if sig_count > 0:
-                    print(f"[Persona] Session signal collected: {sig_count}")
-            except Exception as e:
-                print(f"[Persona] Signal collection error: {e}")
-
-        # ========== 即时蒸馏触发（不等待 daemon）==========
-        try:
-            from core.hephaestus_worker import HephaestusWorker
-            worker = HephaestusWorker()
-            processed = worker.process_all()
-            if processed > 0:
-                print(f"[Distill] Worker 处理了 {processed} 个任务")
-            # 同时尝试收集已完成的蒸馏结果
-            collected = worker.collect_completed()
-            if collected > 0:
-                print(f"[Distill] 收集了 {collected} 个完成的蒸馏结果到 Inbox")
-        except Exception as e:
-            # Worker 失败不影响主流程
-            logger.debug(f"即时蒸馏触发失败: {e}")
-
-        # KIA Orchestrator 周期任务（轻量模式，不依赖 Memos）
-        run_kia_cycles()
+        _handle_session_end(args)
     elif args.kia_check:
-        # 检查 Knowledge-in-Action 调度器中的到期提醒
-        scheduler = KnowledgeScheduler()
-        reminders = scheduler.get_pending_reminders()
-        missed = scheduler.startup_compensation()
-        all_reminders = reminders + missed
-        if all_reminders:
-            print(f"[KIA] 发现 {len(all_reminders)} 个到期提醒:")
-            for task in all_reminders:
-                print(f"  - {task.task_type}/{task.subtype}: {task.due_date[:10]}")
-                print(f"    {scheduler.format_reminder(task)}")
-                scheduler.mark_reminded(task.task_id)
-        else:
-            print("[KIA] 暂无到期提醒")
+        _handle_kia_check()
     else:
-        # 默认输出帮助
-        parser.print_help()
-
+        _handle_default(parser)
 
 
 # ---- Claude Code Agent Adapter (Olympus 基类实现) ----
 
-from integrations.olympus import AgentAdapter, AgentRegistry
+from integrations.olympus import AgentAdapter, AgentRegistry  # noqa: E402
 
 
 class ClaudeCodeAdapter(AgentAdapter):
@@ -1510,8 +1198,8 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def is_available(self) -> bool:
         """检测 Claude Code 是否安装"""
-        # 1. 新版 Claude Code (>= 0.40) 默认路径 ~/.claude/settings.json
-        settings_path = Path.home() / ".claude" / "settings.json"
+        # 1. 新版/已配置的 Claude Code settings.json 路径
+        settings_path = get_config().claude_data_dir / "settings.json"
         if settings_path.exists():
             return True
         # 2. macOS 旧版标准路径
@@ -1524,6 +1212,7 @@ class ClaudeCodeAdapter(AgentAdapter):
             return True
         # 4. 检查 claude 命令是否在 PATH 中
         import shutil
+
         if shutil.which("claude"):
             return True
         return False
@@ -1538,86 +1227,12 @@ class ClaudeCodeAdapter(AgentAdapter):
         for p in candidates:
             if p.exists():
                 return p
-        return None
-
-    def on_session_start(self, working_dir: str, user_message: str = "") -> Dict:
-        context = get_context_for_claude(
-            working_dir,
-            user_message=user_message,
-            authorize_cross=None,
-        )
-        # 同时发布到事件总线
-        try:
-            from core.mnemos_bus import EventBus
-            bus = EventBus()
-            bus.publish("session.start", self.name, {
-                "working_dir": working_dir,
-                "user_message": user_message,
-                "context_length": len(context) if context else 0,
-            })
-        except Exception:
-            pass
-        return {"context": context, "agent": self.name}
-
-    def on_session_end(self, working_dir: str, session_messages: List[Dict] = None) -> Dict:
-        from core.config import get_config
-        save_session(working_dir)
-
-        retro_result = ""
-        if session_messages:
-            retro_result = run_retrospective(json.dumps(session_messages))
-
-        # 加入蒸馏队列
-        sid = None
-        if session_messages:
-            try:
-                from core.kia.amphora import enqueue
-                wd = working_dir or os.getcwd()
-                dir_hash = __import__('hashlib').md5(wd.encode()).hexdigest()[:8]
-                ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-                sid = f"claude:{dir_hash}:{ts}"
-                enqueue(
-                    session_id=sid,
-                    messages=session_messages,
-                    meta={
-                        "source": "claude",
-                        "working_dir": wd,
-                        "has_retrospective": bool(retro_result),
-                    }
-                )
-            except Exception as e:
-                logger.warning(f"蒸馏入队失败: {e}")
-
-        # KIA 周期任务
-        run_kia_cycles()
-
-        # 同时发布到事件总线
-        try:
-            from core.mnemos_bus import EventBus
-            bus = EventBus()
-            bus.publish("session.end", self.name, {
-                "working_dir": working_dir,
-                "session_id": sid,
-                "messages": session_messages or [],
-                "meta": {
-                    "source": self.name,
-                    "working_dir": working_dir or os.getcwd(),
-                    "has_retrospective": bool(retro_result),
-                },
-            })
-        except Exception:
-            pass
-
-        return {
-            "saved": True,
-            "retrospective": retro_result,
-            "distill_task_id": sid,
-        }
+        return candidates[0]
 
     def is_hooks_installed(self) -> bool:
         """检查 Claude Code settings.json 中是否已安装 Mnemos hooks"""
         settings_path = self.get_config_path()
-        if not settings_path:
+        if not settings_path or not settings_path.exists():
             return False
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
@@ -1627,14 +1242,14 @@ class ClaudeCodeAdapter(AgentAdapter):
             start_hook = hooks.get("SessionStart", "")
             end_hook = hooks.get("SessionEnd", "")
             return script_path in start_hook and script_path in end_hook
-        except Exception:
+        except (OSError, ValueError, TypeError, ImportError, AttributeError):  # DEBT(S8): 容错降级，返回默认值避免局部失败扩散
             return False
 
     def is_mcp_configured(self) -> bool:
-        return json_mcp_configured(Path.home() / ".claude.json")
+        return json_mcp_configured(get_config().claude_settings_path)
 
     def install_mcp_server(self) -> bool:
-        return upsert_json_mcp_server(Path.home() / ".claude.json", claude=True)
+        return upsert_json_mcp_server(get_config().claude_settings_path, claude=True, agent="claude")  # noqa: E501
 
     def install_hooks(self) -> bool:
         """安装 Claude Code settings.json hooks"""
@@ -1642,33 +1257,37 @@ class ClaudeCodeAdapter(AgentAdapter):
         if not settings_path:
             return False
         try:
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f)
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            if settings_path.exists():
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+            else:
+                settings = {}
             if "hooks" not in settings:
                 settings["hooks"] = {}
             script_path = Path(__file__).resolve()
             python_cmd = sys.executable
             settings["hooks"]["SessionStart"] = (
-                f'{python_cmd} {script_path} --session-start '
+                f"{python_cmd} {script_path} --session-start "
                 f'--working-dir "$PWD" --user-message "$USER_MESSAGE"'
             )
             settings["hooks"]["SessionEnd"] = (
-                f'{python_cmd} {script_path} --session-end '
+                f"{python_cmd} {script_path} --session-end "
                 f'--working-dir "$PWD" --session-messages "$SESSION_MESSAGES"'
             )
             with open(settings_path, "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=2, ensure_ascii=False)
             self.install_mcp_server()
             return True
-        except Exception as e:
-            logger.warning(f"安装 hooks 失败: {e}")
+        except APOLLON_OPERATION_ERRORS as e:
+            logger.warning("安装 hooks 失败: %s", e, exc_info=True)
             return False
 
     def collect_signals(self, days: int = 7) -> List[Dict]:
         """从 Claude Code 相关数据源采集信号
 
         SignalCollector 没有按 Agent 分的方法，使用通用采集方法
-        从 distill_queue、wiki_state、git、wiki、filesystem、memos 聚合信号。
+        从 distill_queue、wiki_state、git、wiki、filesystem 聚合信号。
         """
         try:
             collector = SignalCollector()
@@ -1690,134 +1309,27 @@ class ClaudeCodeAdapter(AgentAdapter):
                     (cutoff.isoformat(),),
                 )
                 for row in cursor.fetchall():
-                    signals.append({
-                        "source": "claude",
-                        "session_id": row[0],
-                        "timestamp": row[1],
-                        "task_type": row[2] or "unknown",
-                        "task_subtype": row[3] or "",
-                        "user_msg_count": row[4] or 0,
-                        "avg_user_msg_length": row[5] or 0.0,
-                        "correction_count": row[6] or 0,
-                        "follow_up_depth": row[7] or 0,
-                        "termination_type": row[8] or "unknown",
-                        "output_type": row[9] or "discussion",
-                        "working_dir": row[10] or "",
-                        "agent": "claude",
-                    })
+                    signals.append(
+                        {
+                            "source": "claude",
+                            "session_id": row[0],
+                            "timestamp": row[1],
+                            "task_type": row[2] or "unknown",
+                            "task_subtype": row[3] or "",
+                            "user_msg_count": row[4] or 0,
+                            "avg_user_msg_length": row[5] or 0.0,
+                            "correction_count": row[6] or 0,
+                            "follow_up_depth": row[7] or 0,
+                            "termination_type": row[8] or "unknown",
+                            "output_type": row[9] or "discussion",
+                            "working_dir": row[10] or "",
+                            "agent": "claude",
+                        }
+                    )
             return signals
-        except Exception as e:
-            logger.warning(f"Claude 信号采集失败: {e}")
+        except APOLLON_OPERATION_ERRORS as e:
+            logger.warning("Claude 信号采集失败: %s", e)
             return []
-
-    def inject_knowledge(self, task_type: str, subtype: str = "", context_text: str = "") -> Dict:
-        from core.kia.prophasis import PreFlightInjector
-        from core.kia.kairos import TimeWindow, TimeWindowType
-        injector = PreFlightInjector()
-        time_window = TimeWindow(window=TimeWindowType.IMMEDIATE, days_until=0)
-        knowledge = injector.inject(task_type, subtype, time_window, context_text)
-        if not knowledge:
-            return {"loaded": False}
-        return {
-            "loaded": True,
-            "task_type": knowledge.task_type,
-            "checklist": [c.item for c in knowledge.checklist],
-            "lessons_summary": knowledge.lessons_summary,
-        }
-
-    def delegate_distillation(self, task_path: Path, output_path: Path) -> bool:
-        """委托 Claude Code 执行蒸馏
-
-        策略：将任务写入 Claude 的 distill inbox，等待 Claude 下次 session 处理。
-        同时写入通知标记文件，提示 Agent 有新任务待处理。
-        """
-        try:
-            # 读取任务
-            task = json.loads(task_path.read_text(encoding="utf-8"))
-            # 构建 prompt 文件，放入 Claude 的观测目录
-            prompt_dir = Path.home() / ".claude" / "mnemos_distill_tasks"
-            prompt_dir.mkdir(parents=True, exist_ok=True)
-            prompt_file = prompt_dir / f"{task.get('session_id', 'unknown')}.md"
-            prompt_content = self._build_distill_prompt(task)
-            prompt_file.write_text(prompt_content, encoding="utf-8")
-            # 同时写入输出路径作为占位符（Agent 会覆盖）
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            placeholder = (
-                f"<!-- MNEMOS_DISTILL_TASK: {task.get('session_id')} -->\n"
-                f"<!-- 输出格式要求：\n"
-                f"  1. 必须是有效的 JSON 对象\n"
-                f"  2. 顶层字段：judgment (knowledge/skill/skip), fragments (数组)\n"
-                f"  3. 每个 fragment 包含：form, title, frontmatter, background, core_content, boundaries, anti_patterns, related_concepts\n"
-                f"  4. 详细格式见 prompt 文件：{prompt_file}\n"
-                f"-->\n"
-                f"<!-- Claude Code 请阅读 {prompt_file} 并生成蒸馏结果 -->\n"
-            )
-            output_path.write_text(placeholder, encoding="utf-8")
-            # Layer A: 写入通知标记文件
-            notify_file = prompt_dir / ".notify"
-            notify_content = f"""# Mnemos 蒸馏任务通知
-
-**时间**: {datetime.now(timezone.utc).isoformat()}
-**待处理任务**: {task.get('session_id', 'unknown')}
-**输出路径**: {output_path}
-
-请运行以下命令处理：
-```bash
-python3 {prompt_file}
-```
-"""
-            notify_file.write_text(notify_content, encoding="utf-8")
-            return True
-        except Exception as e:
-            logger.warning(f"委托 Claude 蒸馏失败: {e}")
-            return False
-
-    def _build_distill_prompt(self, task: Dict) -> str:
-        meta = task.get("meta", {})
-        # 如果任务携带了完整 prompt，直接使用
-        if meta.get("full_prompt"):
-            return meta["full_prompt"]
-
-        # 使用统一的 DISTILLATION_PROMPT 作为单一 truth source
-        try:
-            from core.hephaestus.distillation_prompts import DISTILLATION_PROMPT
-            from core.hephaestus.distillation_engine import build_session_text
-
-            messages = task.get("messages", [])
-            session_text = build_session_text(messages)
-            if not session_text:
-                return self._build_fallback_prompt(task)
-
-            return DISTILLATION_PROMPT.replace("{session_content}", session_text)
-        except Exception as e:
-            logger.warning(f"构建完整蒸馏 prompt 失败，使用回退: {e}")
-            return self._build_fallback_prompt(task)
-
-    def _build_fallback_prompt(self, task: Dict) -> str:
-        """回退：轻量蒸馏 prompt"""
-        meta = task.get("meta", {})
-        messages = task.get("messages", [])
-        lines = [
-            "# Mnemos 蒸馏任务",
-            "",
-            f"**Session ID**: {task.get('session_id', 'unknown')}",
-            f"**来源**: {meta.get('source', 'unknown')}",
-            f"**工作目录**: {meta.get('working_dir', '')}",
-            "",
-            "## 指令",
-            "请对以下对话进行蒸馏，提取核心知识、经验教训和可复用的模式。",
-            "输出严格 JSON 格式（见 distillation_prompts.py 完整要求）。",
-            "",
-            "## 原始对话",
-            "",
-        ]
-        for msg in messages:
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            lines.append(f"### {role}")
-            lines.append(content)
-            lines.append("")
-        return "\n".join(lines)
 
 
 # 注册到 Olympian 众神殿堂

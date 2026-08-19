@@ -1,0 +1,430 @@
+{
+  "schema_version": "mnemos.cognitive_successor_method_bootstrap_protocol.v2",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json#/$defs/method_bootstrap_protocol",
+  "schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+    "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "artifact_id": "cognitive-successor-method-bootstrap-protocol",
+  "artifact_status": "NON_GOVERNING_EXACT_BYTES_REVIEW_REQUIRED",
+  "question_binding": {
+    "question_id": "COGNITIVE-SUCCESSOR-DECISION-001",
+    "exact_text": "How should successor design conflicts be adjudicated without granting prior authority to legacy contracts, preserved designs, user directions, code evidence, cognitive theory, reviewers, agents or majority agreement; and which results may become constitution clauses?",
+    "exact_text_sha256": "sha256:3ef025f277667650f07703282d38a4f8a2875d742d33d38e94b67d64dbd2f495",
+    "scope": "SUCCESSOR_DESIGN_METHOD_ONLY",
+    "materiality_profile": {
+      "selected_profile": "HIGH",
+      "scope": "DECISION_001_SUCCESSOR_DESIGN_METHOD_BOOTSTRAP",
+      "rationale": "The method can shape safety, cognition, migration, public Interfaces and later irreversible decisions; use HIGH until a new exact question generation proves a narrower scope.",
+      "invalidation_conditions": [
+        "THE_EXACT_QUESTION_OR_SCOPE_CHANGES",
+        "A_NEW_GENERATION_PROVES_ALL_EFFECTS_LOW_IMPACT_AND_REVERSIBLE",
+        "APPLICABLE_SAFETY_PRIVACY_AGENCY_MIGRATION_OR_PUBLIC_INTERFACE_SCOPE_CHANGES"
+      ]
+    }
+  },
+  "hard_constraints": {
+    "METHOD-HARD-001": {
+      "statement": "Each claim kind has target-specific standing; empirical evidence, product values, safety constraints, architecture validation, migration conservation and operational authorization cannot upgrade or impersonate one another.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-004",
+        "METHOD-EVID-007",
+        "METHOD-EVID-008"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-001; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "ALL_CLAIM_KINDS",
+      "invalidation_conditions": [
+        "A claim kind lacks a unique declared standing.",
+        "Evidence shows the standing partition merges materially distinct decision rights."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-002": {
+      "statement": "Source identity, chronology, authority label, reviewer count, model confidence and user activation do not by themselves decide empirical or architecture correctness.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-002",
+        "METHOD-EVID-004",
+        "METHOD-EVID-005"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-002; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "EMPIRICAL_AND_ARCHITECTURE_CLAIMS",
+      "invalidation_conditions": [
+        "A scoped legal or operational authority question is misclassified as empirical correctness.",
+        "New evidence establishes a narrower claim for which source identity is itself the measured fact."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-003": {
+      "statement": "UNKNOWN, CONTESTED, TIE_SENSITIVE and INCOMPARABLE remain explicit and cannot be converted to numeric neutral values or a forced winner.",
+      "source_refs": [
+        "METHOD-EVID-002",
+        "METHOD-EVID-004",
+        "METHOD-EVID-009",
+        "METHOD-EVID-011"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-003; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "EVIDENCE_AND_TRADEOFF_ASSESSMENT",
+      "invalidation_conditions": [
+        "A later protocol defines and validates a lossless typed representation for the disputed state."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-004": {
+      "statement": "Question, scope, candidate denominator, constraints, tradeoffs, evidence dependencies and all outcome-producing workloads or thresholds are frozen before their results are used.",
+      "source_refs": [
+        "METHOD-EVID-002",
+        "METHOD-EVID-003",
+        "METHOD-EVID-005",
+        "METHOD-EVID-009"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-004; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "ADJUDICATION_INPUTS",
+      "invalidation_conditions": [
+        "Any frozen dependency changes.",
+        "A material candidate, scenario, metric or dependency cluster was omitted."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-005": {
+      "statement": "Every candidate is represented symmetrically in its strongest fair form with support, refutation, limits, shared-source dependencies and falsification conditions.",
+      "source_refs": [
+        "METHOD-EVID-002",
+        "METHOD-EVID-004",
+        "METHOD-EVID-005",
+        "METHOD-EVID-006"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-005; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "CANDIDATE_DENOMINATOR",
+      "invalidation_conditions": [
+        "A candidate family is split or merged in a way that changes its strongest claim.",
+        "A challenger identifies a materially distinct missing alternative or strawman."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-006": {
+      "statement": "Applicable safety, privacy, agency, data conservation, recovery and legacy operational boundaries are versioned, scoped and non-compensable; they cannot be traded for speed, experience, simplicity or preference.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-007"
+      ],
+      "owner_ref": {
+        "owner_kind": "SAFETY_PRIVACY_AGENCY_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-006; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "SAFETY_AND_OPERATIONAL_ADMISSIBILITY",
+      "invalidation_conditions": [
+        "The owning constraint registry changes the exact boundary through its authorized process.",
+        "The constraint is shown inapplicable to the frozen scope."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-007": {
+      "statement": "For high-materiality decisions, challenger, finalizer and post-final structural verifier are pairwise separated from method and producer authorship as declared, disclose shared upstream dependencies and merge findings rather than votes.",
+      "source_refs": [
+        "METHOD-EVID-004",
+        "METHOD-EVID-006"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-007; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "CHALLENGE_AND_VERIFICATION",
+      "invalidation_conditions": [
+        "A lower materiality profile explicitly justifies a lighter independent path.",
+        "Identity or dependency evidence proves the declared independence false."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-008": {
+      "statement": "No artifact may self-assert validity, use its producer as its decisive oracle, accept duplicate JSON members, or form a circular hash, validity or authorization dependency.",
+      "source_refs": [
+        "METHOD-EVID-004",
+        "METHOD-EVID-006"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-008; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "ARTIFACT_DAG",
+      "invalidation_conditions": [
+        "A formally verified alternative representation proves equivalent fail-closed integrity."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-009": {
+      "statement": "A genuine residual product-value choice is made by its legitimate value owner with consequences visible, never by model confidence, reviewer voting or an empirical claim pretending to be a value.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-007",
+        "METHOD-EVID-008",
+        "METHOD-EVID-012"
+      ],
+      "owner_ref": {
+        "owner_kind": "PRODUCT_VALUE_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-009; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "PRODUCT_VALUE",
+      "invalidation_conditions": [
+        "The authenticated value owner delegates a narrower decision right with exact scope and expiry."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-010": {
+      "statement": "A design conclusion and permission to execute are detached claims; operational action requires separate authenticated authorization binding exact object, scope, time and recovery conditions.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-004",
+        "METHOD-EVID-007"
+      ],
+      "owner_ref": {
+        "owner_kind": "LEGACY_OPERATION_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-010; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "ACTIVATION_AND_EXTERNAL_EFFECTS",
+      "invalidation_conditions": [
+        "The action is proven read-only and outside any protected operational boundary.",
+        "The authorization registry publishes a superseding exact contract."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    },
+    "METHOD-HARD-011": {
+      "statement": "REVISE terminates the current exact generation; changed bytes require a new generation and full re-adjudication, while only an independently verified ADOPT generation may become authorization-eligible.",
+      "source_refs": [
+        "METHOD-EVID-001",
+        "METHOD-EVID-004",
+        "METHOD-EVID-006"
+      ],
+      "owner_ref": {
+        "owner_kind": "METHOD_BOOTSTRAP_OWNER",
+        "provenance_binding": {
+          "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+          "hash_scope": "WHOLE_FILE_RAW_BYTES"
+        },
+        "authority_scope": "Proposed non-governing owner scope for METHOD-HARD-011; exact authority remains subject to detached verification and user review.",
+        "authority_status": "PROPOSED_OWNER_PENDING_IDENTITY_SCOPE_AND_USER_ACCEPTANCE"
+      },
+      "scope": "DISPOSITION_AND_ACTIVATION",
+      "invalidation_conditions": [
+        "A future append-only state machine proves an equally fail-closed replacement with exact-byte lineage."
+      ],
+      "failure_semantics": "FAIL_OR_BLOCKING_UNKNOWN_IS_NON_COMPENSABLE",
+      "version": 1
+    }
+  },
+  "tradeoff_registry": {
+    "METHOD-TRADEOFF-001": {
+      "definition": "Material decision error, omitted candidate, omitted constraint, omitted counterevidence or false terminal conclusion risk.",
+      "direction": "LOWER_IS_BETTER",
+      "measurement_obligation": "Apply every method to identical blinded historical and synthetic decision packets; independently score material omissions, false dispositions and missed reopening triggers.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-009": true
+      }
+    },
+    "METHOD-TRADEOFF-002": {
+      "definition": "Independent traceability, exact-input reconstruction and explanation fidelity.",
+      "direction": "HIGHER_IS_BETTER",
+      "measurement_obligation": "Give detached actors the same frozen packet and compare exact candidate, constraint, evidence, uncertainty and disposition reconstruction gaps.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-006": true
+      }
+    },
+    "METHOD-TRADEOFF-003": {
+      "definition": "Decision latency, compute, artifact maintenance and specialist resource cost at the frozen materiality profile.",
+      "direction": "LOWER_IS_BETTER",
+      "measurement_obligation": "Measure end-to-end elapsed time, actor time, compute, artifact churn and reopening cost on the same packets without omitting required work.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-009": true
+      }
+    },
+    "METHOD-TRADEOFF-004": {
+      "definition": "Human cognitive load, coordination burden, disagreement handling and reviewer fatigue.",
+      "direction": "LOWER_IS_BETTER",
+      "measurement_obligation": "Measure task load, clarification loops, coordination edges, unresolved dissent retention and error induced by fatigue on identical packets and roles.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-009": true,
+        "METHOD-EVID-010": true
+      }
+    },
+    "METHOD-TRADEOFF-005": {
+      "definition": "Reversibility, adaptation to new evidence and cost of reopening a stale or refuted decision.",
+      "direction": "HIGHER_IS_BETTER",
+      "measurement_obligation": "Inject new evidence and changed constraints after disposition; measure detection, invalidation, rollback, retained provenance and time to a corrected generation.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-002": true,
+        "METHOD-EVID-003": true,
+        "METHOD-EVID-007": true
+      }
+    },
+    "METHOD-TRADEOFF-006": {
+      "definition": "Resistance to producer self-oracle, shared-upstream pseudo-independence, authority leakage, voting substitution and artifact forgery.",
+      "direction": "HIGHER_IS_BETTER",
+      "measurement_obligation": "Run identity, dependency, role-target, mutation and dissent fixtures; measure undetected self-authorship, shared-source and forged-state failures.",
+      "uncertainty_semantics": "UNKNOWN_OR_INCOMPARABLE_CANNOT_BE_RANKED_OR_NUMERICALLY_NEUTRALIZED",
+      "evidence_refs": {
+        "METHOD-EVID-004": true,
+        "METHOD-EVID-005": true,
+        "METHOD-EVID-006": true,
+        "METHOD-EVID-010": true
+      }
+    }
+  },
+  "verifier_obligations": {
+    "EXACT_WHOLE_FILE_HASH_RECOMPUTATION": "Recompute every declared SHA-256, including the ticket schema and dependency bundle members, from referenced whole-file raw bytes; never trust embedded or copied digest text.",
+    "ARTIFACT_DAG_AND_DEPENDENCY_CLOSURE": "Rebuild the typed artifact DAG and exact dependency bundle; reject missing, extra, cyclic, stale, ambiguously rooted, role-mismatched, type-mismatched or key-mismatched dependencies; prove selected candidate, selected method, final method and bundle method identity equality; for typed method generation greater than one prove the predecessor has the same method key and exactly the preceding generation, while generation one has null typed supersedes and any legacy untyped predecessor remains context only.",
+    "CONSTRAINT_PARTITION_COMPLETENESS": "For every candidate, prove each protocol-owned hard-constraint key occurs exactly once across PASS, FAIL, BLOCKING_UNKNOWN, and NOT_APPLICABLE, verify every NOT_APPLICABLE justification, exclude every inadmissible candidate from the feasible set, and prove every frozen tradeoff axis assesses all five candidates exactly once.",
+    "ACTOR_IDENTITY_AND_DEPENDENCY_SEPARATION": "Verify producer, challenger, finalizer and verifier identities plus material dependency disclosures from bound identity evidence; declarations and reviewer counts do not prove independence, and required roles must be pairwise separated where declared.",
+    "LIFECYCLE_STATE_TRANSITION_VALIDITY": "Recompute the producer-to-challenger-to-final-candidate-to-dependency-bundle-to-post-final-verifier transition; structural eligibility requires challenger PASS, selected candidate feasible and non-dominated, zero FAIL, zero BLOCKING_UNKNOWN, zero unresolved required evidence gaps and unchanged exact bytes. A pre-authorization verifier must not claim to validate future authorization bytes.",
+    "QUALITY_POLICY_CONTRACT_DETERMINISM": "Recompute metric normalization, target-range distance, interval and margin ordering, exclusive state precedence, exact all-material outcome and cross-domain denominator equality, complexity-fact membership and effect states, and local-guardrail exact PASS semantics; any null, unfrozen, missing, extra, duplicate, stale, arithmetically inconsistent or non-single-valued quality input blocks the corresponding verdict."
+  },
+  "authorization_acceptance_obligations": {
+    "EXACT_AUTHORIZATION_AND_DEPENDENCY_HASH_RECOMPUTATION": "Decode every authorization-stage artifact as UTF-8 with a duplicate-member-aware raw JSON loader that rejects duplicate object names before parsing; recompute authorization_text.exact_text_sha256 from the exact UTF-8 text; then recompute the exact authorization, ticket schema, final record, challenger report, structural verifier report, dependency bundle, selected method, principal, authentication evidence and recovery-boundary hashes from whole-file raw bytes.",
+    "AUTHORIZED_METHOD_AND_LIFECYCLE_IDENTITY_EQUALITY": "Prove the authorized method bytes and key equal the final selected method and dependency-bundle method, and that the authorization binds the same final, challenger, verifier and bundle bytes accepted by the lifecycle.",
+    "PRINCIPAL_AUTHENTICATION_AND_SCOPE_VALIDITY": "Verify from bound external identity evidence that the principal is authenticated, currently authorized for the exact method-only scope and distinct from the detached authorization-acceptance gate actor.",
+    "ACTION_SCOPE_PROHIBITION_AND_RECOVERY_VALIDITY": "Verify the allowed action and authorized scope are exact, every prohibited action is present, the recovery boundary exists and is applicable, and no production, constitution-clause or legacy-runtime authority is implied.",
+    "CALENDAR_WINDOW_EXPIRY_AND_USE_TIME_VALIDITY": "Parse calendar-valid RFC 3339 times; prove valid_from is earlier than expires_at; prove evaluated_at is within that interval using the bound trusted time source; prove the acceptance receipt valid_until does not exceed the authorization expires_at; and require every use to revalidate both the authorization and receipt windows."
+  },
+  "hash_policy": {
+    "algorithm": "SHA-256",
+    "byte_domain": "RAW_FILE_BYTES",
+    "normalization": "NONE",
+    "binding_granularity": "EXACT_WHOLE_FILE",
+    "embedded_self_hash": false,
+    "dependency_change_semantics": "INVALIDATE_ALL_TRANSITIVE_DOWNSTREAM_BINDINGS"
+  },
+  "evidence_manifest_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+          "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "candidate_denominator_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_candidate_denominator.candidate.json",
+    "sha256": "sha256:8a27275454ce860617e23bbb755350d3a97473eeaf7a29d5ba38e2ee609eeee4",
+    "hash_scope": "WHOLE_FILE_RAW_BYTES"
+  },
+  "input_freeze": {
+    "QUESTION_AND_SCOPE": "Freeze exact question, decision scope and materiality profile before candidate outcomes are visible.",
+    "CANDIDATE_DENOMINATOR": "Freeze the exact five-candidate denominator and reopen every downstream result if a distinct method or strawman is found.",
+    "HARD_CONSTRAINT_CATALOG": "Freeze complete protocol-owned constraint objects before any candidate is assessed; candidates may reference but cannot author the exam.",
+    "EVIDENCE_SNAPSHOT": "Freeze support, refutation, assumptions, limitations, dependency clusters, freshness and explicit missing snapshots before assessment.",
+    "CLAIM_KIND_STANDING_MAP": "Freeze the claim-kind to typed-standing map before evaluating any claim.",
+    "QUALITY_AND_TRADEOFF_POLICY": "Implementation comparisons freeze capability roots, workloads, baselines, SLOs, non-inferiority margins, improvement deltas and complexity change scenarios; this user value is not a method self-selection hard gate.",
+    "IDENTITY_AND_DEPENDENCY_BOUNDARY": "Freeze producer, challenger, finalizer and post-final verifier roles plus upstream dependencies; producer assessment and final decision candidate are never self-validating."
+  },
+  "allowed_design_outcomes": [
+    "ADOPT",
+    "REVISE",
+    "REJECT",
+    "RESEARCH_REQUIRED",
+    "PROTOTYPE_REQUIRED",
+    "USER_VALUE_CHOICE_REQUIRED",
+    "EQUIVALENT_SET"
+  ],
+  "independence_rules": {
+    "candidate_cannot_define_its_exam": true,
+    "producer_cannot_adopt": true,
+    "challenger_must_be_detached": true,
+    "finalizer_must_be_detached": true,
+    "verifier_must_be_detached": true,
+    "reviewer_count_is_not_independence": true
+  },
+  "schema_capability_boundary": "JSON_SCHEMA_VALIDATES_DECLARED_SHAPE_ONLY; DETACHED_VERIFIER_MUST_RECOMPUTE_HASH_DAG_PARTITION_IDENTITY_AND_STATE_FACTS"
+}

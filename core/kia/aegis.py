@@ -8,31 +8,35 @@ In-process Guard - 执行中守护
 
 避免打断用户思路，非侵入式保护。
 """
+
 # Aegis — 宙斯神盾 — 执行中守护，KIA 闭环的实时防护
 # 原模块: in_process_guard.py
 
 
-
 import re
-from dataclasses import dataclass, field
+import sqlite3
 from datetime import datetime
-from enum import Enum
-from typing import List, Dict, Optional, Tuple, Set
+from typing import Any, List, Dict, Optional, Tuple
 
+from .aegis_models import ExecutionContext, GuardAlert, GuardLevel, GuardSession
 from .prophasis import ChecklistItem, LoadedKnowledge
-from core.persona.hamartia import BlindSpotProfileManager, BlindSpot, ChallengeBalancer
+from core.embeddings.siliconflow_client import SiliconFlowEmbeddingClient
 
 
 import logging
-logger = logging.getLogger(__name__)
-class GuardLevel(Enum):
-    """守护级别"""
-    SILENT = "silent"       # 轻微：静默记录
-    HINT = "hint"           # 中等：自然融入
-    INTERRUPT = "interrupt" # 严重：打断确认
 
+logger = logging.getLogger(__name__)
+
+# 模块级知识缓存：避免类级可变默认值陷阱，同时保持跨实例共享
+_KNOWLEDGE_CACHE: Dict[Tuple[str, str], Tuple[LoadedKnowledge, datetime]] = {}
+_KNOWLEDGE_TTL_SECONDS: int = 60
+
+# 模块级 embedding client health_check 结果缓存
+_EMBEDDING_CLIENT_CHECK: Tuple[Optional[Any], datetime] = (None, datetime.min)
+_EMBEDDING_CLIENT_CHECK_TTL_SECONDS: int = 60
 
 # ==================== SmartMatcher 三层匹配引擎 ====================
+
 
 class SmartMatcher:
     """三层级联匹配引擎
@@ -40,14 +44,53 @@ class SmartMatcher:
     【E14 三层匹配引擎补全】
     层级1 — 精确匹配：文本完全相等（最高置信度）
     层级2 — 关键词匹配：子串包含（当前已有）
-    层级3 — 语义匹配：基于词袋 Jaccard 相似度（零 API 成本）
+    层级3 — 语义匹配：本地词袋 Jaccard（零 API 成本），
+             embedding client 可用时升级为向量余弦相似度
     """
 
-    def __init__(self, semantic_threshold: float = 0.65):
+    def __init__(self, semantic_threshold: float = 0.65, embedding_client=None):
         self.semantic_threshold = semantic_threshold
-        self.negation_words = {"不要", "别", "勿", "无需", "不用", "禁止", "避免", "不能", "不要直接"}
-        self.question_markers = {"?", "？", "怎么", "如何", "为什么", "会怎样", "是什么意思", "是否"}
-        self.command_verbs = {"删除", "清空", "执行", "运行", "部署", "发布", "修改", "覆盖", "drop", "truncate", "rm"}
+        self.embedding_client = embedding_client
+        # 未传入 embedding client 时尝试懒加载，使 SmartMatcher 可独立使用
+        if self.embedding_client is None:
+            try:
+                self.embedding_client = InProcessGuard._load_embedding_client()
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logger.debug("[SmartMatcher] embedding client 懒加载失败", exc_info=True)
+        self.negation_words = {
+            "不要",
+            "别",
+            "勿",
+            "无需",
+            "不用",
+            "禁止",
+            "避免",
+            "不能",
+            "不要直接",
+        }
+        self.question_markers = {
+            "?",
+            "？",
+            "怎么",
+            "如何",
+            "为什么",
+            "会怎样",
+            "是什么意思",
+            "是否",
+        }
+        self.command_verbs = {
+            "删除",
+            "清空",
+            "执行",
+            "运行",
+            "部署",
+            "发布",
+            "修改",
+            "覆盖",
+            "drop",
+            "truncate",
+            "rm",
+        }
 
     def match_exact(self, text: str, candidates: List[str]) -> Optional[Tuple[str, float]]:
         """精确匹配：文本与候选完全相等"""
@@ -69,34 +112,127 @@ class SmartMatcher:
                     return kw, score
         return None
 
-    def match_semantic(self, text: str, references: List[str]) -> Optional[Tuple[str, float]]:
-        """语义匹配：词袋 Jaccard 相似度（零 API 成本）"""
-        text_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', text.lower()))
-        if not text_words:
-            return None
+    def _keyword_similarity(self, text: str, reference: str) -> float:
+        """计算两个文本的词袋 Jaccard 相似度"""
+        text_words = set(re.findall(r"[\w\u4e00-\u9fa5]+", text.lower()))
+        ref_words = set(re.findall(r"[\w\u4e00-\u9fa5]+", reference.lower()))
+        if not text_words or not ref_words:
+            return 0.0
+        intersection = text_words & ref_words
+        union = text_words | ref_words
+        return len(intersection) / len(union) if union else 0.0
 
+    def _embedding_semantic(
+        self,
+        text: str,
+        references: List[str],
+        *,
+        subject_scope: tuple[str, str] | None = None,
+    ) -> Optional[Tuple[str, float]]:
+        """
+        使用 embedding 向量计算语义相似度。
+        失败时返回 None，由调用方决定是否回退。
+        """
+        if not self.embedding_client:
+            return None
+        try:
+            all_texts = [text] + references
+            if isinstance(self.embedding_client, SiliconFlowEmbeddingClient):
+                effective_scope = subject_scope
+                if effective_scope is None:
+                    from core.telemetry.prompt_call_log import current_model_call_run
+
+                    if current_model_call_run() is None:
+                        effective_scope = ("source", "in_process_guard")
+                entry_subject_scopes = [
+                    (effective_scope,) if effective_scope is not None else ()
+                    for _ in all_texts
+                ]
+                embeddings = self.embedding_client.embed(
+                    all_texts,
+                    subject_scopes=entry_subject_scopes,
+                )
+            else:
+                # In-process test/local matchers are non-provider clients and
+                # deliberately retain their compact compatibility interface.
+                embeddings = self.embedding_client.embed(all_texts)
+            if not embeddings or embeddings[0] is None:
+                return None
+            query_emb = embeddings[0]
+            candidate_embs = embeddings[1:]
+
+            import math
+
+            q_norm = math.sqrt(sum(x * x for x in query_emb))
+            if q_norm == 0:
+                return None
+
+            best_ref = None
+            best_score = 0.0
+            for ref, emb in zip(references, candidate_embs):
+                if emb is None:
+                    continue
+                v_norm = math.sqrt(sum(x * x for x in emb))
+                if v_norm == 0:
+                    continue
+                dot = sum(x * y for x, y in zip(query_emb, emb))
+                score = dot / (q_norm * v_norm)
+                if score > best_score:
+                    best_score = score
+                    best_ref = ref
+
+            if best_ref and best_score >= self.semantic_threshold:
+                return best_ref, best_score
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logger.debug("[SmartMatcher] embedding 语义匹配失败，回退到 Jaccard", exc_info=True)
+        return None
+
+    def match_semantic(
+        self,
+        text: str,
+        references: List[str],
+        *,
+        subject_scope: tuple[str, str] | None = None,
+    ) -> Optional[Tuple[str, float]]:
+        """
+        语义匹配：先尝试零成本的词袋 Jaccard；
+        未命中且 embedding client 可用时，使用向量余弦相似度。
+        """
+        # 快速路径：本地 Jaccard 命中则直接返回，避免 API 调用
         best_ref = None
         best_score = 0.0
-
         for ref in references:
-            ref_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', ref.lower()))
-            if not ref_words:
-                continue
-            intersection = text_words & ref_words
-            union = text_words | ref_words
-            score = len(intersection) / len(union) if union else 0.0
+            score = self._keyword_similarity(text, ref)
             if score > best_score and score >= self.semantic_threshold:
                 best_score = score
                 best_ref = ref
-
         if best_ref:
             return best_ref, best_score
+
+        # 慢速路径：embedding 语义相似度（处理同义/近义）
+        if self.embedding_client and len(text) >= 20:
+            if subject_scope is None:
+                emb_result = self._embedding_semantic(text, references)
+            else:
+                emb_result = self._embedding_semantic(
+                    text,
+                    references,
+                    subject_scope=subject_scope,
+                )
+            if emb_result:
+                return emb_result
+
         return None
 
-    def match_three_tier(self, text: str,
-                         exact_candidates: List[str] = None,
-                         keywords: List[str] = None,
-                         semantic_refs: List[str] = None) -> Optional[Dict]:
+    def match_three_tier(
+        self,
+        text: str,
+        exact_candidates: List[str] | None = None,
+        keywords: List[str] | None = None,
+        semantic_refs: List[str] | None = None,
+        *,
+        subject_scope: tuple[str, str] | None = None,
+    ) -> Optional[Dict]:
         """三层级联匹配：依次尝试精确 → 关键词 → 语义"""
         # Layer 1: Exact
         if exact_candidates:
@@ -112,7 +248,14 @@ class SmartMatcher:
 
         # Layer 3: Semantic
         if semantic_refs:
-            result = self.match_semantic(text, semantic_refs)
+            if subject_scope is None:
+                result = self.match_semantic(text, semantic_refs)
+            else:
+                result = self.match_semantic(
+                    text,
+                    semantic_refs,
+                    subject_scope=subject_scope,
+                )
             if result:
                 return {"layer": 3, "type": "semantic", "match": result[0], "score": result[1]}
 
@@ -122,7 +265,7 @@ class SmartMatcher:
         window_start = max(0, pos - 10)
         window_end = min(len(text), pos + len(keyword) + 10)
         window = text[window_start:window_end]
-        prefix = text[max(0, pos - 8):pos]
+        prefix = text[max(0, pos - 8) : pos]
         score = base_score
 
         if any(word in prefix for word in self.negation_words):
@@ -143,23 +286,27 @@ class SmartMatcher:
     @staticmethod
     def _is_quoted(text: str, pos: int) -> bool:
         before = text[:pos]
-        return before.count("`") % 2 == 1 or before.count('"') % 2 == 1 or before.count("“") > before.count("”")
+        return (
+            before.count("`") % 2 == 1
+            or before.count('"') % 2 == 1
+            or before.count("“") > before.count("”")
+        )
 
 
 class DuplicateWorkDetector:
     """重复工作检测器
 
     检测用户是否在做之前已经做过/讨论过的工作。
-    基于消息指纹 + 关键词重叠 + 语义相似度。
+    基于消息指纹 + 关键词重叠 + 语义相似度（embedding 可用时升级为向量语义）。
     """
 
-    def __init__(self, history_messages: List[str] = None):
+    def __init__(self, history_messages: List[str] | None = None, embedding_client=None):
         self.history = history_messages or []
-        self.matcher = SmartMatcher(semantic_threshold=0.55)
+        self.matcher = SmartMatcher(semantic_threshold=0.55, embedding_client=embedding_client)
 
     def _fingerprint(self, text: str) -> str:
         """生成文本指纹"""
-        cleaned = re.sub(r'[^\w\u4e00-\u9fa5]', '', text.lower())
+        cleaned = re.sub(r"[^\w\u4e00-\u9fa5]", "", text.lower())
         return cleaned[:100]
 
     def is_duplicate(self, message: str, threshold: float = 0.70) -> Tuple[bool, float, str]:
@@ -179,7 +326,7 @@ class DuplicateWorkDetector:
 
             # 1. 指纹精确匹配
             if msg_fp == hist_fp and len(msg_fp) > 10:
-                return True, 1.0, f"Exact fingerprint match with history"
+                return True, 1.0, "Exact fingerprint match with history"
 
             # 2. 语义相似度
             result = self.matcher.match_semantic(message, [hist])
@@ -189,14 +336,14 @@ class DuplicateWorkDetector:
                     return True, score, f"Semantic similarity {score:.2f} with history"
 
         # 3. 关键词重叠率（快速过滤）
-        msg_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', message.lower()))
+        msg_words = set(re.findall(r"[\w\u4e00-\u9fa5]+", message.lower()))
         if len(msg_words) < 3:
             return False, 0.0, "Too few words"
 
         best_overlap = 0.0
         best_hist = ""
         for hist in self.history:
-            hist_words = set(re.findall(r'[\w\u4e00-\u9fa5]+', hist.lower()))
+            hist_words = set(re.findall(r"[\w\u4e00-\u9fa5]+", hist.lower()))
             if not hist_words:
                 continue
             overlap = len(msg_words & hist_words) / len(msg_words | hist_words)
@@ -217,34 +364,11 @@ class DuplicateWorkDetector:
             self.history = self.history[-500:]
 
 
-@dataclass
-class GuardAlert:
-    """守护告警"""
-    level: GuardLevel
-    checklist_item: ChecklistItem
-    triggered_by: str       # 触发来源：user/ai
-    trigger_text: str       # 触发文本
-    suggestion: str         # 建议内容
-    timestamp: str = ""
-
-    def __post_init__(self):
-        if not self.timestamp:
-            self.timestamp = datetime.now().isoformat()
-
-
-@dataclass
-class GuardSession:
-    """守护会话状态"""
-    task_type: str
-    subtype: str
-    checklist: List[ChecklistItem]
-    triggered_alerts: List[GuardAlert] = field(default_factory=list)
-    silent_records: List[Dict] = field(default_factory=list)
-    hint_used: set = field(default_factory=set)
-
-
 class InProcessGuard:
     """执行中守护"""
+
+    DEFAULT_MAX_ANALYSIS_TURNS_WITHOUT_ACTION = 2
+    DEFAULT_MAX_REPEATED_READS_PER_TARGET = 2
 
     # 严重偏差关键词（触发 INTERRUPT）
     CRITICAL_KEYWORDS = {
@@ -254,31 +378,191 @@ class InProcessGuard:
         "strategy": ["all in", "全部押注", "孤注一掷"],
     }
 
+    # 向后兼容：引用模块级缓存字典（避免类级可变默认值陷阱）
+    _knowledge_cache = _KNOWLEDGE_CACHE
+
+    @classmethod
+    def _get_cached_knowledge(cls, task_type: str, subtype: str) -> Optional[LoadedKnowledge]:
+        """从缓存获取知识，TTL 过期返回 None。"""
+        key = (task_type, subtype)
+        cached = _KNOWLEDGE_CACHE.get(key)
+        if not cached:
+            return None
+        knowledge, cached_at = cached
+        if (datetime.now() - cached_at).total_seconds() > _KNOWLEDGE_TTL_SECONDS:
+            _KNOWLEDGE_CACHE.pop(key, None)
+            return None
+        return knowledge
+
+    @classmethod
+    def _set_cached_knowledge(cls, knowledge: LoadedKnowledge) -> None:
+        """将知识写入缓存。"""
+        _KNOWLEDGE_CACHE[(knowledge.task_type, knowledge.subtype)] = (knowledge, datetime.now())
+
+    @classmethod
+    def clear_knowledge_cache(cls) -> None:
+        """手动清除知识缓存（测试/调试用）。"""
+        _KNOWLEDGE_CACHE.clear()
+
+    @classmethod
+    def from_task_type(cls, task_type: str, subtype: str = "") -> "InProcessGuard":  # noqa: Vulture - guard factory API.
+        """按 task_type 创建 Guard，自动使用缓存的 knowledge 或从文件系统加载。"""
+        # 先尝试缓存
+        knowledge = cls._get_cached_knowledge(task_type, subtype)
+        if knowledge is None:
+            # 从文件系统加载（通过 PreFlightInjector）
+            try:
+                from core.kia.prophasis import PreFlightInjector
+                from core.kia.kairos import TimeWindow, TimeWindowType
+
+                injector = PreFlightInjector()
+                time_window = TimeWindow(window=TimeWindowType.IMMEDIATE, days_until=0)
+                knowledge = injector.inject(task_type, subtype, time_window, "")
+                if knowledge:
+                    cls._set_cached_knowledge(knowledge)
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logger.warning("[InProcessGuard] 从文件系统加载知识失败，使用空清单", exc_info=True)
+                knowledge = None
+        return cls(knowledge)
+
     def __init__(self, knowledge: Optional[LoadedKnowledge] = None):
-        self.session = None
-        self.blindspot_manager = BlindSpotProfileManager()
-        self.challenge_balancer = ChallengeBalancer()
-        self.smart_matcher = SmartMatcher()
-        self.duplicate_detector = DuplicateWorkDetector()
+        self.session: Optional[GuardSession] = None
+        self.embedding_client = self._load_embedding_client()
+        self.smart_matcher = SmartMatcher(embedding_client=self.embedding_client)
+        self.duplicate_detector = DuplicateWorkDetector(embedding_client=self.embedding_client)
         self.contextual_mode = "normal"  # normal/exploration/execution/fatigue/urgency
-        self.session_messages = []  # 记录session消息用于情境推断
+        self.session_messages: List[str] = []  # 记录session消息用于情境推断
+        self._analysis_loop_options = self._load_analysis_loop_options()
         if knowledge:
             self.start_session(knowledge)
 
+    @staticmethod
+    def _positive_int_option(value: Any, default: int) -> Tuple[int, str]:
+        try:
+            if isinstance(value, bool):
+                raise ValueError("bool is not a positive integer threshold")
+            converted = int(value)
+            if converted < 1:
+                raise ValueError("threshold must be >= 1")
+            return converted, "config"
+        except (TypeError, ValueError):
+            return default, "default"
+
+    def _load_analysis_loop_options(self) -> Dict[str, Any]:
+        defaults = {
+            "enabled": True,
+            "max_analysis_turns_without_action": self.DEFAULT_MAX_ANALYSIS_TURNS_WITHOUT_ACTION,
+            "max_repeated_reads_per_target": self.DEFAULT_MAX_REPEATED_READS_PER_TARGET,
+            "threshold_source": "default",
+        }
+        try:
+            from core.config import get_config
+
+            cfg = get_config()
+            analysis_threshold, analysis_source = self._positive_int_option(
+                cfg.get(
+                    "guard.analysis_loop.max_analysis_turns_without_action",
+                    self.DEFAULT_MAX_ANALYSIS_TURNS_WITHOUT_ACTION,
+                ),
+                self.DEFAULT_MAX_ANALYSIS_TURNS_WITHOUT_ACTION,
+            )
+            reads_threshold, reads_source = self._positive_int_option(
+                cfg.get(
+                    "guard.analysis_loop.max_repeated_reads_per_target",
+                    self.DEFAULT_MAX_REPEATED_READS_PER_TARGET,
+                ),
+                self.DEFAULT_MAX_REPEATED_READS_PER_TARGET,
+            )
+            threshold_source = (
+                "config" if analysis_source == "config" and reads_source == "config" else "default"
+            )
+            return {
+                "enabled": bool(cfg.get("guard.analysis_loop.enabled", True)),
+                "max_analysis_turns_without_action": analysis_threshold,
+                "max_repeated_reads_per_target": reads_threshold,
+                "threshold_source": threshold_source,
+                "analysis_threshold_source": analysis_source,
+                "reads_threshold_source": reads_source,
+            }
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logger.debug("[InProcessGuard] analysis loop 配置加载失败，使用默认阈值", exc_info=True)
+            return defaults
+
+    def _analysis_loop_metadata(
+        self,
+        *,
+        threshold_kind: str,
+        threshold_value: int,
+        current_count: int,
+    ) -> Dict[str, Any]:
+        source_key = {
+            "max_analysis_turns_without_action": "analysis_threshold_source",
+            "max_repeated_reads_per_target": "reads_threshold_source",
+        }.get(threshold_kind)
+        return {
+            "threshold_kind": threshold_kind,
+            "threshold_source": self._analysis_loop_options.get(
+                source_key or "threshold_source",
+                self._analysis_loop_options.get("threshold_source", "default"),
+            ),
+            "threshold_value": threshold_value,
+            "current_count": current_count,
+        }
+
+    @staticmethod
+    def _load_embedding_client():
+        """懒加载 embedding client；失败时返回 None，不影响守护工作。
+
+        health_check() 结果缓存 60 秒，避免每次创建 Guard 都发起网络探测。
+        不可用结果也会被缓存，防止 unavailable client 导致反复探测。
+        """
+        global _EMBEDDING_CLIENT_CHECK
+        try:
+            from core.config import get_config
+
+            cfg = get_config()
+            if not cfg.get("embedding.enabled", True):
+                return None
+            from core.embeddings.siliconflow_client import get_embedding_client
+
+            client = get_embedding_client()
+            if client is None:
+                return None
+
+            cached_client, cached_at = _EMBEDDING_CLIENT_CHECK
+            now = datetime.now()
+            # 缓存命中：同一 client 且未过期；None 表示上次探测为不可用
+            if cached_client is client or cached_client is None:
+                elapsed = (now - cached_at).total_seconds()
+                if elapsed < _EMBEDDING_CLIENT_CHECK_TTL_SECONDS:
+                    return cached_client
+
+            hc = client.health_check()
+            if hc.get("available", False):
+                _EMBEDDING_CLIENT_CHECK = (client, now)
+                return client
+            else:
+                # 缓存不可用结果，避免反复 health_check
+                _EMBEDDING_CLIENT_CHECK = (None, now)
+                return None
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logger.debug("[InProcessGuard] embedding client 加载失败", exc_info=True)
+        return None
+
     def start_session(self, knowledge: LoadedKnowledge):
         """开始守护会话"""
-        self.session = GuardSession(
-            task_type=knowledge.task_type,
-            subtype=knowledge.subtype,
-            checklist=knowledge.checklist
+        self.session = GuardSession(  # type: ignore[assignment]
+            task_type=knowledge.task_type, subtype=knowledge.subtype, checklist=knowledge.checklist
         )
         self.session_messages = []
         self.contextual_mode = "normal"
-        # 重置重复检测器历史
-        self.duplicate_detector = DuplicateWorkDetector()
+        self._analysis_loop_options = self._load_analysis_loop_options()
+        # 重置重复检测器历史（保留 embedding client）
+        self.duplicate_detector = DuplicateWorkDetector(embedding_client=self.embedding_client)
         # 会话内分析计数（用于检测分析瘫痪）
         self._analysis_turn_count = 0
-        self._last_action_turn = 0
+        self._tool_read_counts: Dict[str, int] = {}
+        InProcessGuard._set_cached_knowledge(knowledge)
 
     def _infer_contextual_mode(self, user_message: str) -> str:
         """
@@ -288,7 +572,11 @@ class InProcessGuard:
             normal / exploration / execution / fatigue / urgency
         """
         content = user_message.lower()
-        all_text = " ".join(m.lower() for m in self.session_messages[-5:]) if self.session_messages else content
+        all_text = (
+            " ".join(m.lower() for m in self.session_messages[-5:])
+            if self.session_messages
+            else content
+        )
 
         # 疲劳检测
         fatigue_signals = ["累了", "困了", "先这样", "明天再说", "懒得", "没精力"]
@@ -337,15 +625,36 @@ class InProcessGuard:
 
     # 通用高风险关键词（不依赖 checklist，作为兜底规则）
     _DEFAULT_CRITICAL_KEYWORDS = [
-        "删除生产", "删除数据库", "drop database", "drop table",
-        "rm -rf", "rm -rf /", "覆盖生产", "truncate", "delete from",
-        "git push --force", "terraform apply", "kubectl delete",
-        "密钥", "password", "token", "api key", "secret",
-        "不可逆", "无法回滚", "未测试", "直接上线",
+        "删除生产",
+        "删除数据库",
+        "drop database",
+        "drop table",
+        "rm -rf",
+        "rm -rf /",
+        "覆盖生产",
+        "truncate",
+        "delete from",
+        "git push --force",
+        "terraform apply",
+        "kubectl delete",
+        "密钥",
+        "password",
+        "token",
+        "api key",
+        "secret",
+        "不可逆",
+        "无法回滚",
+        "未测试",
+        "直接上线",
     ]
 
-    def check(self, user_message: str, ai_response: str = "",
-              context: Optional[Dict] = None) -> Optional[GuardAlert]:
+    def check(
+        self,
+        user_message: str,
+        ai_response: str = "",
+        context: Optional[Dict] = None,
+        execution_context: Optional[ExecutionContext] = None,
+    ) -> Optional[GuardAlert]:
         """
         检测当前对话是否触及风险点
 
@@ -357,25 +666,17 @@ class InProcessGuard:
         Returns:
             GuardAlert 或 None
         """
-        # 0. 默认高风险规则检查（不依赖 checklist/session）
         combined = (user_message + " " + ai_response).lower()
-        for kw in self._DEFAULT_CRITICAL_KEYWORDS:
-            if kw.lower() in combined:
-                return GuardAlert(
-                    level=GuardLevel.INTERRUPT,
-                    checklist_item=ChecklistItem(
-                        item="高风险操作检测",
-                        source="system",
-                        severity="critical"
-                    ),
-                    triggered_by="system",
-                    trigger_text=kw,
-                    suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？"
-                )
+
+        # 0. 默认高风险规则检查（不依赖 checklist/session）
+        alert = self._check_default_critical(combined, execution_context)
+        if alert:
+            return alert
 
         # 1.5 上下文语义风险检查（不依赖 checklist）
         ctx_alert = self._check_context_risk(context, user_message)
         if ctx_alert:
+            ctx_alert.execution_context = execution_context
             return ctx_alert
 
         if not self.session or not self.session.checklist:
@@ -391,29 +692,87 @@ class InProcessGuard:
         critical = self._check_critical(user_message, ai_response)
         if critical:
             # 严重偏差不受情境模式影响，始终告警
+            critical.execution_context = execution_context
             return critical
 
         # 2. 重复工作检测（SmartMatcher Layer 3 语义匹配）
+        alert = self._check_duplicate_work(user_message, execution_context)
+        if alert:
+            return alert
+
+        # 3. 检查 checklist 中的风险点（三层匹配引擎）
+        alert = self._check_checklist_matches(user_message, ai_response, execution_context)
+        if alert:
+            return alert
+
+        # 5. 思考循环检测（不依赖 checklist，基于会话状态）
+        loop_alert = self._check_thinking_loop(user_message, ai_response, context=context)
+        if loop_alert:
+            loop_alert.execution_context = execution_context
+            return loop_alert
+
+        return None
+
+    def _check_default_critical(
+        self,
+        combined_text: str,
+        execution_context: Optional[ExecutionContext],
+    ) -> Optional[GuardAlert]:
+        """默认高风险关键词检查（不依赖 checklist/session）。"""
+        for kw in self._DEFAULT_CRITICAL_KEYWORDS:
+            if kw.lower() in combined_text:
+                alert = GuardAlert(
+                    level=GuardLevel.INTERRUPT,
+                    checklist_item=ChecklistItem(
+                        item="高风险操作检测", source="system", severity="critical"
+                    ),
+                    triggered_by="system",
+                    trigger_text=kw,
+                    suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？",
+                )
+                alert.execution_context = execution_context
+                return alert
+        return None
+
+    def _check_duplicate_work(
+        self,
+        user_message: str,
+        execution_context: Optional[ExecutionContext],
+    ) -> Optional[GuardAlert]:
+        """重复工作检测（SmartMatcher Layer 3 语义匹配）。"""
         is_dup, dup_score, dup_reason = self.duplicate_detector.is_duplicate(user_message)
         self.duplicate_detector.add_message(user_message)
         if is_dup and dup_score >= 0.80:
-            return GuardAlert(
+            alert = GuardAlert(
                 level=GuardLevel.HINT,
                 checklist_item=ChecklistItem(
-                    item="重复工作提醒",
-                    source="system",
-                    severity="medium"
+                    item="重复工作提醒", source="system", severity="medium"
                 ),
                 triggered_by="user",
                 trigger_text=user_message[:100],
-                suggestion=f"💡 检测到可能与之前工作重复（相似度 {dup_score:.0%}）：{dup_reason}"
+                suggestion=f"💡 检测到可能与之前工作重复（相似度 {dup_score:.0%}）：{dup_reason}",
             )
+            alert.execution_context = execution_context
+            return alert
+        return None
 
-        # 3. 检查 checklist 中的风险点（三层匹配引擎）
+    def _check_checklist_matches(
+        self,
+        user_message: str,
+        ai_response: str,
+        execution_context: Optional[ExecutionContext],
+    ) -> Optional[GuardAlert]:
+        """检查 checklist 中的风险点（三层匹配引擎）。"""
+        if not self.session:
+            return None
+        interrupted_items = {
+            a.checklist_item.item
+            for a in self.session.triggered_alerts
+            if a.level == GuardLevel.INTERRUPT
+        }
         for item in self.session.checklist:
             # 跳过已触发的严重项
-            if item.item in [a.checklist_item.item for a in self.session.triggered_alerts
-                            if a.level == GuardLevel.INTERRUPT]:
+            if item.item in interrupted_items:
                 continue
 
             # 检查用户消息中的触发关键词（三层匹配）
@@ -432,8 +791,9 @@ class InProcessGuard:
                         checklist_item=item,
                         triggered_by="user",
                         trigger_text=match_result["match"],
-                        suggestion=self._generate_suggestion(item)
+                        suggestion=self._generate_suggestion(item),
                     )
+                    alert.execution_context = execution_context
                     self._record_alert(alert)
                     return alert
 
@@ -453,15 +813,11 @@ class InProcessGuard:
                         checklist_item=item,
                         triggered_by="ai",
                         trigger_text=match_result["match"],
-                        suggestion=self._generate_suggestion(item)
+                        suggestion=self._generate_suggestion(item),
                     )
+                    alert.execution_context = execution_context
                     self._record_alert(alert)
                     return alert
-
-        # 5. 思考循环检测（不依赖 checklist，基于会话状态）
-        loop_alert = self._check_thinking_loop(user_message, ai_response)
-        if loop_alert:
-            return loop_alert
 
         return None
 
@@ -473,7 +829,7 @@ class InProcessGuard:
         Returns:
             记录列表
         """
-        records = []
+        records = []  # type: ignore[var-annotated]
         if not self.session or not self.session.checklist:
             return records
 
@@ -483,17 +839,16 @@ class InProcessGuard:
                 continue
 
             matched = None
-            match_layer = 0
             if item.trigger_keywords:
                 result = self._match_three_tier(user_message, item.trigger_keywords)
                 if result:
                     matched = result["match"]
-                    match_layer = result.get("layer", 2)
+                    result.get("layer", 2)
             if not matched and ai_response and item.risk_patterns:
                 result = self._match_three_tier(ai_response, item.risk_patterns)
                 if result:
                     matched = result["match"]
-                    match_layer = result.get("layer", 2)
+                    result.get("layer", 2)
 
             if matched:
                 record = {
@@ -509,10 +864,14 @@ class InProcessGuard:
 
     def _check_critical(self, user_message: str, ai_response: str) -> Optional[GuardAlert]:
         """检查严重偏差"""
+        if not self.session:
+            return None
         combined_raw = user_message + " " + ai_response
         combined = combined_raw.lower()
 
-        critical_keywords = self.CRITICAL_KEYWORDS.get(self.session.task_type, [])
+        critical_keywords = self.CRITICAL_KEYWORDS.get(
+            self.session.task_type, []  # type: ignore[attr-defined]
+        )  # type: ignore[attr-defined]
         for kw in critical_keywords:
             pos = combined.find(kw.lower())
             if pos >= 0:
@@ -522,78 +881,109 @@ class InProcessGuard:
                 return GuardAlert(
                     level=GuardLevel.INTERRUPT,
                     checklist_item=ChecklistItem(
-                        item="严重风险检测",
-                        source="system",
-                        severity="critical"
+                        item="严重风险检测", source="system", severity="critical"
                     ),
                     triggered_by="system",
                     trigger_text=kw,
-                    suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？"
+                    suggestion=f"⚠️ 检测到高风险操作关键词「{kw}」，请确认是否继续？",
                 )
 
         return None
 
-    def _check_context_risk(self, context: Optional[Dict], user_message: str = "") -> Optional[GuardAlert]:
+    def _check_context_risk(
+        self, context: Optional[Dict], user_message: str = ""
+    ) -> Optional[GuardAlert]:
         """基于用户操作上下文进行语义风险匹配"""
         if not context:
             return None
-        score = 0
-        hints = []
+
         current_file = context.get("current_file", "") or ""
         current_command = context.get("current_command", "") or ""
         git_status = context.get("git_status", "") or ""
 
         file_lower = current_file.lower()
         op_text = ((current_command or "") + " " + user_message).lower()
+        cmd_lower = (current_command or "").lower()
+        git_status_text = git_status or ""
 
-        # 高风险：生产环境文件 + 危险操作
+        hints: List[str] = []
+        score = self._score_prod_file_risk(file_lower, op_text, hints)
+        score += self._score_high_risk_command(cmd_lower, hints)
+        score += self._score_git_checkout_risk(
+            git_status_text, cmd_lower, op_text, hints
+        )
+
+        return self._build_context_alert(score, hints)
+
+    def _score_prod_file_risk(
+        self, file_lower: str, op_text: str, hints: List[str]
+    ) -> int:
+        """生产环境文件 + 危险操作评分。"""
         if any(p in file_lower for p in ("prod/", "production/")):
             if any(k in op_text for k in ("rm", "delete", "覆盖", "truncate", "drop")):
-                score += 4
                 hints.append("生产环境文件危险操作")
+                return 4
+        return 0
 
-        # 高风险：高危命令
-        cmd_lower = (current_command or "").lower()
-        if any(k in cmd_lower for k in ("git push --force", "terraform apply", "kubectl delete")):
-            score += 4
+    def _score_high_risk_command(self, cmd_lower: str, hints: List[str]) -> int:
+        """高危命令评分。"""
+        if any(
+            k in cmd_lower
+            for k in ("git push --force", "terraform apply", "kubectl delete")
+        ):
             hints.append("高危命令执行")
+            return 4
+        return 0
 
-        # 中风险：未提交修改 + git checkout
-        git_status_text = git_status or ""
-        if "未提交" in git_status_text or "modified" in git_status_text.lower() or "changes" in git_status_text.lower():
+    def _score_git_checkout_risk(
+        self,
+        git_status_text: str,
+        cmd_lower: str,
+        op_text: str,
+        hints: List[str],
+    ) -> int:
+        """未提交修改下切换分支评分。"""
+        if (
+            "未提交" in git_status_text
+            or "modified" in git_status_text.lower()
+            or "changes" in git_status_text.lower()
+        ):
             if "git checkout" in cmd_lower or "git checkout" in op_text:
-                score += 2
                 hints.append("未提交修改下切换分支")
+                return 2
+        return 0
 
+    def _build_context_alert(
+        self, score: int, hints: List[str]
+    ) -> Optional[GuardAlert]:
+        """根据评分构建上下文风险告警。"""
+        if not hints:
+            return None
+
+        msg = "⚠️ " + "，".join(hints)
         if score >= 4:
-            msg = "⚠️ " + "，".join(hints) + "，请确认。"
-            msg = msg[:80]
-            return GuardAlert(
-                level=GuardLevel.INTERRUPT,
-                checklist_item=ChecklistItem(
-                    item="上下文高风险",
-                    source="context_guard",
-                    severity="critical"
-                ),
-                triggered_by="system",
-                trigger_text="; ".join(hints),
-                suggestion=msg
-            )
+            msg += "，请确认。"
+            level = GuardLevel.INTERRUPT
+            severity = "critical"
+            item = "上下文高风险"
         elif score >= 2:
-            msg = "⚠️ " + "，".join(hints) + "，建议检查。"
-            msg = msg[:80]
-            return GuardAlert(
-                level=GuardLevel.HINT,
-                checklist_item=ChecklistItem(
-                    item="上下文中风险",
-                    source="context_guard",
-                    severity="high"
-                ),
-                triggered_by="system",
-                trigger_text="; ".join(hints),
-                suggestion=msg
-            )
-        return None
+            msg += "，建议检查。"
+            level = GuardLevel.HINT
+            severity = "high"
+            item = "上下文中风险"
+        else:
+            return None
+        msg = msg[:80]
+
+        return GuardAlert(
+            level=level,
+            checklist_item=ChecklistItem(
+                item=item, source="context_guard", severity=severity
+            ),
+            triggered_by="system",
+            trigger_text="; ".join(hints),
+            suggestion=msg,
+        )
 
     def smart_check(self, user_message: str, ai_response: str = "") -> List[GuardAlert]:
         """返回所有匹配风险点，按级别排序；用于批量守护和测试。"""
@@ -602,18 +992,20 @@ class InProcessGuard:
         if first:
             alerts.append(first)
         for record in self.check_silent(user_message, ai_response):
-            alerts.append(GuardAlert(
-                level=GuardLevel.SILENT,
-                checklist_item=ChecklistItem(
-                    item=record["item"],
-                    source="system",
-                    severity=record["severity"],
-                ),
-                triggered_by="system",
-                trigger_text=record["trigger"],
-                suggestion=f"静默记录：{record['item']}",
-                timestamp=record["timestamp"],
-            ))
+            alerts.append(
+                GuardAlert(
+                    level=GuardLevel.SILENT,
+                    checklist_item=ChecklistItem(
+                        item=record["item"],
+                        source="system",
+                        severity=record["severity"],
+                    ),
+                    triggered_by="system",
+                    trigger_text=record["trigger"],
+                    suggestion=f"静默记录：{record['item']}",
+                    timestamp=record["timestamp"],
+                )
+            )
         order = {GuardLevel.INTERRUPT: 0, GuardLevel.HINT: 1, GuardLevel.SILENT: 2}
         return sorted(alerts, key=lambda alert: order[alert.level])
 
@@ -628,10 +1020,7 @@ class InProcessGuard:
             {"layer": int, "type": str, "match": str, "score": float} 或 None
         """
         return self.smart_matcher.match_three_tier(
-            text,
-            exact_candidates=keywords,
-            keywords=keywords,
-            semantic_refs=keywords
+            text, exact_candidates=keywords, keywords=keywords, semantic_refs=keywords
         )
 
     def _determine_level(self, item: ChecklistItem, triggered_by: str) -> GuardLevel:
@@ -657,74 +1046,139 @@ class InProcessGuard:
         """记录告警"""
         if self.session:
             self.session.triggered_alerts.append(alert)
-        # 发射 guard_alert 事件
+        # 发射 guard_alert 事件（携带执行上下文）
         try:
             from core.mnemos_bus import publish_event
-            publish_event("guard_alert", "aegis", {
+
+            payload = {
                 "level": alert.level.value,
                 "checklist_item": alert.checklist_item.item,
                 "triggered_by": alert.triggered_by,
                 "trigger_text": alert.trigger_text[:200],
-                "session_id": getattr(self.session, 'task_type', 'unknown') if self.session else 'unknown',
-            })
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-            pass
-    def _check_thinking_loop(self, user_message: str, ai_response: str = "") -> Optional[GuardAlert]:
+                "session_id": (
+                    getattr(self.session, "task_type", "unknown") if self.session else "unknown"
+                ),
+            }
+            if alert.execution_context:
+                payload["execution"] = {  # type: ignore[assignment]
+                    "task_type": alert.execution_context.task_type,
+                    "task_id": alert.execution_context.task_id,
+                    "step": alert.execution_context.step,
+                    "elapsed": alert.execution_context.elapsed_seconds,
+                }
+            if alert.metadata:
+                payload["metadata"] = dict(alert.metadata)
+            publish_event("guard_alert", "aegis", payload)
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ImportError,
+            AttributeError,
+            RuntimeError,
+            sqlite3.Error,
+        ):
+            logger.warning("Guard alert event publish failed", exc_info=True)
+
+    def _check_thinking_loop(
+        self, user_message: str, ai_response: str = "", context: Optional[Dict] = None
+    ) -> Optional[GuardAlert]:
         """检测 AI 是否陷入分析瘫痪循环
 
         基于会话状态进行行为分析，不依赖 checklist 项：
-        1. 连续纯分析轮次 >= 3 且无行动迹象
+        1. 连续纯分析轮次达到 guard.analysis_loop.max_analysis_turns_without_action 且无行动迹象
         2. 用户说了"修/改/提交"但 AI 回复中无代码块/文件修改
         3. AI 回复中包含循环信号词
+        4. 同一文件/工具读取达到 guard.analysis_loop.max_repeated_reads_per_target 但没有行动
         """
-        if not ai_response:
+        ai_response = ai_response or ""
+        if not self._analysis_loop_options.get("enabled", True):
             return None
 
-        combined = (user_message + " " + ai_response).lower()
+        (user_message + " " + ai_response).lower()
 
         # 判断本轮是否为"纯分析轮"（无代码块、无文件修改标记）
         has_code_block = "```" in ai_response
-        has_file_edit = any(marker in ai_response for marker in
-                           ["StrReplaceFile", "Edit:", "Write:", "Bash:", "+ " , "- "])
-        is_action_turn = has_code_block or has_file_edit
+        has_file_edit = any(
+            marker in ai_response
+            for marker in ["StrReplaceFile", "Edit:", "Write:", "Bash:", "+ ", "- "]
+        )
+        is_action_turn = has_code_block or has_file_edit or self._has_action_context(context)
 
         # 更新计数
         if is_action_turn:
             self._analysis_turn_count = 0
-            self._last_action_turn = len(self.session_messages)
+            self._tool_read_counts = {}
         else:
+            tool_alert = self._check_repeated_tool_reads(context)
+            if tool_alert:
+                return tool_alert
             # 检测是否包含分析信号词
-            analysis_signals = ["分析", "思考", "查看", "检查", "确认", "验证",
-                              "让我再看看", "继续分析", "深入研究", "仔细看看"]
+            analysis_signals = [
+                "分析",
+                "思考",
+                "查看",
+                "检查",
+                "确认",
+                "验证",
+                "让我再看看",
+                "继续分析",
+                "深入研究",
+                "仔细看看",
+            ]
             if any(s in ai_response for s in analysis_signals):
                 self._analysis_turn_count += 1
 
-        # 规则 1：连续 3 轮纯分析 → HINT
-        if self._analysis_turn_count >= 3:
+        max_analysis_turns = int(
+            self._analysis_loop_options.get(
+                "max_analysis_turns_without_action",
+                self.DEFAULT_MAX_ANALYSIS_TURNS_WITHOUT_ACTION,
+            )
+        )
+
+        # 规则 1：连续纯分析达到配置上限 → HINT
+        if self._analysis_turn_count >= max_analysis_turns:
+            current_count = self._analysis_turn_count
             self._analysis_turn_count = 0  # 重置避免重复告警
+            metadata = self._analysis_loop_metadata(
+                threshold_kind="max_analysis_turns_without_action",
+                threshold_value=max_analysis_turns,
+                current_count=current_count,
+            )
             return GuardAlert(
                 level=GuardLevel.HINT,
                 checklist_item=ChecklistItem(
                     item="思考循环检测：连续多轮纯分析无行动",
                     source="system:thinking-loop-detector",
-                    severity="high"
+                    severity="high",
+                    detail=(
+                        f"threshold_source={metadata['threshold_source']}; "
+                        f"threshold_value={metadata['threshold_value']}; "
+                        f"current_count={metadata['current_count']}"
+                    ),
                 ),
                 triggered_by="ai",
                 trigger_text="连续分析轮次",
-                suggestion="💡 已连续多轮分析但未采取行动。建议：基于已有信息直接开始修复，分析可留给事后复盘。",
+                suggestion=(
+                    f"💡 已连续 {current_count} 轮分析但未采取行动，达到上限 "
+                    f"{max_analysis_turns}。建议：基于已有信息直接开始修复，分析可留给事后复盘。"
+                ),
+                metadata=metadata,
             )
 
         # 规则 2：用户要求修复但 AI 还在分析 → HINT
-        user_wants_action = any(kw in user_message.lower() for kw in
-                               ["修复", "修", "改", "改一下", "提交", "push", "deploy"])
+        user_wants_action = any(
+            kw in user_message.lower()
+            for kw in ["修复", "修", "改", "改一下", "提交", "push", "deploy"]
+        )
         if user_wants_action and not is_action_turn:
             return GuardAlert(
                 level=GuardLevel.HINT,
                 checklist_item=ChecklistItem(
                     item="用户要求行动但 AI 仍在分析",
                     source="system:thinking-loop-detector",
-                    severity="critical"
+                    severity="critical",
                 ),
                 triggered_by="user",
                 trigger_text=user_message[:50],
@@ -732,21 +1186,185 @@ class InProcessGuard:
             )
 
         # 规则 3：AI 回复中出现循环信号词 → SILENT（记录即可，不打扰）
-        loop_signals = ["让我再看看", "继续分析", "再确认一下", "深入研究",
-                       "再验证", "再检查", "重新理解", "重新分析"]
+        loop_signals = [
+            "让我再看看",
+            "继续分析",
+            "再确认一下",
+            "深入研究",
+            "再验证",
+            "再检查",
+            "重新理解",
+            "重新分析",
+        ]
         if any(s in ai_response for s in loop_signals):
             return GuardAlert(
                 level=GuardLevel.SILENT,
                 checklist_item=ChecklistItem(
                     item="检测到循环信号词",
                     source="system:thinking-loop-detector",
-                    severity="medium"
+                    severity="medium",
                 ),
                 triggered_by="ai",
-                trigger_text=next(s for s in loop_signals if s in ai_response),
+                trigger_text=next((s for s in loop_signals if s in ai_response), None) or "",
                 suggestion='检测到"让我再看看/继续分析"等循环信号，建议评估是否已有足够信息可以行动。',
             )
 
+        return None
+
+    @staticmethod
+    def _normalize_tool_events(context: Optional[Dict]) -> List[Dict]:
+        """从 context 中提取工具调用事件，兼容不同宿主 Agent 的字段命名。"""
+        if not isinstance(context, dict):
+            return []
+
+        events: List[Dict] = []
+        for key in ("tool_calls", "recent_tool_calls", "tools", "operations"):
+            value = context.get(key)
+            if isinstance(value, list):
+                events.extend(v for v in value if isinstance(v, (dict, str)))  # type: ignore[misc]
+            elif isinstance(value, (dict, str)):
+                events.append(value)  # type: ignore[arg-type]
+
+        if (
+            context.get("current_tool")
+            or context.get("current_file")
+            or context.get("current_command")
+        ):
+            events.append(
+                {
+                    "name": context.get("current_tool") or context.get("tool") or "",
+                    "input": {
+                        "path": context.get("current_file") or "",
+                        "command": context.get("current_command") or "",
+                    },
+                }
+            )
+        return events
+
+    @staticmethod
+    def _event_name(event) -> str:
+        if isinstance(event, str):
+            return event
+        return str(
+            event.get("name")
+            or event.get("tool")
+            or event.get("tool_name")
+            or event.get("recipient_name")
+            or event.get("function")
+            or ""
+        )
+
+    @staticmethod
+    def _event_args(event) -> Dict:
+        if not isinstance(event, dict):
+            return {}
+        args = (
+            event.get("input")
+            or event.get("args")
+            or event.get("arguments")
+            or event.get("parameters")
+            or {}
+        )
+        return args if isinstance(args, dict) else {}
+
+    @staticmethod
+    def _extract_path_from_event(event) -> str:
+        if not isinstance(event, dict):
+            return ""
+        args = InProcessGuard._event_args(event)
+        for source in (event, args):
+            for key in ("path", "file_path", "filepath", "current_file", "ref_id", "uri"):
+                value = source.get(key)
+                if value:
+                    return str(value)
+        command = str(
+            args.get("command") or args.get("cmd") or event.get("command") or event.get("cmd") or ""
+        )
+        match = re.search(
+            r'(?:"|\')?([~/A-Za-z0-9_./:-]+\.(?:py|md|json|toml|yaml|yml|txt|sh|ts|tsx|js|jsx|html|css))(?:"|\')?',  # noqa: E501
+            command,
+        )
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _is_read_event(event) -> bool:
+        name = InProcessGuard._event_name(event).lower()
+        args = InProcessGuard._event_args(event)
+        command = str(args.get("command") or args.get("cmd") or "").lower()
+        read_markers = ("read", "open", "view", "cat", "sed", "grep", "rg", "find")
+        return any(marker in name for marker in read_markers) or command.startswith(read_markers)
+
+    @staticmethod
+    def _is_action_event(event) -> bool:
+        name = InProcessGuard._event_name(event).lower()
+        args = InProcessGuard._event_args(event)
+        command = str(args.get("command") or args.get("cmd") or "").lower()
+        action_markers = (
+            "apply_patch",
+            "edit",
+            "write",
+            "strreplace",
+            "create",
+            "delete",
+            "commit",
+        )
+        return any(marker in name for marker in action_markers) or any(
+            marker in command for marker in action_markers
+        )
+
+    def _has_action_context(self, context: Optional[Dict]) -> bool:
+        if not isinstance(context, dict):
+            return False
+        if (
+            context.get("action_taken")
+            or context.get("edited_files")
+            or context.get("modified_files")
+        ):
+            return True
+        return any(self._is_action_event(event) for event in self._normalize_tool_events(context))
+
+    def _check_repeated_tool_reads(self, context: Optional[Dict]) -> Optional[GuardAlert]:
+        max_repeated_reads = int(
+            self._analysis_loop_options.get(
+                "max_repeated_reads_per_target",
+                self.DEFAULT_MAX_REPEATED_READS_PER_TARGET,
+            )
+        )
+        for event in self._normalize_tool_events(context):
+            if not self._is_read_event(event):
+                continue
+            name = self._event_name(event) or "unknown-tool"
+            path = self._extract_path_from_event(event) or "unknown-target"
+            key = f"{name}:{path}"
+            self._tool_read_counts[key] = self._tool_read_counts.get(key, 0) + 1
+            if self._tool_read_counts[key] >= max_repeated_reads:
+                current_count = self._tool_read_counts[key]
+                self._tool_read_counts[key] = 0
+                metadata = self._analysis_loop_metadata(
+                    threshold_kind="max_repeated_reads_per_target",
+                    threshold_value=max_repeated_reads,
+                    current_count=current_count,
+                )
+                return GuardAlert(
+                    level=GuardLevel.HINT,
+                    checklist_item=ChecklistItem(
+                        item="思考循环检测：同一文件/工具被重复读取",
+                        source="system:thinking-loop-detector",
+                        severity="high",
+                        detail=(
+                            f"threshold_source={metadata['threshold_source']}; "
+                            f"threshold_value={metadata['threshold_value']}; "
+                            f"current_count={metadata['current_count']}"
+                        ),
+                    ),
+                    triggered_by="ai",
+                    trigger_text=key[:120],
+                    suggestion=(
+                        f"💡 同一文件/工具已重复读取 {current_count} 次，达到上限 "
+                        f"{max_repeated_reads}。请停止继续确认，基于已有证据直接修改、验证或向用户汇报阻塞点。"
+                    ),
+                    metadata=metadata,
+                )
         return None
 
     def get_silent_summary(self) -> str:
@@ -771,19 +1389,28 @@ class InProcessGuard:
             return []
 
         usage = []
-        triggered_items = {a.checklist_item.item: a.level.value for a in self.session.triggered_alerts}
+        triggered_items = {
+            a.checklist_item.item: a.level.value for a in self.session.triggered_alerts
+        }
         silent_items = {r["item"]: r["severity"] for r in self.session.silent_records}
+        hint_items = self.session.hint_used
 
         for item in self.session.checklist:
             item_name = item.item
-            usage.append({
-                "item": item_name,
-                "loaded": True,
-                "used": item_name in triggered_items or item_name in silent_items,
-                "triggered": item_name in triggered_items,
-                "level": triggered_items.get(item_name, silent_items.get(item_name, "none")),
-                "severity": item.severity,
-            })
+            usage.append(
+                {
+                    "item": item_name,
+                    "loaded": True,
+                    "used": (
+                        item_name in triggered_items
+                        or item_name in silent_items
+                        or item_name in hint_items
+                    ),
+                    "triggered": item_name in triggered_items,
+                    "level": triggered_items.get(item_name, silent_items.get(item_name, "none")),
+                    "severity": item.severity,
+                }
+            )
 
         return usage
 
@@ -795,6 +1422,9 @@ class InProcessGuard:
         """
         if alert.level != GuardLevel.HINT:
             return ""
+
+        if self.session:
+            self.session.hint_used.add(alert.checklist_item.item)
 
         return (
             f"[Guard Hint] {alert.checklist_item.item}"
@@ -815,6 +1445,7 @@ class InProcessGuard:
 
 
 # ========== 便捷函数 ==========
+
 
 def create_guard(knowledge: LoadedKnowledge) -> InProcessGuard:
     """便捷函数：创建守护"""

@@ -31,17 +31,19 @@ def main():
 
     try:
         from core.config import get_config
+
         cfg = get_config()
         if not cfg.get("embedding.enabled", False):
             print("❌ 语义搜索未启用。请在配置中设置 embedding.enabled = true")
             print("   配置文件: ~/.mnemos/configs/main.json")
             sys.exit(1)
-    except Exception as e:
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
         print(f"❌ 配置读取失败: {e}")
         sys.exit(1)
 
     try:
         from core.embeddings import EmbeddingIndexManager
+
         idx = EmbeddingIndexManager()
         stats = idx.get_stats()
         print(f"索引目录: {stats['index_dir']}")
@@ -59,16 +61,17 @@ def main():
         print("开始构建索引...")
         result = idx.build_index(force_full=args.force)
         print()
-        print(f"✅ 索引构建完成")
+        print("✅ 索引构建完成")
         print(f"   新增: {result['added']} 页")
         print(f"   更新: {result['updated']} 页")
         print(f"   删除: {result['removed']} 页")
         print(f"   总计: {result['total']} 页")
         print(f"   后端: {result.get('backend', 'unknown')}")
 
-    except Exception as e:
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
         print(f"❌ 索引构建失败: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

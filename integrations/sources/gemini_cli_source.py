@@ -15,18 +15,142 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
-from core.config import get_config
-from core.sync_framework.agent_source import AgentSource, SessionInfo, Turn
+from core.sync_framework.agent_source import (
+    NativeSourceContractError,
+    SessionInfo,
+    Turn,
+)
+from core.ops.durable_io import open_native_text
+
+from integrations.sources.base import BaseAgentSource, stable_path_session_id
 
 logger = logging.getLogger(__name__)
 
 
-class GeminiCliSource(AgentSource):
+def _load_messages(session_path: Path) -> List[Dict[str, Any]]:
+    """从 JSONL 会话文件安全读取消息列表。"""
+    messages: List[Dict[str, Any]] = []
+    try:
+        with open_native_text(session_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    decoded = json.loads(line)
+                except json.JSONDecodeError:
+                    raise NativeSourceContractError(
+                        "native_gemini_jsonl_decode_failed"
+                    ) from None
+                messages.append(
+                    decoded
+                    if isinstance(decoded, dict)
+                    else {"_mnemos_raw_native_record": decoded}
+                )
+    except (OSError, UnicodeError):
+        raise NativeSourceContractError(
+            "native_gemini_transcript_read_failed"
+        ) from None
+    return messages
+
+
+def _extract_gemini_content(
+    msg: Dict[str, Any],
+) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    """从单条 Gemini 消息提取内容、tool_call、tool_result 与原始事件。"""
+    raw_message = msg.get("_mnemos_raw_native_record", msg)
+    role = str(msg.get("role") or "").lower()
+    content = msg.get("content", "")
+    parts = msg.get("parts", [])
+    native_ref = {
+        "role": role,
+        "event_type": "native_message",
+        "raw": raw_message,
+    }
+
+    if not parts or content:
+        loss = [] if role else ["unknown_role:empty"]
+        return str(content), [], [], [native_ref], loss
+
+    texts: List[str] = []
+    tool_calls: List[Dict[str, Any]] = []
+    tool_results: List[Dict[str, Any]] = []
+    raw_events: List[Dict[str, Any]] = [native_ref]
+    loss_reasons: List[str] = []
+
+    for p in parts:
+        if isinstance(p, dict):
+            if "text" in p:
+                texts.append(p["text"])
+            elif "function_call" in p:
+                fc = p["function_call"]
+                tool_calls.append(
+                    {
+                        "name": fc.get("name", "unknown"),
+                        "input": fc.get("args", {}),
+                    }
+                )
+            elif "function_response" in p:
+                fr = p["function_response"]
+                tool_results.append(
+                    {
+                        "tool_use_id": fr.get("id", ""),
+                        "content": str(fr.get("response", "")),
+                    }
+                )
+            else:
+                # 非 text 块入 raw_event_refs
+                raw_events.append({"role": role, "event_type": "part", "raw": p})
+                loss_reasons.append(f"unknown_part:{list(p.keys())}")
+        elif isinstance(p, str):
+            texts.append(p)
+
+    return "\n".join(texts), tool_calls, tool_results, raw_events, loss_reasons
+
+
+def _build_gemini_turn(
+    turn_number: int,
+    user_content: str,
+    assistant_content: str,
+    turn_meta: Dict[str, Any],
+    turn_tool_calls: List[Dict[str, Any]],
+    turn_tool_results: List[Dict[str, Any]],
+    turn_raw_events: List[Dict[str, Any]],
+    completeness_loss: List[str],
+    session_path: Path,
+) -> Turn:
+    """构造 Gemini CLI Turn，统一 completeness 与 raw_event_refs。"""
+    return Turn(
+        turn_number=turn_number,
+        user_content=user_content,
+        assistant_content=assistant_content,
+        metadata=turn_meta,
+        tool_calls=turn_tool_calls,
+        tool_results=turn_tool_results,
+        raw_event_refs=turn_raw_events,
+        source_files=[str(session_path)],
+        completeness={
+            "visible_text": "full",
+            "tool_results": "full" if turn_tool_results else "unavailable",
+            "reasoning": "unavailable",
+            "attachments": "unavailable",
+            "truncated": False,
+            "loss_reasons": completeness_loss,
+        },
+    )
+
+
+class GeminiCliSource(BaseAgentSource):
     """Gemini CLI 数据源插件"""
+
+    _cap_tool_calls = True
+    _cap_tool_results = True
+    _cap_reasoning = "unknown"
+    _cap_attachments = "unknown"
+    _cap_source_fidelity = "full"
 
     @property
     def name(self) -> str:
@@ -38,23 +162,10 @@ class GeminiCliSource(AgentSource):
 
     @property
     def data_dir(self) -> Optional[Path]:
-        # 测试覆盖支持
-        if hasattr(self, '_override_data_dir'):
-            return self._override_data_dir
-        config = get_config()
-        # 环境变量优先
-        env_home = os.getenv("GEMINI_HOME")
-        if env_home:
-            p = Path(env_home).expanduser()
-            if p.exists():
-                return p
-
-        # 标准路径
-        for std in ("~/.gemini", "~/.config/gemini"):
-            p = Path(std).expanduser()
-            if p.exists():
-                return p
-        return None
+        return self._resolve_data_dir_with_env(
+            "GEMINI_HOME",
+            [Path.home() / ".gemini", Path.home() / ".config" / "gemini"],
+        )
 
     @property
     def trigger_strategy(self) -> Dict[str, Any]:
@@ -70,51 +181,24 @@ class GeminiCliSource(AgentSource):
         base = self.data_dir
         if not base:
             return []
-
-        sessions_dir = base / "sessions"
-        if not sessions_dir.exists():
-            return []
-
-        sessions = []
-        for session_file in sessions_dir.rglob("*.jsonl"):
-            sessions.append(SessionInfo(
-                session_id=session_file.stem,
-                source_path=session_file,
-                working_dir=str(session_file.parent),
-                mtime=session_file.stat().st_mtime,
-            ))
+        sessions_dir = self._sessions_dir(base)
+        sessions = self._discover_by_glob(sessions_dir, "*.jsonl")
+        for session in sessions:
+            canonical_id = stable_path_session_id(
+                "gemini",
+                sessions_dir,
+                session.source_path,
+                native_id=session.session_id,
+            )
+            session.canonical_session_id = canonical_id
+            session.session_aliases = [session.session_id]
+            session.source_kind = "jsonl"
         return sessions
-
-    def completeness_capabilities(self) -> Dict[str, Any]:
-        return {
-            "visible_text": True,
-            "tool_calls": True,
-            "tool_results": True,
-            "reasoning": "unknown",
-            "attachments": "unknown",
-            "raw_files": True,
-            "source_fidelity": "full",
-        }
 
     def parse_turns(self, session_path: Path) -> List[Turn]:
         """解析 Gemini CLI JSONL 会话文件为 Turn 列表 — P0-6 完整录入版"""
-        turns = []
-        messages = []
-
-        try:
-            with open(session_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        msg = json.loads(line)
-                        messages.append(msg)
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logger.warning(f"[GeminiCliSource] 读取失败 {session_path}: {e}")
-            return turns
+        turns: List[Turn] = []
+        messages = _load_messages(session_path)
 
         user_content = ""
         assistant_content = ""
@@ -127,90 +211,79 @@ class GeminiCliSource(AgentSource):
 
         for msg in messages:
             role = msg.get("role", "").lower()
-            content = msg.get("content", "")
-            parts = msg.get("parts", [])
-
-            # Gemini 格式可能是 parts 数组
-            if parts and not content:
-                texts = []
-                for p in parts:
-                    if isinstance(p, dict):
-                        if "text" in p:
-                            texts.append(p["text"])
-                        elif "function_call" in p:
-                            fc = p["function_call"]
-                            turn_tool_calls.append({
-                                "name": fc.get("name", "unknown"),
-                                "input": fc.get("args", {}),
-                            })
-                        elif "function_response" in p:
-                            fr = p["function_response"]
-                            turn_tool_results.append({
-                                "tool_call_id": fr.get("id", ""),
-                                "content": str(fr.get("response", "")),
-                            })
-                        else:
-                            # 非 text 块入 raw_event_refs
-                            turn_raw_events.append({"role": role, "event_type": "part", "raw": p})
-                            completeness_loss.append(f"unknown_part:{list(p.keys())}")
-                    elif isinstance(p, str):
-                        texts.append(p)
-                content = "\n".join(texts)
+            content, new_calls, new_results, new_raw, new_loss = _extract_gemini_content(
+                msg
+            )
 
             if role == "user":
-                if assistant_content:
-                    turns.append(Turn(
-                        turn_number=turn_number,
-                        user_content=user_content,
-                        assistant_content=assistant_content,
-                        metadata=turn_meta,
-                        tool_calls=turn_tool_calls,
-                        tool_results=turn_tool_results,
-                        raw_event_refs=turn_raw_events,
-                        source_files=[str(session_path)],
-                        completeness={
-                            "visible_text": "full",
-                            "tool_results": "full" if turn_tool_results else "unavailable",
-                            "reasoning": "unavailable",
-                            "attachments": "unavailable",
-                            "truncated": False,
-                            "loss_reasons": completeness_loss,
-                        },
-                    ))
+                has_open_turn = bool(
+                    user_content
+                    or assistant_content
+                    or turn_tool_calls
+                    or turn_tool_results
+                )
+                leading_refs = [] if has_open_turn else list(turn_raw_events)
+                leading_loss = [] if has_open_turn else list(completeness_loss)
+                if has_open_turn:
+                    turns.append(
+                        _build_gemini_turn(
+                            turn_number,
+                            user_content,
+                            assistant_content,
+                            turn_meta,
+                            turn_tool_calls,
+                            turn_tool_results,
+                            turn_raw_events,
+                            completeness_loss,
+                            session_path,
+                        )
+                    )
                     turn_number += 1
-                user_content = str(content)
+                user_content = content
                 assistant_content = ""
                 turn_meta = {}
-                turn_tool_calls = []
-                turn_tool_results = []
-                turn_raw_events = []
-                completeness_loss = []
+                turn_tool_calls = list(new_calls)
+                turn_tool_results = list(new_results)
+                turn_raw_events = leading_refs + list(new_raw)
+                completeness_loss = leading_loss + list(new_loss)
             elif role in ("assistant", "model"):
-                assistant_content = str(content)
+                turn_tool_calls.extend(new_calls)
+                turn_tool_results.extend(new_results)
+                turn_raw_events.extend(new_raw)
+                completeness_loss.extend(new_loss)
+                assistant_content = content
                 turn_meta = {
                     "timestamp": msg.get("timestamp", ""),
                 }
+            else:
+                turn_tool_calls.extend(new_calls)
+                turn_tool_results.extend(new_results)
+                turn_raw_events.extend(new_raw)
+                completeness_loss.extend(
+                    [*new_loss, f"unknown_role:{role or 'empty'}"]
+                )
 
         # 保存最后一轮
-        if user_content or assistant_content:
-            turns.append(Turn(
-                turn_number=turn_number,
-                user_content=user_content,
-                assistant_content=assistant_content,
-                metadata=turn_meta,
-                tool_calls=turn_tool_calls,
-                tool_results=turn_tool_results,
-                raw_event_refs=turn_raw_events,
-                source_files=[str(session_path)],
-                completeness={
-                    "visible_text": "full",
-                    "tool_results": "full" if turn_tool_results else "unavailable",
-                    "reasoning": "unavailable",
-                    "attachments": "unavailable",
-                    "truncated": False,
-                    "loss_reasons": completeness_loss,
-                },
-            ))
+        if (
+            user_content
+            or assistant_content
+            or turn_tool_calls
+            or turn_tool_results
+            or turn_raw_events
+        ):
+            turns.append(
+                _build_gemini_turn(
+                    turn_number,
+                    user_content,
+                    assistant_content,
+                    turn_meta,
+                    turn_tool_calls,
+                    turn_tool_results,
+                    turn_raw_events,
+                    completeness_loss,
+                    session_path,
+                )
+            )
 
         return turns
 

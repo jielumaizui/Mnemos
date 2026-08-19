@@ -1,25 +1,30 @@
 # Mnemos 核心依赖
 # Python 3.10+
-# 推荐使用: pip install -e ".[dev]"
+# 推荐使用: pip install -e .
 
 # 核心依赖
-requests>=2.28.0
-pyyaml>=6.0
-watchdog>=3.0.0
-numpy>=1.24.0
+requests>=2.32.0,<3
+pyyaml>=6.0,<7
+watchdog>=3.0.0,<7
+numpy>=1.24.0,<2
 
 # 文档处理
-pandas>=1.5.0
-openpyxl>=3.0.0
-python-pptx>=0.6.0
-PyPDF2>=2.0.0
-python-docx>=0.8.0
-beautifulsoup4>=4.11.0
-markdownify>=0.11.0
-ebooklib>=0.18.0
+pandas>=1.5.0,<3
+openpyxl>=3.0.0,<4
+python-pptx>=1.0.0,<2
+pypdf>=6.14.2,<7
+python-docx>=1.0.0,<2
+beautifulsoup4>=4.11.0,<5
+markdownify>=0.11.0,<1
+ebooklib>=0.18.0,<1
 
-# MCP 协议支持
-mcp>=1.0.0
+# 模型 API / 密钥 / 运行期工具
+openai>=1.0.0,<2
+anthropic>=0.30.0,<1
+keyring>=25.0.0,<26
+pdfplumber>=0.11.0,<1
+psutil>=5.9.0,<7
 
-# TOML 写入支持
-tomli_w>=1.0.0
+# 可选能力请使用 pyproject extras：
+#   pip install -e ".[ml]"   # scikit-learn + hnswlib 向量索引加速
+#   pip install -e ".[dev]"  # 测试、格式化、安全扫描

@@ -17,9 +17,9 @@ scorer:
     alpha_prior: 1.0                # Beta 先验 α（Laplace 平滑）
     beta_prior: 1.0                 # Beta 先验 β
     explicit_neg_likelihood: 0.3    # 默认 P(E|~H)
-    rule_weight_cold: 3.0           # 冷启动规则权重
-    rule_weight_warm: 1.5           # 温启动规则权重
-    rule_weight_hot: 0.5            # 热启动规则权重
+    rule_weight_cold: 3.0           # 冷启动规则权重（样本少时）
+    rule_weight_hot: 0.5            # 热启动规则权重（样本多时）
+    # 规则权重使用 cold→hot 的指数衰减曲线，无需单独的 warm 阈值
 
   # 降级保护
   fallback:
@@ -34,7 +34,7 @@ scorer:
 
   # 各维度开关
   dimensions:
-    memos:  true
+    l1_storage: true
     sync:   true
     distill: true
     kg:     true

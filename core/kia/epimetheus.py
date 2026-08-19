@@ -13,24 +13,31 @@ Auto-Retrospective - 自动复盘引擎
 4. 提取新增教训
 5. 生成结构化复盘报告
 """
+
 # Epimetheus — 后知之神 — 自动复盘引擎，事后反思与教训提取
 # 原模块: auto_retrospective.py
-
 
 
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
-from .prophasis import ChecklistItem, LoadedKnowledge
-from .aegis import GuardSession
 
 import logging
+
+# Constants extracted from magic numbers
+AUTO_RETROSPECTIVE__ANALYZE_GAPS_DIFF_PCT = 30
+RECAP_AREA_LABELS = {
+    "budget": "预算/资源消耗",
+    "participants": "参与人数",
+    "conversion_rate": "转化率",
+}
 logger = logging.getLogger(__name__)
 try:
-    from core.persona.hamartia import BlindSpotProfile, BlindSpot
+    pass
+
     PERSONA_AVAILABLE = True
 except ImportError:
     PERSONA_AVAILABLE = False
@@ -39,6 +46,7 @@ except ImportError:
 @dataclass
 class GoalComparison:
     """目标对比"""
+
     area: str
     expected: str
     actual: str
@@ -49,6 +57,7 @@ class GoalComparison:
 @dataclass
 class ChecklistUsage:
     """Checklist 使用情况"""
+
     item: str
     loaded: bool
     used: bool
@@ -61,6 +70,7 @@ class ChecklistUsage:
 @dataclass
 class BlindSpotFocus:
     """盲区复盘焦点"""
+
     blindspot_type: str
     was_triggered: bool
     evidence: str
@@ -71,6 +81,7 @@ class BlindSpotFocus:
 @dataclass
 class RetrospectiveResult:
     """复盘结果"""
+
     task_type: str
     subtype: str
     version: int
@@ -93,25 +104,49 @@ class AutoRetrospective:
 
     # 复盘触发关键词
     TRIGGER_PATTERNS = [
-        r'复盘', r'总结一下', r'结束了', r'完成了', r'效果怎么样',
-        r'结果如何', r'效果如何', r'review', r'retrospective',
-        r'wrap up', r'done', r'finish', r'总结', r'收尾',
+        r"复盘",
+        r"总结一下",
+        r"结束了",
+        r"完成了",
+        r"效果怎么样",
+        r"结果如何",
+        r"效果如何",
+        r"review",
+        r"retrospective",
+        r"wrap up",
+        r"done",
+        r"finish",
+        r"总结",
+        r"收尾",
     ]
 
     # 自然结束检测模式
     ENDING_PATTERNS = [
-        r'好的[,，]', r'谢谢', r'没问题', r'ok', r'收到',
+        r"好的[,，]",
+        r"谢谢",
+        r"没问题",
+        r"ok",
+        r"收到",
     ]
 
     # 预期目标提取模式
     GOAL_PATTERNS = {
-        "participants": [r'(\d+)[\s个]*人', r'参与[人数]*[:：]?\s*(\d+)', r'目标[人数]*[:：]?\s*(\d+)'],
-        "conversion_rate": [r'转化率[:：]?\s*(\d+(?:\.\d+)?)\s*%', r'转化[:：]?\s*(\d+(?:\.\d+)?)\s*%'],
-        "budget": [r'预算[:：]?\s*(\d+(?:\.\d+)?)\s*[万kK]?', r'费用[:：]?\s*(\d+(?:\.\d+)?)'],
-        "timeline": [r'(\d+)[\s个]*天', r'周期[:：]?\s*(\d+)', r'时间[:：]?\s*(\d+)'],
+        "participants": [
+            r"(\d+)[\s个]*人",
+            r"参与[人数]*[:：]?\s*(\d+)",
+            r"目标[人数]*[:：]?\s*(\d+)",
+        ],
+        "conversion_rate": [
+            r"转化率[:：]?\s*(\d+(?:\.\d+)?)\s*%",
+            r"转化[:：]?\s*(\d+(?:\.\d+)?)\s*%",
+        ],
+        "budget": [r"预算[:：]?\s*(\d+(?:\.\d+)?)\s*[万kK]?", r"费用[:：]?\s*(\d+(?:\.\d+)?)"],
+        "timeline": [r"(\d+)[\s个]*天", r"周期[:：]?\s*(\d+)", r"时间[:：]?\s*(\d+)"],
     }
 
-    def __init__(self, wiki_base: str | Path | None = None, recap_db_path: str | Path | None = None):
+    def __init__(
+        self, wiki_base: str | Path | None = None, recap_db_path: str | Path | None = None
+    ):
         self.wiki_base = Path(wiki_base).expanduser() if wiki_base else None
         self.recap_db_path = Path(recap_db_path).expanduser() if recap_db_path else None
 
@@ -140,11 +175,15 @@ class AutoRetrospective:
         # checklist 完成、/done 等显式信号由调用方转成触发关键词或直接调用 generate()。
         return False
 
-    def generate(self, task_type: str, subtype: str,
-                 messages: List[Dict],
-                 checklist_usage: List[Dict],
-                 expected_goals: Optional[Dict] = None,
-                 blindspot_profile: Optional[object] = None) -> RetrospectiveResult:
+    def generate(
+        self,
+        task_type: str,
+        subtype: str,
+        messages: List[Dict],
+        checklist_usage: List[Dict],
+        expected_goals: Optional[Dict] = None,
+        blindspot_profile: Optional[object] = None,
+    ) -> RetrospectiveResult:
         """
         生成复盘报告
 
@@ -193,7 +232,7 @@ class AutoRetrospective:
             checklist_usage=formatted_usage,
             new_lessons=new_lessons,
             blindspot_focus=blindspot_focus,
-            summary=summary
+            summary=summary,
         )
 
     def _extract_goals(self, messages: List[Dict], is_expected: bool = True) -> Dict:
@@ -218,10 +257,10 @@ class AutoRetrospective:
         if is_expected:
             # 找"预期"、"目标"、"希望"后面的内容
             expectation_patterns = [
-                r'预期[:：]\s*(.+?)(?:\n|$)',
-                r'目标[:：]\s*(.+?)(?:\n|$)',
-                r'希望[:：]\s*(.+?)(?:\n|$)',
-                r'想要[:：]\s*(.+?)(?:\n|$)',
+                r"预期[:：]\s*(.+?)(?:\n|$)",
+                r"目标[:：]\s*(.+?)(?:\n|$)",
+                r"希望[:：]\s*(.+?)(?:\n|$)",
+                r"想要[:：]\s*(.+?)(?:\n|$)",
             ]
             for pattern in expectation_patterns:
                 matches = re.findall(pattern, all_text)
@@ -232,9 +271,9 @@ class AutoRetrospective:
         else:
             # 找"实际"、"结果"后面的内容
             result_patterns = [
-                r'实际[:：]\s*(.+?)(?:\n|$)',
-                r'结果[:：]\s*(.+?)(?:\n|$)',
-                r'最终[:：]\s*(.+?)(?:\n|$)',
+                r"实际[:：]\s*(.+?)(?:\n|$)",
+                r"结果[:：]\s*(.+?)(?:\n|$)",
+                r"最终[:：]\s*(.+?)(?:\n|$)",
             ]
             for pattern in result_patterns:
                 matches = re.findall(pattern, all_text)
@@ -270,45 +309,51 @@ class AutoRetrospective:
                 exp_val = self._parse_numeric(expected[key])
                 act_val = self._parse_numeric(actual.get(key, "0"))
 
-                if exp_val and act_val is not None:
+                if exp_val is not None and act_val is not None:
                     diff_pct = ((act_val - exp_val) / exp_val * 100) if exp_val != 0 else 0
 
                     if abs(diff_pct) <= 10:
                         severity = "low"
                         gap_desc = f"基本达标（差异 {diff_pct:+.1f}%）"
-                    elif abs(diff_pct) <= 30:
+                    elif abs(diff_pct) <= AUTO_RETROSPECTIVE__ANALYZE_GAPS_DIFF_PCT:
                         severity = "medium"
                         gap_desc = f"未完全达标（差异 {diff_pct:+.1f}%）"
                     else:
                         severity = "high"
                         gap_desc = f"显著偏差（差异 {diff_pct:+.1f}%）"
 
-                    gaps.append(GoalComparison(
-                        area=key,
-                        expected=str(expected[key]),
-                        actual=str(actual.get(key, "未提及")),
-                        gap=gap_desc,
-                        severity=severity
-                    ))
-                elif not act_val:
-                    gaps.append(GoalComparison(
-                        area=key,
-                        expected=str(expected[key]),
-                        actual="未记录",
-                        gap="缺少实际结果数据",
-                        severity="medium"
-                    ))
+                    gaps.append(
+                        GoalComparison(
+                            area=key,
+                            expected=str(expected[key]),
+                            actual=str(actual.get(key, "未提及")),
+                            gap=gap_desc,
+                            severity=severity,
+                        )
+                    )
+                elif act_val is None:
+                    gaps.append(
+                        GoalComparison(
+                            area=key,
+                            expected=str(expected[key]),
+                            actual="未记录",
+                            gap="缺少实际结果数据",
+                            severity="medium",
+                        )
+                    )
 
         # 对比描述型目标
         if "description" in expected:
             if "description" not in actual:
-                gaps.append(GoalComparison(
-                    area="目标达成",
-                    expected=expected["description"],
-                    actual="未记录结果",
-                    gap="缺少结果反馈",
-                    severity="medium"
-                ))
+                gaps.append(
+                    GoalComparison(
+                        area="目标达成",
+                        expected=expected["description"],
+                        actual="未记录结果",
+                        gap="缺少结果反馈",
+                        severity="medium",
+                    )
+                )
 
         return gaps
 
@@ -318,7 +363,7 @@ class AutoRetrospective:
             return float(value)
         if isinstance(value, str):
             # 去掉单位，提取数字
-            cleaned = re.sub(r'[^\d.]', '', value)
+            cleaned = re.sub(r"[^\d.]", "", value)
             try:
                 return float(cleaned) if cleaned else None
             except ValueError:
@@ -329,20 +374,25 @@ class AutoRetrospective:
         """格式化 checklist 使用记录"""
         formatted = []
         for item in raw_usage:
-            formatted.append(ChecklistUsage(
-                item=item.get("item", ""),
-                loaded=item.get("loaded", False),
-                used=item.get("used", False),
-                triggered=item.get("triggered", False),
-                level=item.get("level", "none"),
-                severity=item.get("severity", "medium"),
-                reason_ignored=item.get("reason_ignored", "")
-            ))
+            formatted.append(
+                ChecklistUsage(
+                    item=item.get("item", ""),
+                    loaded=item.get("loaded", False),
+                    used=item.get("used", False),
+                    triggered=item.get("triggered", False),
+                    level=item.get("level", "none"),
+                    severity=item.get("severity", "medium"),
+                    reason_ignored=item.get("reason_ignored", ""),
+                )
+            )
         return formatted
 
-    def _extract_new_lessons(self, messages: List[Dict],
-                             gaps: List[GoalComparison],
-                             checklist_usage: List[ChecklistUsage]) -> List[str]:
+    def _extract_new_lessons(
+        self,
+        messages: List[Dict],
+        gaps: List[GoalComparison],
+        checklist_usage: List[ChecklistUsage],
+    ) -> List[str]:
         """提取新增教训"""
         lessons = []
         all_text = " ".join([m.get("content", "") for m in messages])
@@ -363,11 +413,11 @@ class AutoRetrospective:
 
         # 3. 从会话中的"教训"、"发现"、"问题"等关键词提取
         lesson_patterns = [
-            r'教训[:：]\s*(.+?)(?:\n|$)',
-            r'发现[:：]\s*(.+?)(?:\n|$)',
-            r'问题[:：]\s*(.+?)(?:\n|$)',
-            r'不足[:：]\s*(.+?)(?:\n|$)',
-            r'下次[:：]?\s*(.+?)(?:\n|$)',
+            r"教训[:：]\s*(.+?)(?:\n|$)",
+            r"发现[:：]\s*(.+?)(?:\n|$)",
+            r"问题[:：]\s*(.+?)(?:\n|$)",
+            r"不足[:：]\s*(.+?)(?:\n|$)",
+            r"下次[:：]?\s*(.+?)(?:\n|$)",
         ]
         for pattern in lesson_patterns:
             matches = re.findall(pattern, all_text, re.IGNORECASE)
@@ -386,10 +436,13 @@ class AutoRetrospective:
 
         return unique_lessons[:10]  # 最多10条
 
-    def _analyze_blindspot_focus(self, messages: List[Dict],
-                                  gaps: List[GoalComparison],
-                                  checklist_usage: List[ChecklistUsage],
-                                  blindspot_profile: object = None) -> List[BlindSpotFocus]:
+    def _analyze_blindspot_focus(
+        self,
+        messages: List[Dict],
+        gaps: List[GoalComparison],
+        checklist_usage: List[ChecklistUsage],
+        blindspot_profile: object | None = None,
+    ) -> List[BlindSpotFocus]:
         """
         分析本次任务是否触发了已知的盲区。
 
@@ -401,88 +454,112 @@ class AutoRetrospective:
         focus_list = []
 
         if not blindspot_profile or not PERSONA_AVAILABLE:
-            focus_list.append(BlindSpotFocus(
-                blindspot_type="blindspot_profile_unavailable",
-                was_triggered=False,
-                evidence="盲区画像未接入，本次复盘仅输出目标差异和 checklist 教训",
-                recommendation="可在画像系统可用后重新生成复盘焦点",
-                severity="low",
-            ))
+            focus_list.append(
+                BlindSpotFocus(
+                    blindspot_type="blindspot_profile_unavailable",
+                    was_triggered=False,
+                    evidence="盲区画像未接入，本次复盘仅输出目标差异和 checklist 教训",
+                    recommendation="可在画像系统可用后重新生成复盘焦点",
+                    severity="low",
+                )
+            )
             return focus_list
 
         all_text = " ".join([m.get("content", "") for m in messages]).lower()
 
         # 检查已确认的盲区
-        for bs in blindspot_profile.confirmed:
-            triggered, evidence = self._check_blindspot_triggered(bs, all_text, gaps, checklist_usage)
+        for bs in blindspot_profile.confirmed:  # type: ignore[attr-defined]
+            triggered, evidence = self._check_blindspot_triggered(
+                bs, all_text, gaps, checklist_usage
+            )
             if triggered:
-                focus_list.append(BlindSpotFocus(
-                    blindspot_type=bs.type,
-                    was_triggered=True,
-                    evidence=evidence,
-                    recommendation=self._get_blindspot_recommendation(bs.type),
-                    severity="high" if bs.confidence > 0.7 else "medium",
-                ))
+                focus_list.append(
+                    BlindSpotFocus(
+                        blindspot_type=bs.type,
+                        was_triggered=True,
+                        evidence=evidence,
+                        recommendation=self._get_blindspot_recommendation(bs.type),
+                        severity="high" if bs.confidence > 0.7 else "medium",
+                    )
+                )
 
         # 检查suspected盲区
-        for bs in blindspot_profile.suspected:
-            triggered, evidence = self._check_blindspot_triggered(bs, all_text, gaps, checklist_usage)
+        for bs in blindspot_profile.suspected:  # type: ignore[attr-defined]
+            triggered, evidence = self._check_blindspot_triggered(
+                bs, all_text, gaps, checklist_usage
+            )
             if triggered:
-                focus_list.append(BlindSpotFocus(
-                    blindspot_type=bs.type,
-                    was_triggered=True,
-                    evidence=evidence,
-                    recommendation=f"本次任务表现出「{bs.type}」盲区特征，建议验证此假设",
-                    severity="medium",
-                ))
+                focus_list.append(
+                    BlindSpotFocus(
+                        blindspot_type=bs.type,
+                        was_triggered=True,
+                        evidence=evidence,
+                        recommendation=f"本次任务表现出「{bs.type}」盲区特征，建议验证此假设",
+                        severity="medium",
+                    )
+                )
 
         return focus_list
 
-    def _check_blindspot_triggered(self, blindspot, all_text: str,
-                                    gaps: List[GoalComparison],
-                                    checklist_usage: List[ChecklistUsage]) -> tuple:
+    def _check_blindspot_triggered(
+        self,
+        blindspot,
+        all_text: str,
+        gaps: List[GoalComparison],
+        checklist_usage: List[ChecklistUsage],
+    ) -> tuple:
         """检查单个盲区是否在本次任务中被触发"""
-        triggered = False
-        evidence = ""
-
         if blindspot.type == "framing":
-            # 框架盲区：检查是否所有选项共享同一前提
-            # 简化：检查会话文本中是否有"只能"、"只能"等框架锁定词
-            framing_signals = ["只能", "只能", "必须", "不得不", "没有别的办法"]
-            found = [s for s in framing_signals if s in all_text]
-            if found:
-                triggered = True
-                evidence = f"检测到框架锁定信号：{'、'.join(found[:3])}"
+            return self._check_framing_blindspot(all_text)
+        if blindspot.type == "option_gap":
+            return self._check_option_gap_blindspot(all_text)
+        if blindspot.type == "temporal":
+            return self._check_temporal_blindspot(all_text, gaps)
+        if blindspot.type == "preference_rigidity":
+            return self._check_preference_rigidity_blindspot(checklist_usage)
+        return False, ""
 
-        elif blindspot.type == "option_gap":
-            # 选项盲区：检查是否只考虑了2个选项
-            option_signals = ["二选一", "两个选择", "a还是b", "要么...要么"]
-            found = [s for s in option_signals if s in all_text]
-            if found:
-                triggered = True
-                evidence = f"检测到二元选择模式：{'、'.join(found[:3])}"
+    def _check_framing_blindspot(self, all_text: str) -> tuple:
+        """框架盲区：检查会话文本中是否有框架锁定词。"""
+        framing_signals = ["只能", "只能", "必须", "不得不", "没有别的办法"]
+        found = [s for s in framing_signals if s in all_text]
+        if found:
+            return True, f"检测到框架锁定信号：{'、'.join(found[:3])}"
+        return False, ""
 
-        elif blindspot.type == "temporal":
-            # 时间盲区：检查是否只关注短期
-            short_term_signals = ["先解决眼前", "不管以后", "以后再说", "暂时不管"]
-            found = [s for s in short_term_signals if s in all_text]
-            if found:
-                triggered = True
-                evidence = f"检测到短期导向信号：{'、'.join(found[:3])}"
-            # 如果有high severity的gap，也可能是时间盲区导致的
-            high_gaps = [g for g in gaps if g.severity == "high"]
-            if high_gaps and not triggered:
-                triggered = True
-                evidence = f"存在显著偏差：{high_gaps[0].gap}，可能与时间盲区相关"
+    def _check_option_gap_blindspot(self, all_text: str) -> tuple:
+        """选项盲区：检查是否只考虑了 2 个选项。"""
+        option_signals = ["二选一", "两个选择", "a还是b", "要么...要么"]
+        found = [s for s in option_signals if s in all_text]
+        if found:
+            return True, f"检测到二元选择模式：{'、'.join(found[:3])}"
+        return False, ""
 
-        elif blindspot.type == "preference_rigidity":
-            # 偏好僵化：检查checklist中是否有用户习惯性忽略的项
-            ignored_habits = [u for u in checklist_usage if not u.used and u.level == "none"]
-            if ignored_habits:
-                triggered = True
-                evidence = f"习惯性忽略：{'、'.join([u.item for u in ignored_habits[:2]])}"
+    def _check_temporal_blindspot(
+        self, all_text: str, gaps: List[GoalComparison]
+    ) -> tuple:
+        """时间盲区：检查短期导向信号或显著偏差。"""
+        short_term_signals = ["先解决眼前", "不管以后", "以后再说", "暂时不管"]
+        found = [s for s in short_term_signals if s in all_text]
+        if found:
+            return True, f"检测到短期导向信号：{'、'.join(found[:3])}"
 
-        return triggered, evidence
+        high_gaps = [g for g in gaps if g.severity == "high"]
+        if high_gaps:
+            return True, f"存在显著偏差：{high_gaps[0].gap}，可能与时间盲区相关"
+        return False, ""
+
+    def _check_preference_rigidity_blindspot(
+        self, checklist_usage: List[ChecklistUsage]
+    ) -> tuple:
+        """偏好僵化：检查 checklist 中是否有用户习惯性忽略的项。"""
+        ignored_habits = [u for u in checklist_usage if not u.used and u.level == "none"]
+        if ignored_habits:
+            return (
+                True,
+                f"习惯性忽略：{'、'.join([u.item for u in ignored_habits[:2]])}",
+            )
+        return False, ""
 
     @staticmethod
     def _get_blindspot_recommendation(blindspot_type: str) -> str:
@@ -495,9 +572,12 @@ class AutoRetrospective:
         }
         return recommendations.get(blindspot_type, "注意此类盲区，下次有意识地检验")
 
-    def _generate_summary(self, gaps: List[GoalComparison],
-                          new_lessons: List[str],
-                          blindspot_focus: List[BlindSpotFocus] = None) -> str:
+    def _generate_summary(
+        self,
+        gaps: List[GoalComparison],
+        new_lessons: List[str],
+        blindspot_focus: List[BlindSpotFocus] | None = None,
+    ) -> str:
         """生成复盘摘要"""
         lines = []
 
@@ -522,7 +602,7 @@ class AutoRetrospective:
         """生成 Markdown 复盘报告"""
         lines = [
             "---",
-            f"hermes_type: retrospective",
+            "hermes_type: retrospective",
             f"task_type: {result.task_type}/{result.subtype}",
             f"version: {result.version}",
             f"created: {result.created_at[:10]}",
@@ -548,7 +628,9 @@ class AutoRetrospective:
         if result.gaps:
             lines.extend(["", "## 差异分析"])
             for gap in result.gaps:
-                emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(gap.severity, "⚪")
+                emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(
+                    gap.severity, "⚪"
+                )
                 lines.append(f"{emoji} **{gap.area}**")
                 lines.append(f"  - 预期: {gap.expected}")
                 lines.append(f"  - 实际: {gap.actual}")
@@ -571,8 +653,10 @@ class AutoRetrospective:
         if result.blindspot_focus:
             lines.extend(["", "## 盲区校准与复盘焦点"])
             lines.append("")
-            lines.append("> 此部分基于你的盲区画像自动生成。如果分析不准确，"
-                         "你的反馈会帮助AI校准盲区检测。")
+            lines.append(
+                "> 此部分基于你的盲区画像自动生成。如果分析不准确，"
+                "你的反馈会帮助AI校准盲区检测。"
+            )
             lines.append("")
             for focus in result.blindspot_focus:
                 emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(focus.severity, "⚪")
@@ -594,17 +678,142 @@ class AutoRetrospective:
         """将复盘结果登记为系统复盘待办，交给强制复盘策略追达。"""
         try:
             from core.app.forced_retrospective import ForcedRetrospective
+
             forced = ForcedRetrospective(
                 db_path=str(self.recap_db_path) if self.recap_db_path else None
             )
             severity = self._result_severity(result)
-            topic = result.summary or f"{result.task_type}/{result.subtype} 复盘"
-            return forced.create_system_recap(topic=topic, severity=severity, target_page=report_path)
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at epimetheus.py", exc_info=True)
+            topic = self._build_recap_topic(result)
+            context = self._build_recap_context(result)
+            suggested_points = self._build_recap_suggestions(result)
+            return forced.create_system_recap(
+                topic=topic,
+                severity=severity,
+                context=context,
+                suggested_points=suggested_points,
+            )
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at epimetheus.py", exc_info=True
+            )
             return None
 
-    def write_dashboard(self, recaps: List[Dict], dashboard_path: str | Path | None = None) -> Optional[Path]:
+    def _build_recap_topic(self, result: RetrospectiveResult) -> str:
+        """生成对人可读的复盘主题，避免只显示“存在 N 个显著偏差”。"""
+        high_gaps = [g for g in result.gaps if g.severity in ("high", "critical")]
+        if high_gaps:
+            gap = high_gaps[0]
+            area = self._readable_gap_area(gap.area)
+            return (
+                f"{result.task_type}/{result.subtype}：{area}偏差"
+                f"（预期 {gap.expected}，实际 {gap.actual}）"
+            )
+        return result.summary or f"{result.task_type}/{result.subtype} 复盘"
+
+    def _build_recap_context(self, result: RetrospectiveResult) -> str:
+        """根据复盘结果生成提醒页面的'本次复盘背景'内容。"""
+        lines = [
+            f"**任务类型**：{result.task_type}/{result.subtype}",
+            f"**复盘摘要**：{result.summary or '暂无摘要'}",
+        ]
+
+        if result.expected_goals:
+            lines.append("\n**预期目标**：")
+            for key, val in result.expected_goals.items():
+                lines.append(f"- {key}: {val}")
+
+        if result.actual_results:
+            lines.append("\n**实际结果**：")
+            for key, val in result.actual_results.items():
+                lines.append(f"- {key}: {val}")
+
+        if result.gaps:
+            high_gaps = [g for g in result.gaps if g.severity in ("high", "critical")]
+            if high_gaps:
+                gap = high_gaps[0]
+                area = self._readable_gap_area(gap.area)
+                lines.append("\n**这次复盘要回答**：")
+                lines.append(
+                    f"- 为什么{area}从预期 {gap.expected} 变成实际 {gap.actual}？"
+                )
+
+            lines.append("\n**关键差异**：")
+            for gap in result.gaps:
+                area = self._readable_gap_area(gap.area)
+                area_text = f"{area}（{gap.area}）" if area != gap.area else area
+                lines.extend(
+                    [
+                        f"- 偏差项：{area_text}",
+                        f"  - 严重程度：{gap.severity}",
+                        f"  - 预期值：{gap.expected}",
+                        f"  - 实际值：{gap.actual}",
+                        f"  - 偏差含义：{gap.gap}",
+                    ]
+                )
+
+        if result.new_lessons:
+            lines.append("\n**已提取教训**：")
+            for lesson in result.new_lessons[:5]:
+                lines.append(f"- {lesson}")
+
+        if result.blindspot_focus:
+            triggered = [b for b in result.blindspot_focus if b.was_triggered]
+            if triggered:
+                lines.append("\n**盲区触发**：")
+                for focus in triggered[:3]:
+                    lines.append(f"- {focus.blindspot_type}: {focus.evidence}")
+
+        return "\n".join(lines)
+
+    def _build_recap_suggestions(self, result: RetrospectiveResult) -> str:
+        """根据复盘结果生成'建议复盘重点'。"""
+        suggestions = []
+
+        if result.gaps:
+            high_gaps = [g for g in result.gaps if g.severity in ("high", "critical")]
+            if high_gaps:
+                gap = high_gaps[0]
+                area = self._readable_gap_area(gap.area)
+                suggestions.extend(
+                    [
+                        f"- 为什么{area}从预期 {gap.expected} 变成实际 {gap.actual}？",
+                        f"- 下次如何在执行中提前发现{area}偏差？",
+                    ]
+                )
+            else:
+                suggestions.append("- 复核差异项，确认是否已转化为可执行的改进项")
+
+        if result.new_lessons:
+            suggestions.append("- 将本次提取的教训补充到对应知识页面的校验清单")
+
+        ignored_checklist = [
+            u
+            for u in result.checklist_usage
+            if u.loaded and not u.used and u.severity in ("high", "critical")
+        ]
+        if ignored_checklist:
+            suggestions.append(f"- 检查被忽略的高风险 checklist 项：{ignored_checklist[0].item}")
+
+        if result.blindspot_focus:
+            triggered = [b for b in result.blindspot_focus if b.was_triggered]
+            if triggered:
+                suggestions.append(
+                    f"- 验证盲区假设：{triggered[0].blindspot_type} — {triggered[0].recommendation}"
+                )
+
+        if not suggestions:
+            suggestions.append("- 回顾本次任务流程，确认是否有遗漏的决策或改进点")
+
+        return "\n".join(suggestions)
+
+    @staticmethod
+    def _readable_gap_area(area: str) -> str:
+        """把内部差异字段转成提醒页里用户能理解的名称。"""
+        return RECAP_AREA_LABELS.get(area, area)
+
+    def write_dashboard(
+        self, recaps: List[Dict], dashboard_path: str | Path | None = None
+    ) -> Optional[Path]:
         """写入 Wiki 看板兜底，让待复盘事项即使未被 Agent 提醒也可见。"""
         if dashboard_path:
             path = Path(dashboard_path)
@@ -628,7 +837,9 @@ class AutoRetrospective:
         if not recaps:
             lines.append("暂无待复盘事项。")
         else:
-            lines.extend(["## 本周新增", "", "| 时间 | 来源 | 复盘摘要 | 状态 |", "|---|---|---|---|"])
+            lines.extend(
+                ["## 本周新增", "", "| 时间 | 来源 | 复盘摘要 | 状态 |", "|---|---|---|---|"]
+            )
             for recap in recaps:
                 lines.append(
                     f"| {recap.get('time', datetime.now().strftime('%Y-%m-%d'))} "
@@ -654,17 +865,23 @@ class AutoRetrospective:
 
 # ========== 便捷函数 ==========
 
+
 def should_retrospect(messages: List[Dict]) -> bool:
     """便捷函数：判断是否应该触发复盘"""
     engine = AutoRetrospective()
     return engine.should_trigger(messages)
 
 
-def generate_retrospective(task_type: str, subtype: str,
-                           messages: List[Dict],
-                           checklist_usage: List[Dict],
-                           expected_goals: Optional[Dict] = None,
-                           blindspot_profile: object = None) -> RetrospectiveResult:
+def generate_retrospective(
+    task_type: str,
+    subtype: str,
+    messages: List[Dict],
+    checklist_usage: List[Dict],
+    expected_goals: Optional[Dict] = None,
+    blindspot_profile: object | None = None,
+) -> RetrospectiveResult:
     """便捷函数：生成复盘（支持盲区画像）"""
     engine = AutoRetrospective()
-    return engine.generate(task_type, subtype, messages, checklist_usage, expected_goals, blindspot_profile)
+    return engine.generate(
+        task_type, subtype, messages, checklist_usage, expected_goals, blindspot_profile
+    )

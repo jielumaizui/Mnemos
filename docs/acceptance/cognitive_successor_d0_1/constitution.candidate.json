@@ -1,0 +1,1087 @@
+{
+  "schema_version": "mnemos.cognitive_successor_constitution_clause_proposal_ledger.v5",
+  "schema_ref": "docs/acceptance/cognitive_successor_d0_1/constitution.candidate.schema.json",
+  "ledger_schema_binding": {
+    "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/constitution.candidate.schema.json",
+    "sha256": "sha256:42a42263e0dc64b9ac7c6d330c98a252023a2a6ee06887ba90fa2637df36bc4b"
+  },
+  "artifact_id": "cognitive-successor-v2-constitution-clause-proposal-ledger",
+  "artifact_role": "CLAUSE_PROPOSAL_LEDGER",
+  "artifact_status": "DESIGN_PROPOSAL_LEDGER_NON_GOVERNING",
+  "design_adjudication_status": "PENDING_METHOD_AND_CLAUSE_ADJUDICATION",
+  "proposal_provenance_values": [
+    "PRIOR_USER_DIRECTION",
+    "LEGACY_CONTRACT_EVIDENCE",
+    "CODE_EVIDENCE",
+    "COGNITIVE_THEORY_EVIDENCE",
+    "REVIEWER_PROPOSAL",
+    "CURRENT_DESIGN_SYNTHESIS"
+  ],
+  "adjudication_status_values": [
+    "NOT_ADJUDICATED",
+    "UNRESOLVED",
+    "RESEARCH_REQUIRED",
+    "PROTOTYPE_REQUIRED",
+    "ADOPTED_CANDIDATE",
+    "REVISION_REQUIRED",
+    "REJECTED_CANDIDATE"
+  ],
+  "authoring_snapshot": {
+    "repository_commit": "7b72d0d6026693b8f81c12943a658c98f9358756",
+    "repository_tree": "4569bd4c53419532f5c86f8411b6de625a2abcf7",
+    "legacy_behavior_commit": "1e36a31a26b0b5baf768815f185d57174e9c59dd"
+  },
+  "source_design_refs": [
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md",
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md",
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-design-adjudication-design.md",
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-decision-map.md"
+  ],
+  "term_registry_ref": "CONTEXT.md#cognitive-successor",
+  "design_adjudication_method_binding": {
+    "schema_family": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json",
+      "sha256": "sha256:52bb799955a7b6947fec1a6195f6b67c0111fa8d92ca8e512b472661e95f449f"
+    },
+    "bootstrap_protocol": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_bootstrap_protocol.candidate.json",
+      "sha256": "sha256:b5eec59c119e487f64015c1605ac636086e4976ca4c16fb47a74e67ab5ba0ddd"
+    },
+    "evidence_manifest": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json",
+      "sha256": "sha256:c5ed7fd7cef079f598e5bb0c2cc90103cd26e355b33ccfb9a4c99c516ae18dc5"
+    },
+    "candidate_denominator": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_candidate_denominator.candidate.json",
+      "sha256": "sha256:8a27275454ce860617e23bbb755350d3a97473eeaf7a29d5ba38e2ee609eeee4"
+    },
+    "method_candidate": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json",
+      "sha256": "sha256:be842ac9d6eab51db8f633073f0b331ff67f4382a85f1f13afca446aa49fea2f"
+    },
+    "producer_assessment": {
+      "artifact_ref": "docs/acceptance/cognitive_successor_d0_1/method_adjudication_record.candidate.json",
+      "sha256": "sha256:b53a99948685bace39fd2f5c2ee73f9349f912373e293aeb5af99bf990067e78"
+    },
+    "challenger_report": null,
+    "final_decision": null,
+    "dependency_bundle": null,
+    "verifier_report": null,
+    "activation_authorization": null,
+    "authorization_acceptance_gate": null,
+    "derived_lifecycle_state": "PRODUCER_ASSESSMENT_ONLY"
+  },
+  "candidate_scope_kind_values": [
+    "PRODUCT_GOAL",
+    "COGNITIVE_SEMANTICS",
+    "COGNITIVE_ARCHITECTURE",
+    "SAFETY_OR_AGENCY",
+    "ENGINEERING_QUALITY",
+    "SUCCESSOR_TRANSITION_ARCHITECTURE",
+    "CUTOVER_POLICY"
+  ],
+  "activation_membership_values": [
+    "PENDING_ADJUDICATION",
+    "INCLUDED",
+    "EXCLUDED_REJECTED",
+    "EXCLUDED_REVISION_REQUIRED"
+  ],
+  "candidate_field_policy": {
+    "all_clause_payloads_non_governing": true,
+    "adopted_status_requires_non_null_fields": [
+      "adjudication_record_ref",
+      "adjudication_record_subject_hash",
+      "adjudication_record_disposition",
+      "candidate_payload_hash",
+      "evidence_set_root",
+      "independent_challenger_receipt_ref",
+      "verifier_report_ref"
+    ],
+    "adopted_status_requires_non_empty_fields": [
+      "competing_claim_refs"
+    ],
+    "adopted_status_requires_hash_bindings": [
+      "independent_challenger_receipt_sha256",
+      "verifier_report_sha256"
+    ]
+  },
+  "adjudication_binding_contract_candidate": {
+    "record_subject": "candidate_payload_hash",
+    "record_disposition_must_match_clause_status": true,
+    "record_evidence_set_root_must_match_clause": true,
+    "independent_challenger_receipt_must_bind_record_and_payload_hash": true,
+    "verifier_report_must_bind_record_payload_and_challenger_report": true,
+    "revise_requires_new_candidate_bytes_and_new_adjudication_cycle": true,
+    "all_bindings_must_be_fresh": true
+  },
+  "adopted_constitution_set_derivation_candidate": {
+    "include_only_membership": "INCLUDED",
+    "include_only_status_values": [
+      "ADOPTED_CANDIDATE"
+    ],
+    "rejected_proposals_remain_in_ledger": true,
+    "rejected_proposals_enter_adopted_set": false,
+    "revision_required_proposals_enter_adopted_set": false,
+    "pending_or_unresolved_proposal_count_must_be_zero_for_activation": true,
+    "adopted_clause_set_root": null
+  },
+  "hash_policy": {
+    "mode": "sha256_raw_file_bytes",
+    "text_encoding": "UTF-8",
+    "duplicate_json_members": "REJECT_BEFORE_HASH_GRAPH_EVALUATION",
+    "self_hash_embedded": false,
+    "on_any_byte_change": "verification_and_approval_stale"
+  },
+  "clauses": [
+    {
+    "clause_id": "V2-CONST-001",
+    "title": "Complete effective legacy capability parity",
+    "proposal_provenance": ["PRIOR_USER_DIRECTION"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "CUTOVER_POLICY",
+    "claim_kind": "MIGRATION_OR_CUTOVER_STRATEGY",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "independent_governance.legacy_parity_denominator",
+      "candidate_protected_fact": "Capability intent and implementation health are different facts. Every approved effective Mnemos capability, including one whose current realization is broken, partial, unreachable or not yet repaired, remains available through an equivalent behavior, an adapter, or an approved stronger contract before cutover.",
+      "candidate_claim": "First reconstruct the complete Mnemos capability model and intended behavior from entrances, contracts, code, configuration, schemas, state/effect paths, tests, documents and history. Record current realization health separately. Development may then proceed by capability cluster, using current Mnemos as an architecture and behavior reference without copying its defects or structure mechanically, but cutover requires exact-set equality between the approved Legacy Parity Denominator and the equivalence-verified legacy capability set; no valid capability may be deleted or permanently deferred merely because its current implementation is buggy or incomplete.",
+      "candidate_forbidden_behavior_codes": [
+        "EFFECTIVE_CAPABILITY_EXCLUDED",
+        "PERMANENT_DEFER",
+        "COUNT_ONLY_PARITY",
+        "CAPABILITY_ID_MERGE_HIDES_GAP",
+        "BROKEN_OR_PARTIAL_REALIZATION_USED_TO_DELETE_CAPABILITY_INTENT",
+        "GATE_WEAKENED_FOR_PARITY"
+      ],
+      "candidate_predicates": [
+        "legacy_parity_denominator_frozen == true",
+        "legacy_parity_exact_approval_valid == true",
+        "legacy_equivalence_verified_set_root == approved_legacy_parity_set_root",
+        "capability_intent_inventory_unclassified_or_unknown_count == 0",
+        "current_realization_health_is_recorded_separately_from_capability_validity == true",
+        "permanent_defer_count == 0",
+        "effective_capability_excluded == 0",
+        "gate_regression_or_weakening == 0"
+      ],
+      "candidate_negative_oracles": [
+        "legacy_parameter_facet_omitted_but_count_equal",
+        "broken_entrypoint_is_treated_as_proof_that_the_intended_capability_does_not_exist",
+        "working_implementation_path_is_copied_without_comparing_a_simpler_outcome_equivalent_design",
+        "unsupported_capability_hidden_by_renamed_id",
+        "legacy_gate_removed_to_make_replay_green"
+      ],
+      "source_refs": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md:19-23",
+        "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json#/entries/METHOD-EVID-001/source_binding/exact_excerpts/3"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-002",
+        "DECISION-004",
+        "DECISION-006"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-002",
+    "title": "Retain a qualified legacy generation as oracle and data-forward rollback engine",
+    "proposal_provenance": ["PRIOR_USER_DIRECTION"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "SUCCESSOR_TRANSITION_ARCHITECTURE",
+    "claim_kind": "MIGRATION_OR_CUTOVER_STRATEGY",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "independent_governance.legacy_freeze_and_rollback",
+      "candidate_protected_fact": "The legacy engine remains usable, evidentially independent, and able to receive successor deltas without erasing successor-era facts.",
+      "candidate_claim": "The transition architecture should retain a qualified legacy generation as data source, behavior reference, offline oracle and data-forward rollback engine until adopted exit criteria are met. Current repository and production freeze rules, permitted maintenance and operational authorization remain controlled only by the existing legacy governing contract, not by this candidate clause.",
+      "legacy_operational_constraint_ref": "current Mnemos governing contract outside this non-governing artifact",
+      "candidate_forbidden_behavior_codes": [
+        "LEGACY_FEATURE_DEVELOPMENT_AFTER_FREEZE",
+        "LEGACY_OUTPUT_AS_SOLE_ORACLE",
+        "ROLLBACK_ENGINE_REMOVED_EARLY",
+        "ROLLBACK_BY_DATA_REWIND",
+        "UNMAPPED_SUCCESSOR_DELTA"
+      ],
+      "candidate_predicates": [
+        "legacy_freeze_receipt_valid == true",
+        "unauthorized_legacy_change_count == 0",
+        "rollback_mapping_gap == 0",
+        "rollback_readiness == ROLLBACK_READY",
+        "data_forward_rollback_drill == PASS"
+      ],
+      "candidate_negative_oracles": [
+        "legacy_directory_exists_but_cannot_receive_successor_delta",
+        "rollback_replays_external_effect",
+        "old_snapshot_overwrites_successor_fact"
+      ],
+      "source_refs": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md:19-26"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-010"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-003",
+    "title": "Expand the user's information horizon instead of simulating it",
+    "proposal_provenance": ["PRIOR_USER_DIRECTION"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "PRODUCT_GOAL",
+    "claim_kind": "PRODUCT_VALUE",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.collaborative_cognition",
+      "candidate_protected_fact": "The system understands the user in order to complement the user, while independently seeking relevant information outside the user's observed information horizon.",
+      "candidate_claim": "For tasks whose approved scope requires epistemic expansion, the successor must use user context to collaborate while independently admitting world evidence, counterevidence, alternatives and unknowns; it must not treat similarity to the user's current beliefs or preferences as cognitive success.",
+      "candidate_forbidden_behavior_codes": [
+        "USER_SIMULATION_AS_NORTH_STAR",
+        "PERSONA_ALIGNED_RECALL_ONLY",
+        "USER_ACCEPTANCE_AS_TRUTH",
+        "NO_INFORMATION_GAIN_CLAIMED_AS_EXPANSION"
+      ],
+      "candidate_predicates": [
+        "cognitive_adequacy_denominator_frozen == true",
+        "expansion_required_scenario_gap == 0",
+        "independent_information_gain_or_justified_abstention_gap == 0",
+        "user_system_role_allocation_trace_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "persona_restatement_without_external_information_gain",
+        "user_belief_copied_into_world_model_as_verified",
+        "fluent_answer_hides_unsearched_unknown"
+      ],
+      "source_refs": [
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md#一设计阶段的裁决规则"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-004",
+    "title": "Separate User Context Model and Epistemic World Model owners",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_ARCHITECTURE",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.model_ownership",
+      "candidate_protected_fact": "User goals and preferences cannot become world truth, and external world evidence cannot become user identity or intent.",
+      "candidate_claim": "User Context Model and Epistemic World Model are mutually exclusive canonical owners connected only through typed Interfaces and evidence references.",
+      "candidate_forbidden_behavior_codes": [
+        "PERSONA_TO_WORLD_DIRECT_WRITE",
+        "WORLD_EVIDENCE_TO_USER_CONTEXT_DIRECT_WRITE",
+        "SHARED_AMBIGUOUS_COGNITIVE_OWNER"
+      ],
+      "candidate_predicates": [
+        "persona_to_world_direct_write == 0",
+        "external_to_user_context_unauthorized == 0",
+        "duplicate_user_world_owner == 0"
+      ],
+      "candidate_negative_oracles": [
+        "user_believes_claim_so_world_claim_verified",
+        "external_article_creates_user_preference",
+        "assistant_summary_becomes_user_goal"
+      ],
+      "source_refs": [
+        "core/cognitive/user_model_assets.py:1-7",
+        "core/evidence/source_authority.py:39-55"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-006",
+        "DECISION-007"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-005",
+    "title": "Use target-typed authority and evidence admission",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_ARCHITECTURE",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.authority_and_admission",
+      "candidate_protected_fact": "Authority to describe the user, evidence reliability about the world, policy authority and action permission remain orthogonal.",
+      "candidate_claim": "Every admitted source span must be evaluated against a target-typed authority matrix for USER_CONTEXT, WORLD_EVIDENCE, POLICY and ACTION_PERMISSION; admission for one target never upgrades authority for another target.",
+      "candidate_forbidden_behavior_codes": [
+        "CROSS_TARGET_AUTHORITY_UPGRADE",
+        "EXTERNAL_EVIDENCE_AS_USER_INTENT",
+        "WORLD_EVIDENCE_AS_ACTION_PERMISSION",
+        "MODEL_MEMORY_AS_VERIFIED_WORLD_FACT"
+      ],
+      "candidate_predicates": [
+        "target_authority_unclassified == 0",
+        "cross_target_authority_upgrade == 0",
+        "world_evidence_admission_without_provenance == 0",
+        "user_context_mutation_without_user_model_authority == 0",
+        "material_action_without_action_permission == 0"
+      ],
+      "candidate_negative_oracles": [
+        "external_paper_updates_world_and_persona_together",
+        "tool_observation_creates_action_permission",
+        "source_quote_hash_mismatch_still_admitted"
+      ],
+      "source_refs": [
+        "core/evidence/source_authority.py:49-55",
+        "core/evidence/source_authority.py:296-324"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-007"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-006",
+    "title": "Keep evidence admission invariant under presentation personalization",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_SEMANTICS",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.evidence_admission",
+      "candidate_protected_fact": "Once task scope, risk, materiality and corpus are fixed, personalization cannot remove truth-relevant evidence, counterevidence, alternatives or unknowns.",
+      "candidate_claim": "User Context may shape task formulation and presentation, but a presentation-only change must not alter the admitted material evidence root, material counterevidence root, epistemic status or risk class.",
+      "candidate_forbidden_behavior_codes": [
+        "PERSONA_SHRINKS_EVIDENCE_DENOMINATOR",
+        "PREFERENCE_REMOVES_COUNTEREVIDENCE",
+        "PRESENTATION_CHANGES_TRUTH_STATUS",
+        "CHALLENGE_MUTE_LOWERS_SAFETY_FLOOR"
+      ],
+      "candidate_predicates": [
+        "presentation_variant_material_evidence_root_diff == 0",
+        "presentation_variant_counterevidence_root_diff == 0",
+        "presentation_variant_epistemic_status_diff == 0",
+        "presentation_variant_risk_class_diff == 0"
+      ],
+      "candidate_negative_oracles": [
+        "brief_preference_drops_safety_counterevidence",
+        "optimistic_tone_suppresses_unknown",
+        "persona_top_k_excludes_material_dissent"
+      ],
+      "source_refs": [
+        "core/app/context_search.py:383-409",
+        "core/app/context_search.py:488-500"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005",
+        "DECISION-008"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-007",
+    "title": "Admit material world claims with provenance, counterevidence and unknowns",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_SEMANTICS",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.epistemic_world_model",
+      "candidate_protected_fact": "World claims remain revisable, source-bound and explicit about material conflict and ignorance.",
+      "candidate_claim": "A material world claim may be promoted only through Evidence Admission that binds exact provenance, source dependency, freshness, supporting evidence, material counterevidence, alternatives, uncertainty and invalidation conditions; ungrounded model knowledge remains a hypothesis.",
+      "candidate_forbidden_behavior_codes": [
+        "UNGROUNDED_MODEL_KNOWLEDGE_PROMOTED",
+        "MATERIAL_COUNTEREVIDENCE_OMITTED",
+        "UNKNOWN_COLLAPSED_TO_CONFIDENT_CLAIM",
+        "FALSE_BALANCE_BY_NONMATERIAL_OPPOSITION"
+      ],
+      "candidate_predicates": [
+        "material_claim_without_admission_receipt == 0",
+        "material_counterevidence_omission == 0",
+        "unknown_frontier_trace_gap == 0",
+        "claim_invalidation_contract_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "research_shows_claim_without_source",
+        "material_conflict_hidden_by_summary",
+        "irrelevant_fringe_source_added_only_to_fake_balance"
+      ],
+      "source_refs": [
+        "core/cognitive/state_contract_schema.py:80-100",
+        "core/cognitive/verification_queue.py:123-128"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005",
+        "DECISION-007",
+        "DECISION-008"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-008",
+    "title": "Measure evidence independence by dependency, not count",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_SEMANTICS",
+    "claim_kind": "EMPIRICAL_CAUSAL_OR_COGNITIVE",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.source_dependency",
+      "candidate_protected_fact": "Repeated derivatives of one upstream source do not become independent corroboration.",
+      "candidate_claim": "Evidence strength and multi-agent agreement must be computed over frozen dependency clusters; URL, provider, model, agent and answer counts alone cannot increase independence.",
+      "candidate_forbidden_behavior_codes": [
+        "URL_COUNT_AS_INDEPENDENCE",
+        "AGENT_COUNT_AS_CONSENSUS",
+        "DERIVED_SOURCE_DOUBLE_COUNT",
+        "COMMON_UPSTREAM_HIDDEN"
+      ],
+      "candidate_predicates": [
+        "derived_source_double_count == 0",
+        "dependency_cluster_trace_gap == 0",
+        "duplicate_derivative_confidence_increase == 0"
+      ],
+      "candidate_negative_oracles": [
+        "five_agents_repeat_one_webpage",
+        "five_articles_rewrite_one_press_release",
+        "same_model_samples_claim_independent_consensus"
+      ],
+      "source_refs": [
+        "core/cognitive/state_contract_schema.py:203-224"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005",
+        "DECISION-009"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-009",
+    "title": "Require bounded cognitive rounds and typed stopping dispositions",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_ARCHITECTURE",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.typed_cognitive_workspace",
+      "candidate_protected_fact": "Insufficient evidence, exhausted budget and no progress remain visible control states instead of being converted into fluent certainty.",
+      "candidate_claim": "Every material cognitive round must have bounded state, budget, progress and a typed terminal disposition chosen from ACCEPT, REVISE, ASK_USER, SEEK_INFORMATION, PROPOSE_EXPERIMENT, ABSTAIN or ESCALATE before a decision or action may be sealed.",
+      "candidate_forbidden_behavior_codes": [
+        "UNTYPED_AGENT_TRANSCRIPT_AS_WORKSPACE",
+        "BUDGET_EXHAUSTION_AS_SUCCESS",
+        "NO_PROGRESS_AS_CONFIDENCE",
+        "MISSING_EVIDENCE_FORCED_ANSWER"
+      ],
+      "candidate_predicates": [
+        "material_round_without_terminal_disposition == 0",
+        "workspace_budget_unaccounted == 0",
+        "high_risk_insufficient_evidence_autonomous_action == 0",
+        "no_progress_fingerprint_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "critical_source_missing_but_unique_answer_returned",
+        "search_loop_repeats_without_progress",
+        "decision_snapshot_claimed_as_full_deliberation"
+      ],
+      "source_refs": [
+        "core/cognitive/decision_trace_store.py:56-73"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-009"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-010",
+    "title": "Preserve user authority and explicit material-action permission",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "SAFETY_OR_AGENCY",
+    "claim_kind": "SAFETY_PRIVACY_AGENCY_CONSTRAINT",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.user_agency",
+      "candidate_protected_fact": "The user remains authority for personal goals, values, preferences, user-model corrections and material action permission, without becoming authority over external truth.",
+      "candidate_claim": "Material actions require explicit, scoped, time-bounded and revocable approval; user-model assertions require admissible user-model authority and remain correctable and supersedable.",
+      "candidate_forbidden_behavior_codes": [
+        "RECOMMENDATION_AS_APPROVAL",
+        "SILENCE_AS_USER_GOAL",
+        "POST_REVOCATION_ACTION",
+        "USER_PREFERENCE_AS_WORLD_TRUTH"
+      ],
+      "candidate_predicates": [
+        "material_action_without_approval == 0",
+        "rejected_decision_action == 0",
+        "post_revocation_action == 0",
+        "user_context_mutation_without_authority == 0",
+        "user_model_correction_receipt_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "migration_question_triggers_migration",
+        "ignored_reminder_creates_personality_trait",
+        "withdrawn_permission_still_dispatches_effect"
+      ],
+      "source_refs": [
+        "core/evidence/source_authority.py:97-136",
+        "core/cognitive/decision_trace_store.py:62-92"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-001",
+        "DECISION-009"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-011",
+    "title": "Forbid manipulation and dependence as optimization targets",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "SAFETY_OR_AGENCY",
+    "claim_kind": "SAFETY_PRIVACY_AGENCY_CONSTRAINT",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "independent_governance.anti_manipulation",
+      "candidate_protected_fact": "The system optimizes task benefit and appropriate reliance, not user submission, dependence or concealed persuasion.",
+      "candidate_claim": "Acceptance rate, agreement, engagement duration, interruption response and dependence may be interaction observations but cannot be terminal optimization objectives or truth proxies; material uncertainty and alternatives cannot be hidden to improve adoption.",
+      "candidate_forbidden_behavior_codes": [
+        "ACCEPTANCE_AS_TRUTH",
+        "ENGAGEMENT_AS_TERMINAL_OBJECTIVE",
+        "DEPENDENCE_OPTIMIZATION",
+        "PERSONA_TARGETED_HIDDEN_PERSUASION",
+        "UNCERTAINTY_HIDDEN_FOR_ADOPTION"
+      ],
+      "candidate_predicates": [
+        "forbidden_objective_registry_match == 0",
+        "material_uncertainty_omission == 0",
+        "appropriate_reliance_gate == PASS",
+        "manipulation_scenario_blocking_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "counterevidence_removed_to_raise_acceptance",
+        "persona_used_to_select_more_persuasive_false_framing",
+        "longer_dependency_treated_as_success"
+      ],
+      "source_refs": [
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md#七双分母模型"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-012",
+    "title": "Correct through independent outcomes and append-only attribution",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS", "CODE_EVIDENCE"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "COGNITIVE_SEMANTICS",
+    "claim_kind": "ARCHITECTURE_MECHANISM",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cognitive_runtime.epistemic_control",
+      "candidate_protected_fact": "A user reaction, self-reflection or self-consistency check cannot certify world truth or correction success.",
+      "candidate_claim": "Material belief, prediction, decision and policy correction must bind new evidence, an independently observed outcome or an approved experiment; history is superseded or compensated rather than overwritten, and user reaction remains separate from objective outcome.",
+      "candidate_forbidden_behavior_codes": [
+        "REACTION_AS_OBJECTIVE_OUTCOME",
+        "SELF_REFLECTION_AS_CORRECTION_PROOF",
+        "HISTORY_OVERWRITE",
+        "CONTRADICTORY_OUTCOME_WITHOUT_CORRECTION_OBLIGATION"
+      ],
+      "candidate_predicates": [
+        "reaction_used_as_objective_ground_truth == 0",
+        "history_overwrite_count == 0",
+        "prediction_outcome_attribution_revision_gap == 0",
+        "contradiction_without_correction_obligation == 0",
+        "correction_recurrence_required_cohort_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "user_like_increases_medical_claim_truth",
+        "model_self_critique_marks_error_fixed",
+        "late_outcome_conflict_leaves_active_belief_unchanged"
+      ],
+      "source_refs": [
+        "docs/superpowers/specs/2026-07-18-cog038-feedback-attribution-design.md:271-294",
+        "core/cognitive/state_contract_schema.py:203-224"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-005",
+        "DECISION-009"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-013",
+    "title": "Require both legacy parity and cognitive adequacy for V2 cutover",
+    "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "CUTOVER_POLICY",
+    "claim_kind": "MIGRATION_OR_CUTOVER_STRATEGY",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "independent_governance.v2_cutover_eligibility",
+      "candidate_protected_fact": "A complete rewrite of Mnemos is not automatically an adequate V2 cognitive system, and net-new cognition cannot excuse missing legacy capability.",
+      "candidate_claim": "V2 cutover eligibility is the conjunction of the base safety and migration registry, exact approved Legacy Parity Denominator completion, exact approved Cognitive Adequacy Denominator completion, and joint interaction oracles; neither denominator may substitute for or compensate the other.",
+      "candidate_forbidden_behavior_codes": [
+        "LEGACY_ONLY_GREEN_CALLED_V2",
+        "COGNITIVE_DEMO_EXCUSES_LEGACY_GAP",
+        "DENOMINATOR_PERCENTAGES_MERGED",
+        "JOINT_INTERACTION_ORACLE_OMITTED"
+      ],
+      "candidate_predicates": [
+        "base_cutover_eligibility_registry == true",
+        "legacy_equivalence_verified_set_root == approved_legacy_parity_set_root",
+        "cognitive_adequacy_verified_set_root == approved_cognitive_adequacy_set_root",
+        "joint_interaction_oracle_gap == 0",
+        "complementarity_required_cohort_gap == 0",
+        "manipulation_or_overreliance_blocking_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "all_legacy_features_pass_but_no_epistemic_expansion",
+        "impressive_cognitive_round_but_install_restore_missing",
+        "two_smaller_verified_sets_have_equal_counts"
+      ],
+      "source_refs": [
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md#73-两个分母的关系"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-002",
+        "DECISION-004",
+        "DECISION-005",
+        "DECISION-013",
+        "DECISION-014"
+      ],
+      "supersedes": []
+    },
+    {
+    "clause_id": "V2-CONST-014",
+    "title": "Keep one production canonical and effect writer generation",
+    "proposal_provenance": ["PRIOR_USER_DIRECTION"],
+    "adjudication_status": "NOT_ADJUDICATED",
+    "activation_membership": "PENDING_ADJUDICATION",
+    "candidate_payload_hash": null,
+    "candidate_scope_kind": "CUTOVER_POLICY",
+    "claim_kind": "MIGRATION_OR_CUTOVER_STRATEGY",
+     "adjudication_record_ref": null,
+     "adjudication_record_subject_hash": null,
+     "adjudication_record_disposition": null,
+     "competing_claim_refs": [],
+     "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "cutover.writer_authority",
+      "candidate_protected_fact": "Production comparison and migration never create two competing canonical or material-effect truths.",
+      "candidate_claim": "At any time, at most one production writer generation may mutate canonical state or dispatch material effects; legacy/successor comparison uses immutable export, isolated replay, no-effect adapters or separately approved narrow controlled mirroring.",
+      "candidate_forbidden_behavior_codes": [
+        "PRODUCTION_DUAL_WRITER",
+        "PRODUCTION_DUAL_EFFECT_AUTHORITY",
+        "SHARED_PRODUCTION_CURSOR",
+        "SHADOW_WRITES_PRODUCTION_TARGET"
+      ],
+      "candidate_predicates": [
+        "active_production_writer_count <= 1",
+        "hidden_legacy_writer_count == 0",
+        "production_target_shadow_write_count == 0",
+        "writer_destination_fence_qualification_gap == 0"
+      ],
+      "candidate_negative_oracles": [
+        "legacy_and_successor_send_same_recap",
+        "both_engines_advance_source_cursor",
+        "shadow_publishes_production_wiki"
+      ],
+      "source_refs": [
+    "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md#十二不做生产双跑的对等验证"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-010",
+        "DECISION-012"
+      ],
+      "supersedes": []
+    },
+    {
+      "clause_id": "V2-CONST-015",
+      "title": "Order implementation values without compensation across quality tiers",
+      "proposal_provenance": ["PRIOR_USER_DIRECTION"],
+      "adjudication_status": "NOT_ADJUDICATED",
+      "activation_membership": "PENDING_ADJUDICATION",
+      "candidate_payload_hash": null,
+      "candidate_scope_kind": "ENGINEERING_QUALITY",
+      "claim_kind": "PRODUCT_VALUE",
+      "adjudication_record_ref": null,
+      "adjudication_record_subject_hash": null,
+      "adjudication_record_disposition": null,
+      "competing_claim_refs": [],
+      "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "user.product_value.implementation_quality_priority",
+      "candidate_protected_fact": "The legitimate product-value ordering is supplied by the user's exact direction; it does not prove that any implementation actually satisfies a capability, performance, experience or simplicity claim.",
+      "candidate_claim": "Implementation choice uses a non-compensatory value order: complete effective legacy functionality and adopted cognitive, safety, data and recovery obligations first; demonstrably better performance and user experience on frozen material outcomes second; only among the same outcome-equivalence class is simpler and more elegant code preferred. Adopting an adjudication method does not activate this value clause or either empirical quality clause; each requires its own adjudication, verification and exact authorization.",
+      "candidate_forbidden_behavior_codes": [
+        "SIMPLICITY_BY_CAPABILITY_OMISSION",
+        "SIMPLICITY_BY_PERMANENT_DEFER",
+        "OUTCOME_REGRESSION_COMPENSATED_BY_SIMPLICITY",
+        "VALUE_DIRECTION_PRESENTED_AS_EMPIRICAL_PROOF",
+        "METHOD_ADOPTION_IMPLICITLY_ACTIVATES_QUALITY_CLAUSES"
+      ],
+      "candidate_predicates": [
+        "tier_1_failure_cannot_be_compensated_by_tier_2_or_tier_3",
+        "tier_2_material_difference_cannot_be_compensated_by_tier_3",
+        "tier_3_is_reachable_only_inside_one_approved_outcome_equivalence_class",
+        "method_adoption_does_not_activate_quality_clause_candidates"
+      ],
+      "candidate_negative_oracles": [
+        "a_value_owner_marks_an_unmeasured_candidate_as_complete_or_faster",
+        "a_simpler_candidate_wins_despite_a_material_performance_or_experience_tradeoff",
+        "a_deleted_or_permanently_deferred_capability_is_called_elegance"
+      ],
+      "source_refs": [
+    "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json#/entries/METHOD-EVID-001/source_binding/exact_excerpts/2"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-002",
+        "DECISION-004",
+        "DECISION-005",
+        "DECISION-006",
+        "DECISION-012",
+        "DECISION-013"
+      ],
+      "supersedes": []
+    },
+    {
+      "clause_id": "V2-CONST-016",
+      "title": "Prove performance and experience outcomes on a frozen non-inferiority and improvement contract",
+      "proposal_provenance": ["PRIOR_USER_DIRECTION", "CURRENT_DESIGN_SYNTHESIS"],
+      "adjudication_status": "NOT_ADJUDICATED",
+      "activation_membership": "PENDING_ADJUDICATION",
+      "candidate_payload_hash": null,
+      "candidate_scope_kind": "ENGINEERING_QUALITY",
+      "claim_kind": "ENGINEERING_FEASIBILITY",
+      "adjudication_record_ref": null,
+      "adjudication_record_subject_hash": null,
+      "adjudication_record_disposition": null,
+      "competing_claim_refs": [],
+      "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "architecture_validation.performance_and_experience_evidence",
+      "candidate_protected_fact": "Performance and experience superiority are empirical engineering outcomes and must be independently reproducible from the same exact metric denominator, scenario/cohort coverage, baseline registry, scope, workload, runtime, fault schedule and statistical contract.",
+      "candidate_claim": "Before any Tier 2 verdict, freeze exact bindings for the material-metric denominator, all-material outcome profile, complete cross-domain guardrail set, scenario and cohort coverage, typed baseline registry and outcome-equivalence result. Normalize higher-is-better, lower-is-better and target-range metrics by one declared formula; require ordered confidence intervals and 0 <= equivalence margin <= non-inferiority margin with equivalence margin < meaningful-improvement delta. Derive exactly one state by precedence: absolute-SLO FAIL, absolute-SLO UNKNOWN, SUPERIOR, EQUIVALENT, NONINFERIOR, effect FAIL only when the effect upper bound is below the negative non-inferiority margin, otherwise UNKNOWN. A confidence interval crossing the non-inferiority boundary is UNKNOWN. A capability slice completes only when its Tier 1 denominator is zero-gap and every applicable approved slice metric meets SLO and non-inferiority; it makes no global superiority claim. Final cutover additionally requires nonempty exact performance and user-experience denominators, the exact union with all cognitive, safety, privacy, agency, data, effect and recovery guardrails, at least one predeclared meaningful improvement in each performance and experience domain, and zero material regression.",
+      "candidate_forbidden_behavior_codes": [
+        "POST_RESULT_BASELINE_OR_WORKLOAD_CHANGE",
+        "UNKNOWN_METRIC_AS_NEUTRAL",
+        "MATERIAL_REGRESSION_HIDDEN_IN_AGGREGATE_SCORE",
+        "LOW_STATISTICAL_POWER_AS_GREEN",
+        "SAFETY_EVIDENCE_OR_PERSISTENCE_BYPASS_FOR_SPEED",
+        "EMPTY_OR_CHERRY_PICKED_METRIC_DENOMINATOR",
+        "CANDIDATE_STATE_SELF_AUTHORED_INSTEAD_OF_DERIVED",
+        "NON_SINGLE_VALUED_OR_ARITHMETICALLY_INCONSISTENT_METRIC_STATE",
+        "CROSS_DOMAIN_GUARDRAIL_OMITTED_FROM_ALL_MATERIAL_OUTCOME_SET",
+        "SLICE_CLAIMS_GLOBAL_CUTOVER_OR_UNRELATED_DOMAIN_SUPERIORITY"
+      ],
+      "candidate_predicates": [
+        "executed_material_metric_keys_equal_the_approved_exact_denominator",
+        "approved_all_material_outcome_profile_and_cross_domain_guardrail_set_are_exactly_bound",
+        "executed_metric_and_result_keys_equal_performance_experience_and_complete_cross_domain_union_exactly",
+        "scenario_cohort_and_baseline_registry_roots_are_frozen",
+        "every_material_metric_normalization_interval_margin_and_state_is_recomputed_by_the_exclusive_precedence_contract",
+        "confidence_interval_crossing_noninferiority_is_unknown_and_effect_fail_requires_upper_bound_below_negative_noninferiority_margin",
+        "slice_complete_requires_slice_tier_1_zero_gap_and_all_applicable_metrics_slo_and_noninferiority",
+        "outcome_equivalence_covers_all_material_cognitive_safety_privacy_agency_data_effect_recovery_performance_and_experience_outcomes",
+        "final_cutover_performance_domain_has_meaningful_improvement_and_no_material_regression",
+        "final_cutover_user_experience_domain_has_meaningful_improvement_and_no_material_regression",
+        "material_outcome_tradeoff_is_not_resolved_by_simplicity"
+      ],
+      "candidate_negative_oracles": [
+        "candidate_is_faster_only_because_it_skips_evidence_persistence_audit_or_error_handling",
+        "candidate_passes_only_after_baseline_cohort_scale_or_fault_schedule_is_weakened",
+        "one_improved_average_hides_a_material_tail_latency_accessibility_or_control_regression",
+        "confidence_or_sample_size_is_insufficient_but_state_is_reported_noninferior",
+        "novice_expert_accessibility_longitudinal_or_appropriate_reliance_cohort_is_omitted",
+        "both_candidates_pass_minimum_tier_1_but_material_cognitive_or_recovery_outcomes_are_not_equivalent"
+      ],
+      "source_refs": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-design-adjudication-design.md#82-tier-2性能与体验结果",
+        "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json#/quality_priority_policy/tier_2_performance_and_experience"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-002",
+        "DECISION-004",
+        "DECISION-005",
+        "DECISION-006",
+        "DECISION-012",
+        "DECISION-013"
+      ],
+      "supersedes": []
+    },
+    {
+      "clause_id": "V2-CONST-017",
+      "title": "Prefer independently measured deep-module simplicity without exporting complexity",
+      "proposal_provenance": ["CURRENT_DESIGN_SYNTHESIS"],
+      "adjudication_status": "NOT_ADJUDICATED",
+      "activation_membership": "PENDING_ADJUDICATION",
+      "candidate_payload_hash": null,
+      "candidate_scope_kind": "ENGINEERING_QUALITY",
+      "claim_kind": "ARCHITECTURE_MECHANISM",
+      "adjudication_record_ref": null,
+      "adjudication_record_subject_hash": null,
+      "adjudication_record_disposition": null,
+      "competing_claim_refs": [],
+      "evidence_set_root": null,
+      "independent_challenger_receipt_ref": null,
+      "independent_challenger_receipt_sha256": null,
+      "verifier_report_ref": null,
+      "verifier_report_sha256": null,
+      "adjudication_freshness_status": "NOT_EVALUATED",
+      "machine_approval_status": "PENDING_EXACT_BYTES",
+      "proposed_owner_ref": "architecture_validation.quality_preserving_simplicity",
+      "candidate_protected_fact": "Simplicity is a whole-system architecture property over code, configuration, schema, data, generated assets, dependencies, tests and runbooks; lower LOC or fewer files alone cannot prove it.",
+      "candidate_claim": "Inside one approved all-material outcome-equivalence class, compare at least two implementations, or bind independent candidate-saturation evidence. Measure K_API, K_AUTHORITY, K_PATH, K_CHANGE, K_LIFECYCLE and K_ABSTRACTION as typed fact contracts whose keys and membership proofs equal the approved denominator exactly. Every fact binds its definition, scenario, baseline and candidate roots, materiality, unit, baseline and candidate values, normalized delta, ordered uncertainty interval, improvement delta, equivalence and regression margins, and one mechanically derived state. Every required trust, effect, failure or variation Seam must remain or have a verified equivalent boundary with shared conformance and fault fixtures plus adapter-specific external-failure fixtures. Missing required tests, runbooks, owners, schemas, recovery assets or Seam evidence is FAIL or UNKNOWN, never lower complexity. Each local guardrail must bind the approved profile, oracle, complete workload and result evidence, and passes only with zero blocking findings; partial, stale or missing evidence is UNKNOWN. A final accepted implementation must improve at least one predeclared material complexity fact with no material REGRESSED or UNKNOWN fact against an approved outcome-equivalent implementation baseline, while every negative oracle and local guardrail passes; otherwise report SIMPLICITY_UNRESOLVED and continue design or prototyping rather than choosing by taste or LOC.",
+      "candidate_forbidden_behavior_codes": [
+        "LOC_AS_SOLE_ELEGANCE_ORACLE",
+        "COMPLEXITY_EXPORTED_OUTSIDE_MEASUREMENT_SCOPE",
+        "ONE_GOD_INTERFACE_FOR_UNRELATED_STATE_MACHINES",
+        "PASS_THROUGH_MODULE",
+        "HYPOTHETICAL_SEAM_WITHOUT_BOUNDARY_EVIDENCE",
+        "PERMANENT_COMPATIBILITY_GLUE_WITHOUT_EXIT",
+        "REQUIRED_TEST_OR_RUNBOOK_DELETION_COUNTED_AS_SIMPLICITY",
+        "RAW_COMPOSITE_SCORE_WITHOUT_TYPED_FACT_DENOMINATOR",
+        "COMPLEXITY_FACT_OR_LOCAL_GUARDRAIL_STATE_SELF_AUTHORED",
+        "SINGLE_IMPLEMENTATION_SELF_CERTIFIES_ELEGANCE"
+      ],
+      "candidate_predicates": [
+        "complexity_assessment_uses_same_code_config_schema_data_dependency_test_and_runbook_roots",
+        "all_six_complexity_dimensions_have_exact_typed_fact_denominators_units_thresholds_and_unknown_semantics",
+        "each_complexity_fact_binds_membership_baseline_candidate_materiality_values_deltas_margins_interval_and_derived_state",
+        "executed_complexity_fact_keys_and_membership_proofs_equal_the_approved_fact_set_exactly",
+        "at_least_two_outcome_equivalent_implementations_are_compared_or_independent_saturation_evidence_is_bound",
+        "unrelated_change_interface_coupling_gap_is_zero",
+        "duplicate_state_machine_transaction_or_effect_authority_gap_is_zero",
+        "every_required_seam_remains_or_has_verified_equivalent_boundary_evidence_and_executed_shared_and_adapter_specific_fixtures",
+        "missing_required_asset_count_is_zero",
+        "final_implementation_improves_at_least_one_predeclared_material_complexity_fact_with_no_material_complexity_regression_against_an_approved_outcome_equivalent_implementation_baseline",
+        "each_local_guardrail_binds_approved_profile_oracle_complete_workload_and_result_evidence",
+        "all_deep_module_negative_oracles_and_local_code_quality_guardrails_derive_pass",
+        "pareto_incomparability_yields_simplicity_unresolved",
+        "every_compatibility_item_has_owner_expiry_remove_when_and_telemetry"
+      ],
+      "candidate_negative_oracles": [
+        "fewer_modules_create_one_interface_coordinating_independent_state_machines",
+        "unrelated_artifact_change_forces_public_interface_change",
+        "representative_change_crosses_most_internal_owners",
+        "independent_concerns_cannot_be_tested_or_replaced_separately",
+        "clean_internal_code_requires_callers_or_operators_to_reimplement_ordering_retry_or_recovery",
+        "complexity_is_hidden_in_configuration_schema_data_generated_code_dependency_or_runbook"
+      ],
+      "source_refs": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-design-adjudication-design.md#83-tier-3可独立测量的复杂度向量",
+    "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json#/quality_priority_policy/tier_3_quality_preserving_simplicity/complexity_vector",
+    "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json#/quality_priority_policy/tier_3_quality_preserving_simplicity/god_module_negative_oracles",
+    "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json#/quality_priority_policy/tier_3_quality_preserving_simplicity/seam_admission_rule"
+      ],
+      "unresolved_dependency_ids": [
+        "DECISION-004",
+        "DECISION-005",
+        "DECISION-006",
+        "DECISION-013"
+      ],
+      "supersedes": []
+    }
+  ],
+  "unresolved_term_registry": [
+    "expansion_required_task",
+    "material_claim",
+    "material_counterevidence",
+    "high_risk_task",
+    "high_impact_action",
+    "independent_source_cluster",
+    "objective_outcome",
+    "appropriate_reliance",
+    "complementarity_required_cohort",
+    "false_balance",
+    "outcome_equivalence_class",
+    "meaningful_improvement_delta",
+    "material_performance_metric",
+    "material_experience_metric",
+    "exact_material_metric_denominator",
+    "scenario_cohort_coverage_root",
+    "typed_baseline_registry",
+    "slice_complete_profile",
+    "effect_confidence_interval_state_derivation",
+    "complexity_assessment_root",
+    "complexity_typed_fact_denominator",
+    "representative_change_scenario_root",
+    "required_seam_registry",
+    "cohesive_concern_owner_denominator",
+    "independent_candidate_saturation_evidence",
+    "simplicity_unresolved",
+    "seam_boundary_evidence",
+    "god_object_or_interface"
+  ],
+  "activation_predicates_candidate": [
+    "current_schema_version_v5_activation_is_prohibited",
+    "future_final_record_must_bind_protocol_evidence_denominator_method_assessment_and_challenger_exact_hashes",
+    "future_final_record_design_outcome_must_equal_ADOPT",
+    "future_challenger_report_must_equal_PASS_with_zero_open_blocking_findings",
+    "future_dependency_bundle_must_bind_schema_protocol_evidence_denominator_method_assessment_challenger_and_final_exact_hashes",
+    "future_structural_verifier_must_bind_final_and_dependency_bundle_and_equal_ELIGIBLE_with_all_required_positive_and_mutation_fixtures_matching_expected_results",
+    "future_artifact_DAG_must_be_acyclic_and_every_binding_role_target_and_hash_must_match",
+    "future_proposal_pending_or_unresolved_count_must_equal_zero",
+    "future_terminal_adjudication_binding_gap_must_equal_zero",
+    "future_adopted_constitution_set_root_must_bind_only_fresh_ADOPTED_CANDIDATE_payloads",
+    "future_unresolved_term_count_must_equal_zero",
+    "future_authenticated_user_authorization_must_bind_the_same_exact_dependency_root_scope_expiry_and_recovery_conditions",
+    "future_post_authorization_acceptance_gate_must_recompute_authorization_internal_and_dependency_hashes_principal_scope_time_recovery_and_duplicate_raw_member_rejection_and_equal_ACTIVATION_ELIGIBLE"
+  ],
+  "activation_rule": "Schema version v5 is a non-governing proposal ledger and has no AUTHORIZED_ACTIVE state. A future schema generation may add activation only after a post-final detached structural verifier proves the pre-authorization lifecycle from exact bytes, an authenticated user authorizes that exact dependency root, and a separate post-authorization acceptance gate recomputes authorization bytes, internal text hash, principal scope, action, prohibitions, recovery and both validity windows from bound evidence; no self-declaration, producer assessment, conceptual agreement or JSON Schema green can activate this ledger."
+}

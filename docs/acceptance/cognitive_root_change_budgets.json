@@ -1,0 +1,700 @@
+{
+  "parent_root_id": "COG-046",
+  "root_count": 50,
+  "roots": [
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-025"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 8,
+      "allowed_migration_delta": 2,
+      "allowed_schema_delta": 2,
+      "approved_expansions": [
+        "append_only_native_session_identity_reconciliation_ledger",
+        "raw_rebuild_exact_plan_identity_preflight_and_rollback",
+        "native_session_disposition_conservation_cursor_v4",
+        "tri_state_native_source_discovery_and_coverage_contract",
+        "native_container_residual_evidence_contract",
+        "canonical_raw_structured_field_single_copy_contract",
+        "typed_sync_log_and_backend_dedup_unavailable_contract",
+        "fail_closed_native_source_path_predicate_contract",
+        "fail_closed_snapshot_path_lifecycle_contract",
+    "fail_closed_sanitize_configuration_contract",
+    "atomic_phase1_sqlite_schema_initialization_contract",
+    "stable_nofollow_native_file_read_and_snapshot_copy_contract"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-045"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 3,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "approved_expansions": [
+        "tri_state_agent_path_watcher_contract",
+        "fail_closed_file_watcher_snapshot_contract",
+        "polling_path_inspection_availability_contract",
+        "atomic_polling_state_snapshot_contract"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-001"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "approved_expansions": [
+        "atomic_metadata_deletion_receipt_schema_preflight"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-002"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-004"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-005"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-006"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-007"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 5,
+      "allowed_migration_delta": 2,
+      "allowed_schema_delta": 2,
+      "approved_expansions": [
+        "nonterminal_runtime_stage_and_failed_terminal_adapters",
+        "runtime_flow_receipts_v4_to_v5_in_progress_status",
+        "coupled_cognitive_state_and_search_projection_migration",
+        "amphora_terminal_outbox_independent_anchor_and_reviewed_reconciliation",
+        "exact_amphora_task_claim_and_payload_availability_contract",
+        "per_claim_timeout_ownership_and_retry_contract",
+    "committed_terminal_secondary_outbox_failure_boundary",
+    "capture_artifact_identity_retention_and_durable_cleanup_contract"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-008"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 6,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "approved_expansions": [
+        "typed_runtime_receipt_store_availability_contract",
+        "active_and_passive_runtime_probe_availability_contract",
+        "single_snapshot_agent_diagnostics_contract",
+        "typed_workflow_and_active_adapter_inventory_contract",
+        "atomic_agent_control_receipt_schema_initialization_contract"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-003"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-009"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 1,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "approved_expansions": [
+        "atomic_raw_index_schema_initialization_contract"
+      ],
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-026"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-027"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-018"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-011"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-028"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-029"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-044"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-047"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-010"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-012"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-013"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-049"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-043"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-035"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-036"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-037"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-038"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-048"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-014"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-030"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-015"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-050"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-039"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-034"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-031"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-024"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-016"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-017"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-019"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-032"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-020"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-021"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-022"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-023"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-033"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-040"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-041"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-046"
+    },
+    {
+      "allowed_gate_delta": 0,
+      "allowed_interface_delta": 0,
+      "allowed_migration_delta": 0,
+      "allowed_schema_delta": 0,
+      "expansion_requires_explicit_contract_update": true,
+      "required_docs": [
+        "repo",
+        "desktop",
+        "source_record"
+      ],
+      "root_id": "COG-042"
+    }
+  ],
+  "schema_version": "mnemos.cognitive_root_change_budgets.v1"
+}

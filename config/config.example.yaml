@@ -1,78 +1,758 @@
-# Mnemos 旧版 YAML 配置参考
-# 运行时权威配置为 ~/.mnemos/configs/main.json；新安装请优先使用 config.example.json
+# Mnemos configuration example (YAML)
+# This file is auto-generated from core/config.py::DEFAULT_CONFIG.
+# Uncomment and modify the values you want to override.
 
+# === performance_tier ===
+performance_tier: default
+
+# === claude_data_dir ===
+claude_data_dir: null
+
+# === scheduler ===
+scheduler:
+  worker_threads: 4
+
+# === wiki ===
 wiki:
-  # Obsidian Vault 中的 wiki 目录路径
-  # 留空则自动检测平台默认值
-  vault_path: "~/Documents/Obsidian Vault/wiki"
+  vault_path: null
 
-memos:
+# === agent_kit ===
+agent_kit:
+  runtime_receipt_max_age_seconds: 86400
+
+# === storage ===
+storage:
+  backend: obsidian
+  obsidian:
+    vault_path: null
+    daily_size_threshold: 819200
+    scan_cache_ttl_seconds: 60
+    scan_cache_max_entries: 1024
+  retention_days:
+    observations: 180
+    reflections: 180
+    user_signals: 90
+    application_signals: 90
+    knowledge_graph: 365
+    wiki_metrics_query_log: 90
+    mnemos_search_sessions: 90
+    link_probe_queue: 90
+    model_call_ledger: 90
+    distillation_chunks: 30
+  maintenance:
+    interval_hours: 24
+    vacuum_day_of_week: 0
+    vacuum_size_threshold_mb: 100
+  disk_budget:
+    sqlite_wal_file_max_mb: 512
+    sqlite_wal_total_max_mb: 1024
+    temp_total_max_mb: 2048
+    temp_stale_minutes: 60
+    snapshot_total_max_mb: 20480
+    snapshot_growth_max_mb_per_day: 8192
+    raw_projection_backup_total_max_mb: 1024
+    raw_events_max_mb: 4096
+    raw_events_growth_max_mb_per_day: 2048
+    growth_sample_min_seconds: 300
+
+# === l1_storage ===
+l1_storage:
+  enabled: false
+  api_url: ''
+  token: ''
+
+# === vaults ===
+vaults:
+  raw:
+    path: null
+    enabled: true
+    auto_register: true
+  mnemos:
+    path: null
+    enabled: true
+    auto_register: true
+
+# === cognitive_graph ===
+cognitive_graph:
   enabled: true
-  # Memos 服务器地址
-  api_url: "https://your-memos-instance.com"
-  # API Token（建议通过 MEMOS_TOKEN 环境变量设置）
-  token: ""
+  db_path: null
 
+# === evidence_backfill ===
+evidence_backfill:
+  default_limit: 0
+  max_refs_per_page: 20
+  frontmatter_ref_limit: 10
+  unresolved_sample_limit: 50
+  change_sample_limit: 100
+  include_relation_evidence: true
+  relation_evidence_types:
+  - anti_pattern_quote
+  - distill_extraction
+  write_frontmatter: true
+  write_report: true
+  report_dir: 99-Reports/认知数据就绪度
+
+# === trusted_push ===
+trusted_push:
+  mode: 'off'
+  db_path: null
+  evidence_ttl_days: 14
+  rejected_evidence_ttl_hours: 24
+  high_entropy_min_length: 80
+  high_entropy_threshold: 4.2
+
+# === mnemos_dir ===
+mnemos_dir: null
+
+# === persona ===
 persona:
   enabled: true
-  # 画像数据源开关
-  # 开启越多画像越精准，但隐私暴露也越多
+  strategy_injection_enabled: true
+  strategy_token_limit: 300
+  skill_report_only: true
+  ab_test_enabled: false
   data_sources:
     session:
       enabled: true
-      description: "AI对话信号（核心）- 推断专注深度、质疑倾向、完美偏好等"
     git:
       enabled: false
-      description: "Git提交记录 - 推断续航模式、创新倾向、协作偏好"
-    memos:
-      enabled: false
-      description: "Memos笔记 - 推断认知风格、知识结构"
     wiki:
       enabled: false
-      description: "知识库交互 - 推断关注领域、学习路径"
     file_system:
       enabled: false
-      description: "文件系统活动 - 推断工作模式、项目切换频率"
-    wechat:
-      enabled: false
-      description: "微信聊天记录 - 推断情绪模式、社交偏好"
 
+# === cross_agent_share ===
+cross_agent_share: false
+
+# === security ===
+security:
+  accept_env_secret_fallback: false
+
+# === integrations ===
 integrations:
   claude_code:
     enabled: true
-    settings_json_path: "~/.claude/settings.json"
+    settings_json_path: null
   mcp:
+    enabled: true
+  openclaw:
+    state_dir: null
+  crush:
+    home: null
+  codex:
+    codex_home: null
+    xdg_config_home: null
+
+# === scoring ===
+scoring:
+  ewma_alpha: 0.1
+  min_samples_per_dimension: 12
+  domain_scorers_enabled: true
+  clustering:
+    enabled: false
+  training_scheduler:
     enabled: false
 
+# === distill ===
 distill:
-  # 真实环境保护：积压恢复时分批处理，避免 CPU/磁盘/宿主 Agent 持续高负载
+  tick_interval_seconds: 300
+  auto: true
+  cognitive_action_worker_limit: 100
+  cognitive_action_worker_interval_seconds: 60
+  operational_incident_worker_interval_seconds: 60
+  cognitive_actions:
+    queued_budget: 0
+  trigger_threshold: 0.4
+  incremental_batch_turns: 5
+  llm_cost_budget_per_session: 10
+  cold_knowledge_archive_days: 90
+  token_budget_total: 16000
+  token_budget_system_pct: 0.1
+  token_budget_context_pct: 0.25
+  token_budget_content_pct: 0.55
+  token_budget_output_reserve: 2000
+  response_tokens: 6000
+  dynamic_response_tokens_enabled: true
+  response_tokens_default: 6000
+  response_tokens_medium: 8000
+  response_tokens_long: 12000
+  response_tokens_retry_max: 16000
+  response_tokens_short_input_threshold: 6000
+  response_tokens_medium_input_threshold: 16000
+  response_tokens_merge_fragment_threshold: 2
+  effective_max_tokens: 24000
+  per_message_token_limit: 6000
+  chunk_std_factor: 3
+  chunk_total_factor: 25
+  chunk_size_factor: 1.5
+  fragment_boundary_chars: 8000
+  min_value_context_chars: 30
+  value_prejudgment_rule_assessment_length: 3000
+  content_formatter_max_tokens: 8000
   max_tasks_per_cycle: 5
-  max_collect_per_cycle: 20
   min_task_interval_seconds: 1.0
+  poll_interval_seconds: 60
+  task_timeout_seconds: 300
+  task_timeout_medium_seconds: 900
+  task_timeout_long_seconds: 1800
+  task_timeout_chunked_seconds: 3600
+  chunk_checkpoint_enabled: true
+  chunk_checkpoint_db_path: null
+  fragment_merge_threshold: 0.4
+  enable_llm_fragment_merge: true
+  extract_correction_retries: 1
+  min_session_fragment_pass_ratio: 0.5
+  auto_expression_formatting: true
+  structured_output_contract:
+    enforce: true
+  action_router:
+    enabled: true
+    db_path: null
+    backup_dir: distill_action_backups
+    shadow_dir: 07-Shadow/distill-actions
+    min_merge_confidence: 0.72
+    max_direct_conflict_strength: 0.35
 
+# === knowledge_graph ===
+knowledge_graph:
+  freshness_decay_half_life_days: 30
+  projection_enabled: true
+  projection_max_relations: 200
+  projection_max_relations_per_entity: 5
+  implicit_relation_discovery_enabled: true
+  implicit_relation_max_entities_per_event: 5
+
+# === dispute_scan ===
+dispute_scan:
+  enabled: true
+  interval_seconds: 3600
+  max_daily_disputes: 10
+  max_pages_per_scan: 500
+  min_conflict_strength: 0.5
+  auto_resolve_min_gap: 0.3
+  merge_min_gap: 0.15
+  freshness_half_life_days: 30
+  citation_max_reference: 20
+  weights:
+    confidence: 0.25
+    freshness: 0.25
+    citation: 0.2
+    quality: 0.15
+    source: 0.1
+    core: 0.05
+  adaptive_learning:
+    enabled: false
+    learning_rate: 0.05
+    min_samples_before_update: 5
+    max_weight: 0.6
+    min_weight: 0.05
+
+# === application_signals ===
+application_signals:
+  enabled: true
+  auto_notify: false
+  avoidance:
+    enabled: true
+    cooldown_days: 14
+  cross_agent_divergence:
+    enabled: true
+    cooldown_days: 7
+  freshness:
+    enabled: true
+    cooldown_days: 30
+
+# === quality_gate ===
+quality_gate:
+  enabled: true
+  base_threshold: 0.55
+  review_margin: 0.15
+  cognitive_value:
+    enabled: true
+    base_threshold: 0.55
+    review_margin: 0.15
+
+# === model_call_ledger ===
+model_call_ledger:
+  daily_cost_cap: 50.0
+  allow_explicit_zero_price: false
+
+# === capture ===
+capture:
+  payload_retention_days: 30
+  artifact_ttl_days: 30
+  artifact_max_total_bytes: 1073741824
+  max_queue_depth: 10000
+  per_source_max_queue_depth: 1000
+  max_workers: 4
+  per_source_concurrency: 1
+  max_batch_per_tick: 50
+  tick_interval_seconds: 5
+  max_payload_bytes: 200000
+  reasoning_mode: artifact_summary
+
+# === watchers ===
+watchers:
+  enabled: false
+  agent_paths:
+    enabled: false
+    poll_interval_seconds: 300
+  debounce_seconds: 5
+
+# === daemon ===
 daemon:
+  heartbeat_stale_seconds: 180
+  max_workers: 4
   services:
-    # 默认只消费 MCP/Hook 入队，不主动扫描本机历史聊天文件
     capture_worker: true
-    l1_sync: false
-    distill_merge: true
+    raw_projection: true
+    raw_sync: true
+    retry_failed: true
+    distill_and_merge: true
+    distill_cognitive_actions: true
+    operational_incidents: true
+    wiki_route: true
     heartbeat: true
     inbox_scanner: true
     signal_collector: true
     persona_analyzer: true
-    event_bus: true
+    persona_challenge: true
+    eventbus: true
+    observation_engine: true
+    reflection_engine: true
+    feedback_prompt: true
+    recap_consumption: true
+    dispute_scan: true
+    reminder_scan: true
+    freshness_refresh: true
+    entropy_scan: true
+    link_probe: false
+    db_maintenance: true
+    startup_compensation: true
+    drift_report: true
+    preflight_checks: true
+    scheduler_tick: true
+    adaptive_config: true
+    search_ignore_detection: true
+    user_correction_detection: true
+    cognitive_graph_reconcile: true
+    prediction_maturity: true
+    training_governance: true
+    cognitive_consolidation: true
+    trigger_dispatcher: true
+    file_ingestor: true
+    agent_path_watch: false
+    wiki_auto_commit: true
 
+# === wiki_route ===
+wiki_route:
+  interval_seconds: 3600
+
+# === training_governance ===
+training_governance:
+  interval_seconds: 3600
+  reconcile_batch_limit: 100
+
+# === raw_projection ===
+raw_projection:
+  enabled: true
+  interval_seconds: 300
+  max_files: 0
+  chunk_turns: 5
+  max_turn_chars: 0
+  include_eligible_delete: false
+
+# === raw_event_store ===
+raw_event_store:
+  db_path: null
+  enabled: true
+  recalc_days: 7
+  retention_days: 30
+  survival_prune_threshold: 35.0
+  freshness_half_life_days: 30
+  physical_delete_enabled: true
+  physical_delete_batch_limit: 10000
+  startup_delay_seconds: 600
+
+# === cognitive_consolidation ===
+cognitive_consolidation:
+  db_path: null
+  raw_vault_dir: null
+  method_pages_dir: 04-Concepts/方法论
+  candidate_limit: 50
+  raw_purge_limit: 10
+  min_key_details: 1
+  max_key_details: 2
+  interval_seconds: 86400
+
+# === cognitive_readiness ===
+cognitive_readiness:
+  freshness_window_seconds: 2592000
+
+# === trust ===
+trust:
+  db_path: null
+  base_trust_score: 0.6
+  evidence_ref_bonus: 0.08
+  min_merge_score: 0.72
+  min_delivery_score: 0.55
+  min_delivery_task_fit: 0.45
+  min_guard_score: 0.75
+  min_guard_task_fit: 0.7
+  ignore_penalty: 0.12
+  dismiss_penalty: 0.22
+  no_click_penalty: 0.08
+  contradicted_penalty: 0.35
+  harmful_penalty: 1.0
+  harmful_cooldown_days: 30
+
+# === guard ===
+guard:
+  analysis_loop:
+    enabled: true
+    max_analysis_turns_without_action: 2
+    max_repeated_reads_per_target: 2
+
+# === policy_patch ===
+policy_patch:
+  enabled: true
+  db_path: null
+  ttl_days: 30
+  min_confidence: 0.7
+  max_active: 5
+
+# === prediction ===
+prediction:
+  predictive_delivery_window_hours: 168
+  maturity_interval_seconds: 3600
+  maturity_batch_limit: 100
+
+# === delivery ===
+delivery:
+  db_path: null
+  preference: balanced
+  profiles:
+    quiet:
+      daily_total: 4
+      per_task_total: 1
+      per_task_hint: 1
+      per_task_warn: 0
+      force_open_daily: 0
+      same_topic_cooldown_hours: 48
+      dismiss_cooldown_days: 30
+      overflow_defer_hours: 1
+    balanced:
+      daily_total: 12
+      per_task_total: 3
+      per_task_hint: 2
+      per_task_warn: 1
+      force_open_daily: 0
+      same_topic_cooldown_hours: 24
+      dismiss_cooldown_days: 14
+      overflow_defer_hours: 1
+    active:
+      daily_total: 24
+      per_task_total: 5
+      per_task_hint: 3
+      per_task_warn: 2
+      force_open_daily: 1
+      same_topic_cooldown_hours: 12
+      dismiss_cooldown_days: 7
+      overflow_defer_hours: 1
+
+# === verification_queue ===
+verification_queue:
+  enabled: true
+  db_path: null
+  report_path: null
+  blindspots_db_path: null
+  max_candidates: 50
+  max_disputes: 10
+  max_blindspots: 10
+  max_freshness_alerts: 10
+  cron: 20 16 * * *
+  respect_resource_budget: true
+
+# === freshness_refresh ===
+freshness_refresh:
+  redistill_enabled: false
+  auto_refresh_limit: 3
+  archive_limit: 10
+  interval_seconds: 86400
+  auto_refresh_on_stale: true
+
+# === entropy ===
+entropy:
+  scan_sample_size: 200
+  scan_interval_seconds: 86400
+
+# === reflection_export ===
+reflection_export:
+  max_records_per_run: 200
+  max_records_per_day: 20
+
+# === shadow_projection ===
+shadow_projection:
+  max_pages_per_batch: 50
+
+# === link_probe ===
+link_probe:
+  interval_seconds: 3600
+
+# === file_ingestor ===
+file_ingestor:
+  watch_dir: ''
+
+# === sync ===
 sync:
-  # 如需开启 daemon L1 扫描，请先把 daemon.services.l1_sync 设为 true
-  l1_scan_poll_interval_seconds: 60
-  l1_scan_max_sources_per_cycle: 3
-  l1_scan_max_sessions_per_source: 20
-  l1_scan_max_turns_per_session: 50
-  l1_scan_max_file_bytes: 2097152
-  l1_scan_recent_hours: 24
+  raw_sync_sessions_per_source: 10
+  raw_sync_turns_per_session: 100
+  backfill_max_turns_per_session: 0
+  retry_failed_limit: 50
 
+# === reminder ===
+reminder:
+  enabled: true
+  contextual_cooldown_seconds: 600
+  freshness_cooldown_seconds: 86400
+  scan_interval_seconds: 86400
+  max_contextual_per_turn: 3
+
+# === app ===
+app:
+  push_max_items: 3
+
+# === feedback_signal ===
+feedback_signal:
+  db_path: null
+
+# === raw ===
+raw:
+  index:
+    retention_days: 180
+
+# === adaptive_config ===
+adaptive_config:
+  rules: []
+
+# === cognition_episode ===
+cognition_episode:
+  dispatch_startup_limit: 100
+
+# === event_bus ===
 event_bus:
-  # 真实环境保护：事件积压时只分批恢复到内存队列，剩余保持 pending
+  max_workers: 1
+  max_latency_ms: 10
   queue_depth_alert: 1000
   max_queue_depth: 10000
   max_recover_events: 1000
+  max_chain_depth: 10
+  dead_letter_alert: 10
+  dead_letter_max: 1000
+  dead_letter_replay_max_age_hours: 168
+  dead_letter_replay_per_type_limit: 100
+  startup_replay_limit: 500
+  max_retries: 5
+  retry_base_seconds: 1.0
+  retry_max_seconds: 60.0
+  dispatch_workers: 1
+  handler_timeout_seconds: 0
+  lease_seconds: 300.0
+
+# === ops ===
+ops:
+  daemon_log_max_bytes: 10485760
+
+# === auto_heal ===
+auto_heal:
+  enabled: true
+  user_intervention_budget: 10
+  default_verification_command: python3 mnemos_cli.py health --json
+  record_action_ledger: true
+
+# === system ===
+system:
+  database_dir: null
+
+# === observation ===
+observation:
+  enabled: true
+  interval_seconds: 3600
+  inject_on_session_start: true
+
+# === reflection ===
+reflection:
+  enabled: true
+  interval_seconds: 86400
+  auto_trigger_on_session_end: true
+  manual_query: 分析最近认知与决策模式
+  register_default_consumers: true
+  observation_trigger_enabled: true
+  observation_trigger_confidence: 0.7
+
+# === feedback ===
+feedback:
+  enabled: true
+  prompt_interval_seconds: 86400
+  recap_consumption_interval_seconds: 60
+  pending_hours: 24
+  pending_limit: 10
+
+# === skill ===
+skill:
+  cognitive_decision_flywheel:
+    min_occurrences: 3
+    time_window_days: 30
+    wiki_jaccard_threshold: 0.7
+    min_usage_count: 5
+    min_age_days: 7
+    min_confidence: 0.6
+    failure_rate_threshold: 0.3
+    new_scenario_threshold: 3
+    exception_threshold: 2
+    cleanup_days: 60
+    grace_period_days: 7
+
+# === embedding ===
+embedding:
+  enabled: true
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  api_key: ''
+  api_key_env: MNEMOS_EMBEDDING_API_KEY
+  api_key_source: env:MNEMOS_EMBEDDING_API_KEY
+  model: BAAI/bge-m3
+  embedding_model: BAAI/bge-m3
+  use_rerank: true
+
+# === reranker ===
+reranker:
+  enabled: true
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  api_key: ''
+  api_key_env: MNEMOS_RERANKER_API_KEY
+  api_key_source: env:MNEMOS_RERANKER_API_KEY
+  model: BAAI/bge-reranker-v2-m3
+
+# === multimodal ===
+multimodal:
+  enabled: false
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  api_key: ''
+  api_key_env: MNEMOS_MULTIMODAL_API_KEY
+  api_key_source: ''
+  model: Qwen/Qwen2.5-VL-72B-Instruct
+  timeout: 120
+  max_input_tokens: 131072
+  chain: []
+  providers: {}
+  rate_limits: {}
+
+# === relation_embedding ===
+relation_embedding:
+  batch_flush: true
+  flush_interval_seconds: 60
+  flush_batch_size: 10
+
+# === llm ===
+llm:
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  api_key: ''
+  api_key_env: MNEMOS_LLM_API_KEY
+  api_key_source: env:MNEMOS_LLM_API_KEY
+  model: deepseek-ai/DeepSeek-V4-Flash
+  timeout: 120
+  api_key_sources: []
+  key_strategy: weighted
+  race_timeout: 30
+  providers:
+    dmxapi:
+      base_url: https://www.dmxapi.cn/v1
+      api_key: ''
+      api_key_env: DMXAPI_API_KEY
+      model: kimi-k2.5-free
+    siliconflow:
+      base_url: https://api.siliconflow.cn/v1
+      api_key: ''
+      api_key_env: SILICONFLOW_API_KEY
+      model: deepseek-ai/DeepSeek-V4-Flash
+    openai:
+      base_url: https://api.openai.com/v1
+      api_key: ''
+      model: gpt-4o-mini
+  provider_prices: {}
+  rate_limits:
+    dmxapi:
+      rpm: 5
+      models:
+        kimi-k2.5-free:
+          rpm: 5
+        MiniMax-M2.7-free:
+          rpm: 5
+    siliconflow:
+      rpm: 500
+      tpm: 2000000
+  routing_strategy: sequential
+  chain:
+  - provider: siliconflow
+    base_url: https://api.siliconflow.cn/v1
+    model: deepseek-ai/DeepSeek-V4-Flash
+    api_key: ''
+    api_key_source: env:SILICONFLOW_API_KEY
+    cost_level: paid
+    timeout: 120
+  - provider: dmxapi
+    base_url: https://www.dmxapi.cn/v1
+    model: kimi-k2.5-free
+    api_key: ''
+    api_key_source: env:DMXAPI_API_KEY
+    cost_level: free
+    timeout: 120
+  - provider: dmxapi
+    base_url: https://www.dmxapi.cn/v1
+    model: MiniMax-M2.7-free
+    api_key: ''
+    api_key_source: env:DMXAPI_API_KEY
+    cost_level: free
+    timeout: 120
+
+# === document_process ===
+document_process:
+  max_file_size_mb: 100
+
+# === preflight ===
+preflight:
+  mode: full
+  timeout_sec: 5
+
+# === oracle ===
+oracle:
+  index_cache_ttl_seconds: 60
+
+# === push ===
+push:
+  index_cache_ttl_seconds: 60
+
+# === intent_router ===
+intent_router:
+  llm_fallback_enabled: false
+  llm_fallback_threshold: 0.65
+  llm_fallback_timeout_seconds: 2.0
+
+# === search ===
+search:
+  weights: {}
+
+# === charon ===
+charon:
+  tech_keywords: null
+  concept_keywords: null
+
+# === incremental ===
+incremental: {}
+
+# === features ===
+features:
+  enable_link_probe: false

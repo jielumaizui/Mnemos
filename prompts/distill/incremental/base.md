@@ -15,18 +15,18 @@
 输出严格合法的 JSON：
 
 ```json
-{{
+{
   "update_type": "append|replace|conflict",
   "reason": "更新类型判断理由",
   "section_to_update": "需要更新的章节标题（replace时）",
   "new_content": "新增或替换的内容（Markdown格式）",
-  "conflict_detail": {{
+  "conflict_detail": {
     "existing_claim": "已有页面中的断言",
     "new_claim": "新对话中的断言",
     "resolution_suggestion": "建议的解决方案"
-  }},
+  },
   "confidence": 0.0-1.0
-}}
+}
 ```
 
 ## 已有页面内容

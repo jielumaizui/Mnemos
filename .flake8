@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 120
+exclude = .venv,__pycache__,.git,.pytest_cache,.mypy_cache,.audit_venv,build,dist,vulture_whitelist.py
+extend-ignore = E203,E402
+per-file-ignores =
+    core/hephaestus/distillation_engine.py:F401

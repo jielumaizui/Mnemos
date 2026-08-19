@@ -1,0 +1,205 @@
+{
+  "schema_version": "mnemos.cognitive_phase0_independent_denominator.v1",
+  "owner": "sole active governing contract sections 14.7, 14.8, 15.2 and tracked release entrypoints",
+  "governing_source": {
+    "asset_id": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+    "path": "Mnemos-Phase0-7全局工程修复合同-2026-07-24.md",
+    "governance_role": "current_active",
+    "section_anchors": [
+      "### 14.7",
+      "### 14.8",
+      "### 14.9"
+    ],
+    "section_14_7_sha256": "44bcadfbd368c85ac7a86f479134dff61300803d7178bda37cb7ecf0425c2c33",
+    "section_14_8_sha256": "e24a12a36009b55b7395ae3e4beedb8915bce753ab0741c99a49ed9c77f729a8",
+    "imported_contract_corpus_sha256": "b3cac4ed8ab5e7d015c1817c505f8bb5efb7d30bb91a02e853c19e51b76ba90c"
+  },
+  "governed_hashes": {
+    "root_order": "7f241be4d6c337fa333e46dfffdbb2f0b8f2650729fe0f334ee904c4d606ff4d",
+    "finding_owners": "2de909dc48984f5976077a33bd6e53611f7cece282c21d87ab1a9c3e3686f565",
+    "support_wps": "9ed9317f8d34e74e7871dd462b3d5096d1c9c8c299ef9970e21155eb7f28c987",
+    "support_wp_prerequisites": "ff01bfeef224a905ef4b461a405ab5b86ee0a6dae0d5339af4a78dab1fd04c74",
+    "phase0_support_requirement_specs": "2f2bd4a3540342b2c467ad8d0c31315c40f622c161e724b894a18f634fc04bf5",
+    "phase1_root_requirement_specs": "7bc5e8b1617f0aef0aeeef075d1a2773fa80b20c14acc240ada82a69482a20f5",
+    "phase1_revalidation_sequence": "ff7d257536dcad5b5c5f2d4d5ccce4edc3bea860460d589e1d87302ffd6486ee",
+    "phase1_closure_boundaries": "d914cbadbfffe8ec97c856a5cd0f2eb793f199f241d35a2904e5168cf4d36d7e",
+    "phase1_immutable_historical_artifacts": "4320713e56f1983a7b488065d623997f1cb565708ab45aa6a8bafb7ad3c78cd0",
+    "phase1_current_generation_artifact_paths": "be3de7887a14872f3900c1dbdbf99d70a930b1ecdfa1fcf8f2274b43fb1190b2",
+    "phase0_followup_residual_dispositions": "ca1c1a56c5405ee0fa8431482b76cb7939dc6a371f27c3cdf941544cc690e96b",
+    "finding_support": "b1f969de981786fddf4383d096c226919d45b56940832615679cd1328264da6c",
+    "invalidated_roots": "aba83ea39cfce5033b0e34ee796cacda2a77d46cb50c961a802f516e07a598c6",
+    "applies_to_all": "c84ad22e3e3636607eb7cab2f6b894792b7d39cbf6eb331f54b484ed76137830"
+  },
+  "identity_denominators": {
+    "certificate_ids": {
+      "count": 6,
+      "sha256": "c173cd554c3a5f59608878c85dffbbd62ef7f612f7cfc567ae1cfc7aad6488e9"
+    },
+    "runtime_interface_ids": {
+      "count": 13,
+      "sha256": "c635e1e080b9da6f1819c8605796c29480780f83e4035cad891a9027e02a5013"
+    }
+  },
+  "closure_states": {
+    "COG-001": "CODE_CONTRACT_REVALIDATED_CONTINUOUS_LIVE_EFFECT_PENDING",
+    "COG-002": "CODE_CONTRACT_REVALIDATED_CURRENT_HISTORY_NOT_READ",
+    "COG-004": "CODE_CONTRACT_REVALIDATED_CURRENT_CLAUDE_DENOMINATOR_NOT_READ",
+    "COG-005": "CODE_CONTRACT_REVALIDATED_CURRENT_CRUSH_DENOMINATOR_NOT_READ",
+    "COG-006": "CODE_CONTRACT_REVALIDATED_CURRENT_OPENCLAW_DENOMINATOR_NOT_READ",
+    "COG-007": "CODE_CONTRACT_REVALIDATED_CURRENT_KIMI_DENOMINATOR_NOT_READ",
+    "COG-008": "CODE_CONTRACT_REVALIDATED_LIVE_LEDGER_MIGRATION_PENDING",
+    "COG-003": "CODE_CONTRACT_REVALIDATED_LIVE_RUNTIME_REPROBE_PENDING",
+    "COG-009": "CODE_CONTRACT_REVALIDATED_LIVE_PROJECTION_REPLAY_PENDING",
+    "COG-026": "CODE_CONTRACT_REVALIDATED_LIVE_INCREMENTAL_APPLY_PENDING",
+    "COG-025": "SAFETY_SEAM_IMPLEMENTED_INCIDENT_AUTH_BLOCKED",
+    "COG-040": "BASELINE_CONTRACT_FROZEN_NOT_PHASE7_CLOSED",
+    "COG-045": "CODE_CONTRACT_REVALIDATED_LIVE_RAW_REBUILD_PENDING",
+    "COG-046": "P0_DENOMINATOR_LOCK_IMPLEMENTED_PHASE7_OPEN"
+  },
+  "closure_boundary_hashes": {
+    "COG-001": "df2d14e3ef983a6957bac10f41ea75542f6834c051d7e90a99cca92028cdc928",
+    "COG-002": "a5eb16804cfad0f738e254fee79dc60e4bd439b45d233f80d423b435480d4bd5",
+    "COG-004": "54231eeec722e9973c0483d08068714f8283c81dfc6a4d5942f6270eeba13cb5",
+    "COG-005": "07c680726134c1a22f9ebc60d21991aa31f923999f1b45c30a8723163f6e65ca",
+    "COG-006": "ea0c1aa2377cc1daedca264220ed66a9a13f5d098f9cea47a3f4791efc7d091f",
+    "COG-007": "0929ceb8e9bc6aecda25fdef80c04228e347eeed824f62f4860a1d17aba7e0ba",
+    "COG-008": "46ff00adc07d7eba064f45daaa4918d706e80424241271c48ffcac086b154131",
+    "COG-003": "07c85e9bf24d0b6407feb166dcf2ea1e5bb592f859c7aa6a21800bbba00f75a4",
+    "COG-009": "dadbf0c53b71f9dc3435ce4a54262344c14a96cb66341379b5c553abf896b8c4",
+    "COG-026": "efccaca589c9061d781b8313e1ce06f6e41e7091f05786deaf6fd68e0b39aded",
+    "COG-025": "228d361655fbd58c2e4d4b2e3fe418ab8d2c5c1fb6b19f66a64f83cb9387f725",
+    "COG-040": "5fd4658410720ccc4e0c927b116b4ca02b2d3620e89211013601e6d59a069cad",
+    "COG-045": "bc8803e02c83fc121fe335f86c1c9cccd5a62f91687ab3a8dc4309c16a8dc829",
+    "COG-046": "309cf4cbcc843a9c0e4c4009f2884e9ea9acde7860fbd58a31b9642422aceeca"
+  },
+  "historical_evidence_hashes": {
+    "phase0_reopen_20260724": "d3f4d2fa7b82870d4e5ae3e0ea90c10ed38b49d74f74d0073ae00766cb3d8c83",
+    "phase0_cog040_baseline_20260724": "70e8792a587f3382b61eb78c7bef3e40cef2b23bba12c9f85548aef1eefce2b2",
+    "phase0_cog046_denominator_lock_20260724": "86683ca60a4f2d421cfca2e96c19612acc9a653fac09391805e6330ea2f18555"
+  },
+  "superseded_phase0_generation_hashes": {
+    "contract_governance_migration_20260724": "890f25ca17b864ab7f0d2e486321957c605b840088a449611cd34082639d9831",
+    "phase0_cog025_evidence_revalidation_20260724": "e4359f8f286aac7fc1fc2c582b4d93e02b2427c3a83546c57d0f997aa711d612",
+    "phase0_cog040_contract_revalidation_20260724": "18584ac6ba356834f31c55821153a2e2286952c68b1f79f46a175e8f5266f4f2",
+    "phase0_cog046_gate_hardening_20260724": "0c610173c2210dff88d6d5bc0c0ff7c68d08a5e26d99f149b8e1fcff33b7328a",
+    "phase0_cog046_followup_repair_20260725": "604cbfebaeaf3a7de31f1e55f093ce18e3e93eae2f8e60112b87870ba40b8479"
+  },
+  "superseded_phase1_generation_hashes": {
+    "phase1_cog045_contract_revalidation_20260725": "4c63da054685a3419e94520f5655fd38905b91b76dd09d10fabeb81e6ca056c1",
+    "phase1_cog045_exact_plan_authorization_hardening_20260725": "1a0099283440cac073a32f0c549e784babf8e28a3c831cf3e29d40f4670c98b7",
+    "phase1_cog045_governance_revalidation_20260725": "1274c8d642f1db222e3faa3132c26b7afec0c4036d8bd0ca3b735639fe898626",
+    "phase1_cog045_migration_contract_completion_20260725": "9a134fe3321316925f1b8ca73e5b3459d2cf6cfb6ae99459a2748e1bef87a69a",
+    "phase1_cog045_requirement_registration_20260725": "1c7511a4b07f62913119fd787d2585737822d5fcb248286033c38da566d3f85d",
+    "phase1_cog001_contract_revalidation_20260725": "08d58bea517aa4002c5da71b4a2d428bd009a5a8adff4dc66dbec87507e68ba8",
+    "phase1_cog002_contract_revalidation_20260725": "e96d3c7b4f058f03e023996048c7d6effdb410b809b6fab2190b3089f0edaef4",
+    "phase1_cog004_contract_revalidation_20260725": "c3f562d4132e4f429e10400a7272dcc7efcf4e87d6db3a82b25e8e2e0ea8f40c",
+    "phase1_cog005_contract_revalidation_20260725": "2b933728fb0f18a209fa469c353364f4e17f9d579c6ab2da8a636c22097d1461",
+    "phase1_cog006_contract_revalidation_20260726": "188ff429cd1285f054841aab50b39902d8a4a4712ef4e445b5756158fe1d60d3",
+    "phase1_cog007_contract_revalidation_20260725": "9f714f5106f6fbe289c2aa705201e10aa53ca573a6487d6b200be40df0b088ca",
+    "phase1_cog008_contract_revalidation_20260725": "7efef190f434e0d29dd2609d3b906234639d9065ef4994e842a3f054750da896",
+    "phase1_cog003_contract_revalidation_20260725": "7a0693f1e33b56ee2b5eecbbdc0b51a52ab302b8884909802f3d9963dfee34e3",
+    "phase1_cog009_contract_revalidation_20260725": "195aa754114a88596797e2590d7b2cc8493b48170b09b180087bfea22e373250",
+    "phase1_cog009_projection_reference_overlay_20260725": "6426f0d610084cd08b0493a1b3f4259a718a25ec82b284d91fb3d234d00baeb3",
+    "phase1_cog026_contract_revalidation_20260725": "1a4f3c7f846b7ce2d787e91cfad2dc7c34b27915f561b625aa59b5d00409239a",
+    "phase1_cog008_deep_review_repair_20260726": "daa5553041355a2c65fcf2931547d3938f8aa665bd953ba3038ee6618697bc6e",
+    "phase1_full_deep_audit_repair_20260726": "d60f7cd4cea815315718f5609d6ddea0add5e720f6a7198c581be0f274633075",
+    "phase1_raw_identity_deep_review_repair_20260726": "9aff673d2f3331140a763cc947f9db3de44f42fb27b88a8af5e1b3f384f2d069",
+    "phase1_raw_identity_current_revision_repair_20260726": "67c769afbe62248713d4cb19ea47d33352e3c7ea5e2d00716bb65129e56685b3",
+    "phase1_append_only_generation_guard_repair_20260726": "93e9651317fd9eb8318fcfef79da4b2aaa77b88217c24303b616dbca6d39e99b",
+    "phase1_governance_transaction_repair_20260726": "8d69a83ae82c69a133a9c133cdfc992a3f93586d2ea0ec21e59500d276d20d32",
+    "phase1_governance_concurrency_repair_20260726": "598e838f4edb5c7f8c35758681374ec23c1304ee6f9e6635fd5a5f68b8ba91a9",
+    "phase1_governance_reviewed_plan_repair_20260726": "60ee281a473292a337b5c984b3e2a59a3a49c1910c7797788b165499e19fde0e",
+    "phase1_governance_idempotent_refresh_repair_20260726": "bb0e734303cc587447db804efe4a6d2030ec0ee40d64cb1b17bd3c4131d06b1e",
+    "phase1_raw_conservation_repair_20260726": "a3eeb2d0207ea2e9bb5f2ad10a521ec0c347f9e3e3608c03f73cae80b6212f69",
+    "phase1_terminal_review_static_repair_20260726": "dc59be0456578c0c24bfca211bc4a917255f0ed3fd2d900b8c7e8137624efcaa",
+    "phase1_raw_writer_attribution_repair_20260726": "a9731c457a32996b88434ce90c9c471b9e52684bf2c4f65f325bcfc64b8412e1",
+    "phase1_terminal_engineering_repair_20260726": "8adfe10ed9e10417541ed378d60fcba41fd1651612ad8ecdbc14642900512bf5",
+    "phase1_current_projection_repair_20260727": "5bc97c77683d0305d8aa44a88b39e67d2ea192285cc777844cc4021bdbab80d4",
+    "phase1_repairable_prestate_plan_repair_20260727": "7ec467eeac4a4974aeb10fa41d7928af9cf2118accfe9944e89abc76d60d6d11",
+    "phase1_projection_snapshot_repair_20260727": "1f9fa53730b9824671d9e924216334be0f9747a90fe819c8acc6846929637c60",
+    "phase1_preparedless_retry_error_repair_20260727": "ed3b21a14402d5fc7bac8953e51af6927cf7dc1fcdc34215622ffbbf06cb6266",
+    "phase1_metric_timestamp_idempotence_repair_20260727": "e7038fc9662b008468ab97ff8d2f73f1999ec903b99e72a85bf3cb1092be6066",
+    "phase1_single_pass_planning_repair_20260727": "90492b47d5eee6687b3dd35e79327f00283df8728bf58e918431919fd4cf324d",
+    "phase1_single_pass_planning_invariant_repair_20260727": "68bcc4c7325ee948cd286691e6a51b13846bf130cf218f2cd0cad90736c46b07",
+    "phase1_challenger_session_lifetime_repair_20260728": "a885d4b71c7ee44148a6e09dbea572864b8839867325e9d7566e914de523f2d7",
+    "phase1_challenger_turn_graph_lifetime_repair_20260728": "2ceea7d33dec35a1e3ba7a250dbee2a611420c457d1cc9845de7d7021129eb37",
+    "phase1_global_worker_kernel_boundary_repair_20260728": "7bcaf47c856d6f7283db8cbb73546a27f2773c241b6263d7219be606101444fb",
+    "phase1_governance_population_policy_summary_repair_20260728": "5611cf907ca567f99f5d7debedcebe6f70355a95dfd535b054538fcb9e5bf54d",
+    "phase1_native_parse_worker_diagnostics_retry_repair_20260728": "fb601157693c5ff2f292864c97acac290942bfdfa280406af9ae7519f43da8c4",
+    "phase1_native_custom_parser_exception_boundary_repair_20260728": "40fe30dcf1fcc48178b3360532676f62062b65d2d8f1a0a060027036ce333576",
+    "phase1_migration_failure_evidence_boundary_repair_20260728": "8b262383f8cd74fa372cdf95ec4fb12a7648f785208e7c00cf2e3b65d6438f19",
+    "phase1_global_mutation_oracle_closure_20260729": "911c5e185b899ea12fe7cc7a090d52b6bfcac1a177fc902a2147f491a089a03d",
+    "phase1_sqlite_snapshot_diagnostic_closure_20260729": "5b28ea1b60aeb074e6adf5198499d33e3af0b389b6c33676f444452653391031",
+    "phase1_post_deep_review_code_freeze_20260729": "e5f867c46e38e6f3f6b100667a48f582fda67ab5af4ac3b7006e4e7e185eab5d"
+  },
+  "inventory_denominators": {
+    "schema_ddl_paths": {
+      "count": 129,
+      "sha256": "7c6a8043415c6ef7b0965b2ea687c6d85961c40231a0898ede27a299a26059d9"
+    },
+    "migration_paths": {
+      "count": 101,
+      "sha256": "da336f0ad9a1be9bde1bce18ab3abf8e76563f3ae181b7bb3cf459883993ed3b"
+    },
+    "audit_artifact_paths": {
+      "count": 82,
+      "sha256": "985bfa507e775350a93ff355592e358c2b190e0e7166c5286fc29a05c104f5f5"
+    },
+    "full_score_gate_ids": {
+      "count": 63,
+      "sha256": "042bcc618b7d93b4040fcc8a9d6b6027222346a9d9ecb5ea5ab23c9b4984e403"
+    }
+  },
+  "external_governing_assets": [
+    {
+      "asset_id": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+      "path": "Mnemos-Phase0-7全局工程修复合同-2026-07-24.md",
+      "profile": "phase0_required",
+      "classification": "governing_contract",
+      "governance_role": "current_active",
+      "supersedes": [
+        "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+        "desktop:mnemos-phase0-7-global-handoff-2026-07-24"
+      ],
+      "renamed_from": {
+        "asset_id": "desktop:mnemos-phase0-7-global-handoff-2026-07-24",
+        "path": "Mnemos-Phase0-7全局深度审核与修复交接-2026-07-24.md",
+        "sha256": "sha256:c630cb1571c5b1d13bbe12582629075a9b17fcedba2371b97fda6935be5e50be"
+      },
+      "required_anchors": [
+        "status: ACTIVE",
+        "authority: SOLE_GOVERNING_CONTRACT",
+        "14.7 50 个 canonical Root 主账",
+        "14.8 38 finding 反向追踪账",
+        "WP-COG-046-P0-DENOMINATOR-LOCK",
+        "21. 迁入的 Canonical Root 定义、公共合同与状态历史",
+        "24.10 COG-003",
+        "24.11 COG-009",
+        "24.12 COG-026"
+      ],
+      "required_current_root_generations": [
+        "COG-045"
+      ],
+      "final_byte_hash_owner": "detached_closure_bundle_only"
+    }
+  ],
+  "external_historical_assets": [
+    {
+      "asset_id": "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+      "path": "Mnemos认知链路审计与全量修复方案-2026-07-12.md",
+      "profile": "historical_reference",
+      "classification": "historical_source",
+      "governance_role": "historical_provenance",
+      "gate_eligible": false,
+      "superseded_by": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+      "required_anchors": [
+        "status: SUPERSEDED_HISTORICAL_EVIDENCE",
+        "Contract status: SUPERSEDED",
+        "COG-025",
+        "COG-040",
+        "COG-046"
+      ],
+      "frozen_sha256": "sha256:ba8b60a688bfae22910e7ab3e9b258b715f8c57ed97c17e5d3d9421167fdb5e6"
+    }
+  ]
+}

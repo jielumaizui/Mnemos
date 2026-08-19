@@ -28,12 +28,19 @@ from typing import Callable, Dict, List, Optional, Any
 
 from core.config import get_config
 from core.db_utils import SqlitePool
+from core.ops.durable_io import DurableIOError, inspect_path_kind
+
+# Constants extracted from magic numbers
+INTERVAL_SECONDS = 3600
+POLLING_INTERVAL_SECONDS = 3600
+TRIGGER_SECONDS = 3600
 
 
 logger = logging.getLogger(__name__)
 try:
     from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
+    from watchdog.events import FileSystemEventHandler
+
     _WATCHDOG_AVAILABLE = True
 except ImportError:
     _WATCHDOG_AVAILABLE = False
@@ -50,29 +57,31 @@ class BaseTrigger(ABC):
         self._max_backoff = 300  # 5 分钟上限
 
     @abstractmethod
-    def start(self, watch_path: Path):
-        ...
+    def start(self, watch_path: Path): ...
 
     @abstractmethod
-    def stop(self):
-        ...
+    def stop(self): ...
 
     def _backoff_delay(self) -> float:
         """指数退避：5s → 10s → 20s → ... → 300s"""
-        delay = min(5 * (2 ** self._error_count), self._max_backoff)
-        return delay
+        delay = min(5 * (2**self._error_count), self._max_backoff)
+        return delay  # type: ignore[no-any-return]
 
     def _execute_callback(self, file_path: str):
         """安全执行回调，带错误隔离"""
         try:
             self._callback(file_path)
             self._error_count = max(0, self._error_count - 1)
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
             self._error_count += 1
             delay = self._backoff_delay()
             logger.error(
-                f"[Trigger:{self._source_name}] 回调失败 (#{self._error_count}): {e}, "
-                f"退避 {delay:.0f}s"
+                "[Trigger:%s] 回调失败 (#%s): %s, 退避 %.0fs",
+                self._source_name,
+                self._error_count,
+                e,
+                delay,
+                exc_info=True,
             )
 
 
@@ -88,7 +97,7 @@ class WatchdogTrigger(BaseTrigger):
         self,
         callback: Callable[[str], None],
         source_name: str = "",
-        events: List[str] = None,
+        events: List[str] | None = None,
         debounce: float = 5.0,
     ):
         super().__init__(callback, source_name)
@@ -101,10 +110,10 @@ class WatchdogTrigger(BaseTrigger):
 
     def start(self, watch_path: Path):
         if not _WATCHDOG_AVAILABLE:
-            logger.warning(f"[WatchdogTrigger:{self._source_name}] watchdog 未安装，跳过")
+            logger.warning("[WatchdogTrigger:%s] watchdog 未安装，跳过", self._source_name)
             return
         if self._running:
-            logger.warning(f"[WatchdogTrigger:{self._source_name}] 已启动，跳过重复调用")
+            logger.warning("[WatchdogTrigger:%s] 已启动，跳过重复调用", self._source_name)
             return
 
         self._running = True
@@ -114,7 +123,7 @@ class WatchdogTrigger(BaseTrigger):
         self._observer.schedule(self._handler, str(watch_path), recursive=True)
         self._observer.daemon = True
         self._observer.start()
-        logger.info(f"[WatchdogTrigger:{self._source_name}] 监听 {watch_path}")
+        logger.info("[WatchdogTrigger:%s] active", self._source_name)
 
     def stop(self):
         self._running = False
@@ -162,7 +171,7 @@ class PollingTrigger(BaseTrigger):
         self,
         callback: Callable[[str], None],
         source_name: str = "",
-        interval: int = 3600,
+        interval: int = INTERVAL_SECONDS,
         pattern: str = "*.txt",
     ):
         super().__init__(callback, source_name)
@@ -170,22 +179,24 @@ class PollingTrigger(BaseTrigger):
         self._pattern = pattern
         self._thread: Optional[threading.Thread] = None
         self._seen: Dict[str, float] = {}  # path → mtime
-        self._db_path = get_config().data_dir / "polling_state.db"
+        self._state_loaded = False
+        self._db_path = get_config().database_dir / "polling_state.db"
         self._pool = SqlitePool(self._db_path)
 
     def start(self, watch_path: Path):
         if self._running:
-            logger.warning(f"[PollingTrigger:{self._source_name}] 已启动，跳过重复调用")
+            logger.warning("[PollingTrigger:%s] 已启动，跳过重复调用", self._source_name)
             return
+        try:
+            self._load_state()
+        except BaseException:
+            self.close()
+            raise
         self._running = True
-        self._load_state()
-        self._thread = threading.Thread(
-            target=self._poll_loop, args=(watch_path,), daemon=True
-        )
+        self._thread = threading.Thread(target=self._poll_loop, args=(watch_path,), daemon=True)
         self._thread.start()
         logger.info(
-            f"[PollingTrigger:{self._source_name}] 轮询 {watch_path} "
-            f"(间隔 {self._interval}s)"
+            "[PollingTrigger:%s] 轮询 %s (间隔 %ss)", self._source_name, watch_path, self._interval
         )
 
     def stop(self):
@@ -194,12 +205,15 @@ class PollingTrigger(BaseTrigger):
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
-        self._save_state()
-        self.close()
+        try:
+            if self._state_loaded:
+                self._save_state()
+        finally:
+            self.close()
 
     def close(self):
         """关闭持久连接"""
-        if hasattr(self, '_pool'):
+        if hasattr(self, "_pool"):
             self._pool.close()
 
     def _poll_loop(self, watch_path: Path):
@@ -207,9 +221,11 @@ class PollingTrigger(BaseTrigger):
         while self._running:
             try:
                 self._scan(watch_path)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
                 self._error_count += 1
-                logger.error(f"[PollingTrigger:{self._source_name}] 扫描失败: {e}")
+                logger.error(
+                    "[PollingTrigger:%s] 扫描失败: %s", self._source_name, e, exc_info=True
+                )
 
             # 退避后等待
             delay = self._backoff_delay() if self._error_count > 0 else self._interval
@@ -220,8 +236,11 @@ class PollingTrigger(BaseTrigger):
 
     def _scan(self, watch_path: Path):
         """扫描目录，检测新文件或变化的文件"""
-        if not watch_path.exists():
+        watch_kind = inspect_path_kind(watch_path)
+        if watch_kind == "missing":
             return
+        if watch_kind != "directory":
+            raise DurableIOError("polling_trigger_root_not_directory")
 
         current_files = set()
         for f in watch_path.rglob(self._pattern):
@@ -229,8 +248,12 @@ class PollingTrigger(BaseTrigger):
             current_files.add(fpath)
             try:
                 mtime = f.stat().st_mtime
-            except OSError:
+            except FileNotFoundError:
                 continue
+            except OSError:
+                raise DurableIOError(
+                    "polling_trigger_entry_unavailable"
+                ) from None
 
             last_mtime = self._seen.get(fpath, 0)
             if mtime > last_mtime:
@@ -247,8 +270,9 @@ class PollingTrigger(BaseTrigger):
     def _load_state(self):
         """从 SQLite 加载已扫描文件状态"""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = self._pool.get_conn()
         try:
-            conn = self._pool.get_conn()
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS polling_state (
                     source TEXT NOT NULL,
@@ -261,25 +285,36 @@ class PollingTrigger(BaseTrigger):
                 "SELECT path, mtime FROM polling_state WHERE source = ?",
                 (self._source_name,),
             )
-            for row in cursor.fetchall():
-                self._seen[row[0]] = row[1]
+            loaded = {str(row[0]): float(row[1]) for row in cursor.fetchall()}
             conn.commit()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-            pass
+        except BaseException as exc:
+            conn.rollback()
+            if isinstance(exc, (sqlite3.Error, OSError)):
+                raise DurableIOError("polling_state_read_unavailable") from exc
+            raise
+        self._seen = loaded
+        self._state_loaded = True
+
     def _save_state(self):
         """保存已扫描文件状态到 SQLite"""
+        rows = [(self._source_name, p, m) for p, m in self._seen.items()]
+        conn = self._pool.get_conn()
         try:
-            conn = self._pool.get_conn()
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("DELETE FROM polling_state WHERE source = ?", (self._source_name,))
-            conn.executemany(
-                "INSERT OR REPLACE INTO polling_state (source, path, mtime) VALUES (?, ?, ?)",
-                [(self._source_name, p, m) for p, m in self._seen.items()],
-            )
+            if rows:
+                conn.executemany(
+                    "INSERT INTO polling_state (source, path, mtime) VALUES (?, ?, ?)",
+                    rows,
+                )
             conn.commit()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-            pass
+        except BaseException as exc:
+            conn.rollback()
+            if isinstance(exc, (sqlite3.Error, OSError)):
+                raise DurableIOError("polling_state_write_unavailable") from exc
+            raise
+
+
 class HybridTrigger(BaseTrigger):
     """
     混合触发器：Watchdog + Polling 组合。
@@ -291,15 +326,14 @@ class HybridTrigger(BaseTrigger):
         self,
         callback: Callable[[str], None],
         source_name: str = "",
-        events: List[str] = None,
+        events: List[str] | None = None,
         debounce: float = 5.0,
-        polling_interval: int = 3600,
+        polling_interval: int = POLLING_INTERVAL_SECONDS,
+        pattern: str = "*.jsonl",
     ):
         super().__init__(callback, source_name)
         self._watchdog = WatchdogTrigger(callback, source_name, events, debounce)
-        self._polling = PollingTrigger(
-            callback, source_name, polling_interval, "*.jsonl"
-        )
+        self._polling = PollingTrigger(callback, source_name, polling_interval, pattern)
 
     def start(self, watch_path: Path):
         self._running = True
@@ -348,7 +382,7 @@ class TriggerDispatcher:
             trigger = PollingTrigger(
                 callback=self._callback,
                 source_name=source_name,
-                interval=strategy.get("interval", 3600),
+                interval=strategy.get("interval", TRIGGER_SECONDS),
                 pattern=strategy.get("pattern", "*"),
             )
         elif trigger_type == "hybrid":
@@ -357,34 +391,59 @@ class TriggerDispatcher:
                 source_name=source_name,
                 events=strategy.get("events", ["modified", "created"]),
                 debounce=strategy.get("debounce", 5.0),
-                polling_interval=strategy.get("interval", 3600),
+                polling_interval=strategy.get("interval", TRIGGER_SECONDS),
+                pattern=strategy.get("pattern", "*.jsonl"),
             )
         else:
-            logger.warning(f"[TriggerDispatcher] 未知触发类型: {trigger_type}")
+            logger.warning("[TriggerDispatcher] 未知触发类型: %s", trigger_type)
             return
 
         self._triggers[source_name] = trigger
         self._paths[source_name] = watch_path
-        logger.info(f"[TriggerDispatcher] 注册 {source_name}: {trigger_type}")
+        logger.info("[TriggerDispatcher] 注册 %s: %s", source_name, trigger_type)
 
     def start_all(self):
         """启动所有触发器"""
         for name, trigger in self._triggers.items():
             path = self._paths.get(name)
-            if path and path.exists():
+            try:
+                path_available = (
+                    path is not None
+                    and inspect_path_kind(path) != "missing"
+                )
+            except DurableIOError as exc:
+                logger.error(
+                    "[TriggerDispatcher] 路径检查失败 %s: %s",
+                    name,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+            if path_available:
                 try:
                     trigger.start(path)
-                except Exception as e:
-                    logger.error(f"[TriggerDispatcher] 启动失败 {name}: {e}")
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+                    logger.error("[TriggerDispatcher] 启动失败 %s: %s", name, e, exc_info=True)
 
     def stop_all(self):
         """停止所有触发器"""
         for trigger in self._triggers.values():
             try:
                 trigger.stop()
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-                pass
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+                logger.warning("Trigger stop failed", exc_info=True)
+
+    def unregister(self, source_name: str) -> None:  # noqa: Vulture - public trigger lifecycle API for dynamic source unload.
+        """注销指定来源的触发器并释放资源"""
+        trigger = self._triggers.pop(source_name, None)
+        self._paths.pop(source_name, None)
+        if trigger is not None:
+            try:
+                trigger.stop()
+                logger.info("[TriggerDispatcher] 注销 %s", source_name)
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+                logger.warning("Trigger unregister stop failed", exc_info=True)
+
     def start(self, source_name: str):
         """启动指定触发器"""
         trigger = self._triggers.get(source_name)
@@ -399,7 +458,8 @@ class TriggerDispatcher:
             trigger.stop()
 
 
-class _DebounceHandler(FileSystemEventHandler if _WATCHDOG_AVAILABLE else object):
+# type: ignore[misc]
+class _DebounceHandler(FileSystemEventHandler if _WATCHDOG_AVAILABLE else object):  # type: ignore[misc]  # noqa: E501
     """Watchdog 事件处理器，带去抖动"""
 
     def __init__(self, callback: Callable[[str], None], debounce: float, events: List[str]):
@@ -409,13 +469,13 @@ class _DebounceHandler(FileSystemEventHandler if _WATCHDOG_AVAILABLE else object
         self._pending: Dict[str, threading.Timer] = {}
         self._lock = threading.Lock()
 
-    def on_modified(self, event):
+    def on_modified(self, event):  # noqa: Vulture - watchdog dispatch hook.
         if event.is_directory:
             return
         if "modified" in self._events:
             self._debounce_event(event.src_path)
 
-    def on_created(self, event):
+    def on_created(self, event):  # noqa: Vulture - watchdog dispatch hook.
         if event.is_directory:
             return
         if "created" in self._events:

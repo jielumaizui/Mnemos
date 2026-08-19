@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import Counter, defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,10 @@ class LightweightComplementNB:
             alpha: Laplace 平滑参数
         """
         self.alpha = alpha
-        self._class_count: Dict[int, float] = Counter()       # 类样本数
-        self._feature_count: Dict[int, Dict[str, float]] = defaultdict(Counter)
+        self._class_count: Counter[int] = Counter()  # 类样本数
+        self._feature_count: Dict[int, Dict[str, float]] = defaultdict(
+            Counter  # type: ignore[arg-type]
+        )  # type: ignore[arg-type]
         self._feature_log_prob: Dict[int, Dict[str, float]] = {}
         self._class_log_prior: Dict[int, float] = {}
         self._classes: set = set()
@@ -79,14 +81,23 @@ class LightweightComplementNB:
             raise ValueError("classes must be provided on first call to partial_fit()")
 
         for features, label in zip(X, y):
-            self._class_count[label] += 1.0
+            if not features:
+                features = {"__bias__": 1.0}
+            self._class_count[label] += 1
             for feat, val in features.items():
                 self._feature_count[label][feat] += val
-                self._n_features = max(self._n_features, len(self._feature_count[label]))
+
+        # 一次性更新特征总数（避免 O(n²×m)）
+        all_features = set()  # type: ignore[var-annotated]
+        for counter in self._feature_count.values():
+            all_features.update(counter.keys())
+        self._n_features = max(self._n_features, len(all_features))
 
         self._update_log_prob()
         self.is_fitted = True
-        logger.debug(f"[LightweightNB] partial_fit: {len(X)} samples, classes={dict(self._class_count)}")
+        logger.debug(
+            "[LightweightNB] partial_fit: %s samples, classes=%s", len(X), dict(self._class_count)
+        )
         return self
 
     # ── 预测接口 ──
@@ -102,29 +113,32 @@ class LightweightComplementNB:
             # 未训练时返回均匀分布
             return [{0: 0.5, 1: 0.5} for _ in X]
 
+        # 预计算每个类别的补集统计量（避免 O(C²×F)）
+        total_all = sum(self._class_count.values())
+        complement_cache = {}
+        for cls in sorted(self._classes):
+            comp_count = Counter()  # type: ignore[var-annotated]
+            for other_cls, feat_counter in self._feature_count.items():
+                if other_cls != cls:
+                    comp_count += feat_counter  # type: ignore[arg-type]
+            total_comp = total_all - self._class_count.get(cls, 0)
+            complement_cache[cls] = (comp_count, total_comp)
+
         results = []
         for features in X:
+            if not features:
+                features = {"__bias__": 1.0}
             scores = {}
             for cls in sorted(self._classes):
                 log_prob = self._class_log_prior.get(cls, math.log(0.5))
-                # ComplementNB：用补集统计量
-                complement_feat_count = Counter()
-                total_comp = 0.0
-                for other_cls, feat_counter in self._feature_count.items():
-                    if other_cls != cls:
-                        complement_feat_count += feat_counter
-                        total_comp += self._class_count[other_cls]
-
-                denom = total_comp + self.alpha * self._n_features
+                comp_count, total_comp = complement_cache[cls]
+                denom = total_comp + self.alpha * max(self._n_features, 1)
                 for feat, val in features.items():
-                    count = complement_feat_count.get(feat, 0.0)
-                    # 补集概率：log( (count + alpha) / denom )
+                    count = comp_count.get(feat, 0.0)
                     log_w = math.log((count + self.alpha) / denom)
                     log_prob += val * log_w
-
                 scores[cls] = log_prob
 
-            # softmax 归一化
             results.append(self._softmax(scores))
 
         return results
@@ -132,7 +146,7 @@ class LightweightComplementNB:
     def predict(self, X: List[Dict[str, float]]) -> List[int]:
         """预测标签"""
         probs = self.predict_proba(X)
-        return [max(p, key=p.get) for p in probs]
+        return [max(p, key=p.get) for p in probs]  # type: ignore[arg-type]
 
     def score(self, X: List[Dict[str, float]], y: List[int]) -> float:
         """准确率"""
@@ -157,10 +171,10 @@ class LightweightComplementNB:
     def from_dict(cls, data: Dict) -> "LightweightComplementNB":
         """从字典恢复"""
         inst = cls(alpha=data.get("alpha", 1.0))
-        inst._class_count = Counter(data.get("class_count", {}))
-        inst._feature_count = defaultdict(Counter)
+        inst._class_count = Counter(data.get("class_count", {}))  # type: ignore[assignment]
+        inst._feature_count = defaultdict(Counter)  # type: ignore[arg-type]
         for k, v in data.get("feature_count", {}).items():
-            inst._feature_count[int(k)] = Counter(v)
+            inst._feature_count[int(k)] = Counter(v)  # type: ignore[assignment]
         inst._classes = set(data.get("classes", [0, 1]))
         inst._n_features = data.get("n_features", 0)
         inst.is_fitted = data.get("is_fitted", False)
@@ -184,8 +198,11 @@ class LightweightComplementNB:
         total = sum(self._class_count.values())
         if total == 0:
             return
+        class_count = max(len(self._classes), 1)
         for cls in self._classes:
-            self._class_log_prior[cls] = math.log(self._class_count[cls] / total)
+            self._class_log_prior[cls] = math.log(
+                (self._class_count[cls] + self.alpha) / (total + self.alpha * class_count)
+            )
 
     @staticmethod
     def _softmax(scores: Dict[int, float]) -> Dict[int, float]:

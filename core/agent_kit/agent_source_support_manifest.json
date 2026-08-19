@@ -1,0 +1,407 @@
+{
+  "schema_version": "mnemos.agent_source_support_manifest.v1",
+  "source_definition_owner": "core/agent_kit/agent_source_support_manifest.json",
+  "host_core_cognitive_capabilities": [
+    "visible_text",
+    "tool_calls",
+    "tool_results",
+    "source_fidelity"
+  ],
+  "sources": [
+    {
+      "name": "codex",
+      "role": "host_agent",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.codex_source", "class": "CodexSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": ["integrations.codex.codex_home", "integrations.codex.xdg_config_home"],
+          "environment": [{"name": "CODEX_HOME", "mode": "path"}, {"name": "XDG_CONFIG_HOME", "mode": "append:codex"}],
+          "standard_paths": ["{home}/.codex", "{home}/.config/codex"],
+          "process_args": [{"flag": "--home", "mode": "path"}],
+          "heuristic": {"filenames": ["settings.json"], "content_marker": ""},
+          "transcript_subdir": "sessions"
+        },
+        "formats": ["rollout-*.jsonl"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning", "attachments"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["codex"], "path_templates": ["{home}/.codex/sessions", "{home}/.config/codex/sessions"]},
+      "active_entrypoint": "mcp_only",
+      "active_setup": {"kind": "mcp_only", "mcp": {"writer": "codex_toml", "checker": "codex_mcp_configured", "path_template": "{home}/.codex/config.toml"}, "policy": {"checker": "marked_block", "path_template": "{home}/.codex/AGENTS.md"}}
+    },
+    {
+      "name": "claude",
+      "role": "host_agent",
+      "aliases": ["claude-code", "claude_code"],
+      "parser": {"module": "integrations.sources.claude_source", "class": "ClaudeSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": ["claude_data_dir"],
+          "environment": [],
+          "standard_paths": ["{home}/.claude"],
+          "process_args": [{"flag": "--data-dir", "mode": "path"}],
+          "heuristic": {"filenames": ["settings.json"], "content_marker": "\"hooks\""},
+          "transcript_subdir": "projects"
+        },
+        "formats": ["projects/**/*.jsonl"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["claude"], "path_templates": ["{home}/.claude/settings.json", "{home}/.claude/projects", "{home}/Library/Application Support/Claude/settings.json", "{home}/.config/claude/settings.json"]},
+      "active_entrypoint": "adapter",
+      "active_setup": {"kind": "adapter"}
+    },
+    {
+      "name": "hermes",
+      "role": "host_agent",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.hermes_source", "class": "HermesSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "HERMES_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/.hermes"],
+          "process_args": [],
+          "heuristic": {"filenames": ["config.toml"], "content_marker": ""},
+          "transcript_subdir": "sessions"
+        },
+        "formats": ["sessions/*.json", "sessions/*.jsonl"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["hermes"], "path_templates": ["{home}/.hermes/sessions"]},
+      "active_entrypoint": "mcp_only",
+      "active_setup": {"kind": "mcp_only", "mcp": {"writer": "yaml", "checker": "yaml_mcp_configured", "path_template": "{home}/.hermes/config.yaml", "top_key": "mcp_servers"}, "policy": {"checker": "marked_block", "path_template": "{home}/.hermes/MNEMOS_ACTIVE.md"}}
+    },
+    {
+      "name": "opencode",
+      "role": "host_agent",
+      "aliases": ["open-code"],
+      "parser": {"module": "integrations.sources.opencode_source", "class": "OpenCodeSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": ["OPENCODE_DB_PATH"],
+          "environment": [{"name": "OPENCODE_DB_PATH", "mode": "parent_if_file"}],
+          "standard_paths": ["{home}/.local/share/opencode", "{home}/.config/opencode", "{home}/.opencode"],
+          "process_args": [],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": ""
+        },
+        "formats": ["opencode.db", "*.json (legacy fallback)"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "hybrid", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["opencode"], "path_templates": ["{home}/.local/share/opencode/opencode.db", "{home}/.config/opencode/opencode.db", "{home}/.opencode/opencode.db"]},
+      "active_entrypoint": "mcp_only",
+      "active_setup": {"kind": "mcp_only", "mcp": {"writer": "opencode", "checker": "opencode_mcp_configured", "path_template": "{home}/.config/opencode/opencode.json"}, "policy": {"checker": "opencode_policy_configured", "path_template": "{home}/.config/opencode/opencode.json"}}
+    },
+    {
+      "name": "openclaw",
+      "role": "host_agent",
+      "aliases": ["open_claw"],
+      "parser": {"module": "integrations.sources.openclaw_source", "class": "OpenClawSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": ["integrations.openclaw.state_dir"],
+          "environment": [{"name": "OPENCLAW_STATE_DIR", "mode": "path"}],
+          "standard_paths": ["{home}/.openclaw"],
+          "process_args": [{"flag": "--profile", "mode": "openclaw_profile"}],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": "agents"
+        },
+        "formats": ["agents/*/sessions/*.trajectory.jsonl", "agents/*/sessions/*.jsonl (excluding *.trajectory.jsonl)", "workspace/memory/.dreams/session-corpus/*.txt"],
+        "format_resolution": {
+          "variants": [
+            {"source_kind": "trajectory", "path_glob": "agents/*/sessions/*.trajectory.jsonl", "priority": 300, "identity": "native_session_id", "content_equivalence": "turn_fingerprint"},
+            {"source_kind": "normal_jsonl", "path_glob": "agents/*/sessions/*.jsonl", "exclude_suffix": ".trajectory.jsonl", "priority": 200, "identity": "native_session_id", "content_equivalence": "turn_fingerprint"},
+            {"source_kind": "corpus", "path_glob": "workspace/memory/.dreams/session-corpus/*.txt", "priority": 100, "identity": "native_session_id", "content_equivalence": "turn_fingerprint"}
+          ],
+          "extension_rule": "longest_turn_fingerprint_prefix",
+          "conflict_rule": "opaque_artifact_identity"
+        }
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "polling", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["openclaw"], "path_templates": ["{home}/.openclaw/agents", "{home}/.openclaw/workspace/memory/.dreams/session-corpus"]},
+      "active_entrypoint": "mcp_only",
+      "active_setup": {"kind": "mcp_only", "mcp": {"writer": "openclaw", "checker": "openclaw_mcp_configured", "path_template": "{home}/.openclaw/openclaw.json"}, "policy": {"checker": "marked_block", "path_template": "{home}/.openclaw/MNEMOS_ACTIVE.md"}}
+    },
+    {
+      "name": "crush",
+      "role": "host_agent",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.crush_source", "class": "CrushSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": ["integrations.crush.home"],
+          "environment": [{"name": "CRUSH_HOME", "mode": "path"}, {"name": "CRUSH_DATA_DIR", "mode": "path"}],
+          "standard_paths": ["{cwd}/.crush", "{home}/.crush", "{home}/.config/crush"],
+          "multi_root": {"mode": "all_valid", "project_ancestor_search": true},
+          "process_args": [],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": ""
+        },
+        "formats": ["crush.db"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "attachments"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "hybrid", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["crush"], "path_templates": ["{cwd}/.crush/crush.db", "{home}/.crush/crush.db", "{home}/.config/crush/crush.db"]},
+      "active_entrypoint": "adapter",
+      "active_setup": {"kind": "adapter"}
+    },
+    {
+      "name": "kiro",
+      "role": "host_agent",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.kiro_source", "class": "KiroSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "KIRO_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/.kiro"],
+          "process_args": [],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": "sessions/cli"
+        },
+        "formats": ["sessions/cli/*.jsonl", "sessions/cli/*.json", "sessions/cli/*.history"]
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning", "attachments"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["kiro-cli", "kiro-cli-chat"], "path_templates": ["{home}/.kiro/sessions/cli"]},
+      "active_entrypoint": "mcp_only",
+      "active_setup": {"kind": "mcp_only", "mcp": {"writer": "json", "checker": "kiro_mcp_configured", "path_template": "{home}/.kiro/settings/mcp.json", "top_key": "mcpServers"}, "policy": {"checker": "marked_block", "path_template": "{home}/.kiro/MNEMOS_ACTIVE.md"}}
+    },
+    {
+      "name": "kimi",
+      "role": "host_agent",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.kimi_source", "class": "KimiSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "KIMI_CODE_HOME", "mode": "path"}, {"name": "KIMI_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/.kimi-code", "{home}/.kimi"],
+          "process_args": [],
+          "heuristic": {"filenames": ["config.toml"], "content_marker": ""},
+          "transcript_subdir": "sessions"
+        },
+        "formats": ["sessions/**/context*.jsonl", "sessions/**/wire.jsonl"],
+        "artifact_resolution": {
+          "variants": [
+            {
+              "source_kind": "main_context",
+              "path_glob": "sessions/**/context*.jsonl",
+              "selector": "outside_subagents",
+              "identity": "native_artifact_id",
+              "aggregation": "context_segments_per_directory",
+              "parent_relation": "none"
+            },
+            {
+              "source_kind": "subagent_context",
+              "path_glob": "sessions/**/subagents/**/context*.jsonl",
+              "selector": "under_subagents",
+              "identity": "native_artifact_id",
+              "aggregation": "context_segments_per_directory",
+              "parent_relation": "native_subagent_path"
+            },
+            {
+              "source_kind": "main_wire",
+              "path_glob": "sessions/**/wire.jsonl",
+              "selector": "main_wire",
+              "identity": "native_artifact_id",
+              "aggregation": "single_wire",
+              "parent_relation": "native_main_wire_path"
+            },
+            {
+              "source_kind": "subagent_wire",
+              "path_glob": "sessions/**/subagents/**/wire.jsonl",
+              "selector": "under_subagents",
+              "identity": "native_artifact_id",
+              "aggregation": "single_wire",
+              "parent_relation": "native_subagent_wire_path"
+            }
+          ],
+          "archive_order_rule": "context_numeric_ascending_then_lexical_unknown_then_active",
+          "duplicate_event_rule": "dedupe_explicit_native_event_id_and_canonical_json_value_only",
+          "conflict_rule": "opaque_artifact_identity",
+          "identity_contract": "kimi-native-artifact-v2",
+          "state_fingerprint_rule": "ordered_artifact_name_and_bytes_sha256",
+          "decoder_contract": "reversible_jsonl_v1",
+          "decoder_rejection_rule": "preserve_invalid_utf8_json_nonobject_duplicate_key_nonfinite_surrogate_and_excessive_nesting",
+          "json_value_equality_rule": "number_value_equal_boolean_type_distinct",
+          "number_decode_rule": "decimal_identity_exact_utf8_source_line_and_json_valid_runtime_wrapper",
+          "migration_rule": "fail_closed_on_legacy_raw_overlap",
+          "legacy_identity_rule": "bind_fixed_point_misclassification_aliases",
+          "timestamp_rule": "preserve_invalid_numeric_timestamp_as_typed_raw",
+          "parent_identity_rule": "native_parent_plus_canonical_main_artifact_v2"
+        }
+      },
+      "capability": {"required_cognitive_capabilities": ["visible_text", "tool_calls", "tool_results", "source_fidelity", "reasoning", "attachments"], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "hybrid", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": true, "contract": "mnemos.agent_runtime_probe.v1"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "agent_kit", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["kimi", "kimi-code"], "path_templates": ["{home}/.kimi-code", "{home}/.kimi/sessions"]},
+      "active_entrypoint": "adapter",
+      "active_setup": {"kind": "adapter"}
+    },
+    {
+      "name": "aider",
+      "role": "ingestion_only",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.aider_source", "class": "AiderSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "AIDER_CHAT_HISTORY_FILE", "mode": "path"}, {"name": "AIDER_PROJECT_ROOTS", "mode": "path_list"}],
+          "standard_paths": [],
+          "process_args": [],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": ""
+        },
+        "formats": ["**/.aider.chat.history.md"]
+      },
+      "capability": {"required_cognitive_capabilities": [], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": false, "contract": "not_a_host"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "sync_framework", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["aider"], "path_templates": ["{home}/.aider"]},
+      "active_entrypoint": "none",
+      "active_setup": {"kind": "none"}
+    },
+    {
+      "name": "gemini",
+      "role": "ingestion_only",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.gemini_cli_source", "class": "GeminiCliSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "GEMINI_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/.gemini", "{home}/.config/gemini"],
+          "process_args": [],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": "sessions"
+        },
+        "formats": ["sessions/*.jsonl"]
+      },
+      "capability": {"required_cognitive_capabilities": [], "source_fidelity": "full"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "watchdog", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": false, "contract": "not_a_host"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "full"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "sync_framework", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["gemini", "gemini-cli"], "path_templates": ["{home}/.gemini", "{home}/.config/gemini"]},
+      "active_entrypoint": "none",
+      "active_setup": {"kind": "none"}
+    },
+    {
+      "name": "cursor",
+      "role": "ingestion_only",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.cursor_source", "class": "CursorSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "CURSOR_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/Library/Application Support/Cursor", "{home}/.config/Cursor", "{home}/AppData/Roaming/Cursor", "{home}/.cursor"],
+          "process_args": [{"flag": "--user-data-dir", "mode": "path"}],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": ""
+        },
+        "formats": ["**/chat_history.json", "**/session.json", "**/conversations.json", "**/*.vscdb"]
+      },
+      "capability": {"required_cognitive_capabilities": [], "source_fidelity": "experimental"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "polling", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": false, "contract": "not_a_host"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "experimental"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "sync_framework", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["cursor"], "path_templates": ["{home}/Library/Application Support/Cursor", "{home}/.config/Cursor", "{home}/.cursor"]},
+      "active_entrypoint": "none",
+      "active_setup": {"kind": "none"}
+    },
+    {
+      "name": "windsurf",
+      "role": "ingestion_only",
+      "aliases": [],
+      "parser": {"module": "integrations.sources.windsurf_source", "class": "WindsurfSource", "owner": "integrations.sources"},
+      "native": {
+        "root_resolver": {
+          "configuration_keys": [],
+          "environment": [{"name": "WINDSURF_HOME", "mode": "path"}],
+          "standard_paths": ["{home}/Library/Application Support/Windsurf", "{home}/.config/Windsurf", "{home}/AppData/Roaming/Windsurf", "{home}/.windsurf"],
+          "process_args": [{"flag": "--user-data-dir", "mode": "path"}],
+          "heuristic": {"filenames": [], "content_marker": ""},
+          "transcript_subdir": ""
+        },
+        "formats": ["**/chat_history.json", "**/session.json", "**/conversations.json", "**/history.json"]
+      },
+      "capability": {"required_cognitive_capabilities": [], "source_fidelity": "experimental"},
+      "authorization": {"content_access": "user_authorized_required", "scope": "source_session"},
+      "continuous": {"enabled": true, "owner": "daemon.raw_sync", "service": "raw_sync", "activation_key": "daemon.services.raw_sync", "trigger": "polling", "poll_interval_seconds": 600, "max_latency_seconds": 1200},
+      "backfill": {"enabled": true, "owner": "sync_framework"},
+      "runtime_probe": {"required": false, "contract": "not_a_host"},
+      "raw_contract": {"native_to_raw": "lossless_visible_v1", "acl": "inherit_source_scope", "fidelity": "experimental"},
+      "retention": {"policy": "raw_event_store_default"},
+      "retirement": {"state": "active", "owner": "sync_framework", "remove_when": "explicit manifest role=retired", "expires_at": ""},
+      "install_evidence": {"cli_names": ["windsurf"], "path_templates": ["{home}/Library/Application Support/Windsurf", "{home}/.config/Windsurf", "{home}/.windsurf"]},
+      "active_entrypoint": "none",
+      "active_setup": {"kind": "none"}
+    }
+  ]
+}

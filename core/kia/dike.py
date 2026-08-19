@@ -11,9 +11,9 @@ Task Classifier - 通用任务分类器
 - 置信度 0.7-0.9：静默提示
 - 置信度 < 0.7：主动询问
 """
+
 # Dike — 正义女神 — 任务分类器，裁决与归类
 # 原模块: task_classifier.py
-
 
 
 import json
@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 import logging
+
 logger = logging.getLogger(__name__)
 try:
     import yaml
@@ -36,14 +37,15 @@ except ImportError:  # pragma: no cover - pyyaml 是项目依赖，保留降级�
 @dataclass
 class ClassificationResult:
     """分类结果"""
-    task_type: str              # 主类型，如 "coding"
-    subtype: str                # 子类型，如 "python"
-    confidence: float           # 置信度 0-1
+
+    task_type: str  # 主类型，如 "coding"
+    subtype: str  # 子类型，如 "python"
+    confidence: float  # 置信度 0-1
     matched_keywords: List[str] = field(default_factory=list)
     suggested_confirmation: str = ""  # "silent" / "hint" / "ask"
-    confirmed: bool = False     # 是否已确认
+    confirmed: bool = False  # 是否已确认
     expected_goals: Dict = field(default_factory=dict)  # 预期目标
-    context_summary: str = ""   # 上下文摘要
+    context_summary: str = ""  # noqa: Vulture - ClassificationResult JSON summary contract.
     top_types: List[Tuple[str, float]] = field(default_factory=list)
     all_scores: Dict[str, float] = field(default_factory=dict)
     mixed_intent: bool = False
@@ -69,9 +71,10 @@ class ClassificationResult:
 @dataclass
 class TaskTypeDefinition:
     """任务类型定义"""
-    name: str                   # 类型名
+
+    name: str  # 类型名
     subtypes: Dict[str, List[str]]  # 子类型 -> 关键词列表
-    keywords: List[str]         # 通用关键词
+    keywords: List[str]  # 通用关键词
     expected_goal_prompts: List[str] = field(default_factory=list)  # 预期目标提示
 
 
@@ -87,7 +90,8 @@ class TaskLearner:
             self.feedback_db = Path(feedback_db).expanduser()
         else:
             from core.config import get_config
-            self.feedback_db = get_config().data_dir / "task_classifier.db"
+
+            self.feedback_db = get_config().database_dir / "task_classifier.db"
         self.taxonomy = taxonomy or TaskClassifier.TASK_TAXONOMY
         self._init_db()
 
@@ -118,13 +122,16 @@ class TaskLearner:
 
     def record_feedback(self, text: str, predicted: str, actual: str):
         text_lower = text.lower()
-        text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+        text_hash = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
         with sqlite3.connect(str(self.feedback_db), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO classification_feedback
                 (text_hash, predicted, actual, text_preview, created_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (text_hash, predicted, actual, text[:200], datetime.now().isoformat()))
+            """,
+                (text_hash, predicted, actual, text[:200], datetime.now().isoformat()),
+            )
 
             for keyword in self._extract_matched_keywords(predicted, text_lower):
                 self._update_keyword_weight(conn, predicted, keyword, 0.8)
@@ -133,10 +140,13 @@ class TaskLearner:
 
     def get_adjusted_weight(self, task_type: str, keyword: str) -> float:
         with sqlite3.connect(str(self.feedback_db), timeout=10) as conn:
-            row = conn.execute("""
+            row = conn.execute(
+                """
                 SELECT weight FROM keyword_weights
                 WHERE task_type = ? AND keyword = ?
-            """, (task_type, keyword)).fetchone()
+            """,
+                (task_type, keyword),
+            ).fetchone()
         return float(row[0]) if row else 1.0
 
     def _extract_matched_keywords(self, task_type: str, text: str) -> List[str]:
@@ -149,14 +159,19 @@ class TaskLearner:
         return [kw for kw in keywords if kw in text]
 
     @staticmethod
-    def _update_keyword_weight(conn: sqlite3.Connection, task_type: str, keyword: str, value: float):
-        conn.execute("""
+    def _update_keyword_weight(
+        conn: sqlite3.Connection, task_type: str, keyword: str, value: float
+    ):
+        conn.execute(
+            """
             INSERT INTO keyword_weights (task_type, keyword, weight, sample_count)
             VALUES (?, ?, ?, 1)
             ON CONFLICT(task_type, keyword) DO UPDATE SET
                 weight = (weight * sample_count + excluded.weight) / (sample_count + 1),
                 sample_count = sample_count + 1
-        """, (task_type, keyword, value))
+        """,
+            (task_type, keyword, value),
+        )
 
 
 class TaskClassifier:
@@ -173,8 +188,23 @@ class TaskClassifier:
                 "shell": ["shell", "bash", "脚本", "命令行", "自动化脚本"],
                 "data-pipeline": ["pipeline", "etl", "数据流", "数据管道", "批处理"],
             },
-            keywords=["写代码", "程序", "bug", "debug", "函数", "类", "接口", "api",
-                     "代码", "编程", "开发", "实现", "重构", "优化代码", "报错"],
+            keywords=[
+                "写代码",
+                "程序",
+                "bug",
+                "debug",
+                "函数",
+                "类",
+                "接口",
+                "api",
+                "代码",
+                "编程",
+                "开发",
+                "实现",
+                "重构",
+                "优化代码",
+                "报错",
+            ],
             expected_goal_prompts=[
                 "预期功能是什么？",
                 "输入输出格式？",
@@ -188,8 +218,21 @@ class TaskClassifier:
                 "content-strategy": ["内容", "文案", "公众号", "文章", "内容策略"],
                 "growth-hack": ["拉新", "增长", "获客", "裂变", "引流", "转化"],
             },
-            keywords=["宣发", "推广", "营销", "品牌", "活动", "策划", "运营",
-                     "客户", "用户", "留存", "活跃", "roi", "投放"],
+            keywords=[
+                "宣发",
+                "推广",
+                "营销",
+                "品牌",
+                "活动",
+                "策划",
+                "运营",
+                "客户",
+                "用户",
+                "留存",
+                "活跃",
+                "roi",
+                "投放",
+            ],
             expected_goal_prompts=[
                 "预期参与人数？",
                 "目标转化率？",
@@ -204,8 +247,21 @@ class TaskClassifier:
                 "data-analysis": ["数据分析", "报表", "统计", "可视化", "图表"],
                 "ab-test": ["ab测试", "实验", "对照组", "显著性", "假设检验"],
             },
-            keywords=["分析", "数据", "报表", "统计", "漏斗", "转化率", "指标",
-                     "趋势", "对比", "归因", "洞察", "维度", "维度分析"],
+            keywords=[
+                "分析",
+                "数据",
+                "报表",
+                "统计",
+                "漏斗",
+                "转化率",
+                "指标",
+                "趋势",
+                "对比",
+                "归因",
+                "洞察",
+                "维度",
+                "维度分析",
+            ],
             expected_goal_prompts=[
                 "分析目标是什么？",
                 "关键指标有哪些？",
@@ -219,8 +275,21 @@ class TaskClassifier:
                 "market-entry": ["市场进入", "新市场", "拓展", "渠道"],
                 "competitive-analysis": ["竞品分析", "竞争", "对手", "市场格局"],
             },
-            keywords=["战略", "布局", "规划", "路线图", "竞品", "定位", "愿景",
-                     "目标", "方向", "策略", "打法", "商业模式", "护城河"],
+            keywords=[
+                "战略",
+                "布局",
+                "规划",
+                "路线图",
+                "竞品",
+                "定位",
+                "愿景",
+                "目标",
+                "方向",
+                "策略",
+                "打法",
+                "商业模式",
+                "护城河",
+            ],
             expected_goal_prompts=[
                 "目标市场/客群？",
                 "预期达成什么效果？",
@@ -235,8 +304,20 @@ class TaskClassifier:
                 "proposal": ["方案", "提案", "计划书", "汇报", "ppt"],
                 "blog": ["博客", "文章", "公众号", "知乎", "自媒体"],
             },
-            keywords=["写", "文档", "方案", "报告", "文章", "内容", "编辑",
-                     "整理", "总结", "撰写", "稿子", "文案"],
+            keywords=[
+                "写",
+                "文档",
+                "方案",
+                "报告",
+                "文章",
+                "内容",
+                "编辑",
+                "整理",
+                "总结",
+                "撰写",
+                "稿子",
+                "文案",
+            ],
             expected_goal_prompts=[
                 "目标读者是谁？",
                 "预期篇幅/深度？",
@@ -249,8 +330,7 @@ class TaskClassifier:
                 "code-review": ["代码审查", "code review", "cr", "审代码", "代码"],
                 "design-review": ["设计评审", "方案评审", "架构评审"],
             },
-            keywords=["审查", "评审", "review", "检查", "评估", "验收",
-                     "把关", "确认", "审核"],
+            keywords=["审查", "评审", "review", "检查", "评估", "验收", "把关", "确认", "审核"],
             expected_goal_prompts=[
                 "审查标准是什么？",
                 "重点关注哪些方面？",
@@ -268,31 +348,28 @@ class TaskClassifier:
         self,
         config_path: Optional[str] = None,
         history_db: Optional[str] = None,
-        history_path: Optional[str] = None,
         feedback_db: Optional[str] = None,
     ):
         """
         Args:
             config_path: YAML 任务类型配置路径
             history_db: SQLite 历史任务库路径
-            history_path: 历史任务记录路径，用于模式学习
             feedback_db: 用户反馈权重库路径
         """
         self.task_taxonomy = self._load_config(config_path)
-        self.history_path = Path(history_path).expanduser() if history_path else None
         if history_db:
             self.history_db = Path(history_db).expanduser()
         else:
             from core.config import get_config
-            self.history_db = get_config().data_dir / "task_classifier.db"
-        self._history_cache = None
+
+            self.history_db = get_config().database_dir / "task_classifier.db"
         self.learner = TaskLearner(feedback_db or str(self.history_db), self.task_taxonomy)
         self._init_history_db()
 
     # 冷启动计数器：记录每个任务类型被识别的次数（用于降低新类型的门槛）
     _cold_start_counts: Dict[str, int] = {}
     COLD_START_THRESHOLD = 3  # 前3次降低门槛
-    COLD_START_BOOST = 0.2    # 冷启动加分
+    COLD_START_BOOST = 0.2  # 冷启动加分
 
     def _load_config(self, config_path: Optional[str]) -> Dict[str, TaskTypeDefinition]:
         """加载任务类型配置；无配置或解析失败时回退内置分类表。"""
@@ -305,8 +382,8 @@ class TaskClassifier:
 
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at dike.py", exc_info=True)
+        except (OSError, IOError):
+            logging.getLogger(__name__).warning("Caught unexpected error at dike.py", exc_info=True)
             return self.TASK_TAXONOMY
 
         raw_task_types = data.get("task_types", {})
@@ -318,16 +395,14 @@ class TaskClassifier:
             if not isinstance(info, dict):
                 continue
             taxonomy[task_type] = TaskTypeDefinition(
-                name=info.get("name", task_type),
+                name=info.get("name", task_type),  # type: ignore[arg-type]
                 keywords=list(info.get("keywords", [])),
                 subtypes={
                     str(subtype): list(keywords or [])
                     for subtype, keywords in (info.get("subtypes", {}) or {}).items()
                 },
                 expected_goal_prompts=list(
-                    info.get("expected_goals")
-                    or info.get("expected_goal_prompts")
-                    or []
+                    info.get("expected_goals") or info.get("expected_goal_prompts") or []
                 ),
             )
 
@@ -364,19 +439,22 @@ class TaskClassifier:
     ):
         """记录分类历史，供后续 Jaccard 模式匹配使用。"""
         with sqlite3.connect(str(self.history_db), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO task_classification_history
                 (session_id, task_type, subtype, summary, keywords, confidence, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                session_id,
-                result.task_type,
-                result.subtype,
-                summary,
-                json.dumps(result.matched_keywords, ensure_ascii=False),
-                result.confidence,
-                datetime.now().isoformat(),
-            ))
+            """,
+                (
+                    session_id,
+                    result.task_type,
+                    result.subtype,
+                    summary,
+                    json.dumps(result.matched_keywords, ensure_ascii=False),
+                    result.confidence,
+                    datetime.now().isoformat(),
+                ),
+            )
 
     def classify(self, messages: List[Dict]) -> ClassificationResult:
         """
@@ -391,6 +469,7 @@ class TaskClassifier:
         # 合并所有消息内容
         full_text = " ".join([m.get("content", "") for m in messages if m.get("content")])
         full_text_lower = full_text.lower()
+        context_summary = self._summarize_messages(messages)
 
         # 1. 关键词匹配
         keyword_scores = self._keyword_match(full_text_lower)
@@ -412,6 +491,7 @@ class TaskClassifier:
                 all_scores={},
                 primary_type="unknown",
                 primary_subtype="unknown",
+                context_summary=context_summary,
             )
 
         sorted_scores = self._sort_scores(combined_scores)
@@ -436,9 +516,7 @@ class TaskClassifier:
         secondary_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0.0
         mixed_intent = bool(score > 0 and secondary_score > 0.4 and secondary_score / score > 0.6)
         matched_by_type = {
-            t: self._get_matched_keywords(t, full_text_lower)
-            for t, s in sorted_scores[:3]
-            if s > 0
+            t: self._get_matched_keywords(t, full_text_lower) for t, s in sorted_scores[:3] if s > 0
         }
 
         return ClassificationResult(
@@ -456,17 +534,24 @@ class TaskClassifier:
             primary_type=task_type,
             primary_subtype=subtype,
             primary_confidence=round(score, 3),
+            context_summary=context_summary,
         )
 
-    def classify_and_confirm(self, messages: List[Dict],
-                             llm_confirm_callback=None) -> ClassificationResult:
+    def classify_and_confirm(
+        self,
+        messages: List[Dict],
+        llm_confirm_callback=None,
+        session_id: Optional[str] = None,
+    ) -> ClassificationResult:
         """
         分类 + 确认（完整流程）
 
         Args:
             messages: 会话消息
-            llm_confirm_callback: 可选的LLM确认回调函数
-                                  签名: fn(task_type, subtype, context) -> (confirmed: bool, confidence: float)
+            llm_confirm_callback: 可选的LLM确认回调函数，
+                签名: fn(task_type, subtype, context)
+                -> (confirmed: bool, confidence: float)
+            session_id: 可选会话 ID；未传时使用消息摘要生成稳定 ID。
 
         Returns:
             ClassificationResult（confirmed 字段已更新）
@@ -476,16 +561,32 @@ class TaskClassifier:
         # 如果LLM确认回调存在且置信度不够高，调用LLM
         if llm_confirm_callback and result.confidence < 0.9:
             confirmed, llm_confidence = llm_confirm_callback(
-                result.task_type,
-                result.subtype,
-                messages
+                result.task_type, result.subtype, messages
             )
             # 取平均
             result.confidence = round((result.confidence + llm_confidence) / 2, 3)
             result.confirmed = confirmed
             result.suggested_confirmation = self._determine_confirmation(result.confidence)
 
+        if result.task_type != "unknown" and result.confirmed:
+            summary = self._summarize_messages(messages)
+            if summary:
+                text_hash = hashlib.md5(
+                    summary.encode("utf-8"), usedforsecurity=False
+                ).hexdigest()
+                self.record_history(session_id or f"auto:{text_hash}", result, summary)
+
         return result
+
+    @staticmethod
+    def _summarize_messages(messages: List[Dict]) -> str:
+        """生成用于历史模式匹配的轻量消息摘要。"""
+        summary = " ".join(
+            str(message.get("content", "")).strip()
+            for message in messages
+            if message.get("content")
+        )
+        return summary[:500]
 
     def _keyword_match(self, text: str) -> Dict[str, float]:
         """关键词匹配，返回各类型得分"""
@@ -508,7 +609,9 @@ class TaskClassifier:
                         matched.append(kw)
 
             # 归一化
-            total_keywords = len(definition.keywords) + sum(len(v) for v in definition.subtypes.values())
+            total_keywords = len(definition.keywords) + sum(
+                len(v) for v in definition.subtypes.values()
+            )
             if total_keywords > 0:
                 scores[task_type] = min(score / 3.0, 1.0)  # 封顶1.0
 
@@ -518,14 +621,17 @@ class TaskClassifier:
         """基于历史任务模式匹配"""
         scores = {}
         with sqlite3.connect(str(self.history_db), timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             for task_type in self.task_taxonomy.keys():
-                rows = conn.execute("""
+                rows = conn.execute(
+                    """
                     SELECT summary FROM task_classification_history
                     WHERE task_type = ?
                     ORDER BY created_at DESC
                     LIMIT 20
-                """, (task_type,)).fetchall()
+                """,
+                    (task_type,),
+                ).fetchall()
                 if len(rows) < 2:
                     continue
 
@@ -539,17 +645,6 @@ class TaskClassifier:
                     similarity = len(intersection) / len(union)
                     weight = min(len(rows) / 10.0, 1.0)
                     scores[task_type] = similarity * weight
-
-        # 兼容旧 JSON history_path；SQLite 为主，旧数据只补充未命中的类型。
-        for task_type, tasks in self._load_history().items():
-            if task_type in scores or len(tasks) < 2:
-                continue
-            all_text = " ".join(t.get("summary", "") for t in tasks)
-            history_words = set(all_text.lower().split())
-            current_words = set(text.split())
-            union = history_words | current_words
-            if union:
-                scores[task_type] = (len(history_words & current_words) / len(union)) * min(len(tasks) / 10.0, 1.0)
 
         return scores
 
@@ -583,7 +678,7 @@ class TaskClassifier:
         for subtype, keywords in definition.subtypes.items():
             score = sum(2.0 for kw in keywords if kw in text)
             if score > best_score:
-                best_score = score
+                best_score = score  # type: ignore[assignment]
                 best_subtype = subtype
 
         return best_subtype
@@ -593,36 +688,35 @@ class TaskClassifier:
         goals = {}
 
         # 参与人数/规模
-        participant_match = re.search(r'(\d+)\s*人', text)
+        participant_match = re.search(r"(\d+)\s*人", text)
         if participant_match:
             goals["participants"] = participant_match.group(1)
 
         # 转化率
-        conversion_match = re.search(r'(\d+(?:\.\d+)?)\s*%\s*(?:转化率|转化)', text)
+        conversion_match = re.search(r"(\d+(?:\.\d+)?)\s*%\s*(?:转化率|转化)", text)
         if conversion_match:
             goals["conversion_rate"] = conversion_match.group(1) + "%"
 
         # 预算
-        budget_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:万|k|千)?\s*(?:元|预算|费用)', text)
+        budget_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:万|k|千)?\s*(?:元|预算|费用)", text)
         if budget_match:
             goals["budget"] = budget_match.group(1)
 
         # 时间/周期
-        time_match = re.search(r'(\d+)\s*(?:天|周|月|年)', text)
+        time_match = re.search(r"(\d+)\s*(?:天|周|月|年)", text)
         if time_match:
             goals["duration"] = time_match.group(0)
 
         # 目标/预期效果
         if "目标" in text or "预期" in text:
-            goal_match = re.search(r'[目标预期].*?[:：]\s*(.+?)(?:[，。；]|$)', text)
+            goal_match = re.search(r"[目标预期].*?[:：]\s*(.+?)(?:[，。；]|$)", text)
             if goal_match:
                 goals["target"] = goal_match.group(1).strip()
 
         # 根据任务类型补充默认提示
-        definition = self.task_taxonomy.get(task_type)
-        if definition and not goals:
+        if task_type in self.task_taxonomy and not goals:
             # 如果没有提取到目标，使用默认提示
-            prompts = definition.expected_goal_prompts
+            prompts = self.get_expected_goal_prompts(task_type)
             if prompts:
                 goals["_prompts"] = prompts
 
@@ -631,11 +725,11 @@ class TaskClassifier:
     def _determine_confirmation(self, confidence: float) -> str:
         """根据置信度确定确认策略"""
         if confidence >= 0.9:
-            return "silent"      # 静默确认
+            return "silent"  # 静默确认
         elif confidence >= 0.7:
-            return "hint"        # 静默提示
+            return "hint"  # 静默提示
         else:
-            return "ask"         # 主动询问
+            return "ask"  # 主动询问
 
     def _get_matched_keywords(self, task_type: str, text: str) -> List[str]:
         """获取匹配到的关键词"""
@@ -653,21 +747,6 @@ class TaskClassifier:
                     matched.append(kw)
 
         return matched[:10]  # 最多返回10个
-
-    def _load_history(self) -> Dict[str, List[Dict]]:
-        """加载历史任务记录"""
-        if self._history_cache is not None:
-            return self._history_cache
-
-        if not self.history_path or not self.history_path.exists():
-            return {}
-
-        try:
-            data = json.loads(self.history_path.read_text(encoding="utf-8"))
-            self._history_cache = data
-            return data
-        except (json.JSONDecodeError, IOError):
-            return {}
 
     def get_expected_goal_prompts(self, task_type: str) -> List[str]:
         """获取预期目标提示问题"""
@@ -717,18 +796,19 @@ class TaskClassifier:
 
 # ========== 便捷函数 ==========
 
+
 def classify_task(
     messages: List[Dict],
-    history_path: Optional[str] = None,
     config_path: Optional[str] = None,
     history_db: Optional[str] = None,
     feedback_db: Optional[str] = None,
+    llm_confirm_callback=None,
+    session_id: Optional[str] = None,
 ) -> ClassificationResult:
-    """便捷函数：分类任务"""
+    """便捷函数：分类任务，并在需要时运行可选确认回调。"""
     classifier = TaskClassifier(
         config_path=config_path,
         history_db=history_db,
-        history_path=history_path,
         feedback_db=feedback_db,
     )
-    return classifier.classify(messages)
+    return classifier.classify_and_confirm(messages, llm_confirm_callback, session_id)

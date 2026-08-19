@@ -12,51 +12,58 @@ Signal Collector - 统一信号采集接口
 3. Git历史（commit message / 频率 / 风格）
 4. 文件系统行为（创建/修改/组织模式）
 5. Obsidian图谱（链接密度 / 枢纽节点）
-6. 微信聊天记录（wechat_collector.py 提供）
 """
+
 # Daimon — 守护灵 — 信号采集器，伴随用户收集行为
 # 原模块: signal_collector.py
 
 
-
-import os
 import re
 import sys
 import json
 import sqlite3
 import subprocess
 import logging
-logger = logging.getLogger(__name__)
-from pathlib import Path
-from typing import Dict, List, Optional, Iterator, Any
-from datetime import datetime, timedelta
-from collections import Counter
 
-from core.config import get_config
-from .psyche import (
-    SignalStore, get_signal_store,
-    SessionSignal, GitSignal, MemosSignal, log_session_signal,
+logger = logging.getLogger(__name__)
+from pathlib import Path  # noqa: E402
+from typing import Any, Callable, Dict, List, Optional  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+
+from core.config import get_config  # noqa: E402
+from .psyche import (  # noqa: E402
+    SignalStore,
+    get_signal_store,
+    SessionSignal,
+    GitSignal,
 )
 
+# Constants extracted from magic numbers
+SINCE_DAYS = 30
+RESULT_SECONDS = 30
+SIGNAL_COLLECTOR_DURATION_BUCKET_MONTH_DAYS = 30
+SIGNAL_COLLECTOR_DURATION_BUCKET_WEEK_DAYS = 7
+STATS_DAYS = 30
+CONFIG_SOURCE_TO_COLLECTORS = {
+    "session": ("session", "wiki_state", "sync_engine"),
+    "git": ("git",),
+    "wiki": ("wiki",),
+    "file_system": ("file_system",),
+}
+SUPPORTED_CONFIG_SOURCES = frozenset(CONFIG_SOURCE_TO_COLLECTORS)
 
 
 class SignalCollector:
     """统一信号采集器"""
 
-    def __init__(self, store: SignalStore = None):
+    def __init__(self, store: SignalStore | None = None):
         self.store = store or get_signal_store()
 
     def _wiki_dir(self) -> Path:
-        from core.config import get_config
         return get_config().wiki_dir
 
     def _wiki_state_db(self) -> Path:
-        from core.config import get_config
         return get_config().claude_data_dir / "wiki_state.db"
-
-    def _distill_queue_dir(self) -> Path:
-        from core.config import get_config
-        return get_config().claude_data_dir / "distill_queue"
 
     # ============================================================
     # 1. AI Session 信号采集
@@ -64,25 +71,40 @@ class SignalCollector:
 
     def collect_from_distill_queue(self) -> int:
         """
-        从 distill_queue 采集 session 信号。
-        读取已完成的 session JSON 文件，提取行为信号。
+        从 amphora 蒸馏队列采集 session 信号。
+        读取 pending / processing 任务中的 messages 和 meta，提取行为信号。
         """
         count = 0
-        if not self._distill_queue_dir().exists():
+        try:
+            from core.kia import amphora
+        except ImportError:
+            logger.debug("amphora 不可用，跳过 distill_queue 信号采集")
             return count
 
-        for json_file in self._distill_queue_dir().glob("*.json"):
+        tasks: List[Dict] = []
+        try:
+            tasks.extend(amphora.list_pending(include_future_retry=True))
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            logger.debug("读取 amphora pending 任务失败: %s", e, exc_info=True)
+        try:
+            tasks.extend(amphora.list_processing())
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
+            logger.debug("读取 amphora processing 任务失败: %s", e, exc_info=True)
+
+        for task in tasks:
             try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                signal = self._parse_session_to_signal(data)
+                signal = self._parse_session_to_signal(task)
                 if signal:
                     # 去重：按 session_id 检查
                     if self.store.session_exists(signal.session_id):
                         continue
                     self.store.insert_session_signal(signal)
                     count += 1
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
+            except (
+                OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, sqlite3.Error,
+                subprocess.SubprocessError
+            ):
+                logger.debug("跳过无效 session 任务: %s", task.get("session_id"), exc_info=True)
                 continue
 
         return count
@@ -97,7 +119,7 @@ class SignalCollector:
 
         try:
             with sqlite3.connect(str(self._wiki_state_db()), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+                conn.row_factory = sqlite3.Row  # noqa
                 cursor = conn.execute("""
                     SELECT * FROM processed_sessions
                     WHERE processed_at >= date('now', '-30 days')
@@ -113,8 +135,8 @@ class SignalCollector:
                             continue
                         self.store.insert_session_signal(signal)
                         count += 1
-        except Exception as e:
-            logger.warning(f"忽略异常: {e}")
+        except (OSError, ValueError) as e:
+            logger.warning("wiki_state 信号采集失败: %s", e, exc_info=True)
 
         return count
 
@@ -125,10 +147,13 @@ class SignalCollector:
             return None
 
         user_messages = [m for m in messages if m.get("role") == "user"]
-        assistant_messages = [m for m in messages if m.get("role") == "assistant"]
+        _ = [m for m in messages if m.get("role") == "assistant"]
 
         if not user_messages:
             return None
+
+        # amphora 任务把业务字段放在 meta 中，做兼容提取
+        meta = data.get("meta", {}) if isinstance(data.get("meta"), dict) else {}
 
         # 基本统计
         user_contents = [m.get("content", "") for m in user_messages]
@@ -137,8 +162,7 @@ class SignalCollector:
         # 纠正检测：用户消息中包含否定/修正信号
         correction_keywords = ["不对", "错了", "不是", "应该", "换个", "不对，"]
         correction_count = sum(
-            1 for c in user_contents
-            if any(kw in c for kw in correction_keywords)
+            1 for c in user_contents if any(kw in c for kw in correction_keywords)
         )
 
         # 追问深度：连续用户消息数（assistant回复后用户继续问）
@@ -167,16 +191,16 @@ class SignalCollector:
         return SessionSignal(
             session_id=data.get("session_id", ""),
             timestamp=created_at,
-            task_type=data.get("task_type", ""),
-            task_subtype=data.get("task_subtype", ""),
+            task_type=data.get("task_type") or meta.get("task_type", ""),
+            task_subtype=data.get("task_subtype") or meta.get("task_subtype", ""),
             user_msg_count=len(user_messages),
             avg_user_msg_length=avg_length,
             correction_count=correction_count,
             follow_up_depth=follow_up_depth,
             termination_type=termination_type,
             output_type=output_type,
-            working_dir=data.get("working_dir", ""),
-            agent=data.get("agent", "claude"),
+            working_dir=data.get("working_dir") or meta.get("working_dir", ""),
+            agent=data.get("agent") or meta.get("agent", meta.get("source", "claude")),
             context_tags=context_tags,
             duration_seconds=int(duration),
         )
@@ -203,13 +227,12 @@ class SignalCollector:
         """
         count = 0
         try:
-            from core.config import get_config
-            db_path = get_config().data_dir / "sync_log.db"
+            db_path = get_config().database_dir / "sync_log.db"
             if not db_path.exists():
                 return count
 
             with sqlite3.connect(str(db_path), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+                conn.row_factory = sqlite3.Row  # noqa
                 # 防御式：旧数据库可能缺少 working_dir / tags 列
                 _queries = [
                     """SELECT session_id, agent_name, working_dir,
@@ -261,13 +284,16 @@ class SignalCollector:
                         continue
                     self.store.insert_session_signal(signal)
                     # 标记已采集
-                    conn.execute("""
+                    conn.execute(
+                        """
                         UPDATE sync_log SET persona_collected = 1
                         WHERE session_id = ?
-                    """, (signal.session_id,))
+                    """,
+                        (signal.session_id,),
+                    )
                     count += 1
-        except Exception as e:
-            logger.warning(f"SyncEngine 信号采集失败: {e}")
+        except (OSError, ValueError) as e:
+            logger.warning("SyncEngine 信号采集失败: %s", e, exc_info=True)
 
         return count
 
@@ -341,7 +367,7 @@ class SignalCollector:
     # 2. Git 信号采集
     # ============================================================
 
-    def collect_from_git(self, repo_paths: List[str] = None) -> int:
+    def collect_from_git(self, repo_paths: List[str] | None = None) -> int:
         """
         从 Git 仓库采集行为信号。
         默认扫描 ~/projects 和当前工作目录下的 git 仓库。
@@ -354,8 +380,8 @@ class SignalCollector:
         for repo_path in repo_paths:
             try:
                 count += self._collect_from_single_repo(Path(repo_path))
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                logger.debug("跳过无效仓库: %s", repo_path, exc_info=True)
                 continue
 
         return count
@@ -372,11 +398,13 @@ class SignalCollector:
 
         # Windows 常用路径
         if sys.platform == "win32":
-            search_paths.extend([
-                Path.home() / "Documents" / "GitHub",
-                Path.home() / "source" / "repos",
-                Path.home() / "Documents" / "workspace",
-            ])
+            search_paths.extend(
+                [
+                    Path.home() / "Documents" / "GitHub",
+                    Path.home() / "source" / "repos",
+                    Path.home() / "Documents" / "workspace",
+                ]
+            )
 
         for base in search_paths:
             if not base.exists():
@@ -391,17 +419,22 @@ class SignalCollector:
         count = 0
 
         # 获取最近30天的 commit
-        since = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        since = (datetime.now() - timedelta(days=SINCE_DAYS)).strftime("%Y-%m-%d")
 
         try:
             result = subprocess.run(
                 [
-                    "git", "-C", str(repo_path),
-                    "log", f"--since={since}",
+                    "git",
+                    "-C",
+                    str(repo_path),
+                    "log",
+                    f"--since={since}",
                     "--format=%H|%ci|%s",
                     "--shortstat",
                 ],
-                capture_output=True, text=True, timeout=30
+                capture_output=True,
+                text=True,
+                timeout=RESULT_SECONDS,
             )
 
             if result.returncode != 0:
@@ -418,20 +451,26 @@ class SignalCollector:
                     timestamp=commit["timestamp"],
                     message_length=len(commit["message"]),
                     has_issue_reference="#" in commit["message"],
-                    has_pr_reference="PR" in commit["message"].upper() or "pull" in commit["message"].lower(),
+                    has_pr_reference="PR" in commit["message"].upper()
+                    or "pull" in commit["message"].lower(),
                     files_changed=commit.get("files_changed", 0),
                     lines_added=commit.get("lines_added", 0),
                     lines_deleted=commit.get("lines_deleted", 0),
                     test_files_changed=commit.get("test_files_changed", 0),
                     commit_type=self._infer_commit_type(commit["message"]),
-                    is_weekend=datetime.fromisoformat(commit["timestamp"].replace("Z", "+00:00")).weekday() >= 5,
-                    hour_of_day=datetime.fromisoformat(commit["timestamp"].replace("Z", "+00:00")).hour,
+                    is_weekend=datetime.fromisoformat(
+                        commit["timestamp"].replace("Z", "+00:00")
+                    ).weekday()
+                    >= 5,
+                    hour_of_day=datetime.fromisoformat(
+                        commit["timestamp"].replace("Z", "+00:00")
+                    ).hour,
                 )
                 self.store.insert_git_signal(signal)
                 count += 1
 
-        except Exception as e:
-            logger.warning(f"忽略异常: {e}")
+        except (OSError, ValueError, subprocess.CalledProcessError) as e:
+            logger.warning("Git 信号采集失败: %s", e, exc_info=True)
 
         return count
 
@@ -466,15 +505,15 @@ class SignalCollector:
         result = {"files_changed": 0, "lines_added": 0, "lines_deleted": 0, "test_files_changed": 0}
 
         # e.g. "3 files changed, 50 insertions(+), 10 deletions(-)"
-        files_match = re.search(r'(\d+) file', stat_line)
+        files_match = re.search(r"(\d+) file", stat_line)
         if files_match:
             result["files_changed"] = int(files_match.group(1))
 
-        insertions_match = re.search(r'(\d+) insertion', stat_line)
+        insertions_match = re.search(r"(\d+) insertion", stat_line)
         if insertions_match:
             result["lines_added"] = int(insertions_match.group(1))
 
-        deletions_match = re.search(r'(\d+) deletion', stat_line)
+        deletions_match = re.search(r"(\d+) deletion", stat_line)
         if deletions_match:
             result["lines_deleted"] = int(deletions_match.group(1))
 
@@ -489,13 +528,13 @@ class SignalCollector:
         msg_lower = message.lower()
 
         patterns = [
-            (r'^feat|^feature|^add', 'feat'),
-            (r'^fix|^bugfix|^hotfix', 'fix'),
-            (r'^docs|^doc', 'docs'),
-            (r'^refactor|^restructure', 'refactor'),
-            (r'^test|^spec', 'test'),
-            (r'^chore|^ci|^build|^deps', 'chore'),
-            (r'^style|^format|^lint', 'style'),
+            (r"^feat|^feature|^add", "feat"),
+            (r"^fix|^bugfix|^hotfix", "fix"),
+            (r"^docs|^doc", "docs"),
+            (r"^refactor|^restructure", "refactor"),
+            (r"^test|^spec", "test"),
+            (r"^chore|^ci|^build|^deps", "chore"),
+            (r"^style|^format|^lint", "style"),
         ]
 
         for pattern, ctype in patterns:
@@ -517,7 +556,7 @@ class SignalCollector:
         if not self._wiki_dir().exists():
             return count
 
-        cutoff = datetime.now() - timedelta(days=30)
+        cutoff = datetime.now() - timedelta(days=SIGNAL_COLLECTOR_DURATION_BUCKET_MONTH_DAYS)
 
         for md_file in self._wiki_dir().rglob("*.md"):
             try:
@@ -529,7 +568,7 @@ class SignalCollector:
 
                 # 读取 frontmatter 获取标签等信息
                 tags_added = []
-                tags_removed = []
+                tags_removed = []  # type: ignore[var-annotated]
                 try:
                     content = md_file.read_text(encoding="utf-8", errors="ignore")
                     if content.startswith("---"):
@@ -537,12 +576,13 @@ class SignalCollector:
                         if len(parts) >= 3:
                             try:
                                 import yaml
+
                                 fm = yaml.safe_load(parts[1]) or {}
                                 tags_added = fm.get("tags", [])
-                            except Exception as e:
-                                logger.warning(f"忽略异常: {e}")
-                except Exception as e:
-                    logger.warning(f"忽略异常: {e}")
+                            except (yaml.YAMLError, ValueError) as e:
+                                logger.debug("YAML frontmatter 解析失败: %s", e, exc_info=True)
+                except (OSError, ValueError) as e:
+                    logger.debug("Wiki 文件读取失败: %s", e, exc_info=True)
 
                 page_rel = str(md_file.relative_to(self._wiki_dir()))
                 # 去重：按 page_path 检查（7天内已存在则跳过）
@@ -550,17 +590,18 @@ class SignalCollector:
                     continue
 
                 # 写入知识信号（通过 store 方法，确保 signal_metadata 同步创建）
+                # 注：mtime > cutoff 已由上方 continue 保证，此处恒为 modify
                 self.store.insert_knowledge_signal(
                     page_path=page_rel,
-                    action_type="modify" if mtime > cutoff else "access",
+                    action_type="modify",
                     timestamp=mtime.isoformat(),
                     tags_added=json.dumps(tags_added, ensure_ascii=False),
                     tags_removed=json.dumps(tags_removed, ensure_ascii=False),
                 )
                 count += 1
 
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
+            except (OSError, ValueError):
+                logger.debug("跳过无效 Wiki 文件: %s", md_file, exc_info=True)
                 continue
 
         return count
@@ -569,7 +610,7 @@ class SignalCollector:
     # 4. 文件系统信号采集
     # ============================================================
 
-    def collect_from_file_system(self, watch_paths: List[str] = None) -> int:
+    def collect_from_file_system(self, watch_paths: List[str] | None = None) -> int:
         """
         从文件系统采集行为信号。
         扫描指定目录，分析文件创建/修改模式。
@@ -583,7 +624,7 @@ class SignalCollector:
                 str(Path.cwd()),
             ]
 
-        cutoff = datetime.now() - timedelta(days=7)
+        cutoff = datetime.now() - timedelta(days=SIGNAL_COLLECTOR_DURATION_BUCKET_WEEK_DAYS)
 
         for path_str in watch_paths:
             path = Path(path_str)
@@ -607,7 +648,11 @@ class SignalCollector:
                     if file_path.name.startswith("."):
                         continue
 
-                    action = "create" if ctime > cutoff and abs((ctime - mtime).total_seconds()) < 60 else "modify"
+                    action = (
+                        "create"
+                        if ctime > cutoff and abs((ctime - mtime).total_seconds()) < 60
+                        else "modify"
+                    )
 
                     # 计算目录深度
                     try:
@@ -617,7 +662,10 @@ class SignalCollector:
                         depth = 0
 
                     # 检测是否在 inbox/下载目录
-                    is_inbox = any(kw in str(file_path).lower() for kw in ["download", "desktop", "inbox", "tmp"])
+                    is_inbox = any(
+                        kw in str(file_path).lower()
+                        for kw in ["download", "desktop", "inbox", "tmp"]
+                    )
 
                     # 检测是否在 git 中
                     is_versioned = (file_path.parent / ".git").exists() or any(
@@ -642,97 +690,63 @@ class SignalCollector:
                     )
                     count += 1
 
-                except Exception:
-                    logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
+                except (OSError, ValueError):
+                    logger.debug("跳过无效文件: %s", file_path, exc_info=True)
                     continue
 
         return count
 
     # ============================================================
-    # 5. Memos 笔记信号采集
+    # 5. 统一采集入口
     # ============================================================
 
-    def collect_from_memos(self, max_records: int = None) -> int:
-        """
-        从 Memos 采集笔记信号。
-        过滤 AI 生成的内容，只保留用户原创笔记。
-        """
-        try:
-            from integrations.styx import MemosClient
-        except ImportError:
-            return 0
-
-        client = MemosClient()
-        all_memos = client.list_all_memos(max_records=max_records)
-
-        # AI 生成标记（用于过滤）
-        ai_indicators = {
-            "agent=claude", "agent=kimi", "agent=gpt", "agent=hermes",
-            "type=session-delta", "type=clean-refined",
-            "source=claude", "source=hermes", "source=kimi",
-            "type=chunk",
+    def _collector_registry(self) -> Dict[str, Callable[[], int]]:
+        return {
+            "session": self.collect_from_distill_queue,
+            "wiki_state": self.collect_from_wiki_state,
+            "sync_engine": self.collect_from_sync_engine,
+            "git": self.collect_from_git,
+            "wiki": self.collect_from_wiki,
+            "file_system": self.collect_from_file_system,
         }
 
-        count = 0
-        for memo in all_memos:
-            tags = set(memo.get("tags", []))
-            content = memo.get("content", "")
+    @staticmethod
+    def _source_enabled(source_config: Any, *, default: bool) -> bool:
+        if isinstance(source_config, dict):
+            return bool(source_config.get("enabled", default))
+        if isinstance(source_config, bool):
+            return source_config
+        return default
 
-            # 跳过 AI 生成的内容
-            if tags & ai_indicators:
-                continue
-            # 跳过空内容
-            if not content or not content.strip():
-                continue
-            # 跳过纯 JSON 元数据（hermes chunk 等）
-            if content.strip().startswith('{"_meta"') or content.strip().startswith('{"session_id"'):
-                continue
-
-            # 提取内容特征
-            content_len = len(content)
-            has_title = bool(re.search(r'^#+\s', content, re.MULTILINE))
-            has_list = bool(re.search(r'(^|\n)[\s]*[-*+\d]+[.)\s]', content))
-            has_code = bool(re.search(r'```', content))
-            has_link = bool(re.search(r'\[.*?\]\(.*?\)', content))
-            img_count = len(re.findall(r'!\[.*?\]\(.*?\)', content))
-
-            # 解析时间 (Memos API 使用 createTime)
-            created = memo.get("createTime", "")
-            if not created:
-                continue
-
-            memo_uid = memo.get("name", "")
-
-            # 去重：按 memo_uid 检查
-            if memo_uid and self.store.memos_exists(memo_uid):
-                continue
-
-            # 构建信号
-            signal = MemosSignal(
-                timestamp=created,
-                content_length=content_len,
-                has_title=has_title,
-                has_list=has_list,
-                has_code_block=has_code,
-                has_link=has_link,
-                image_count=img_count,
-                tag_count=len(tags),
-                tags_json=json.dumps(list(tags), ensure_ascii=False),
-                is_ai_generated=False,
-                ai_agent="",
-                memo_uid=memo_uid,
+    @staticmethod
+    def _validate_collector_sources(
+        sources: List[str],
+        available_sources: Dict[str, Callable[[], int]],
+    ) -> None:
+        unknown = sorted(set(sources) - set(available_sources))
+        if unknown:
+            known = ", ".join(sorted(available_sources))
+            raise ValueError(
+                "unsupported persona SignalCollector source(s): "
+                f"{', '.join(unknown)}; supported sources: {known}"
             )
 
-            self.store.insert_memos_signal(signal)
-            count += 1
+    @staticmethod
+    def _validate_config_sources(data_sources: Dict[str, Any]) -> None:
+        unsupported_enabled = [
+            name
+            for name, source_config in sorted(data_sources.items())
+            if name not in SUPPORTED_CONFIG_SOURCES
+            and SignalCollector._source_enabled(source_config, default=False)
+        ]
+        if unsupported_enabled:
+            known = ", ".join(sorted(SUPPORTED_CONFIG_SOURCES))
+            raise ValueError(
+                "unsupported enabled persona data source(s): "
+                f"{', '.join(unsupported_enabled)}; supported config sources: {known}"
+            )
 
-        return count
-
-    # ============================================================
-    # 6. 统一采集入口
-    # ============================================================
-
-    def collect_all(self, sources: List[str] = None) -> Dict[str, int]:
+    def collect_all(self, sources: List[str] | None = None) -> Dict[str, int]:
         """
         统一采集入口。
 
@@ -742,19 +756,11 @@ class SignalCollector:
         Returns:
             各源采集数量统计
         """
-        all_sources = {
-            "session": self.collect_from_distill_queue,
-            "wiki_state": self.collect_from_wiki_state,
-            "sync_engine": self.collect_from_sync_engine,
-            "git": self.collect_from_git,
-            "wiki": self.collect_from_wiki,
-            "file_system": self.collect_from_file_system,
-            "memos": self.collect_from_memos,
-        }
-
+        all_sources = self._collector_registry()
         if sources is None:
             # 按配置自动选择数据源
             sources = self._resolve_sources_from_config()
+        self._validate_collector_sources(sources, all_sources)
 
         active_sources = {k: v for k, v in all_sources.items() if k in sources}
 
@@ -763,8 +769,8 @@ class SignalCollector:
             try:
                 count = collector()
                 results[name] = count
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at daimon.py", exc_info=True)
+            except (OSError, ValueError, TypeError, ImportError):
+                logger.debug("采集器 %s 失败", name, exc_info=True)
                 results[name] = -1  # 错误标记
 
         return results
@@ -775,24 +781,17 @@ class SignalCollector:
         if not config.persona_enabled:
             return ["session"]  # 画像系统关闭时至少保留 session
 
-        enabled = []
+        enabled: List[str] = []
         ds = config.persona_data_sources
-        if ds.get("session", {}).get("enabled", True):
-            enabled.extend(["session", "wiki_state", "sync_engine"])
-        if ds.get("git", {}).get("enabled", False):
-            enabled.append("git")
-        if ds.get("memos", {}).get("enabled", False):
-            enabled.append("memos")
-        if ds.get("wiki", {}).get("enabled", False):
-            enabled.append("wiki")
-        if ds.get("file_system", {}).get("enabled", False):
-            enabled.append("file_system")
-        # wechat 暂不支持自动采集
+        self._validate_config_sources(ds)
+        for source, collectors in CONFIG_SOURCE_TO_COLLECTORS.items():
+            if self._source_enabled(ds.get(source, {}), default=True):
+                enabled.extend(collectors)
         return enabled or ["session"]
 
     def get_collection_summary(self) -> str:
         """获取采集摘要"""
-        stats = self.store.get_signal_stats(days=30)
+        stats = self.store.get_signal_stats(days=STATS_DAYS)
         lines = ["📡 信号采集摘要（最近30天）"]
         for source, count in stats.items():
             lines.append(f"  {source}: {count} 条信号")
@@ -803,7 +802,8 @@ class SignalCollector:
 
 # ========== 便捷函数 ==========
 
-def collect_all_signals(sources: List[str] = None) -> Dict[str, int]:
+
+def collect_all_signals(sources: List[str] | None = None) -> Dict[str, int]:
     """便捷函数：采集所有信号"""
     collector = SignalCollector()
     return collector.collect_all(sources)

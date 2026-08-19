@@ -1,34 +1,732 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["judgment", "fragments"],
+  "$defs": {
+    "cognitionEpisodeEvidence": {
+      "type": "object",
+      "required": ["source_event_id", "source_authority_id", "quote"],
+      "properties": {
+        "source_event_id": {"type": "string", "minLength": 1},
+        "source_authority_id": {
+          "type": "string",
+          "pattern": "^source-authority:[0-9a-f]{32}$",
+          "description": "只能选择系统输入目录中的 exact Raw span 引用；不得输出权限、角色、span、hash 或 ACL。"
+        },
+        "quote": {"type": "string", "minLength": 1},
+        "artifact_ref_id": {
+          "type": "string",
+          "pattern": "^artifact-ref:[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cognitionEpisodeEntry": {
+      "type": "object",
+      "required": ["status", "evidence_refs", "claim_ids"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["known", "unknown", "not_applicable"]
+        },
+        "value": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "evidence_refs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/cognitionEpisodeEvidence"}
+        },
+        "claim_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "known"}},
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["value"],
+            "properties": {
+              "evidence_refs": {"minItems": 1},
+              "claim_ids": {"minItems": 1}
+            }
+          },
+          "else": {
+            "required": ["reason"],
+            "properties": {
+              "evidence_refs": {"maxItems": 0},
+              "claim_ids": {"maxItems": 0}
+            },
+            "not": {"required": ["value"]}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "cognitionEpisode": {
+      "type": "object",
+      "required": [
+        "situation",
+        "goal",
+        "desired_state",
+        "facts",
+        "assumptions",
+        "hypotheses",
+        "causal_links",
+        "alternatives",
+        "tradeoffs",
+        "decision",
+        "rationale",
+        "actions",
+        "outcomes",
+        "root_cause",
+        "correction",
+        "supersedes",
+        "uncertainty",
+        "invalidation_conditions",
+        "scope"
+      ],
+      "properties": {
+        "situation": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "goal": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "desired_state": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "facts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "assumptions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "hypotheses": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "causal_links": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "alternatives": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "tradeoffs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "decision": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "rationale": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "outcomes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "root_cause": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "correction": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "supersedes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "uncertainty": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "invalidation_conditions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}},
+        "scope": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cognitionEpisodeEntry"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["judgment", "judgment_reason", "fragments", "structured_output"],
+  "oneOf": [
+    {
+      "title": "SkipOutput",
+      "properties": {
+        "judgment": {"const": "skip"},
+        "fragments": {"type": "array", "maxItems": 0},
+        "structured_output": {
+          "type": "object",
+          "properties": {
+            "distill_intent": {"const": "skip"}
+          }
+        }
+      }
+    },
+    {
+      "title": "KnowledgeOrSkillOutput",
+      "properties": {
+        "judgment": {"enum": ["knowledge", "skill"]},
+        "fragments": {"type": "array", "minItems": 1},
+        "structured_output": {
+          "type": "object",
+          "required": ["cognition_episode"],
+          "properties": {
+            "distill_intent": {
+              "enum": ["create", "update", "merge", "dispute", "reinforce"]
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "judgment": {
       "type": "string",
-      "enum": ["knowledge"],
+      "enum": ["knowledge", "skill", "skip"],
       "description": "判断结论"
     },
     "judgment_reason": {
       "type": "string",
+      "minLength": 1,
       "description": "判断理由"
+    },
+    "skill_suggestion": {
+      "type": "string",
+      "description": "兼容字段：如果 judgment 是 skill，给出认知决策资产标题和用途"
+    },
+    "cognitive_decision_asset": {
+      "type": "object",
+      "description": "当 judgment 是 skill 时优先输出 cognitive_decision_asset.v1 建议；Skill 只是兼容判断名",
+      "properties": {
+        "schema_version": {"type": "string", "const": "cognitive_decision_asset.v1"},
+        "asset_type": {
+          "type": "string",
+          "enum": [
+            "methodology",
+            "pitfall_pattern",
+            "decision_heuristic",
+            "verification_recipe",
+            "automation_skill_candidate"
+          ]
+        },
+        "title": {"type": "string"},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "applicability": {"type": "array", "items": {"type": "string"}},
+        "failure_modes": {"type": "array", "items": {"type": "string"}},
+        "verification_recipe": {"type": "array", "items": {"type": "string"}},
+        "automation_derivative_allowed": {"type": "boolean"}
+      }
+    },
+    "analysis_type": {
+      "type": "string",
+      "enum": ["standard", "data_distillation"],
+      "description": "分析类型"
+    },
+    "data_profile": {
+      "type": "object",
+      "description": "数据蒸馏模式下的数据画像（可选）"
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {"type": "object"},
+      "description": "数据蒸馏模式下的异常列表（可选）"
+    },
+    "structured_output": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "gate_decision_id",
+        "source_agent",
+        "source_session_id",
+        "source_event_ids",
+        "raw_completeness",
+        "distill_intent",
+        "candidate_summary",
+        "input_spec_hash",
+        "cognition_context_hash"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "distill_output_v4",
+          "description": "固定为 distill_output_v4"
+        },
+        "input_spec_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "系统构建的不可变 DistillInputSpec hash，LLM 必须原样回显"
+        },
+        "cognition_context_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "系统构建的不可变 CognitionExtractionContext hash，LLM 必须原样回显"
+        },
+        "gate_decision_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "本次入口质量判断或提取任务的可追踪 ID"
+        },
+        "source_agent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "来源 agent，例如 codex/claude/kimi/unknown"
+        },
+        "source_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "原始对话 session_id"
+        },
+        "source_event_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "支撑本次蒸馏的 raw event id；未知时使用 session:<session_id>"
+        },
+        "raw_completeness": {
+          "type": "string",
+          "enum": ["full", "compressed", "truncated", "partial", "unknown"],
+          "description": "raw 来源完整性"
+        },
+        "distill_intent": {
+          "type": "string",
+          "enum": ["create", "update", "merge", "dispute", "reinforce", "skip"],
+          "description": "本次蒸馏意图"
+        },
+        "candidate_summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "候选知识摘要"
+        },
+        "skip_reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "仅 skip 分支必填：为什么输入没有可长期沉淀的价值"
+        },
+        "no_value_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["source_event_id", "reason"],
+            "properties": {
+              "source_event_id": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          },
+          "description": "仅 skip 分支必填：目录内 source event 对无长期价值判断的最小证据"
+        },
+        "user_behavior_intent": {
+          "type": "object",
+          "required": [
+            "content_source",
+            "user_intent_signal",
+            "intent_hypothesis",
+            "intent_evidence",
+            "intent_verification_events",
+            "intent_confidence",
+            "intent_status",
+            "behavior_summary"
+          ],
+          "properties": {
+            "content_source": {
+              "type": "string",
+              "enum": [
+                "native_dialogue",
+                "likely_pasted",
+                "external_file",
+                "user_note",
+                "unknown"
+              ],
+              "description": "用户引入材料的来源，由 ContentSource/上下文辅助判断"
+            },
+            "user_intent_signal": {
+              "type": "string",
+              "enum": [
+                "seeking_judgment",
+                "seeking_summary",
+                "expressing_agreement",
+                "expressing_doubt",
+                "sharing_information",
+                "asking_question",
+                "curate_or_decision_material",
+                "unknown"
+              ],
+              "description": "UserIntent 规则或后续校正后的意图信号"
+            },
+            "intent_hypothesis": {
+              "type": "string",
+              "minLength": 1,
+              "description": "为什么用户需要/引入这段知识；没有显式用户证据时写 unknown"
+            },
+            "intent_evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["source_event_id", "quote"],
+                "properties": {
+                  "source_event_id": {"type": "string", "minLength": 1},
+                  "source_authority_id": {
+                    "type": "string",
+                    "pattern": "^source-authority:[0-9a-f]{32}$",
+                    "description": "系统来源权限目录引用；仅在能确定 exact ref 时选择，否则省略并由系统按 quote 唯一解析。"
+                  },
+                  "quote": {"type": "string", "minLength": 1},
+                  "reason": {"type": "string"}
+                }
+              },
+              "description": "支撑意图判断的用户原话/行为证据，source_event_id 必须来自 source_event_ids"
+            },
+            "intent_verification_events": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["source_event_id", "status", "quote"],
+                "properties": {
+                  "source_event_id": {"type": "string", "minLength": 1},
+                  "source_authority_id": {
+                    "type": "string",
+                    "pattern": "^source-authority:[0-9a-f]{32}$",
+                    "description": "系统来源权限目录引用；仅在能确定 exact ref 时选择，否则省略并由系统按 quote 唯一解析。"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["verified", "refuted", "revised", "unverified"]
+                  },
+                  "quote": {"type": "string", "minLength": 1},
+                  "note": {"type": "string"}
+                }
+              },
+              "description": "后续对话对意图假设的确认、否定或修正；没有证据时为空数组"
+            },
+            "intent_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "意图置信度；未知/未验证应降低"
+            },
+            "intent_status": {
+              "type": "string",
+              "enum": ["verified", "refuted", "revised", "unverified", "unknown"],
+              "description": "意图假设在后续对话中的验证状态"
+            },
+            "behavior_summary": {
+              "type": "string",
+              "minLength": 1,
+              "description": "一句话说明用户为什么需要或引入这条知识"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"intent_hypothesis": {"const": "unknown"}},
+                "required": ["intent_hypothesis"]
+              },
+              "then": {
+                "required": ["intent_status", "intent_confidence"],
+                "properties": {
+                  "intent_status": {"enum": ["unverified", "unknown"]},
+                  "intent_confidence": {"maximum": 0.3}
+                }
+              }
+            }
+          ],
+          "description": "用户行为/意图长期认知素材，供 persona/reflection/cognitive flywheel 消费"
+        },
+        "cognition_episode": {
+          "$ref": "#/$defs/cognitionEpisode",
+          "description": "非 skip 必填的完整认知事件草稿；模型只填写语义和选择证据引用。"
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "claim_id",
+              "claim_text",
+              "claim_type",
+              "scope",
+              "evidence",
+              "relation_to_existing",
+              "recommended_action",
+              "confidence"
+            ],
+            "properties": {
+              "claim_id": {"type": "string", "minLength": 1},
+              "claim_text": {"type": "string", "minLength": 1},
+              "claim_type": {
+                "type": "string",
+                "enum": [
+                  "technical_fact",
+                  "preference",
+                  "procedure",
+                  "decision",
+                  "constraint",
+                  "pattern",
+                  "anti_pattern",
+                  "entity",
+                  "relationship",
+                  "open_question",
+                  "meta"
+                ]
+              },
+              "scope": {
+                "type": "object",
+                "required": ["domain"],
+                "properties": {
+                  "domain": {"type": "string", "minLength": 1},
+                  "applies_to": {"type": "array", "items": {"type": "string"}},
+                  "not_applies_to": {"type": "array", "items": {"type": "string"}}
+                }
+              },
+              "evidence": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["source_event_id", "quote"],
+                  "properties": {
+                    "source_event_id": {"type": "string", "minLength": 1},
+                    "source_authority_id": {
+                      "type": "string",
+                      "pattern": "^source-authority:[0-9a-f]{32}$",
+                      "description": "系统来源权限目录引用。仅在能确定 exact ref 时选择，否则省略并由系统按 quote 唯一解析；模型不能输出或修改权限字段。"
+                    },
+                    "quote": {"type": "string", "minLength": 1},
+                    "artifact_ref_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^artifact-ref:[0-9a-f]{32}$",
+                      "description": "可选的系统制品目录引用。只能从输入合同 artifact_catalog.entries 中选择；不得生成 URI、类型、哈希、MIME 或 ACL。"
+                    }
+                  }
+                }
+              },
+              "relation_to_existing": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "new",
+                      "same",
+                      "extends",
+                      "refines",
+                      "specializes",
+                      "example",
+                      "related",
+                      "contradicts",
+                      "supersedes"
+                    ]
+                  },
+                  "target_pages": {"type": "array", "items": {"type": "string"}},
+                  "delta_text": {"type": "string"},
+                  "reason": {"type": "string"}
+                }
+              },
+              "recommended_action": {
+                "type": "string",
+                "enum": [
+                  "create_page",
+                  "merge_into_page",
+                  "update_page",
+                  "route_to_dispute",
+                  "record_reinforcement",
+                  "skip"
+                ]
+              },
+              "cognitive_actions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "create_observation",
+                    "create_reflection_seed",
+                    "propose_policy_patch",
+                    "propose_methodology",
+                    "propose_pitfall_pattern",
+                    "update_relation",
+                    "record_reinforcement"
+                  ]
+                },
+                "description": "高价值 claim 必填的下游认知动作；普通 technical_fact/entity/open_question 可省略。"
+              },
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "same",
+                            "extends",
+                            "refines",
+                            "specializes",
+                            "example",
+                            "related",
+                            "contradicts",
+                            "supersedes"
+                          ]
+                        }
+                      },
+                      "required": ["type"]
+                    }
+                  },
+                  "required": ["relation_to_existing"]
+                },
+                "then": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "required": ["target_pages"],
+                      "properties": {
+                        "target_pages": {"minItems": 1}
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "extends",
+                            "refines",
+                            "specializes",
+                            "example",
+                            "related",
+                            "contradicts",
+                            "supersedes"
+                          ]
+                        }
+                      },
+                      "required": ["type"]
+                    }
+                  },
+                  "required": ["relation_to_existing"]
+                },
+                "then": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "required": ["delta_text"],
+                      "properties": {
+                        "delta_text": {"minLength": 1}
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "properties": {
+                        "type": {"enum": ["contradicts", "supersedes"]}
+                      },
+                      "required": ["type"]
+                    }
+                  },
+                  "required": ["relation_to_existing"]
+                },
+                "then": {
+                  "required": ["recommended_action"],
+                  "properties": {
+                    "relation_to_existing": {
+                      "required": ["reason"],
+                      "properties": {
+                        "reason": {"minLength": 1}
+                      }
+                    },
+                    "recommended_action": {"const": "route_to_dispute"}
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "relation_to_existing": {
+                      "properties": {"type": {"const": "same"}},
+                      "required": ["type"]
+                    }
+                  },
+                  "required": ["relation_to_existing"]
+                },
+                "then": {
+                  "required": ["recommended_action"],
+                  "properties": {
+                    "relation_to_existing": {
+                      "required": ["reason"],
+                      "properties": {
+                        "reason": {"type": "string", "pattern": "100%|完全重复"}
+                      }
+                    },
+                    "recommended_action": {"const": "record_reinforcement"}
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "claim_type": {
+                      "enum": [
+                        "preference",
+                        "procedure",
+                        "decision",
+                        "constraint",
+                        "pattern",
+                        "anti_pattern",
+                        "relationship",
+                        "meta"
+                      ]
+                    },
+                    "recommended_action": {"not": {"const": "skip"}}
+                  },
+                  "required": ["claim_type", "recommended_action"]
+                },
+                "then": {
+                  "required": ["cognitive_actions"],
+                  "properties": {
+                    "cognitive_actions": {"minItems": 1}
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"distill_intent": {"const": "skip"}},
+            "required": ["distill_intent"]
+          },
+          "then": {
+            "required": ["skip_reason", "no_value_evidence", "claims"],
+            "properties": {
+              "claims": {"type": "array", "maxItems": 0}
+            }
+          },
+          "else": {
+            "required": ["user_behavior_intent", "cognition_episode", "claims"],
+            "properties": {
+              "claims": {"type": "array", "minItems": 1}
+            }
+          }
+        }
+      ],
+      "description": "QualityGate/写入计划审计用结构化蒸馏契约"
     },
     "fragments": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["form", "title", "core_content"],
+        "required": ["form", "title", "claim_ids", "frontmatter", "core_content"],
         "properties": {
           "form": {
             "type": "string",
-            "enum": ["decision", "pattern", "pitfall", "snippet", "reference", "todo"],
+            "enum": ["问题-解决", "决策记录", "经验法则", "反模式", "方法论", "洞察关联"],
             "description": "知识形态"
           },
           "title": {
             "type": "string",
-            "description": "页面标题"
+            "minLength": 10,
+            "description": "页面标题（必须是一个问题或结论，至少10个字符）"
+          },
+          "claim_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1},
+            "description": "该片段精确支撑的 claim_id；必须引用本次 structured_output.claims。"
           },
           "frontmatter": {
             "type": "object",
-            "description": "YAML frontmatter"
+            "required": ["摘要", "领域"],
+            "properties": {
+              "摘要": {
+                "type": "string",
+                "minLength": 5,
+                "description": "30-200字概括核心价值，至少5个字符"
+              },
+              "领域": {
+                "type": "string",
+                "minLength": 2,
+                "description": "知识领域，至少2个字符"
+              }
+            },
+            "description": "YAML frontmatter，必须包含摘要和领域"
           },
           "background": {
             "type": "string",
@@ -36,7 +734,9 @@
           },
           "core_content": {
             "type": "string",
-            "description": "核心内容（Markdown格式）"
+            "minLength": 100,
+            "pattern": "(^|\\n)#{1,3}\\s|```",
+            "description": "核心内容（Markdown格式，至少100个字符，且必须包含标题或代码块）"
           },
           "boundaries": {
             "type": "object",

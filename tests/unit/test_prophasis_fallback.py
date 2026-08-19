@@ -35,7 +35,12 @@ def test_preflight_fallback_outputs_actionable_items_with_sources(tmp_path, monk
     assert knowledge is not None
     assert len(knowledge.checklist) <= 10
     assert knowledge.lessons_summary.startswith("未命中专用复盘文件")
-    first = knowledge.checklist[0]
-    assert first.item.startswith("复用《数据管道缺陷复盘》：")
-    assert first.source == "06-Retrospectives/coding_反模式_1.md"
-    assert first.detail == "source_agent=claude"
+    assert knowledge.checklist[0].source == "anti-pattern:analysis-paralysis"
+    fallback_items = [
+        item
+        for item in knowledge.checklist
+        if item.source == "06-Retrospectives/coding_反模式_1.md"
+    ]
+    assert fallback_items
+    assert fallback_items[0].item.startswith("复用《数据管道缺陷复盘》：")
+    assert fallback_items[0].detail == "source_agent=claude"

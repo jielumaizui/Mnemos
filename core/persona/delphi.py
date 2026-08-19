@@ -12,70 +12,82 @@ Persona Store - 画像存储与wiki frontmatter反写
 - 每条知识自带匹配度字段
 - 老字段保留，标注superseded
 """
+
 # Delphi — 德尔斐神庙 — 画像存储，神谕/画像的持久化
 # 原模块: persona_store.py
 
 
-
-import os
 import re
 import json
+import copy
 import yaml
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, asdict
+from typing import Callable, Dict, List, Mapping, Optional, Any, Sequence, Tuple
+from dataclasses import asdict
 from datetime import datetime
 
-from .psyche import SignalStore, get_signal_store
-from .pythia import PreferenceProfile, EnergyProfile, CognitiveProfile, ValueProfile
+from .psyche import (
+    SignalStore,
+    authorize_exact_persona_material_action,
+    get_signal_store,
+)
+from .pythia import PreferenceProfile
 from .hamartia import BlindSpotProfile
+from .delphi_behavior_rules import (
+    _COGNITIVE_RULES,
+    _ENERGY_RULES,
+    _VALUE_RULES,
+    _append_dimension_lines,
+)
+from .projection_runtime import (
+    PERSONA_HISTORY_RELATIVE,
+    PERSONA_PAGE_RELATIVE,
+    PersonaProjectionMixin,
+)
+from core.utils import LazyPath
 from core.config import get_config
+from core.cognitive.decision_trace import (
+    MaterialActionAuthorization,
+    MaterialActionCoordinator,
+    MaterialActionRequest,
+    authorize_exact_project_contract_action,
+    resolve_material_action_authorization,
+)
+from core.cognitive.state_contract import sha256_json
+from core.cognitive.state_store import CognitiveStateStore
+from core.wiki_derived_projection import DerivedProjectionLifecycle
+from core.wiki_page_roles import classify_wiki_page_role
 import logging
-
-
 
 # ========== 配置 ==========
 
 logger = logging.getLogger(__name__)
-def _get_wiki_dir():
-    """Lazy-load wiki directory to avoid side effects at import time."""
-    return get_config().wiki_dir
 
 
-class _LazyPath:
-    """Lazy path that evaluates get_config() only when accessed."""
-    __slots__ = ('_segments',)
-    def __init__(self, *segments):
-        self._segments = segments
-    def __truediv__(self, other):
-        return _LazyPath(*self._segments, other)
-    def __rtruediv__(self, other):
-        raise NotImplementedError
-    def _resolve(self):
-        result = _get_wiki_dir()
-        for seg in self._segments:
-            result = result / seg
-        return result
-    def __str__(self):
-        return str(self._resolve())
-    def __repr__(self):
-        return f"LazyPath({'/'.join(self._segments)})"
-    def __fspath__(self):
-        return str(self._resolve())
-    def __getattr__(self, name):
-        return getattr(self._resolve(), name)
-    def __hash__(self):
-        return hash(self._resolve())
-    def __eq__(self, other):
-        return self._resolve() == other
-
-
-WIKI_DIR = _LazyPath()
-PERSONA_PAGE_PATH = _LazyPath("01-People", "user-persona.md")
-PERSONA_HISTORY_DIR = _LazyPath("01-People", "user-persona-history")
+WIKI_DIR = LazyPath("wiki_dir")
+PERSONA_PAGE_PATH = LazyPath("wiki_dir", *PERSONA_PAGE_RELATIVE.parts)
+PERSONA_HISTORY_DIR = LazyPath("wiki_dir", *PERSONA_HISTORY_RELATIVE.parts)
+PERSONA_MARKDOWN_DECISION_CONTRACT_ID = (
+    "project-contract:persona-markdown-material-actions"
+)
+PERSONA_MARKDOWN_DECISION_CONTRACT_REVISION = (
+    "mnemos.persona_markdown_material_actions.v1"
+)
+PERSONA_MARKDOWN_DECISION_CONTRACT_TEXT = (
+    "PersonaStore may write only the exact current or history Markdown bytes "
+    "prepared for the bound Persona target and verified prior state."
+)
+PERSONA_MARKDOWN_DECISION_PRODUCER_HASH = sha256_json(
+    {
+        "module": "core.persona.delphi",
+        "producer": "persona-store",
+        "version": PERSONA_MARKDOWN_DECISION_CONTRACT_REVISION,
+    }
+)
 
 
 # ========== 知识匹配度计算 ==========
+
 
 class KnowledgeAligner:
     """
@@ -120,7 +132,9 @@ class KnowledgeAligner:
     def __init__(self, persona: PreferenceProfile):
         self.persona = persona
 
-    def calculate_alignment(self, wiki_page: Dict, session_context: Dict = None) -> Dict[str, float]:
+    def calculate_alignment(
+        self, wiki_page: Dict, session_context: Dict | None = None
+    ) -> Dict[str, float]:
         """
         计算单条知识与画像的三维匹配度。
 
@@ -154,39 +168,98 @@ class KnowledgeAligner:
         # 综合（权重可调）
         weights = self._get_alignment_weights()
         alignment["total"] = (
-            alignment["preference_match"] * weights["preference"] +
-            alignment["capability_match"] * weights["capability"] +
-            alignment["context_match"] * weights["context"]
+            alignment["preference_match"] * weights["preference"]
+            + alignment["capability_match"] * weights["capability"]
+            + alignment["context_match"] * weights["context"]
         )
 
         return alignment
 
-    def _calc_preference_match(self, page_type: str, frontmatter: Dict) -> float:
-        """计算偏好匹配度"""
-        # 从画像中提取偏好标签（简化版）
+    def _derive_preference_tags(self) -> List[str]:
+        """从画像价值雷达中推导出用户偏好标签集合。"""
         value = self.persona.value
+        tags = []
 
-        # 根据页面类型和偏好兼容性
-        matrix = self.TYPE_PREFERENCE_MATRIX.get(page_type, {})
-
-        # 推断用户的偏好关键词（简化版）
-        user_prefs = []
         if value.correctness_vs_efficiency > 0.6:
-            user_prefs.append("feasibility_first")
+            tags.append("feasibility_first")
         elif value.correctness_vs_efficiency < 0.4:
-            user_prefs.append("cost_first")
+            tags.append("cost_first")
 
         if value.innovation_vs_safety > 0.6:
-            user_prefs.append("risk_seeking")
+            tags.append("risk_seeking")
         elif value.innovation_vs_safety < 0.4:
-            user_prefs.append("risk_averse")
+            tags.append("risk_averse")
 
-        if not user_prefs:
+        if value.depth_vs_breadth > 0.6:
+            tags.append("depth_first")
+        elif value.depth_vs_breadth < 0.4:
+            tags.append("breadth_first")
+
+        if value.perfection_vs_completion > 0.6:
+            tags.append("perfection_oriented")
+        elif value.perfection_vs_completion < 0.4:
+            tags.append("completion_oriented")
+
+        if value.autonomy_vs_collaboration > 0.6:
+            tags.append("autonomous")
+        elif value.autonomy_vs_collaboration < 0.4:
+            tags.append("collaborative")
+
+        if value.action_vs_analysis > 0.6:
+            tags.append("action_oriented")
+        elif value.action_vs_analysis < 0.4:
+            tags.append("analysis_oriented")
+
+        return tags
+
+    def _static_preference_score(self, page_type: str, tags: List[str]) -> float:
+        """基于静态类型-偏好矩阵计算匹配度。
+
+        只考虑与当前页面类型矩阵相关的偏好标签，避免无关标签稀释信号。
+        """
+        matrix = self.TYPE_PREFERENCE_MATRIX.get(page_type, {})
+        if not matrix or not tags:
+            return 0.5
+        relevant = [tag for tag in tags if tag in matrix]
+        if not relevant:
+            return 0.5
+        scores = [matrix[tag] for tag in relevant]
+        return sum(scores) / len(scores)
+
+    def _dynamic_preference_score(
+        self, page_type: str, frontmatter: Dict, tags: List[str]
+    ) -> float:
+        """基于页面标签/偏好标签与用户画像标签的动态重叠计算匹配度。"""
+        if not tags:
             return 0.5
 
-        # 取平均匹配度
-        scores = [matrix.get(pref, 0.5) for pref in user_prefs]
-        return sum(scores) / len(scores)
+        explicit_tags = set(frontmatter.get("tags", [])) | set(
+            frontmatter.get("preference_tags", [])
+        )
+        page_tokens = explicit_tags | {page_type}
+        page_tokens.discard("")
+
+        matches = page_tokens & set(tags)
+        if not matches:
+            return 0.5
+        return 0.3 + 0.7 * (len(matches) / len(tags))
+
+    def _calc_preference_match(self, page_type: str, frontmatter: Dict) -> float:
+        """计算偏好匹配度：静态矩阵 + 动态标签重叠。"""
+        tags = self._derive_preference_tags()
+        static_score = self._static_preference_score(page_type, tags)
+
+        # 仅当页面存在显式偏好线索（tags / preference_tags）时才引入动态匹配，
+        # 避免纯类型信息冲淡静态矩阵的已有信号。
+        explicit_tags = set(frontmatter.get("tags", [])) | set(
+            frontmatter.get("preference_tags", [])
+        )
+        explicit_tags.discard("")
+        if explicit_tags:
+            dynamic_score = self._dynamic_preference_score(page_type, frontmatter, tags)
+            return 0.5 * static_score + 0.5 * dynamic_score
+
+        return static_score
 
     def _calc_capability_match(self, frontmatter: Dict) -> float:
         """
@@ -200,7 +273,7 @@ class KnowledgeAligner:
         # 简化版：基于知识level和画像的复杂度推断
         level = frontmatter.get("level", "L2")
         try:
-            level_num = int(re.search(r'L(\d+)', str(level)).group(1))
+            level_num = int(re.search(r"L(\d+)", str(level)).group(1))  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             level_num = 2
 
@@ -209,17 +282,17 @@ class KnowledgeAligner:
 
         gap = level_num - user_level
 
-        if gap < -1:       # 知识太简单
+        if gap < -1:  # 知识太简单
             return 0.3
-        elif gap == -1:    # 略简单，可复习
+        elif gap == -1:  # 略简单，可复习
             return 0.6
-        elif gap == 0:     # 学习区 sweet spot
+        elif gap == 0:  # 学习区 sweet spot
             return 1.0
-        elif gap == 1:     # 拉伸区
+        elif gap == 1:  # 拉伸区
             return 0.7
-        elif gap == 2:     # 有挑战
+        elif gap == 2:  # 有挑战
             return 0.4
-        else:              # 太难了
+        else:  # 太难了
             return 0.1
 
     def _calc_context_match(self, wiki_page: Dict, session_context: Dict) -> float:
@@ -274,38 +347,278 @@ class KnowledgeAligner:
 
 # ========== PersonaStore 类 ==========
 
-class PersonaStore:
+
+class PersonaStore(PersonaProjectionMixin):
     """画像存储管理器"""
 
-    def __init__(self, wiki_dir: Path = None, signal_store: SignalStore = None):
-        self.wiki_dir = wiki_dir or WIKI_DIR
+    def __init__(
+        self,
+        wiki_dir: Path | None = None,
+        signal_store: SignalStore | None = None,
+        *,
+        material_action_resolver: Callable[
+            [Mapping[str, str]], MaterialActionAuthorization
+        ]
+        | None = None,
+        projection_lifecycle: DerivedProjectionLifecycle | None = None,
+    ):
+        self.wiki_dir = Path(wiki_dir) if wiki_dir is not None else Path(WIKI_DIR)
         self.signal_store = signal_store or get_signal_store()
-        self.persona_page = self.wiki_dir / "01-People" / "user-persona.md"
-        self.history_dir = self.wiki_dir / "01-People" / "user-persona-history"
+        self._material_action_resolver = material_action_resolver
+        if wiki_dir is None and isinstance(WIKI_DIR, LazyPath):
+            self.persona_page = Path(PERSONA_PAGE_PATH)
+            self.history_dir = Path(PERSONA_HISTORY_DIR)
+        else:
+            self.persona_page = self.wiki_dir / PERSONA_PAGE_RELATIVE
+            self.history_dir = self.wiki_dir / PERSONA_HISTORY_RELATIVE
         self.history_dir.mkdir(parents=True, exist_ok=True)
+        self.projection_lifecycle = projection_lifecycle or DerivedProjectionLifecycle(
+            self.wiki_dir
+        )
+        self.last_trusted_push: Dict[str, Any] | None = None
+
+    def _resolve_material_action(
+        self,
+        *,
+        action_type: str,
+        owner: str,
+        executor: str,
+        target_ref: str,
+        input_hash: str,
+        command_ids: Mapping[str, str] | None,
+        expected_state_db: Path,
+        source_facts: Mapping[str, Any],
+        evidence_refs: tuple[str, ...],
+        task: str,
+        goal: str,
+        created_at: str,
+        approved_candidate_key: str,
+        approved_candidate_summary: str,
+        rejected_candidate_key: str,
+        rejected_candidate_summary: str,
+        committed_metric: str,
+        rejected_metric: str,
+    ) -> MaterialActionAuthorization:
+        request = {
+            "action_type": action_type,
+            "owner": owner,
+            "executor": executor,
+            "target_ref": target_ref,
+            "input_hash": input_hash,
+            "expected_state_db": str(expected_state_db),
+        }
+        if self._material_action_resolver is not None:
+            return self._material_action_resolver(request)
+        if isinstance(command_ids, Mapping):
+            command_id = str(command_ids.get(target_ref) or "").strip()
+            if not command_id:
+                raise PermissionError("persona mutation lacks its exact material command")
+            return MaterialActionCoordinator(
+                CognitiveStateStore(expected_state_db)
+            ).bind(
+                command_id,
+                executor_id=executor,
+            )
+        try:
+            authorization, _ = resolve_material_action_authorization(
+                None,
+                owner=owner,
+                executor_id=executor,
+                action_type=action_type,
+                target_ref=target_ref,
+                input_hash=input_hash,
+                expected_state_db=expected_state_db,
+            )
+            return authorization
+        except PermissionError as exc:
+            if "canonical material-action authorization is required" not in str(exc):
+                raise
+        request_spec = MaterialActionRequest(
+            owner=owner,
+            executor_id=executor,
+            action_type=action_type,
+            target_ref=target_ref,
+            input_hash=input_hash,
+            expected_state_db=str(expected_state_db.resolve(strict=False)),
+        )
+        from core.trust.vault_mutation_service import (
+            TRUSTED_MARKDOWN_ACTION_TYPE,
+            TRUSTED_MARKDOWN_EXECUTOR,
+            TRUSTED_MARKDOWN_OWNER,
+        )
+
+        if (owner, executor, action_type) == (
+            TRUSTED_MARKDOWN_OWNER,
+            TRUSTED_MARKDOWN_EXECUTOR,
+            TRUSTED_MARKDOWN_ACTION_TYPE,
+        ):
+            return authorize_exact_project_contract_action(
+                expected_request=request_spec,
+                state_db_path=expected_state_db,
+                contract_id=PERSONA_MARKDOWN_DECISION_CONTRACT_ID,
+                contract_revision_id=PERSONA_MARKDOWN_DECISION_CONTRACT_REVISION,
+                contract_text=PERSONA_MARKDOWN_DECISION_CONTRACT_TEXT,
+                source_namespace="persona-markdown-material-action",
+                source_facts=dict(source_facts),
+                decision_checks={
+                    "trusted_markdown_family_matches": True,
+                    "persona_markdown_source_facts_present": bool(source_facts),
+                    "persona_markdown_evidence_present": bool(evidence_refs),
+                },
+                evidence_refs=evidence_refs,
+                task=task,
+                goal=goal,
+                constraints=(
+                    "The exact target, bytes, and prior content hash must remain bound.",
+                    "Only the prepared Persona current/history Markdown may commit.",
+                ),
+                created_at=created_at,
+                producer="persona-store",
+                producer_version=PERSONA_MARKDOWN_DECISION_CONTRACT_REVISION,
+                producer_code_hash=PERSONA_MARKDOWN_DECISION_PRODUCER_HASH,
+                evaluator_id="persona-markdown-material-action-evaluator",
+                approved_candidate_key=approved_candidate_key,
+                approved_candidate_summary=approved_candidate_summary,
+                rejected_candidate_key=rejected_candidate_key,
+                rejected_candidate_summary=rejected_candidate_summary,
+                approved_reason_code="persona_markdown_binding_verified",
+                rejected_reason_code="persona_markdown_binding_rejected",
+                committed_metric=committed_metric,
+                rejected_metric=rejected_metric,
+            )
+        return authorize_exact_persona_material_action(
+            expected_request=request_spec,
+            state_db_path=expected_state_db,
+            source_namespace="persona-store-material-action",
+            source_facts=dict(source_facts),
+            evidence_refs=evidence_refs,
+            task=task,
+            goal=goal,
+            constraints=(
+                "The exact profile, target, and existing state must remain bound.",
+                "Generated profile content and evidence cannot drift before commit.",
+            ),
+            created_at=created_at,
+            producer="persona-store",
+            evaluator_id="persona-store-material-action-evaluator",
+            approved_candidate_key=approved_candidate_key,
+            approved_candidate_summary=approved_candidate_summary,
+            rejected_candidate_key=rejected_candidate_key,
+            rejected_candidate_summary=rejected_candidate_summary,
+            committed_metric=committed_metric,
+            rejected_metric=rejected_metric,
+        )
 
     # ---- 画像读写 ----
 
-    def save_persona(self, profile: PreferenceProfile, blindspot: BlindSpotProfile = None):
-        """
-        保存画像到wiki。
+    def save_persona(
+        self,
+        profile: PreferenceProfile,
+        blindspot: BlindSpotProfile | None = None,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+        consume_signal_ids: Mapping[str, Sequence[int]] | None = None,
+    ):
+        """Commit canonical Persona first, then publish its replayable Wiki projection."""
 
-        1. 更新当前画像页面
-        2. 备份旧版本到history
-        3. 保存到数据库
-        """
-        # 1. 备份旧版本
-        if self.persona_page.exists():
-            self._backup_current_version()
+        if consume_signal_ids is None:
+            consume_signal_ids = profile.source_signal_ids
 
-        # 2. 生成画像页面内容
-        content = self._generate_persona_page(profile, blindspot)
+        self._persist_persona_version(
+            profile,
+            blindspot,
+            material_action_commands=material_action_commands,
+            consume_signal_ids=consume_signal_ids,
+        )
+        versions = self.load_canonical_persona_versions_read_only(
+            self.signal_store.db_path
+        )
+        if not versions or versions[0][0].version != profile.version:
+            raise RuntimeError(
+                f"Committed Persona version is not replayable: {profile.version}"
+            )
+        self.project_all_personas(versions)
 
-        # 3. 写入wiki
-        self.persona_page.parent.mkdir(parents=True, exist_ok=True)
-        self.persona_page.write_text(content, encoding="utf-8")
+        from core.mnemos_bus import publish_event
 
-        # 4. 保存到数据库
+        trace_id = publish_event(
+            "persona.updated",
+            "persona_store",
+            {
+                "version": profile.version,
+                "wiki_path": str(self.persona_page),
+                "material_action_commands": dict(material_action_commands or {}),
+            },
+        )
+        if not trace_id:
+            raise RuntimeError("persona.updated publisher returned no trace id")
+
+    def _persist_persona_version(
+        self,
+        profile: PreferenceProfile,
+        blindspot: BlindSpotProfile | None,
+        *,
+        material_action_commands: Mapping[str, str] | None,
+        consume_signal_ids: Mapping[str, Sequence[int]] | None,
+    ) -> None:
+        """Persist the canonical version before any derived Markdown changes."""
+
+        from .psyche import (
+            PERSONA_VERSION_ACTION,
+            PERSONA_VERSION_EXECUTOR,
+            PERSONA_VERSION_OWNER,
+            persona_version_material_action_binding,
+        )
+
+        persona_binding = persona_version_material_action_binding(
+            version=profile.version,
+            generated_at=profile.generated_at,
+            period_start=profile.period_start,
+            period_end=profile.period_end,
+            energy=asdict(profile.energy),
+            cognitive=asdict(profile.cognitive),
+            value=asdict(profile.value),
+            blindspot=self._blindspot_to_dict(blindspot) if blindspot else {},
+            signal_count=profile.signal_count,
+            source_signal_ids=consume_signal_ids,
+        )
+        persona_action = self._resolve_material_action(
+            action_type=PERSONA_VERSION_ACTION,
+            owner=PERSONA_VERSION_OWNER,
+            executor=PERSONA_VERSION_EXECUTOR,
+            target_ref=persona_binding["target_ref"],
+            input_hash=persona_binding["input_hash"],
+            command_ids=material_action_commands,
+            expected_state_db=(
+                self.signal_store.db_path.parent / "producer_consumer_ledger.db"
+            ),
+            source_facts={
+                "schema_version": "mnemos.persona_store_version_facts.v1",
+                "profile": persona_binding["payload"],
+                "wiki_target": str(self.persona_page.resolve(strict=False)),
+            },
+            evidence_refs=(
+                f"persona-version:{profile.version}",
+                f"persona-signal-count:{profile.signal_count}",
+            ),
+            task=f"Persist Persona version {profile.version}",
+            goal="Persist the exact profile generated by the Persona workflow.",
+            created_at=(
+                datetime.fromisoformat(profile.generated_at)
+                .astimezone()
+                .isoformat()
+            ),
+            approved_candidate_key="persist_exact_persona_version",
+            approved_candidate_summary=(
+                "Persist the exact generated Persona version and its source count."
+            ),
+            rejected_candidate_key="retain_previous_persona_version",
+            rejected_candidate_summary=(
+                "Retain the previous Persona when generated profile bytes drift."
+            ),
+            committed_metric="persona_version_committed",
+            rejected_metric="unbound_persona_version_count",
+        )
         self.signal_store.save_persona_version(
             version=profile.version,
             period_start=profile.period_start,
@@ -315,26 +628,18 @@ class PersonaStore:
             value=asdict(profile.value),
             blindspot=self._blindspot_to_dict(blindspot) if blindspot else {},
             signal_count=profile.signal_count,
+            generated_at=profile.generated_at,
+            material_action=persona_action,
+            source_signal_ids=consume_signal_ids,
         )
 
     def load_persona(self) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
-        """加载当前画像。先尝试wiki，失败则从数据库回退，最后返回默认冷启动模板。"""
-        # 1. 尝试从wiki加载
-        if self.persona_page.exists():
-            try:
-                content = self.persona_page.read_text(encoding="utf-8")
-                profile, bs = self._parse_persona_page(content)
-                if profile is not None:
-                    return profile, bs
-            except Exception as e:
-                logger.warning(f"忽略异常: {e}")
+        """Load only the canonical Persona store; Wiki is never a reverse source."""
 
-        # 2. 从数据库回退
         profile, bs = self._load_persona_from_db()
         if profile is not None:
             return profile, bs
 
-        # 3. 冷启动：返回默认模板
         logger.info("[画像] 无历史画像，返回默认冷启动模板")
         return self._create_default_persona(), None
 
@@ -348,13 +653,22 @@ class PersonaStore:
         from datetime import datetime, timezone
 
         now = datetime.now(timezone.utc).isoformat()
-        all_energy_dims = ["focus_depth", "startup_difficulty", "endurance_mode",
-                          "switching_flexibility", "recovery_cycle"]
-        all_cognitive_dims = ["abstraction", "system_view", "skepticism",
-                             "creativity", "deduction"]
-        all_value_dims = ["correctness_vs_efficiency", "depth_vs_breadth",
-                         "perfection_vs_completion", "innovation_vs_safety",
-                         "autonomy_vs_collaboration"]
+        all_energy_dims = [
+            "focus_depth",
+            "startup_difficulty",
+            "endurance_mode",
+            "switching_flexibility",
+            "recovery_cycle",
+        ]
+        all_cognitive_dims = ["abstraction", "system_view", "skepticism", "creativity", "deduction"]
+        all_value_dims = [
+            "correctness_vs_efficiency",
+            "depth_vs_breadth",
+            "perfection_vs_completion",
+            "innovation_vs_safety",
+            "autonomy_vs_collaboration",
+            "action_vs_analysis",
+        ]
 
         return PreferenceProfile(
             version=0,
@@ -391,56 +705,33 @@ class PersonaStore:
             signal_count=0,
         )
 
-    def _load_persona_from_db(self) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
-        """从数据库重建画像"""
-        from .pythia import PreferenceProfile, EnergyProfile, CognitiveProfile, ValueProfile
-        from .hamartia import BlindSpotProfile, BlindSpot
-
+    def _load_persona_from_db(self) -> Tuple[Optional[PreferenceProfile], Optional[Any]]:
+        """从数据库重建最新画像"""
         latest = self.signal_store.get_latest_persona_version()
         if not latest:
             return None, None
-
         try:
-            energy_data = latest.get("energy_profile", {})
-            cognitive_data = latest.get("cognitive_profile", {})
-            value_data = latest.get("value_profile", {})
-
-            profile = PreferenceProfile(
-                version=latest.get("version", 0),
-                generated_at=latest.get("generated_at", ""),
-                period_start=latest.get("period_start", ""),
-                period_end=latest.get("period_end", ""),
-                energy=EnergyProfile(**{k: v for k, v in energy_data.items()
-                                        if k in EnergyProfile.__dataclass_fields__}),
-                cognitive=CognitiveProfile(**{k: v for k, v in cognitive_data.items()
-                                              if k in CognitiveProfile.__dataclass_fields__}),
-                value=ValueProfile(**{k: v for k, v in value_data.items()
-                                      if k in ValueProfile.__dataclass_fields__}),
-                signal_count=latest.get("signal_count_used", 0),
-            )
-
-            # 盲区画像
-            bs_data = latest.get("blindspot_profile", {})
-            blindspot = None
-            if bs_data:
-                blindspot = BlindSpotProfile(
-                    confirmed=[BlindSpot(**b) for b in bs_data.get("confirmed", [])],
-                    suspected=[BlindSpot(**b) for b in bs_data.get("suspected", [])],
-                    dismissed=[BlindSpot(**b) for b in bs_data.get("dismissed", [])],
-                    total_challenges=bs_data.get("total_challenges", 0),
-                    accepted_count=bs_data.get("accepted_count", 0),
-                    ignored_count=bs_data.get("ignored_count", 0),
-                    rejected_count=bs_data.get("rejected_count", 0),
-                    acceptance_rate=bs_data.get("acceptance_rate", 0.0),
-                    challenge_credit=bs_data.get("challenge_credit", 10.0),
-                )
-
-            return profile, blindspot
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
+            return self._profile_from_db_row(latest)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            logger.warning("Caught unexpected error at delphi.py", exc_info=True)
             return None, None
 
-    def _generate_persona_page(self, profile: PreferenceProfile, blindspot: BlindSpotProfile = None) -> str:
+    def load_recent_personas(self, limit: int = 2) -> List[PreferenceProfile]:
+        """加载最近 N 个已保存的画像版本（不含冷启动模板）。"""
+        rows = self.signal_store.get_recent_persona_versions(limit=limit)
+        personas = []
+        for row in rows:
+            try:
+                profile, _ = self._profile_from_db_row(row)
+                if profile and profile.version > 0:
+                    personas.append(profile)
+            except (TypeError, ValueError, KeyError, AttributeError):
+                logger.warning("忽略异常画像版本", exc_info=True)
+        return personas
+
+    def _generate_persona_page(
+        self, profile: PreferenceProfile, blindspot: BlindSpotProfile | None = None
+    ) -> str:
         """生成画像页面Markdown"""
         data = profile.to_dict()
 
@@ -452,16 +743,36 @@ class PersonaStore:
 
         lines = [
             "---",
-            f"type: user-persona",
+            "type: user-persona",
             f"version: {profile.version}",
             f"generated_at: {generated_at_str}",
             f"period: {profile.period_start} ~ {profile.period_end}",
             f"signal_count: {profile.signal_count}",
+            f"source_count: {profile.signal_count}",
+            "sources: "
+            + json.dumps(
+                [
+                    f"signal_store:{self.signal_store.db_path}#period/"
+                    f"{profile.period_start}/{profile.period_end}"
+                ],
+                ensure_ascii=False,
+            ),
+            f"evidence_level: {'multiple' if profile.signal_count > 1 else 'single'}",
+            f"knowledge_stage: {'P2' if profile.signal_count else 'P3'}",
+            f"status: {'active' if profile.signal_count else 'draft'}",
+            f"user_confirmed: {str(profile.user_confirmed).lower()}",
+            "confirmed_at: " + json.dumps(profile.confirmed_at, ensure_ascii=False),
+            "calibration_score: "
+            + (
+                "null"
+                if profile.calibration_score is None
+                else str(round(float(profile.calibration_score), 3))
+            ),
             f"confidence_energy: {profile.energy.confidence:.2f}",
             f"confidence_cognitive: {profile.cognitive.confidence:.2f}",
             f"confidence_value: {profile.value.confidence:.2f}",
             f"insufficient_energy: {json.dumps(profile.energy.insufficient_dimensions or [])}",
-            f"insufficient_cognitive: {json.dumps(profile.cognitive.insufficient_dimensions or [])}",
+            f"insufficient_cognitive: {json.dumps(profile.cognitive.insufficient_dimensions or [])}",  # noqa: E501
             f"insufficient_value: {json.dumps(profile.value.insufficient_dimensions or [])}",
             "---",
             "",
@@ -493,11 +804,13 @@ class PersonaStore:
             else:
                 lines.append(f"- **{key}**: {label} ({score:.2f})")
 
-        lines.extend([
-            "",
-            "## 认知模式（Layer 2: How you think）",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 认知模式（Layer 2: How you think）",
+                "",
+            ]
+        )
 
         for key, val in data["cognitive"].items():
             if key == "confidence":
@@ -509,11 +822,13 @@ class PersonaStore:
             else:
                 lines.append(f"- **{key}**: {label} ({score:.2f})")
 
-        lines.extend([
-            "",
-            "## 价值优先级（Layer 3: What you care）",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "## 价值优先级（Layer 3: What you care）",
+                "",
+            ]
+        )
 
         for key, val in data["value"].items():
             if key == "confidence":
@@ -527,11 +842,13 @@ class PersonaStore:
 
         # 盲区画像
         if blindspot:
-            lines.extend([
-                "",
-                "## 盲区画像",
-                "",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## 盲区画像",
+                    "",
+                ]
+            )
 
             if blindspot.confirmed:
                 lines.append("### 已确认的盲区")
@@ -545,28 +862,33 @@ class PersonaStore:
                     lines.append(f"- **{bs.type}**: {bs.description}")
                     lines.append(f"  - 置信度: {bs.confidence:.2f}")
 
-            lines.extend([
-                "",
-                f"### 挑战统计",
-                f"- 总挑战次数: {blindspot.total_challenges}",
-                f"- 接受: {blindspot.accepted_count} | 忽略: {blindspot.ignored_count} | 拒绝: {blindspot.rejected_count}",
-                f"- 接受率: {blindspot.acceptance_rate:.1%}",
-                f"- 当前信用: {blindspot.challenge_credit:.1f}/{blindspot.credit_max}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "### 挑战统计",
+                    f"- 总挑战次数: {blindspot.total_challenges}",
+                    f"- 接受: {blindspot.accepted_count} | 忽略: {blindspot.ignored_count} | 拒绝: {blindspot.rejected_count}",  # noqa: E501
+                    f"- 接受率: {blindspot.acceptance_rate:.1%}",
+                    f"- 当前信用: {blindspot.challenge_credit:.1f}/{blindspot.credit_max}",
+                ]
+            )
 
-        lines.extend([
-            "",
-            "---",
-            "",
-            "*此画像由 AI 自动分析生成，每季度更新一次。*",
-        ])
+        lines.extend(
+            [
+                "",
+                "---",
+                "",
+                "*此画像由 AI 自动分析生成，每季度更新一次。*",
+            ]
+        )
 
         return "\n".join(lines)
 
-    def _parse_persona_page(self, content: str) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
+    def _parse_persona_page(
+        self, content: str
+    ) -> Tuple[Optional[PreferenceProfile], Optional[BlindSpotProfile]]:
         """解析画像页面。从markdown中提取分数重建PreferenceProfile。"""
         from .pythia import PreferenceProfile, EnergyProfile, CognitiveProfile, ValueProfile
-        from .hamartia import BlindSpotProfile
 
         if not content.startswith("---"):
             return None, None
@@ -577,14 +899,14 @@ class PersonaStore:
 
         try:
             fm = yaml.safe_load(parts[1]) or {}
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
+        except (yaml.YAMLError, ValueError):
+            logger.warning("Caught unexpected error at delphi.py", exc_info=True)
             return None, None
 
         # 从markdown列表项提取分数，格式：- **key**: label (0.85)
         body = parts[2]
         scores = {}
-        for match in re.finditer(r'\*\*(\w+)\*\*:.+\(([\d.]+)\)', body):
+        for match in re.finditer(r"\*\*(\w+)\*\*:.+\(([\d.]+)\)", body):
             scores[match.group(1)] = float(match.group(2))
 
         # 构建画像（yaml.safe_load 会把日期解析为 datetime.date，需要转回字符串）
@@ -595,7 +917,9 @@ class PersonaStore:
         profile = PreferenceProfile(
             version=fm.get("version", 0),
             generated_at=str(generated_at),
-            period_start=fm.get("period", "").split(" ~ ")[0] if "~" in fm.get("period", "") else "",
+            period_start=(
+                fm.get("period", "").split(" ~ ")[0] if "~" in fm.get("period", "") else ""
+            ),
             period_end=fm.get("period", "").split(" ~ ")[1] if "~" in fm.get("period", "") else "",
             energy=EnergyProfile(
                 focus_depth=scores.get("focus_depth", 0.5),
@@ -629,22 +953,108 @@ class PersonaStore:
 
         return profile, None  # 盲区画像暂不从此解析
 
-    def _backup_current_version(self):
-        """备份当前画像版本"""
-        if not self.persona_page.exists():
+    def _backup_current_version(
+        self,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+    ):
+        """Project the latest canonical version into history without reading Wiki."""
+
+        profile, blindspot = self._load_persona_from_db()
+        if profile is None:
             return
+        self._project_persona_history(
+            profile,
+            blindspot,
+            material_action_commands=material_action_commands,
+        )
 
-        # 读取版本号
-        try:
-            content = self.persona_page.read_text(encoding="utf-8")
-            version_match = re.search(r'version:\s*(\d+)', content)
-            version = int(version_match.group(1)) if version_match else 0
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
-            version = 0
+    def _write_persona_markdown(
+        self,
+        path: Path,
+        content: str,
+        *,
+        source: str,
+        action: str,
+        evidence_refs: List[str],
+        metadata: Dict[str, Any] | None = None,
+        material_action_commands: Mapping[str, str] | None = None,
+    ):
+        from core.trust.markdown_adapter import read_markdown_text
+        from core.trust.models import sha256_text
+        from core.trust.vault_mutation_service import (
+            TRUSTED_MARKDOWN_ACTION_TYPE,
+            TRUSTED_MARKDOWN_EXECUTOR,
+            TRUSTED_MARKDOWN_OWNER,
+            TrustedVaultMutationService,
+            commit_trusted_markdown,
+            trusted_markdown_material_action_binding,
+        )
 
-        backup_path = self.history_dir / f"user-persona-v{version}.md"
-        backup_path.write_text(self.persona_page.read_text(encoding="utf-8"), encoding="utf-8")
+        service = TrustedVaultMutationService(wiki_base=self.wiki_dir)
+        expected_existing_hash = (
+            sha256_text(read_markdown_text(path))
+            if path.is_file()
+            else None
+        )
+        binding = trusted_markdown_material_action_binding(
+            target_path=path,
+            content=content,
+            proposed_action=action,
+            expected_existing_hash=expected_existing_hash,
+        )
+        material_action = self._resolve_material_action(
+            action_type=TRUSTED_MARKDOWN_ACTION_TYPE,
+            owner=TRUSTED_MARKDOWN_OWNER,
+            executor=TRUSTED_MARKDOWN_EXECUTOR,
+            target_ref=binding["target_ref"],
+            input_hash=binding["input_hash"],
+            command_ids=material_action_commands,
+            expected_state_db=(
+                service.config.db_path.parent / "producer_consumer_ledger.db"
+            ),
+            source_facts={
+                "schema_version": "mnemos.persona_markdown_facts.v1",
+                "source": source,
+                "action": action,
+                "target_path": str(path.resolve(strict=False)),
+                "content_hash": sha256_text(content),
+                "expected_existing_hash": expected_existing_hash or "",
+                "metadata": dict(metadata or {}),
+            },
+            evidence_refs=tuple(evidence_refs),
+            task=f"Apply Persona Markdown action {action}",
+            goal="Commit only the exact Persona Markdown mutation prepared here.",
+            created_at=datetime.now().astimezone().isoformat(),
+            approved_candidate_key="commit_exact_persona_markdown",
+            approved_candidate_summary=(
+                "Commit the exact Persona Markdown bytes to the bound target."
+            ),
+            rejected_candidate_key="retain_existing_persona_markdown",
+            rejected_candidate_summary=(
+                "Retain existing Markdown when target or content bytes drift."
+            ),
+            committed_metric="persona_markdown_committed",
+            rejected_metric="unbound_persona_markdown_count",
+        )
+        result = service.submit_markdown(
+            target_path=path,
+            content=content,
+            source=source,
+            actor="system",
+            evidence_refs=evidence_refs,
+            proposed_action=action,
+            expected_existing_hash=expected_existing_hash,
+            metadata=dict(metadata or {}),
+            material_action=material_action,
+        )
+        commit_trusted_markdown(
+            result,
+            target_path=path,
+            content=content,
+            material_action=material_action,
+        )
+        return result
 
     def _blindspot_to_dict(self, profile: BlindSpotProfile) -> Dict:
         """盲区画像转字典"""
@@ -664,8 +1074,14 @@ class PersonaStore:
 
     # ---- 知识库反写 ----
 
-    def align_all_wiki_pages(self, persona: PreferenceProfile, session_context: Dict = None,
-                             dry_run: bool = False) -> Dict[str, int]:
+    def align_all_wiki_pages(
+        self,
+        persona: PreferenceProfile,
+        session_context: Dict | None = None,
+        dry_run: bool = False,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+    ) -> Dict[str, int]:
         """
         全量扫描wiki，计算匹配度并反写frontmatter。
 
@@ -692,6 +1108,17 @@ class PersonaStore:
 
             try:
                 content = md_file.read_text(encoding="utf-8")
+                relative_path = md_file.relative_to(self.wiki_dir)
+                page_role = classify_wiki_page_role(content, str(relative_path))
+                root = relative_path.parts[0] if relative_path.parts else ""
+                if page_role.startswith(("formal_derived:", "derived_report:")) or root in {
+                    "L2.4-KG",
+                    "L3-Observations",
+                    "L4-Reflections",
+                    "L5-Feedback",
+                }:
+                    stats["skipped"] += 1
+                    continue
                 frontmatter = self._extract_frontmatter(content)
 
                 if frontmatter is None:
@@ -700,7 +1127,7 @@ class PersonaStore:
 
                 # 计算匹配度
                 wiki_page = {
-                    "path": str(md_file.relative_to(self.wiki_dir)),
+                    "path": str(relative_path),
                     "frontmatter": frontmatter,
                     "content_snippet": content[:500],
                 }
@@ -715,33 +1142,49 @@ class PersonaStore:
                 )
 
                 if new_content != content:
-                    md_file.write_text(new_content, encoding="utf-8")
+                    self._write_persona_markdown(
+                        md_file,
+                        new_content,
+                        source="persona_alignment",
+                        action="align_wiki_page",
+                        evidence_refs=[
+                            f"persona_version:{persona.version}",
+                            f"wiki_page:{relative_path}",
+                        ],
+                        metadata={
+                            "alignment": alignment,
+                            "page_path": str(relative_path),
+                        },
+                        material_action_commands=material_action_commands,
+                    )
                     stats["updated"] += 1
 
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
+            except (OSError, ValueError):
+                logger.warning("Caught unexpected error at delphi.py", exc_info=True)
                 stats["skipped"] += 1
                 continue
 
         return stats
 
     def _extract_frontmatter(self, content: str) -> Optional[Dict]:
-        """提取frontmatter"""
+        """提取frontmatter，使用行首匹配避免内容中 --- 被误切分"""
         if not content.startswith("---"):
             return None
 
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+        # 匹配独立的 --- 行，避免 frontmatter 值内部的 --- 被误切
+        match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n(.*)", content, re.DOTALL)
+        if not match:
             return None
 
         try:
-            return yaml.safe_load(parts[1]) or {}
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
+            return yaml.safe_load(match.group(1)) or {}
+        except (yaml.YAMLError, ValueError):
+            logger.warning("Caught unexpected error at delphi.py", exc_info=True)
             return None
 
-    def _update_persona_frontmatter(self, content: str, frontmatter: Dict,
-                                    alignment: Dict, persona_version: int) -> str:
+    def _update_persona_frontmatter(
+        self, content: str, frontmatter: Dict, alignment: Dict, persona_version: int
+    ) -> str:
         """
         更新知识条目的画像frontmatter字段。
 
@@ -756,25 +1199,28 @@ class PersonaStore:
         if len(parts) < 3:
             return content
 
+        # 深拷贝 frontmatter，避免副作用
+        fm = copy.deepcopy(frontmatter)
+
         # 处理旧的persona_current
-        if "persona_current" in frontmatter:
-            old_current = frontmatter["persona_current"]
-            if "persona_history" not in frontmatter:
-                frontmatter["persona_history"] = []
+        if "persona_current" in fm:
+            old_current = copy.deepcopy(fm["persona_current"])
+            if "persona_history" not in fm:
+                fm["persona_history"] = []
 
             # 标记为superseded
             old_current["status"] = "superseded"
             old_current["superseded_at"] = datetime.now().isoformat()[:10]
             old_current["superseded_by"] = persona_version
 
-            frontmatter["persona_history"].append(old_current)
+            fm["persona_history"].append(old_current)
 
             # 限制历史记录数量（保留最近5个版本）
-            if len(frontmatter["persona_history"]) > 5:
-                frontmatter["persona_history"] = frontmatter["persona_history"][-5:]
+            if len(fm["persona_history"]) > 5:
+                fm["persona_history"] = fm["persona_history"][-5:]
 
         # 写入新的persona_current
-        frontmatter["persona_current"] = {
+        fm["persona_current"] = {
             "version": persona_version,
             "updated_at": datetime.now().isoformat()[:10],
             "preference_alignment": {
@@ -782,10 +1228,15 @@ class PersonaStore:
             },
             "capability_alignment": {
                 "score": round(alignment["capability_match"], 2),
-                "difficulty_for_user": "boredom" if alignment["capability_match"] < 0.3 else
-                                        "sweet_spot" if alignment["capability_match"] > 0.8 else
-                                        "stretch_zone" if alignment["capability_match"] > 0.5 else
-                                        "panic_zone",
+                "difficulty_for_user": (
+                    "boredom"
+                    if alignment["capability_match"] < 0.3
+                    else (
+                        "sweet_spot"
+                        if alignment["capability_match"] > 0.8
+                        else "stretch_zone" if alignment["capability_match"] > 0.5 else "panic_zone"
+                    )
+                ),
             },
             "context_alignment": {
                 "score": round(alignment["context_match"], 2),
@@ -794,29 +1245,38 @@ class PersonaStore:
         }
 
         # 重新生成frontmatter
-        new_frontmatter = yaml.dump(frontmatter, allow_unicode=True, sort_keys=False)
+        new_frontmatter = yaml.dump(fm, allow_unicode=True, sort_keys=False)
         return f"---\n{new_frontmatter}---{parts[2]}"
 
 
 # ========== 便捷函数 ==========
 
-def save_persona_to_wiki(profile: PreferenceProfile, blindspot: BlindSpotProfile = None):
-    """便捷函数：保存画像到wiki"""
-    store = PersonaStore()
-    store.save_persona(profile, blindspot)
-    logger.info(f"✅ 画像已保存到 wiki: {store.persona_page}")
+
+def save_persona_to_wiki(profile: PreferenceProfile, blindspot: BlindSpotProfile | None = None):
+    """Reject the retired direct-write convenience entry point."""
+
+    del profile, blindspot
+    raise RuntimeError(
+        "direct Persona persistence is retired; use PersonaApplicationService"
+    )
 
 
 def align_wiki_with_persona(persona: PreferenceProfile, dry_run: bool = False) -> Dict:
     """便捷函数：全量反写wiki匹配度"""
     store = PersonaStore()
     stats = store.align_all_wiki_pages(persona, dry_run=dry_run)
-    logger.warning(f"✅ Wiki扫描完成: {stats['scanned']} 条, 更新 {stats['updated']} 条, 跳过 {stats['skipped']} 条")
+    logger.warning(
+        "✅ Wiki扫描完成: %s 条, 更新 %s 条, 跳过 %s 条",
+        stats["scanned"],
+        stats["updated"],
+        stats["skipped"],
+    )
     return stats
 
 
 # 便捷函数
 _persona_store_instance = None
+
 
 def get_persona_store() -> PersonaStore:
     """获取全局 PersonaStore 实例"""
@@ -825,6 +1285,7 @@ def get_persona_store() -> PersonaStore:
         _persona_store_instance = PersonaStore()
     return _persona_store_instance
 
+
 # ========== Agent 适配画像策略 ==========
 
 # A/B 测试状态：每个进程只确定一次
@@ -832,18 +1293,35 @@ _ab_test_persona_driven: Optional[bool] = None
 
 
 def _ensure_ab_test_group() -> bool:
-    """确保 A/B 测试分组已确定"""
+    """确保 A/B 测试分组已确定（确定性哈希，同一设备始终同一组）"""
     global _ab_test_persona_driven
     if _ab_test_persona_driven is None:
-        import random
-        _ab_test_persona_driven = random.random() < 0.5
+        import hashlib
+        import uuid
+
+        machine_id = str(uuid.getnode())
+        experiment_key = "mnemos_persona_driven_v1"
+        hash_val = int(hashlib.md5((machine_id + experiment_key).encode(), usedforsecurity=False).hexdigest(), 16)
+        _ab_test_persona_driven = (hash_val % 100) < 50
     return _ab_test_persona_driven
+
+
+def _get_ab_test_group_label() -> Optional[str]:
+    """
+    返回当前 A/B 实验分组标签。
+
+    Returns:
+        "treatment" / "control" / None
+    """
+    if not get_config().get("persona.ab_test_enabled", False):
+        return None
+    return "treatment" if _ensure_ab_test_group() else "control"
 
 
 def _load_base_behavior_prompt() -> str:
     """加载基础画像策略（所有 Agent 通用）"""
     try:
-        if not _ensure_ab_test_group():
+        if get_config().get("persona.ab_test_enabled", False) and not _ensure_ab_test_group():
             return "\n[Persona-Driven Behavior]\n- A/B 对照组：本次 session 不使用画像驱动策略"
 
         pstore = PersonaStore()
@@ -856,77 +1334,15 @@ def _load_base_behavior_prompt() -> str:
         ins_cognitive = set(profile.cognitive.insufficient_dimensions or [])
         ins_value = set(profile.value.insufficient_dimensions or [])
 
-        # 能量层映射
-        if "focus_depth" not in ins_energy:
-            fd = profile.energy.focus_depth
-            if fd > 0.6:
-                lines.append("- 用户专注深度高：提供结构化、层次化的深度回复，避免碎片化信息")
-            elif fd < 0.4:
-                lines.append("- 用户专注深度低：提供简短、可快速消化的信息，多用列表和要点")
-
-        if "startup_difficulty" not in ins_energy:
-            sd = profile.energy.startup_difficulty
-            if sd > 0.6:
-                lines.append("- 用户启动难度高：主动提供框架、模板或选项，降低决策成本")
-            elif sd < 0.4:
-                lines.append("- 用户启动容易：可以用开放性问题开场，给用户更多探索空间")
-
-        if "switching_flexibility" not in ins_energy:
-            sf = profile.energy.switching_flexibility
-            if sf > 0.6:
-                lines.append("- 用户切换弹性高：允许话题自然切换，不必强行锁定当前主题")
-            elif sf < 0.4:
-                lines.append("- 用户切换弹性低：坚持当前主线，切换话题时明确提示和确认")
-
-        # 认知层映射
-        if "abstraction" not in ins_cognitive:
-            ab = profile.cognitive.abstraction
-            if ab > 0.6:
-                lines.append("- 用户偏抽象思维：先说原理/框架，再用案例佐证")
-            elif ab < 0.4:
-                lines.append("- 用户偏具象思维：先给具体案例，再归纳原理")
-
-        if "system_view" not in ins_cognitive:
-            sv = profile.cognitive.system_view
-            if sv > 0.6:
-                lines.append("- 用户偏好系统视角：先给全貌和关联，再深入细节")
-            elif sv < 0.4:
-                lines.append("- 用户偏好单点视角：聚焦当前问题，全局背景简要提及")
-
-        if "skepticism" not in ins_cognitive:
-            sk = profile.cognitive.skepticism
-            if sk > 0.6:
-                lines.append("- 用户质疑倾向强：主动展示推理过程、证据和局限性")
-            elif sk < 0.4:
-                lines.append("- 用户信任倾向强：直接给结论和建议，不必过度解释前提")
-
-        # 价值层映射
-        if "correctness_vs_efficiency" not in ins_value:
-            ce = profile.value.correctness_vs_efficiency
-            if ce > 0.6:
-                lines.append("- 用户重视正确性：确保信息准确，不确定时明确说明")
-            elif ce < 0.4:
-                lines.append("- 用户重视效率：快速给出可行方案，不必追求完美")
-
-        if "perfection_vs_completion" not in ins_value:
-            pc = profile.value.perfection_vs_completion
-            if pc > 0.6:
-                lines.append("- 用户追求完美：提供详尽、完整的方案，考虑边界情况")
-            elif pc < 0.4:
-                lines.append("- 用户追求完成：先给 MVP 方案，细节后续补充")
-
-        if "depth_vs_breadth" not in ins_value:
-            db = profile.value.depth_vs_breadth
-            if db > 0.6:
-                lines.append("- 用户偏好深度：深入一个点，不必面面俱到")
-            elif db < 0.4:
-                lines.append("- 用户偏好广度：提供多种选择和视角，不必深入每个细节")
+        _append_dimension_lines(lines, profile.energy, ins_energy, _ENERGY_RULES)
+        _append_dimension_lines(lines, profile.cognitive, ins_cognitive, _COGNITIVE_RULES)
+        _append_dimension_lines(lines, profile.value, ins_value, _VALUE_RULES)
 
         if len(lines) > 1:
             return "\n".join(lines)
         return ""
-    except Exception:
-        logging.getLogger(__name__).warning(f"Caught unexpected error at delphi.py", exc_info=True)
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        logger.warning("Caught unexpected error at delphi.py", exc_info=True)
         return ""
 
 
@@ -947,8 +1363,8 @@ def get_behavior_prompt(agent: str) -> str:
 
     # Agent 特定策略
     agent_notes = {
-        "claude": "[Agent Note] 你当前使用 Claude Code，擅长深度技术讨论和代码分析。画像策略叠加：在技术讨论中优先提供深度分析，代码审查时关注架构设计和边界 case。",
-        "hermes": "[Agent Note] 你当前使用 Hermes，擅长快速信息检索和多源搜索。画像策略叠加：在检索时优先返回高置信度来源，根据用户偏好调整信息密度（深度/广度）。",
+        "claude": "[Agent Note] 你当前使用 Claude Code，擅长深度技术讨论和代码分析。画像策略叠加：在技术讨论中优先提供深度分析，代码审查时关注架构设计和边界 case。",  # noqa: E501
+        "hermes": "[Agent Note] 你当前使用 Hermes，擅长快速信息检索和多源搜索。画像策略叠加：在检索时优先返回高置信度来源，根据用户偏好调整信息密度（深度/广度）。",  # noqa: E501
         "openclaw": "[Agent Note] 你当前使用 OpenClaw，擅长分析和推理。画像策略叠加：在推理过程中主动展示思考链，根据用户质疑倾向调整论证详略。",
         "opencode": "[Agent Note] 你当前使用 OpenCode，擅长代码理解和生成。画像策略叠加：在代码生成时根据用户追求完美/完成的倾向调整详尽程度。",
         "codex": "[Agent Note] 你当前使用 Codex，专注代码生成任务。画像策略叠加：快速生成可运行代码，根据用户效率偏好提供简洁实现或完整方案。",
@@ -956,12 +1372,27 @@ def get_behavior_prompt(agent: str) -> str:
     note = agent_notes.get(agent, "")
     if note:
         lines.append(note)
-    return "\n".join(lines)
+    result = "\n".join(lines)
+
+    # 记录画像行为提示使用情况（失败不阻塞）
+    try:
+        from core.persona.behavior_tracker import BehaviorPromptTracker
+
+        BehaviorPromptTracker().track(
+            agent=agent,
+            source="preflight",
+            prompt_text=result,
+            ab_test_group=_get_ab_test_group_label(),
+        )
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+        logger.debug("[get_behavior_prompt] 行为提示追踪失败", exc_info=True)
+
+    return result
 
 
 if __name__ == "__main__":
     # 测试
     store = PersonaStore()
-    print(f"✅ PersonaStore initialized")
+    print("✅ PersonaStore initialized")
     print(f"   Wiki目录: {store.wiki_dir}")
     print(f"   画像页面: {store.persona_page}")

@@ -1,0 +1,172 @@
+{
+  "events": {
+    "cognition_episode_committed": {
+      "producers": [
+        {
+          "source": "core.cognitive.cognition_episode_dispatch.publish_cognition_episode_revision",
+          "note": "Publishes an immutable Event returned by _event_for_revision; the static map cannot resolve the event_type through that helper call."
+        }
+      ]
+    },
+    "daily_credit_recovery": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by Agent adapters at runtime when a daily credit-recovery check runs (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "git_commit_detected": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by git-based Agent adapters or hooks when a repository commit is detected (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "knowledge.deleted": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by external knowledge-management integrations when a Wiki page/knowledge entry is deleted (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "knowledge.ingested": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by ingestion adapters (Olympus/Caduceus/Typhon/Musae/Daedalus) when new knowledge is ingested (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "knowledge.updated": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by external knowledge-management integrations when a Wiki page/knowledge entry is updated (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "message.exchanged": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by Agent adapters when a cross-Agent message is exchanged (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "notes_synced": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by note-sync integrations when external notes are synchronized (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "page.created": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by Agent hooks / file-system integrations when a new Wiki page is created (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "page.modified": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by Agent hooks / file-system integrations when a Wiki page is modified (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "page_accessed": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by runtime access-tracking integrations when a Wiki page is accessed (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "page_created": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Legacy variant emitted by runtime page-creation integrations (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "periodic_cleanup": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by daemon/scheduler cleanup routines at runtime (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "periodic_persona_analysis": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by persona scheduling routines at runtime (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "scheduler.daily": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by the daemon daily scheduler (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "scheduler.hourly": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by the daemon hourly scheduler (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "session_completed": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by session-tracking adapters when a conversation session completes (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "skill_deviated": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by skill-tracking integrations when a skill execution deviates from expected behavior (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "skill_executed": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by skill-tracking integrations when a skill is executed (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "task_completed": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by task-tracking integrations when a task completes (AST-invisible dynamic path)."
+        }
+      ]
+    },
+    "wiki_page_accessed": {
+      "producers": [
+        {
+          "source": "runtime_adapter",
+          "note": "Emitted by runtime access-tracking integrations when a Wiki page is accessed (AST-invisible dynamic path)."
+        }
+      ]
+    }
+  }
+}

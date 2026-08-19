@@ -63,7 +63,12 @@ def test_publish_due_and_overdue_events(tmp_path, monkeypatch):
     import core.mnemos_bus as bus
 
     published = []
-    monkeypatch.setattr(bus, "publish_event", lambda event_type, agent, payload: published.append((event_type, agent, payload)) or "trace")
+    monkeypatch.setattr(
+        bus,
+        "publish_event",
+        lambda event_type, agent, payload: published.append((event_type, agent, payload))
+        or "trace",
+    )
 
     capsule = TimeCapsule(wiki_base=str(tmp_path), db_path=str(tmp_path / "capsule.db"))
     today = datetime.now().strftime("%Y-%m-%d")
@@ -78,3 +83,57 @@ def test_publish_due_and_overdue_events(tmp_path, monkeypatch):
     assert published[0][2]["page_path"] == "due.md"
     assert published[1][0] == "capsule.overdue"
     assert published[1][2]["days_overdue"] >= 1
+
+
+def test_dismiss_reminder_updates_status(tmp_path):
+    from core.kia.aion import TimeCapsule
+
+    capsule = TimeCapsule(wiki_base=str(tmp_path), db_path=str(tmp_path / "capsule.db"))
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert capsule._add_reminder("due.md", "due", "manual_review", today, "due reason")
+    reminder = capsule.get_all_reminders()[0]
+
+    assert capsule.dismiss_reminder(reminder.capsule_id) is True
+    assert capsule.dismiss_reminder(9999) is False
+
+    dismissed = capsule.get_all_reminders(status="dismissed")
+    assert len(dismissed) == 1
+    assert dismissed[0].capsule_id == reminder.capsule_id
+
+
+def test_scan_auto_reminders_normalizes_english_temporal_scope(tmp_path):
+    """英文 temporal_scope（stable/version-bound/contextual）应被正确识别。"""
+    from core.kia.aion import TimeCapsule
+
+    created = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+    page = tmp_path / "note.md"
+    _write_page(page, f"temporal_scope: stable\ncreated_at: {created}\n")
+
+    capsule = TimeCapsule(wiki_base=str(tmp_path), db_path=str(tmp_path / "capsule.db"))
+    count = capsule.scan_for_auto_reminders()
+    assert count == 1
+    reminders = capsule.get_all_reminders()
+    assert len(reminders) == 1
+    assert reminders[0].page_title == "note"
+    assert "稳定" in reminders[0].reason
+
+
+def test_scan_auto_reminders_fallback_to_file_mtime_when_created_at_missing(tmp_path):
+    """页面缺少 created_at 时，应使用文件修改时间生成胶囊。"""
+    from core.kia.aion import TimeCapsule
+
+    page = tmp_path / "note.md"
+    _write_page(page, "temporal_scope: version-bound\n")
+
+    # 确保 mtime 是过去 30 天内的某天，以便生成未来提醒
+    mtime = (datetime.now() - timedelta(days=10)).timestamp()
+    page.touch()
+    import os
+
+    os.utime(page, (mtime, mtime))
+
+    capsule = TimeCapsule(wiki_base=str(tmp_path), db_path=str(tmp_path / "capsule.db"))
+    count = capsule.scan_for_auto_reminders()
+    assert count >= 1
+    reminders = capsule.get_all_reminders()
+    assert any(r.page_path == str(page) for r in reminders)

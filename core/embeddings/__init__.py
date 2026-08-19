@@ -16,6 +16,7 @@ from .index_manager import EmbeddingIndexManager
 from .cache import EmbeddingCache
 from .rate_limiter import SiliconFlowRateLimiter
 from .relation_manager import RelationEmbeddingManager
+from .dual_index import DualIndexRetriever
 
 __all__ = [
     "SiliconFlowEmbeddingClient",
@@ -24,4 +25,5 @@ __all__ = [
     "EmbeddingCache",
     "SiliconFlowRateLimiter",
     "RelationEmbeddingManager",
+    "DualIndexRetriever",
 ]

@@ -7,7 +7,6 @@ SQLite 全局状态库初始化
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 from core.config import get_config
 
@@ -37,7 +36,7 @@ def init_db():
                 source TEXT NOT NULL,
                 message_count INTEGER DEFAULT 0,
                 quality_score REAL DEFAULT 0,
-                l2_memos_uid TEXT,
+                l2_backend_uid TEXT,
                 processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 distill_method TEXT DEFAULT 'rule'
             )
@@ -136,14 +135,16 @@ def init_db():
         """)
 
         # 索引
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_proc_session ON processed_sessions(session_id)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proc_session ON processed_sessions(session_id)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wiki_type ON wiki_pages(type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_wiki_status ON wiki_pages(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_entity_type ON entities(type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_type ON health_issues(issue_type)")
 
         conn.commit()
-        print(f"[WikiState] 数据库已初始化: {DB_PATH}")
+        print(f"[WikiState] Database initialized: {DB_PATH}")
 
 
 if __name__ == "__main__":

@@ -2,12 +2,14 @@
 # Agent 抽象基类，统一所有 AI Agent 的生命周期接口
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from pathlib import Path
 
 
 import logging
 logger = logging.getLogger(__name__)
+
+
 class AgentAdapter(ABC):
     """AI Agent 适配器基类
 
@@ -33,29 +35,6 @@ class AgentAdapter(ABC):
         ...
 
     @abstractmethod
-    def on_session_start(self, working_dir: str, user_message: str = "") -> Dict[str, Any]:
-        """会话开始时调用
-
-        Returns:
-            信号采集结果，如 {"session_id": "...", "signals": [...]}
-        """
-        ...
-
-    @abstractmethod
-    def on_session_end(
-        self, working_dir: str, session_messages: List[Dict] = None
-    ) -> Dict[str, Any]:
-        """会话结束时调用
-
-        Args:
-            session_messages: 本次会话的完整消息列表
-
-        Returns:
-            处理结果，如 {"queued": True, "distill_task_id": "..."}
-        """
-        ...
-
-    @abstractmethod
     def install_hooks(self) -> bool:
         """安装 Agent 的 session hooks（如 Claude Code 的 settings.json）
 
@@ -73,31 +52,6 @@ class AgentAdapter(ABC):
 
         Returns:
             信号列表
-        """
-        ...
-
-    @abstractmethod
-    def inject_knowledge(
-        self, task_type: str, subtype: str = "", context_text: str = ""
-    ) -> Dict[str, Any]:
-        """向 Agent 注入知识（KIA 闭环第一步）
-
-        默认通过 MCP 协议实现，各 Agent 可覆盖。
-        """
-        ...
-
-    @abstractmethod
-    def delegate_distillation(
-        self, task_path: Path, output_path: Path
-    ) -> bool:
-        """委托 Agent 执行蒸馏任务（同源复用原则）
-
-        Args:
-            task_path: 蒸馏任务文件路径（JSON，包含原始对话）
-            output_path: Agent 应将蒸馏结果写入的路径
-
-        Returns:
-            是否成功下发任务（不保证 Agent 已完成）
         """
         ...
 
@@ -134,8 +88,9 @@ class AgentAdapter(ABC):
         """安装 Mnemos 主动使用策略。"""
         try:
             from integrations.active import install_agent_policy
+
             return install_agent_policy(self.name)
-        except Exception:
+        except ImportError:
             logger.warning("安装主动使用策略失败", exc_info=True)
             return False
 
@@ -143,8 +98,10 @@ class AgentAdapter(ABC):
         """检查 Mnemos 主动使用策略是否已安装。"""
         try:
             from integrations.active import is_agent_policy_installed
+
             return is_agent_policy_installed(self.name)
-        except Exception:
+        except ImportError:
+            logger.warning("检查主动使用策略失败", exc_info=True)
             return False
 
     def is_active_connection_installed(self) -> bool:
@@ -182,8 +139,10 @@ class AgentRegistry:
                 inst = adapter_class()
                 if inst.is_available():
                     instances.append(inst)
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at olympus.py", exc_info=True)
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logging.getLogger(__name__).warning(
+                    "Caught unexpected error at olympus.py", exc_info=True
+                )
                 continue
         # 按优先级排序
         instances.sort(key=lambda a: a.priority)
@@ -204,8 +163,8 @@ class AgentRegistry:
                 if inst.name.lower() != target:
                     continue
                 if include_unavailable or inst.is_available():
-                    return inst
-            except Exception:
+                    return inst  # type: ignore[no-any-return]
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
                 logging.getLogger(__name__).warning("Caught unexpected error", exc_info=True)
         return None
 
@@ -214,22 +173,20 @@ class AgentRegistry:
         """显式导入所有适配器模块以触发注册"""
         adapter_modules = [
             "integrations.apollon",
-            "integrations.caduceus",
-            "integrations.daedalus",
-            "integrations.musae",
-            "integrations.typhon",
             "integrations.kimi_adapter",
+            "integrations.crush_adapter",
         ]
         for mod_name in adapter_modules:
             try:
                 __import__(mod_name)
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-                pass
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logging.getLogger(__name__).warning("加载适配器 %s 失败", mod_name, exc_info=True)
+
     @classmethod
     def get_host_agent(cls) -> Optional[AgentAdapter]:
         """根据 MNEMOS_HOST_AGENT 环境变量返回宿主 Agent"""
         import os
+
         host = os.environ.get("MNEMOS_HOST_AGENT", "").lower()
         if not host:
             return None

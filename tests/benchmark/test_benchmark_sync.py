@@ -1,132 +1,184 @@
 """
-SyncEngine 性能基准测试
+SyncEngine smoke benchmarks.
 
-目标:
-- sync_session (单轮): P95 < 500ms
-- sync_batch (10 sessions): P95 < 3s
-
-运行:
-    python -m pytest tests/benchmark/test_benchmark_sync.py -v
-    # 或安装 pytest-benchmark 后:
-    # python -m pytest tests/benchmark/ --benchmark-only
-
-注意: 需要 memos-server 在 localhost:5230 运行，否则测试自动跳过。
+These tests exercise the real SyncEngine pipeline against a temporary SQLite
+database and an in-memory StorageBackend.  They deliberately avoid Obsidian,
+Memos, network calls, and checked-in benchmark databases so they can run in the
+default test suite.
 """
 
-import sys
+from __future__ import annotations
+
+import math
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
+from typing import Dict, List
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-import pytest
-
-
-_FAKE_CONFIG = {
-    "memos_token": "fake-token",
-    "memos_api_url": "http://localhost:5230",
-    "data_dir": Path(__file__).resolve().parent / "_bench_data",
-    "get": lambda key, default=None: {
-        "memos.max_content_bytes": 7792,
-        "memos.ingest_batch_size": 10,
-        "memos.ingest_batch_interval": 0,
-    }.get(key, default),
-}
+from core.sync_framework.agent_source import AgentSource, SessionInfo, Turn
+from core.sync_framework.storage_backend import StorageBackend, StorageResult
+from core.sync_framework.sync_engine import SyncEngine
 
 
-class _FakeSource:
-    name = "benchmark"
-    model_tag = "test"
-    data_dir = None
+class _BenchmarkConfig:
+    storage_backend = "obsidian"
 
-    def discover_sessions(self):
-        return []
+    def __init__(self, tmp_path: Path):
+        self.data_dir = tmp_path / "data"
+        self.database_dir = tmp_path / "db"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.database_dir.mkdir(parents=True, exist_ok=True)
 
-    def parse_turns(self, session_path):
-        return []
-
-    def on_session_start(self, session_id, working_dir):
-        pass
-
-    def on_session_end(self, session_id, messages):
-        pass
-
-    def build_extra_tags(self, turn):
-        return []
+    def get(self, key: str, default=None):
+        values = {
+            "storage.obsidian.daily_size_threshold": 819200,
+            "capture.reasoning_mode": "artifact_summary",
+        }
+        return values.get(key, default)
 
 
-def test_sync_session_latency_baseline():
-    """测量 sync_session 的基线延迟（Mock 模式，无网络）"""
-    with patch("core.sync_framework.sync_engine.get_config", return_value=_FAKE_CONFIG):
-        from core.sync_framework.sync_engine import SyncEngine
-        from core.sync_framework.agent_source import SessionInfo, Turn, SyncResult
+class _MemoryStorageBackend(StorageBackend):
+    def __init__(self):
+        self.records: Dict[str, StorageResult] = {}
+        self._next_id = 0
 
-        mock_client = Mock()
-        mock_client.create_memo.return_value = {"uid": "bench-001"}
-        mock_client._sanitize = lambda x: x  # 脱敏透传
-        db_path = Path(__file__).resolve().parent / "_bench_data" / "sync_log.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = SyncEngine(client=mock_client, db_path=str(db_path))
-        # Mock client 以消除网络延迟
+    def save(self, content: str, tags: List[str], title: str) -> List[StorageResult]:
+        self._next_id += 1
+        uid = f"bench-{self._next_id:05d}"
+        result = StorageResult(
+            uid=uid,
+            content=content,
+            tags=list(tags),
+            metadata={"title": title},
+        )
+        self.records[uid] = result
+        return [result]
 
-        source = _FakeSource()
-        session = SessionInfo(session_id="bench-s1", source_path=Path("/tmp/bench.md"))
+    def search(self, query: str, limit: int | None = None) -> List[StorageResult]:
+        matches = [r for r in self.records.values() if query in r.content]
+        return matches[:limit] if limit is not None else matches
+
+    def list_by_tags(self, tags: List[str], limit: int | None = None) -> List[StorageResult]:
+        required = set(tags)
+        matches = [r for r in self.records.values() if required.issubset(set(r.tags))]
+        return matches[:limit] if limit is not None else matches
+
+    def get_by_id(self, uid: str) -> StorageResult | None:
+        return self.records.get(uid)
+
+    def health_check(self) -> Dict[str, str]:
+        return {"status": "ok", "message": "in-memory benchmark backend"}
+
+    def update_tags(
+        self,
+        uid: str,
+        add_tags: List[str] | None = None,
+        remove_tags: List[str] | None = None,
+    ) -> StorageResult | None:
+        result = self.records.get(uid)
+        if result is None:
+            return None
+        tags = set(result.tags)
+        tags.update(add_tags or [])
+        tags.difference_update(remove_tags or [])
+        result.tags = sorted(tags)
+        return result
+
+
+class _BenchmarkSource(AgentSource):
+    def __init__(self):
+        self._turns_by_path: Dict[Path, List[Turn]] = {}
+
+    @property
+    def name(self) -> str:
+        # Exercise the real native-source contract with a declared source.
+        # The benchmark model tag/content remain synthetic and hermetic.
+        return "codex"
+
+    @property
+    def model_tag(self) -> str:
+        return "benchmark-model"
+
+    def discover_sessions(self) -> List[SessionInfo]:
+        return [
+            SessionInfo(session_id=path.stem, source_path=path)
+            for path in self._turns_by_path
+        ]
+
+    def parse_turns(self, session_path: Path) -> List[Turn]:
+        return self._turns_by_path[session_path]
+
+    def add_session(self, tmp_path: Path, session_id: str, turn_count: int) -> SessionInfo:
+        source_path = tmp_path / f"{session_id}.jsonl"
         turns = [
-            Turn(turn_number=i, user_content=f"Q{i}", assistant_content=f"A{i}")
-            for i in range(5)
+            Turn(
+                turn_number=i,
+                user_content=f"How should benchmark session {session_id} handle item {i}?",
+                assistant_content=(
+                    f"Benchmark answer {i} for {session_id}. "
+                    "This content is intentionally small but not empty."
+                ),
+            )
+            for i in range(turn_count)
         ]
-        source.parse_turns = lambda p: turns
-
-        # 预热一次（排除数据库初始化开销）
-        engine.sync_session(source, session, incremental=False)
-
-        latencies = []
-        for _ in range(10):
-            t0 = time.perf_counter()
-            engine.sync_session(source, session, incremental=False)
-            t1 = time.perf_counter()
-            latencies.append((t1 - t0) * 1000)
-
-        latencies.sort()
-        p95 = latencies[int(len(latencies) * 0.95)]
-        mean = sum(latencies) / len(latencies)
-
-        print(f"\n  sync_session (5 turns, mock client): mean={mean:.1f}ms, p95={p95:.1f}ms")
-        # 基准框架：记录数据，不严格断言（首次运行含模块加载/DB 初始化）
-        assert p95 < 5000, f"P95 延迟 {p95:.1f}ms 异常高，需排查"
+        self._turns_by_path[source_path] = turns
+        return SessionInfo(session_id=session_id, source_path=source_path)
 
 
-def test_sync_batch_throughput():
-    """测量 sync_batch 的吞吐量（Mock 模式）"""
-    with patch("core.sync_framework.sync_engine.get_config", return_value=_FAKE_CONFIG):
-        from core.sync_framework.sync_engine import SyncEngine
-        from core.sync_framework.agent_source import SessionInfo
+def _new_engine(tmp_path: Path, monkeypatch) -> SyncEngine:
+    from core.sync_framework import sync_engine
 
-        mock_client = Mock()
-        mock_client.create_memo.return_value = {"uid": "bench-001"}
-        db_path = Path(__file__).resolve().parent / "_bench_data" / "sync_log.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        engine = SyncEngine(client=mock_client, db_path=str(db_path))
+    cfg = _BenchmarkConfig(tmp_path)
+    monkeypatch.setattr(sync_engine, "get_config", lambda: cfg)
+    return SyncEngine(
+        backend=_MemoryStorageBackend(),
+        db_path=str(cfg.database_dir / "sync_log.db"),
+    )
 
-        source = _FakeSource()
-        sessions = [
-            SessionInfo(session_id=f"bench-s{i}", source_path=Path(f"/tmp/bench{i}.md"))
-            for i in range(10)
-        ]
 
-        def make_turns(path):
-            return [
-                Mock(turn_number=j, user_content=f"Q{j}", assistant_content=f"A{j}")
-                for j in range(3)
-            ]
-        source.parse_turns = make_turns
+def _p95_ms(latencies_ms: List[float]) -> float:
+    ordered = sorted(latencies_ms)
+    index = min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1)
+    return ordered[index]
 
-        t0 = time.perf_counter()
+
+def test_sync_session_smoke_latency(tmp_path: Path, monkeypatch):
+    engine = _new_engine(tmp_path, monkeypatch)
+    source = _BenchmarkSource()
+    try:
+        # Warm database schema and imports outside the measured loop.
+        warm = source.add_session(tmp_path, "warmup", 1)
+        engine.sync_session(source, warm, incremental=False)
+
+        latencies_ms: List[float] = []
+        for i in range(12):
+            session = source.add_session(tmp_path, f"session-{i}", 5)
+            start = time.perf_counter()
+            results = engine.sync_session(source, session, incremental=False)
+            latencies_ms.append((time.perf_counter() - start) * 1000)
+            assert [r.action for r in results] == ["new"] * 5
+
+        p95 = _p95_ms(latencies_ms)
+        mean = sum(latencies_ms) / len(latencies_ms)
+        print(f"sync_session 5-turn smoke: mean={mean:.1f}ms p95={p95:.1f}ms")
+        assert p95 < 500, f"sync_session P95 {p95:.1f}ms exceeded 500ms smoke budget"
+    finally:
+        engine.close()
+
+
+def test_sync_batch_smoke_throughput(tmp_path: Path, monkeypatch):
+    engine = _new_engine(tmp_path, monkeypatch)
+    source = _BenchmarkSource()
+    try:
+        sessions = [source.add_session(tmp_path, f"batch-{i}", 3) for i in range(10)]
+        start = time.perf_counter()
         result = engine.sync_batch(source, sessions, incremental=False)
-        t1 = time.perf_counter()
-        elapsed_ms = (t1 - t0) * 1000
+        elapsed_ms = (time.perf_counter() - start) * 1000
 
-        print(f"\n  sync_batch (10 sessions × 3 turns): {elapsed_ms:.1f}ms")
+        print(f"sync_batch 10x3 smoke: elapsed={elapsed_ms:.1f}ms")
         assert result.total_sessions == 10
-        assert elapsed_ms < 3000, f"批量同步 {elapsed_ms:.1f}ms 超过 3s 阈值"
+        assert len(result.successful) == 10
+        assert not result.failed
+        assert result.turn_stats["new"] == 30
+        assert elapsed_ms < 3000, f"sync_batch {elapsed_ms:.1f}ms exceeded 3s smoke budget"
+    finally:
+        engine.close()

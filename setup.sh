@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Mnemos 一键安装脚本 (macOS / Linux)
-# 用法: ./setup.sh [--yes] [--skip-memos] [--skip-obsidian] [--skip-daemon] [--skip-scheduler] [--skip-hooks] [--dry-run]
+# 用法: ./setup.sh [--yes] [--skip-daemon] [--skip-scheduler] [--skip-hooks] [--dry-run]
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)"
 PROJECT_ROOT="$SCRIPT_DIR"
 
 # --help / -h 直接透传给 Python 脚本，避免先执行环境检查
 for arg in "$@"; do
     if [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
-        cd "$PROJECT_ROOT"
+        cd "$PROJECT_ROOT" || exit 1  # [P1-FIX] fail fast if cd fails
         python3 scripts/auto_setup.py --help
         exit 0
     fi
@@ -30,7 +30,7 @@ echo "Python: $PYTHON_VERSION"
 MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
 MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 
-if [ "$MAJOR" -lt 3 ] || ([ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]); then
+if [ "$MAJOR" -lt 3 ] || { [ "$MAJOR" -eq 3 ] && [ "$MINOR" -lt 10 ]; }; then
     echo "✗ Python 版本过低 ($PYTHON_VERSION)，需要 >= 3.10"
     exit 1
 fi
@@ -51,11 +51,15 @@ fi
 echo ""
 
 # 运行 Python 部署脚本
-cd "$PROJECT_ROOT"
+cd "$PROJECT_ROOT" || exit 1  # [P1-FIX] fail fast if cd fails
 "$PYTHON" scripts/auto_setup.py "$@"
+SETUP_STATUS=$?
+if [ "$SETUP_STATUS" -ne 0 ]; then
+    exit "$SETUP_STATUS"
+fi
 
 # 如果虚拟环境不存在但 auto_setup.py 创建了它，提示用户
-cd "$PROJECT_ROOT"
+cd "$PROJECT_ROOT" || exit 1  # [P1-FIX] fail fast if cd fails
 if [ -f ".venv/bin/python" ] && [ "$PYTHON" = "python3" ]; then
     echo ""
     echo "提示: 已创建虚拟环境 .venv"
@@ -63,3 +67,5 @@ if [ -f ".venv/bin/python" ] && [ "$PYTHON" = "python3" ]; then
     echo "  .venv/bin/python mnemos_cli.py ..."
     echo "  source .venv/bin/activate && python mnemos_cli.py ..."
 fi
+
+exit 0

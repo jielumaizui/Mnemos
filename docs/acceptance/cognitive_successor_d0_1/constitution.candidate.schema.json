@@ -1,0 +1,914 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mnemos.local/schemas/cognitive-successor-constitution-clause-proposal-ledger.v5.json",
+  "title": "Cognitive successor constitution clause proposal ledger candidate",
+  "$comment": "JSON Schema validates the parsed structure only. A duplicate-member-aware UTF-8 raw-byte loader must reject duplicate JSON members before validation, and an external verifier must recompute every referenced file hash; schema validation alone proves neither property.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "schema_ref",
+    "ledger_schema_binding",
+    "artifact_id",
+    "artifact_role",
+    "artifact_status",
+    "design_adjudication_status",
+    "proposal_provenance_values",
+    "adjudication_status_values",
+    "authoring_snapshot",
+    "source_design_refs",
+    "term_registry_ref",
+    "design_adjudication_method_binding",
+    "candidate_scope_kind_values",
+    "activation_membership_values",
+    "candidate_field_policy",
+    "adjudication_binding_contract_candidate",
+    "adopted_constitution_set_derivation_candidate",
+    "hash_policy",
+    "clauses",
+    "unresolved_term_registry",
+    "activation_predicates_candidate",
+    "activation_rule"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "mnemos.cognitive_successor_constitution_clause_proposal_ledger.v5"
+    },
+    "schema_ref": {
+      "const": "docs/acceptance/cognitive_successor_d0_1/constitution.candidate.schema.json"
+    },
+    "ledger_schema_binding": {
+      "allOf": [
+        {"$ref": "#/$defs/artifact_binding"},
+        {
+          "properties": {
+            "artifact_ref": {"const": "docs/acceptance/cognitive_successor_d0_1/constitution.candidate.schema.json"}
+          }
+        }
+      ]
+    },
+    "artifact_id": {
+      "const": "cognitive-successor-v2-constitution-clause-proposal-ledger"
+    },
+    "artifact_role": {"const": "CLAUSE_PROPOSAL_LEDGER"},
+    "artifact_status": {"const": "DESIGN_PROPOSAL_LEDGER_NON_GOVERNING"},
+    "design_adjudication_status": {"const": "PENDING_METHOD_AND_CLAUSE_ADJUDICATION"},
+    "proposal_provenance_values": {
+      "const": [
+        "PRIOR_USER_DIRECTION",
+        "LEGACY_CONTRACT_EVIDENCE",
+        "CODE_EVIDENCE",
+        "COGNITIVE_THEORY_EVIDENCE",
+        "REVIEWER_PROPOSAL",
+        "CURRENT_DESIGN_SYNTHESIS"
+      ]
+    },
+    "adjudication_status_values": {
+      "const": [
+        "NOT_ADJUDICATED",
+        "UNRESOLVED",
+        "RESEARCH_REQUIRED",
+        "PROTOTYPE_REQUIRED",
+        "ADOPTED_CANDIDATE",
+        "REVISION_REQUIRED",
+        "REJECTED_CANDIDATE"
+      ]
+    },
+    "authoring_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_commit", "repository_tree", "legacy_behavior_commit"],
+      "properties": {
+        "repository_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "repository_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "legacy_behavior_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "source_design_refs": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "term_registry_ref": {"type": "string", "minLength": 1},
+    "design_adjudication_method_binding": {"$ref": "#/$defs/method_binding"},
+    "candidate_scope_kind_values": {
+      "const": [
+        "PRODUCT_GOAL",
+        "COGNITIVE_SEMANTICS",
+        "COGNITIVE_ARCHITECTURE",
+        "SAFETY_OR_AGENCY",
+        "ENGINEERING_QUALITY",
+        "SUCCESSOR_TRANSITION_ARCHITECTURE",
+        "CUTOVER_POLICY"
+      ]
+    },
+    "activation_membership_values": {
+      "const": [
+        "PENDING_ADJUDICATION",
+        "INCLUDED",
+        "EXCLUDED_REJECTED",
+        "EXCLUDED_REVISION_REQUIRED"
+      ]
+    },
+    "candidate_field_policy": {"$ref": "#/$defs/candidate_field_policy"},
+    "adjudication_binding_contract_candidate": {
+      "$ref": "#/$defs/adjudication_binding_contract"
+    },
+    "adopted_constitution_set_derivation_candidate": {
+      "$ref": "#/$defs/adopted_set_derivation"
+    },
+    "hash_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "text_encoding",
+        "duplicate_json_members",
+        "self_hash_embedded",
+        "on_any_byte_change"
+      ],
+      "properties": {
+        "mode": {"const": "sha256_raw_file_bytes"},
+        "text_encoding": {"const": "UTF-8"},
+        "duplicate_json_members": {
+          "const": "REJECT_BEFORE_HASH_GRAPH_EVALUATION"
+        },
+        "self_hash_embedded": {"const": false},
+        "on_any_byte_change": {"const": "verification_and_approval_stale"}
+      }
+    },
+    "clauses": {
+      "type": "array",
+      "minItems": 17,
+      "maxItems": 17,
+      "uniqueItems": true,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-001"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-002"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-003"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-004"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-005"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-006"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-007"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-008"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-009"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-010"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-011"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-012"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-013"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-014"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-015"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-016"}}}]},
+        {"allOf": [{"$ref": "#/$defs/clause_proposal"}, {"properties": {"clause_id": {"const": "V2-CONST-017"}}}]}
+      ],
+      "items": false
+    },
+    "unresolved_term_registry": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "activation_predicates_candidate": {
+      "const": [
+        "current_schema_version_v5_activation_is_prohibited",
+        "future_final_record_must_bind_protocol_evidence_denominator_method_assessment_and_challenger_exact_hashes",
+        "future_final_record_design_outcome_must_equal_ADOPT",
+        "future_challenger_report_must_equal_PASS_with_zero_open_blocking_findings",
+        "future_dependency_bundle_must_bind_schema_protocol_evidence_denominator_method_assessment_challenger_and_final_exact_hashes",
+        "future_structural_verifier_must_bind_final_and_dependency_bundle_and_equal_ELIGIBLE_with_all_required_positive_and_mutation_fixtures_matching_expected_results",
+        "future_artifact_DAG_must_be_acyclic_and_every_binding_role_target_and_hash_must_match",
+        "future_proposal_pending_or_unresolved_count_must_equal_zero",
+        "future_terminal_adjudication_binding_gap_must_equal_zero",
+        "future_adopted_constitution_set_root_must_bind_only_fresh_ADOPTED_CANDIDATE_payloads",
+        "future_unresolved_term_count_must_equal_zero",
+        "future_authenticated_user_authorization_must_bind_the_same_exact_dependency_root_scope_expiry_and_recovery_conditions",
+        "future_post_authorization_acceptance_gate_must_recompute_authorization_internal_and_dependency_hashes_principal_scope_time_recovery_and_duplicate_raw_member_rejection_and_equal_ACTIVATION_ELIGIBLE"
+      ]
+    },
+    "activation_rule": {
+      "const": "Schema version v5 is a non-governing proposal ledger and has no AUTHORIZED_ACTIVE state. A future schema generation may add activation only after a post-final detached structural verifier proves the pre-authorization lifecycle from exact bytes, an authenticated user authorizes that exact dependency root, and a separate post-authorization acceptance gate recomputes authorization bytes, internal text hash, principal scope, action, prohibitions, recovery and both validity windows from bound evidence; no self-declaration, producer assessment, conceptual agreement or JSON Schema green can activate this ledger."
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Schema generation v5 is producer-assessment-only; all 17 clause entries must remain pending. Any assessed clause requires a new ledger schema generation.",
+      "properties": {
+        "clauses": {
+          "prefixItems": [
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"},
+            {"$ref": "#/$defs/current_generation_pending_clause"}
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullable_sha256": {
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "nullable_ref": {
+      "oneOf": [
+        {"type": "string", "minLength": 1},
+        {"type": "null"}
+      ]
+    },
+    "artifact_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_ref", "sha256"],
+      "properties": {
+        "artifact_ref": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "nullable_artifact_binding": {
+      "oneOf": [
+        {"$ref": "#/$defs/artifact_binding"},
+        {"type": "null"}
+      ]
+    },
+    "method_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_family",
+        "bootstrap_protocol",
+        "evidence_manifest",
+        "candidate_denominator",
+        "method_candidate",
+        "producer_assessment",
+        "challenger_report",
+        "final_decision",
+        "dependency_bundle",
+        "verifier_report",
+        "activation_authorization",
+        "authorization_acceptance_gate",
+        "derived_lifecycle_state"
+      ],
+      "properties": {
+        "schema_family": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication.schema.json"
+                }
+              }
+            }
+          ]
+        },
+        "bootstrap_protocol": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/method_bootstrap_protocol.candidate.json"
+                }
+              }
+            }
+          ]
+        },
+        "evidence_manifest": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/method_evidence_manifest.candidate.json"
+                }
+              }
+            }
+          ]
+        },
+        "candidate_denominator": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/method_candidate_denominator.candidate.json"
+                }
+              }
+            }
+          ]
+        },
+        "method_candidate": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/design_adjudication_method.candidate.json"
+                }
+              }
+            }
+          ]
+        },
+        "producer_assessment": {
+          "allOf": [
+            {"$ref": "#/$defs/artifact_binding"},
+            {
+              "properties": {
+                "artifact_ref": {
+                  "const": "docs/acceptance/cognitive_successor_d0_1/method_adjudication_record.candidate.json"
+                }
+              }
+            }
+          ]
+        },
+        "challenger_report": {"type": "null"},
+        "final_decision": {"type": "null"},
+        "dependency_bundle": {"type": "null"},
+        "verifier_report": {"type": "null"},
+        "activation_authorization": {"type": "null"},
+        "authorization_acceptance_gate": {"type": "null"},
+        "derived_lifecycle_state": {"const": "PRODUCER_ASSESSMENT_ONLY"}
+      },
+      "$comment": "The v5 ledger records only the producer-assessment stage. Any later non-active stage requires a new schema generation with an explicit binding state; AUTHORIZED_ACTIVE is intentionally unrepresentable here. Artifact hashes require an external exact-byte verifier because JSON Schema cannot read or hash referenced files."
+    },
+    "candidate_field_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_clause_payloads_non_governing",
+        "adopted_status_requires_non_null_fields",
+        "adopted_status_requires_non_empty_fields",
+        "adopted_status_requires_hash_bindings"
+      ],
+      "properties": {
+        "all_clause_payloads_non_governing": {"const": true},
+        "adopted_status_requires_non_null_fields": {
+          "const": [
+            "adjudication_record_ref",
+            "adjudication_record_subject_hash",
+            "adjudication_record_disposition",
+            "candidate_payload_hash",
+            "evidence_set_root",
+            "independent_challenger_receipt_ref",
+            "verifier_report_ref"
+          ]
+        },
+        "adopted_status_requires_non_empty_fields": {
+          "const": ["competing_claim_refs"]
+        },
+        "adopted_status_requires_hash_bindings": {
+          "const": [
+            "independent_challenger_receipt_sha256",
+            "verifier_report_sha256"
+          ]
+        }
+      }
+    },
+    "adjudication_binding_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_subject",
+        "record_disposition_must_match_clause_status",
+        "record_evidence_set_root_must_match_clause",
+        "independent_challenger_receipt_must_bind_record_and_payload_hash",
+        "verifier_report_must_bind_record_payload_and_challenger_report",
+        "revise_requires_new_candidate_bytes_and_new_adjudication_cycle",
+        "all_bindings_must_be_fresh"
+      ],
+      "properties": {
+        "record_subject": {"const": "candidate_payload_hash"},
+        "record_disposition_must_match_clause_status": {"const": true},
+        "record_evidence_set_root_must_match_clause": {"const": true},
+        "independent_challenger_receipt_must_bind_record_and_payload_hash": {"const": true},
+        "verifier_report_must_bind_record_payload_and_challenger_report": {"const": true},
+        "revise_requires_new_candidate_bytes_and_new_adjudication_cycle": {"const": true},
+        "all_bindings_must_be_fresh": {"const": true}
+      }
+    },
+    "adopted_set_derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "include_only_membership",
+        "include_only_status_values",
+        "rejected_proposals_remain_in_ledger",
+        "rejected_proposals_enter_adopted_set",
+        "revision_required_proposals_enter_adopted_set",
+        "pending_or_unresolved_proposal_count_must_be_zero_for_activation",
+        "adopted_clause_set_root"
+      ],
+      "properties": {
+        "include_only_membership": {"const": "INCLUDED"},
+        "include_only_status_values": {"const": ["ADOPTED_CANDIDATE"]},
+        "rejected_proposals_remain_in_ledger": {"const": true},
+        "rejected_proposals_enter_adopted_set": {"const": false},
+        "revision_required_proposals_enter_adopted_set": {"const": false},
+        "pending_or_unresolved_proposal_count_must_be_zero_for_activation": {"const": true},
+        "adopted_clause_set_root": {"$ref": "#/$defs/nullable_sha256"}
+      }
+    },
+    "clause_proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clause_id",
+        "title",
+        "proposal_provenance",
+        "adjudication_status",
+        "activation_membership",
+        "candidate_payload_hash",
+        "candidate_scope_kind",
+        "claim_kind",
+        "adjudication_record_ref",
+        "adjudication_record_subject_hash",
+        "adjudication_record_disposition",
+        "competing_claim_refs",
+        "evidence_set_root",
+        "independent_challenger_receipt_ref",
+        "independent_challenger_receipt_sha256",
+        "verifier_report_ref",
+        "verifier_report_sha256",
+        "adjudication_freshness_status",
+        "machine_approval_status",
+        "proposed_owner_ref",
+        "candidate_protected_fact",
+        "candidate_claim",
+        "candidate_forbidden_behavior_codes",
+        "candidate_predicates",
+        "candidate_negative_oracles",
+        "source_refs",
+        "unresolved_dependency_ids",
+        "supersedes"
+      ],
+      "properties": {
+        "clause_id": {"type": "string", "pattern": "^V2-CONST-[0-9]{3}$"},
+        "title": {"type": "string", "minLength": 1},
+        "proposal_provenance": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "PRIOR_USER_DIRECTION",
+              "LEGACY_CONTRACT_EVIDENCE",
+              "CODE_EVIDENCE",
+              "COGNITIVE_THEORY_EVIDENCE",
+              "REVIEWER_PROPOSAL",
+              "CURRENT_DESIGN_SYNTHESIS"
+            ]
+          }
+        },
+        "adjudication_status": {
+          "enum": [
+            "NOT_ADJUDICATED",
+            "UNRESOLVED",
+            "RESEARCH_REQUIRED",
+            "PROTOTYPE_REQUIRED",
+            "ADOPTED_CANDIDATE",
+            "REVISION_REQUIRED",
+            "REJECTED_CANDIDATE"
+          ]
+        },
+        "activation_membership": {
+          "enum": [
+            "PENDING_ADJUDICATION",
+            "INCLUDED",
+            "EXCLUDED_REJECTED",
+            "EXCLUDED_REVISION_REQUIRED"
+          ]
+        },
+        "candidate_payload_hash": {"$ref": "#/$defs/nullable_sha256"},
+        "candidate_scope_kind": {
+          "enum": [
+            "PRODUCT_GOAL",
+            "COGNITIVE_SEMANTICS",
+            "COGNITIVE_ARCHITECTURE",
+            "SAFETY_OR_AGENCY",
+            "ENGINEERING_QUALITY",
+            "SUCCESSOR_TRANSITION_ARCHITECTURE",
+            "CUTOVER_POLICY"
+          ]
+        },
+        "claim_kind": {
+          "enum": [
+            "EMPIRICAL_CURRENT_STATE",
+            "EMPIRICAL_CAUSAL_OR_COGNITIVE",
+            "PREDICTIVE",
+            "PRODUCT_VALUE",
+            "SAFETY_PRIVACY_AGENCY_CONSTRAINT",
+            "ARCHITECTURE_MECHANISM",
+            "ENGINEERING_FEASIBILITY",
+            "CAPABILITY_EQUIVALENCE",
+            "MIGRATION_OR_CUTOVER_STRATEGY",
+            "OPERATIONAL_AUTHORIZATION"
+          ]
+        },
+        "adjudication_record_ref": {"$ref": "#/$defs/nullable_ref"},
+        "adjudication_record_subject_hash": {"$ref": "#/$defs/nullable_sha256"},
+        "adjudication_record_disposition": {
+          "type": ["string", "null"],
+          "enum": [
+            "ADOPT",
+            "REVISE",
+            "REJECT",
+            "RESEARCH_REQUIRED",
+            "PROTOTYPE_REQUIRED",
+            "USER_VALUE_CHOICE_REQUIRED",
+            "EQUIVALENT_SET",
+            null
+          ]
+        },
+        "competing_claim_refs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "evidence_set_root": {"$ref": "#/$defs/nullable_sha256"},
+        "independent_challenger_receipt_ref": {"$ref": "#/$defs/nullable_ref"},
+        "independent_challenger_receipt_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "verifier_report_ref": {"$ref": "#/$defs/nullable_ref"},
+        "verifier_report_sha256": {"$ref": "#/$defs/nullable_sha256"},
+        "adjudication_freshness_status": {"enum": ["NOT_EVALUATED", "FRESH", "STALE"]},
+        "machine_approval_status": {"enum": ["PENDING_EXACT_BYTES", "ELIGIBLE", "INELIGIBLE"]},
+        "proposed_owner_ref": {"type": "string", "minLength": 1},
+        "candidate_protected_fact": {"type": "string", "minLength": 1},
+        "candidate_claim": {"type": "string", "minLength": 1},
+        "candidate_forbidden_behavior_codes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "candidate_predicates": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "candidate_negative_oracles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "unresolved_dependency_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "supersedes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "legacy_operational_constraint_ref": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "NOT_ADJUDICATED"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {"$ref": "#/$defs/unadjudicated_binding"}
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "UNRESOLVED"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/assessed_binding",
+            "properties": {
+              "activation_membership": {"const": "PENDING_ADJUDICATION"},
+              "machine_approval_status": {"const": "PENDING_EXACT_BYTES"},
+              "adjudication_record_disposition": {
+                "enum": ["USER_VALUE_CHOICE_REQUIRED", "EQUIVALENT_SET"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "RESEARCH_REQUIRED"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/assessed_binding",
+            "properties": {
+              "activation_membership": {"const": "PENDING_ADJUDICATION"},
+              "machine_approval_status": {"const": "PENDING_EXACT_BYTES"},
+              "adjudication_record_disposition": {"const": "RESEARCH_REQUIRED"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "PROTOTYPE_REQUIRED"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/assessed_binding",
+            "properties": {
+              "activation_membership": {"const": "PENDING_ADJUDICATION"},
+              "machine_approval_status": {"const": "PENDING_EXACT_BYTES"},
+              "adjudication_record_disposition": {"const": "PROTOTYPE_REQUIRED"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "ADOPTED_CANDIDATE"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/terminal_reviewed_binding",
+            "properties": {
+              "activation_membership": {"const": "INCLUDED"},
+              "adjudication_record_disposition": {"const": "ADOPT"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "REVISION_REQUIRED"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/terminal_reviewed_binding",
+            "properties": {
+              "activation_membership": {"const": "EXCLUDED_REVISION_REQUIRED"},
+              "adjudication_record_disposition": {"const": "REVISE"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"adjudication_status": {"const": "REJECTED_CANDIDATE"}},
+            "required": ["adjudication_status"]
+          },
+          "then": {
+            "$ref": "#/$defs/terminal_reviewed_binding",
+            "properties": {
+              "activation_membership": {"const": "EXCLUDED_REJECTED"},
+              "adjudication_record_disposition": {"const": "REJECT"}
+            }
+          }
+        }
+      ]
+    },
+    "clause_001": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-001"}}
+        }
+      ]
+    },
+    "clause_002": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-002"}}
+        }
+      ]
+    },
+    "clause_003": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-003"}}
+        }
+      ]
+    },
+    "clause_004": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-004"}}
+        }
+      ]
+    },
+    "clause_005": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-005"}}
+        }
+      ]
+    },
+    "clause_006": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-006"}}
+        }
+      ]
+    },
+    "clause_007": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-007"}}
+        }
+      ]
+    },
+    "clause_008": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-008"}}
+        }
+      ]
+    },
+    "clause_009": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-009"}}
+        }
+      ]
+    },
+    "clause_010": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-010"}}
+        }
+      ]
+    },
+    "clause_011": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-011"}}
+        }
+      ]
+    },
+    "clause_012": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-012"}}
+        }
+      ]
+    },
+    "clause_013": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-013"}}
+        }
+      ]
+    },
+    "clause_014": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-014"}}
+        }
+      ]
+    },
+    "clause_015": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-015"}}
+        }
+      ]
+    },
+    "clause_016": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-016"}}
+        }
+      ]
+    },
+    "clause_017": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {
+          "type": "object",
+          "required": ["clause_id"],
+          "properties": {"clause_id": {"const": "V2-CONST-017"}}
+        }
+      ]
+    },
+    "unadjudicated_binding": {
+      "type": "object",
+      "properties": {
+        "activation_membership": {"const": "PENDING_ADJUDICATION"},
+        "candidate_payload_hash": {"type": "null"},
+        "adjudication_record_ref": {"type": "null"},
+        "adjudication_record_subject_hash": {"type": "null"},
+        "adjudication_record_disposition": {"type": "null"},
+        "competing_claim_refs": {"maxItems": 0},
+        "evidence_set_root": {"type": "null"},
+        "independent_challenger_receipt_ref": {"type": "null"},
+        "independent_challenger_receipt_sha256": {"type": "null"},
+        "verifier_report_ref": {"type": "null"},
+        "verifier_report_sha256": {"type": "null"},
+        "adjudication_freshness_status": {"const": "NOT_EVALUATED"},
+        "machine_approval_status": {"const": "PENDING_EXACT_BYTES"}
+      }
+    },
+    "current_generation_pending_clause": {
+      "allOf": [
+        {"$ref": "#/$defs/clause_proposal"},
+        {"$ref": "#/$defs/unadjudicated_binding"},
+        {
+          "type": "object",
+          "required": ["adjudication_status"],
+          "properties": {
+            "adjudication_status": {"const": "NOT_ADJUDICATED"}
+          }
+        }
+      ]
+    },
+    "assessed_binding": {
+      "type": "object",
+      "properties": {
+        "candidate_payload_hash": {"$ref": "#/$defs/sha256"},
+        "adjudication_record_ref": {"type": "string", "minLength": 1},
+        "adjudication_record_subject_hash": {"$ref": "#/$defs/sha256"},
+        "competing_claim_refs": {"minItems": 2},
+        "evidence_set_root": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "terminal_reviewed_binding": {
+      "allOf": [
+        {"$ref": "#/$defs/assessed_binding"},
+        {
+          "type": "object",
+          "properties": {
+            "independent_challenger_receipt_ref": {"type": "string", "minLength": 1},
+            "independent_challenger_receipt_sha256": {"$ref": "#/$defs/sha256"},
+            "verifier_report_ref": {"type": "string", "minLength": 1},
+            "verifier_report_sha256": {"$ref": "#/$defs/sha256"},
+            "adjudication_freshness_status": {"const": "FRESH"},
+            "machine_approval_status": {"const": "ELIGIBLE"}
+          }
+        }
+      ]
+    }
+  }
+}

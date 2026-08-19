@@ -5,6 +5,25 @@
 
 ---
 
+## [2.0.0] — 全量同步重构版（2026-08-20）
+
+> 与上游开发版全量对齐的大版本同步。新增 daemon 守护进程体系、trust 可信推送闭环、cognitive 认知链路、wiki 投影生命周期等子系统，scripts 运维/审计工具链大幅扩展。
+
+### Added
+
+- `daemon/` 守护进程服务（runtime、distill_service、raw_sync、heartbeat、wiki_projection_handlers 等）
+- `core/trust/` 可信推送闭环、`core/cognitive_graph/`、`core/reflection/`、`core/privacy/`、`core/evidence/` 等新子包
+- Wiki 投影生命周期（`core/wiki_projection_*.py`）与 EventBus `HandlerOutcome` 契约
+- 200+ 个审计/对账/迁移脚本（`scripts/audit_*`、`scripts/reconcile_*` 等）
+- `SECURITY.md`、`AGENTS.md`、`docs/` 架构与运维文档体系
+
+### Changed
+
+- CI 门禁全面升级：mypy budget、vulture、20+ 项 audit 门、coverage ≥70%、bandit/pip-audit
+- 配置全部走环境变量与 example 模板，无任何硬编码本机路径
+
+---
+
 ## [v0.2.0] — 五 Agent 全适配重构版（2026-05-19）
 
 > 从 "Claude Code First" 到 "Agent-Agnostic" 的架构重构。所有 5 个 Agent 适配器成为一等公民，统一事件总线实现跨 Agent 通信。
@@ -73,9 +92,9 @@
 #### Fixed — P0 核心链路
 - **L1 兜底去重** (`sync_engine.py`)
   - `_trace_sync_log` 改为 opt-in，`_save_content()` 显式传 `_trace_sync_log=False`
-  - 统一 `content_hash=<16位>` 标签，Memos 端二次查重兜底
+  - 统一 `content_hash=<16位>` 标签，memos 端二次查重兜底
   - 修复 turn_number/memouids JSON 格式
-- **Memos→Wiki 追溯** (`wiki_builder.py`)
+- **memos→Wiki 追溯** (`wiki_builder.py`)
   - `_link_session_memos_to_wiki()` 同时更新 `sync_log.wiki_page_paths/distill_status/distilled_at`
   - frontmatter 添加 `source_session` / `蒸馏时间`
   - `_mark_processed()` status 对齐实际 method（distilled/skipped_low_quality 等）
@@ -111,7 +130,7 @@
 - **KG 置信度治理** (`knowledge_graph.py`)
   - `apply_discovered()` 应用 source_method 上限：same_directory ≤ 0.45, hash_prefix ≤ 0.55, keyword_overlap ≤ 0.65, link_parse ≤ 0.8
 - **历史截断数据** (`mark_truncated.py`)
-  - 扫描 Memos 中历史截断标记（10+ 种正则），写入 `truncated_memos` 表
+  - 扫描 memos 中历史截断标记（10+ 种正则），写入 `truncated_memos` 表
   - doctor 报告 `raw_incomplete_count`
   - 新 `save_long_content()` 已移除截断，自动分片
 
@@ -186,7 +205,7 @@ wiki/retrospectives/
 
 ### Karpathy 蒸馏范式迁移（2026-05-03）
 > 旧 Wiki 体系（Clean/Expand/L0-L9）全面废弃，改用 Karpathy LLM Wiki 范式。
-> Memos 层无损保留全部上下文，LLM 主动蒸馏成结构化 Wiki。
+> memos 层无损保留全部上下文，LLM 主动蒸馏成结构化 Wiki。
 
 #### Added
 - 新建 `core/topic_splitter.py` — 轻量 LLM 话题切分器
@@ -219,7 +238,7 @@ wiki/retrospectives/
 
 #### Changed
 - `memos_sdk.py`: `mark_l1_processed()` 标记为废弃（空操作，打印警告）
-  - 蒸馏体系用指纹表追踪状态，不在 Memos 上打 processed 标签
+  - 蒸馏体系用指纹表追踪状态，不在 memos 上打 processed 标签
 - `memos_sdk.py`: `batch_save()` 去掉 `type=clean-ingest` / `type=expand-ingest` 标签
 - `claude_live_sync.py`: 去掉 `processed=false` 标签写入
   - 保留 source/thread/time/scope 描述性标签
@@ -236,7 +255,7 @@ wiki/retrospectives/
 
 #### 待办（首尾工作）
 - [ ] 停用旧 wiki 相关 launchd 任务（cold_demotion, draft_clean, expand_scan, heat_decay, health_check, synthesis_pipeline, weekly_report, wiki_tags_sync）
-- [ ] 跑首次全量基线扫描（把历史 Memos 过一遍蒸馏）
+- [ ] 跑首次全量基线扫描（把历史 memos 过一遍蒸馏）
 - [ ] 观察一周 wiki 产出质量，调 prompt 和阈值
 
 ### Added
@@ -314,7 +333,7 @@ wiki/retrospectives/
   - `batch_clean_submit.py:61` / `ingest_engine_service.py:93,276`: 删掉 `or "ingested" in tags`
   - `core/namespaces.py:301`: special_tags 移除 `"ingested"`
 - 新建 `scripts/migrate_status_tag.py`: 一次性迁移脚本
-  - 遍历 Memos 所有 `status=ready-for-ingest` → `processed=false`
+  - 遍历 memos 所有 `status=ready-for-ingest` → `processed=false`
   - 防御：已有 `processed=true` 则跳过
 - Token 泄露处理
   - `sync_all.sh`: 移除硬编码 token，改为从环境变量读取，缺失时报错退出
@@ -323,7 +342,7 @@ wiki/retrospectives/
 - 新建 `~/.claude/CLAUDE.md`: 跨会话记忆查询协议
   - 触发关键词：时间指代 / 会话续接 / 回忆复盘 / 历史引用
   - 执行命令：`claude_integration.py --session-start`
-  - 禁止：知识查询类问题查 Memos、每轮都查、结果直接展示
+  - 禁止：知识查询类问题查 memos、每轮都查、结果直接展示
 
 ### 已知遗留 (待处理)
 
@@ -484,12 +503,12 @@ wiki/retrospectives/
 
 ### v4.0 — 全自动架构（2026-04 中期）
 - 热力追踪迁移至 Wiki 层（`wiki_heat_tracker.py`）
-- AI 仅搜索 Wiki，不搜索 Memos 原始草稿池
+- AI 仅搜索 Wiki，不搜索 memos 原始草稿池
 - 10 级 L0-L9 体系，L9 封顶 500
 - 衰减 + 冷降级双机制
 
 ### v3.0 — 人工审核版（2026-04 早期）
-- 热力追踪在 Memos 层
+- 热力追踪在 memos 层
 - 6 级 L1-L5 + L6 体系
 - 现已被 v4 完全取代
 

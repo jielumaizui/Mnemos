@@ -1,0 +1,200 @@
+{
+  "schema_version": "mnemos.golden_benchmark.v1",
+  "deterministic_providers": {
+    "llm": "mock",
+    "embedding": "mock",
+    "reranker": "mock",
+    "multimodal": "mock"
+  },
+  "scorecard_expectations": {
+    "min_engineering_score": 100,
+    "min_cognitive_maturity_score": 100,
+    "min_wow_path_score": 100,
+    "min_quality_gate_score": 100,
+    "min_consumer_closure_score": 100,
+    "min_total_score": 100
+  },
+  "samples": [
+    {
+      "id": "asyncio_gather_memory_regression",
+      "categories": ["raw_conversation", "incident"],
+      "input": {
+        "kind": "raw_conversation",
+        "query": "asyncio gather memory regression",
+        "content": "asyncio gather memory regression: avoid unbounded gather; keep evidence_refs and use bounded concurrency before retry."
+      },
+      "expected_quality_decision": {
+        "decision": "accept",
+        "reason_codes": ["incident_has_root_cause", "evidence_refs_present"],
+        "confidence": 0.96,
+        "next_action": "write_wiki_and_preflight"
+      },
+      "expected_assets": [
+        {
+          "asset_type": "distill_claim",
+          "title": "asyncio gather memory regression",
+          "expected_search_id": "asyncio_bounded_concurrency",
+          "evidence_refs": ["benchmark://raw/asyncio_gather_memory_regression"],
+          "source_refs": ["benchmark://session/asyncio_gather_memory_regression"],
+          "consumers": ["wiki_builder", "context_aware_search", "preflight_inject"],
+          "confidence": 0.96,
+          "status": "verified"
+        },
+        {
+          "asset_type": "wiki_page",
+          "title": "Bounded concurrency runbook",
+          "expected_search_id": "bounded_concurrency_runbook",
+          "evidence_refs": ["benchmark://wiki/asyncio_gather_memory_regression"],
+          "source_refs": ["benchmark://session/asyncio_gather_memory_regression"],
+          "consumers": ["context_aware_search", "preflight_inject", "obsidian_ui"],
+          "confidence": 0.93,
+          "status": "produced"
+        }
+      ],
+      "expected_consumers": ["wiki_builder", "context_aware_search", "preflight_inject"],
+      "expected_persona_delta": {
+        "cognitive.rigor": 0.04,
+        "value.correctness": 0.03
+      },
+      "expected_preflight_hits": ["asyncio gather", "bounded concurrency"],
+      "expected_search_ranking": ["asyncio_bounded_concurrency", "bounded_concurrency_runbook"],
+      "expected_wiki_folder": "03-Tech",
+      "expected_status": "verified",
+      "expected_scorecard": {
+        "cognitive_asset_quality": 100,
+        "consumer_closure": 100
+      }
+    },
+    {
+      "id": "trusted_document_decision_record",
+      "categories": ["user_document", "decision"],
+      "input": {
+        "kind": "user_document",
+        "query": "config migration decision",
+        "content": "config migration decision: use registry first, plan before apply, snapshot before mutation, and keep rollback evidence."
+      },
+      "expected_quality_decision": {
+        "decision": "accept",
+        "reason_codes": ["trusted_user_document", "decision_has_validation"],
+        "confidence": 0.94,
+        "next_action": "write_decision_asset"
+      },
+      "expected_assets": [
+        {
+          "asset_type": "cognitive_decision_asset",
+          "title": "Config migration decision",
+          "expected_search_id": "config_migration_decision",
+          "evidence_refs": ["benchmark://doc/config_migration_decision"],
+          "source_refs": ["benchmark://trusted_document/config_migration_decision"],
+          "consumers": ["cognitive_decision_flywheel", "future_skill_derivation"],
+          "confidence": 0.94,
+          "status": "verified"
+        }
+      ],
+      "expected_consumers": ["cognitive_decision_flywheel", "preflight_inject"],
+      "expected_persona_delta": {
+        "value.reliability": 0.05
+      },
+      "expected_preflight_hits": ["plan before apply", "rollback evidence"],
+      "expected_search_ranking": ["config_migration_decision"],
+      "expected_wiki_folder": "04-Concepts",
+      "expected_status": "verified",
+      "expected_scorecard": {
+        "cognitive_asset_quality": 100,
+        "consumer_closure": 100
+      }
+    },
+    {
+      "id": "low_value_smalltalk_rejection",
+      "categories": ["low_value"],
+      "input": {
+        "kind": "raw_conversation",
+        "query": "hello",
+        "content": "hello thanks ok"
+      },
+      "expected_quality_decision": {
+        "decision": "reject",
+        "reason_codes": ["low_value", "no_reusable_claim"],
+        "confidence": 1.0,
+        "next_action": "skip_without_wiki"
+      },
+      "expected_assets": [],
+      "expected_consumers": ["quality_gate", "scorecard"],
+      "expected_persona_delta": {},
+      "expected_preflight_hits": [],
+      "expected_search_ranking": [],
+      "expected_wiki_folder": "07-Shadow",
+      "expected_status": "degraded",
+      "expected_scorecard": {
+        "rejection_reason_machine_readable": 100
+      }
+    },
+    {
+      "id": "privacy_secret_block",
+      "categories": ["raw_conversation", "low_value"],
+      "input": {
+        "kind": "raw_conversation",
+        "query": "secret token",
+        "content": "secret token should never be copied into wiki; record redacted summary only."
+      },
+      "expected_quality_decision": {
+        "decision": "reject",
+        "reason_codes": ["privacy_secret", "wiki_write_blocked"],
+        "confidence": 1.0,
+        "risk_level": "high",
+        "next_action": "redact_and_skip"
+      },
+      "expected_assets": [],
+      "expected_consumers": ["quality_gate", "privacy_audit", "scorecard"],
+      "expected_persona_delta": {},
+      "expected_preflight_hits": [],
+      "expected_search_ranking": [],
+      "expected_wiki_folder": "07-Shadow",
+      "expected_status": "failed_terminal",
+      "expected_scorecard": {
+        "privacy_rejection": 100
+      }
+    },
+    {
+      "id": "conflicting_retry_strategy",
+      "categories": ["conflict_input", "decision"],
+      "input": {
+        "kind": "raw_conversation",
+        "query": "retry strategy conflict",
+        "content": "retry strategy conflict: old note says retry forever, new incident says cap retries and route contradiction to dispute."
+      },
+      "expected_quality_decision": {
+        "decision": "needs_review",
+        "reason_codes": ["conflict_detected", "requires_dispute_route"],
+        "confidence": 0.82,
+        "risk_level": "medium",
+        "next_action": "route_to_dispute"
+      },
+      "expected_assets": [
+        {
+          "asset_type": "distill_claim",
+          "title": "Retry strategy conflict",
+          "expected_search_id": "retry_strategy_conflict",
+          "evidence_refs": ["benchmark://conflict/retry_strategy"],
+          "source_refs": ["benchmark://session/conflicting_retry_strategy"],
+          "consumers": ["dispute_resolver", "knowledge_graph", "preflight_inject"],
+          "confidence": 0.82,
+          "status": "needs_user",
+          "contradicts": ["benchmark://legacy/retry_forever"]
+        }
+      ],
+      "expected_consumers": ["dispute_resolver", "preflight_inject", "scorecard"],
+      "expected_persona_delta": {
+        "cognitive.conflict_awareness": 0.04
+      },
+      "expected_preflight_hits": ["retry strategy conflict", "route contradiction"],
+      "expected_search_ranking": ["retry_strategy_conflict"],
+      "expected_wiki_folder": "08-Disputes",
+      "expected_status": "needs_user",
+      "expected_scorecard": {
+        "conflict_routed": 100,
+        "consumer_closure": 100
+      }
+    }
+  ]
+}

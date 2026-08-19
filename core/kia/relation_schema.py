@@ -25,65 +25,67 @@ class RelationType(str, Enum):
     核心类型（蓝图要求 9 种）：CONTAINS, RELATED_TO, CONTRADICTS,
     SUPERCEDES, DERIVES_FROM, PREREQUISITE, CO_OCCURS, SEQUENTIAL, SIMILAR_TO
 
-    扩展类型（向后兼容，共 17+ 种）：涵盖层级、因果、演化、对比、元关系等
+    扩展类型（当前完整词表，共 17+ 种）：涵盖层级、因果、演化、对比、元关系等
     """
 
     # === 核心类型（蓝图标准 9 种）===
-    CONTAINS = "contains"                # 包含（A 包含 B）
-    RELATED_TO = "related_to"            # 相关（A 与 B 有关联）
-    CONTRADICTS = "contradicts"          # 矛盾（A 和 B 结论冲突）
-    SUPERCEDES = "supercedes"            # 取代（A 取代 B）
-    DERIVES_FROM = "derives_from"        # 派生（A 由 B 派生）
-    PREREQUISITE = "prerequisite"        # 前置（A 是 B 的前置条件）
-    CO_OCCURS = "co_occurs"              # 共现（A 与 B 同时出现）
-    SEQUENTIAL = "sequential"            # 顺序（A 在 B 之前发生）
-    SIMILAR_TO = "similar_to"            # 相似（A 和 B 结构/模式相似）
+    CONTAINS = "contains"  # 包含（A 包含 B）
+    RELATED_TO = "related_to"  # 相关（A 与 B 有关联）
+    CONTRADICTS = "contradicts"  # 矛盾（A 和 B 结论冲突）
+    SUPERCEDES = "supercedes"  # 取代（A 取代 B）
+    DERIVES_FROM = "derives_from"  # 派生（A 由 B 派生）
+    PREREQUISITE = "prerequisite"  # 前置（A 是 B 的前置条件）
+    CO_OCCURS = "co_occurs"  # 共现（A 与 B 同时出现）
+    SEQUENTIAL = "sequential"  # 顺序（A 在 B 之前发生）
+    SIMILAR_TO = "similar_to"  # 相似（A 和 B 结构/模式相似）
 
-    # === 扩展类型（向后兼容，保留现有语义）===
+    # === 扩展类型（当前完整语义词表）===
     # 层级关系
-    BUILDS_ON = "builds_on"              # 建立在...之上（A 深化/扩展了 B）
-    SPECIALIZES = "specializes"          # 是...的特化（A 是 B 的具体场景）
-    GENERALIZES = "generalizes"          # 是...的泛化（A 是 B 的抽象概括）
-    PART_OF = "part_of"                  # 是...的一部分（A 属于 B 的组成）
-    HAS_PART = "has_part"                # 包含...部分（A 包含 B）
+    BUILDS_ON = "builds_on"  # 建立在...之上（A 深化/扩展了 B）
+    SPECIALIZES = "specializes"  # 是...的特化（A 是 B 的具体场景）
+    GENERALIZES = "generalizes"  # 是...的泛化（A 是 B 的抽象概括）
+    PART_OF = "part_of"  # 是...的一部分（A 属于 B 的组成）
+    HAS_PART = "has_part"  # 包含...部分（A 包含 B）
 
     # 因果/依赖关系
-    CAUSES = "causes"                    # 导致...（A 引发 B）
-    DEPENDS_ON = "depends_on"            # 依赖于...（A 需要 B 作为前提）
+    CAUSES = "causes"  # 导致...（A 引发 B）
+    DEPENDS_ON = "depends_on"  # 依赖于...（A 需要 B 作为前提）
     PREREQUISITE_FOR = "prerequisite_for"  # 是...的前置条件（A 是 B 的前置知识）
-    SOLVES = "solves"                    # 解决了...（A 是 B 的解决方案）
+    SOLVES = "solves"  # 解决了...（A 是 B 的解决方案）
 
     # 演化关系
-    REPLACES = "replaces"                # 替代了...（新版 A 替代旧版 B）
-    EVOLVED_FROM = "evolved_from"        # 从...演化而来（A 由 B 演化）
-    SUPERCEDED_BY = "superceded_by"      # 被...取代（A 被 B 取代）
+    REPLACES = "replaces"  # 替代了...（新版 A 替代旧版 B）
+    EVOLVED_FROM = "evolved_from"  # 从...演化而来（A 由 B 演化）
+    SUPERCEDED_BY = "superceded_by"  # 被...取代（A 被 B 取代）
 
     # 对比关系
-    ALTERNATIVE_TO = "alternative_to"    # 是...的替代方案（A 和 B 可互换）
-    CONTRASTS_WITH = "contrasts_with"    # 与...对比（A 与 B 对比）
+    ALTERNATIVE_TO = "alternative_to"  # 是...的替代方案（A 和 B 可互换）
+    CONTRASTS_WITH = "contrasts_with"  # 与...对比（A 与 B 对比）
 
     # 动作/语义关系（ConnectWorker 使用）
-    USES = "uses"                        # 使用...（A 使用 B）
-    IMPLEMENTS = "implements"            # 实现...（A 实现 B）
-    EXTENDS = "extends"                  # 扩展...（A 扩展 B）
+    USES = "uses"  # 使用...（A 使用 B）
+    IMPLEMENTS = "implements"  # 实现...（A 实现 B）
+    EXTENDS = "extends"  # 扩展...（A 扩展 B）
 
     # 元关系
-    REFERENCES = "references"            # 引用了...（A 提及/参考了 B）
-    INSTANCE_OF = "instance_of"          # 是...的实例（A 是 B 的具体案例）
+    REFERENCES = "references"  # 引用了...（A 提及/参考了 B）
+    INSTANCE_OF = "instance_of"  # 是...的实例（A 是 B 的具体案例）
 
 
 # 蓝图定义的核心关系类型（9 种）
-CORE_RELATION_TYPES = frozenset({
-    RelationType.CONTAINS,
-    RelationType.RELATED_TO,
-    RelationType.CONTRADICTS,
-    RelationType.SUPERCEDES,
-    RelationType.DERIVES_FROM,
-    RelationType.PREREQUISITE,
-    RelationType.CO_OCCURS,
-    RelationType.SEQUENTIAL,
-    RelationType.SIMILAR_TO,
-})
+CORE_RELATION_TYPES = frozenset(
+    {
+        RelationType.CONTAINS,
+        RelationType.RELATED_TO,
+        RelationType.CONTRADICTS,
+        RelationType.SUPERCEDES,
+        RelationType.DERIVES_FROM,
+        RelationType.PREREQUISITE,
+        RelationType.CO_OCCURS,
+        RelationType.SEQUENTIAL,
+        RelationType.SIMILAR_TO,
+    }
+)
 
 
 # 关系元数据：反向关系、对称性、传递性、描述
@@ -152,7 +154,7 @@ RELATION_META: Dict[RelationType, Dict] = {
         "description": "A 和 B 结构、模式或适用场景相似",
         "example": "「策略模式」similar_to「状态模式」",
     },
-    # --- 扩展类型（向后兼容）---
+    # --- 扩展类型 ---
     RelationType.BUILDS_ON: {
         "reverse": "is_built_by",
         "symmetric": False,
@@ -278,29 +280,31 @@ RELATION_META: Dict[RelationType, Dict] = {
 @dataclass
 class RelationEvidence:
     """关系证据"""
-    evidence_type: str           # quote / similarity / keyword_overlap / llm_inference / user_annotation
-    content: str                 # 证据内容（引用文本、相似度值、关键词列表等）
+
+    evidence_type: str  # quote / similarity / keyword_overlap / llm_inference / user_annotation
+    content: str  # 证据内容（引用文本、相似度值、关键词列表等）
     created_at: str = ""
 
 
 @dataclass
 class Relation:
     """知识关系（对齐蓝图 §3.2）"""
-    source: str                       # 源实体
-    target: str                       # 目标实体
+
+    source: str  # 源实体
+    target: str  # 目标实体
     relation_type: RelationType
-    strength: float = 0.5             # 综合强度（向后兼容字段）
-    base_strength: float = 0.5        # 基础强度（提取时计算）
-    dynamic_strength: float = 0.5     # 动态强度（基于使用频率）
-    confidence: float = 0.5           # 初始可信度
-    confidence_history: List[float] = None  # 可信度历史（贝叶斯更新记录）
-    evidence: List[RelationEvidence] = None   # 支持证据列表
-    source_method: str = "auto"       # auto / manual / dark_knowledge
-    context: str = ""                 # 关联上下文（ADR-019：语义桥接文本）
+    strength: float = 0.5  # 当前综合强度
+    base_strength: float = 0.5  # 基础强度（提取时计算）
+    dynamic_strength: float = 0.5  # 动态强度（基于使用频率）
+    confidence: float = 0.5  # 初始可信度
+    confidence_history: Optional[List[float]] = None  # 可信度历史（贝叶斯更新记录）
+    evidence: Optional[List[RelationEvidence]] = None  # 支持证据列表
+    source_method: str = "auto"  # auto / manual / distill / link_parse / ...
+    context: str = ""  # 关联上下文（ADR-019：语义桥接文本）
     created_at: str = ""
     updated_at: str = ""
-    last_validated: str = ""          # 上次验证时间
-    status: str = "active"            # active / suspect / deprecated
+    last_validated: str = ""  # 上次验证时间
+    status: str = "active"  # active / suspect / deprecated
 
     def __post_init__(self):
         if self.evidence is None:
@@ -318,20 +322,22 @@ class Relation:
     @property
     def is_symmetric(self) -> bool:
         """是否对称关系"""
-        return RELATION_META.get(self.relation_type, {}).get("symmetric", False)
+        return RELATION_META.get(self.relation_type, {}).get("symmetric", False)  # type: ignore[no-any-return]  # noqa: E501
 
     @property
     def reverse_type(self) -> str:
         """反向关系类型名称"""
-        return RELATION_META.get(self.relation_type, {}).get("reverse", "related_to")
+        return RELATION_META.get(self.relation_type, {}).get("reverse", "related_to")  # type: ignore[no-any-return]  # noqa: E501
 
     @property
     def is_transitive(self) -> bool:
         """是否传递关系"""
-        return RELATION_META.get(self.relation_type, {}).get("transitive", False)
+        return RELATION_META.get(self.relation_type, {}).get("transitive", False)  # type: ignore[no-any-return]  # noqa: E501
 
     def update_confidence(self, new_score: float) -> None:
         """贝叶斯更新置信度，追加到历史"""
+        if self.confidence_history is None:
+            self.confidence_history = []
         self.confidence_history.append(round(self.confidence, 4))
         # 简单 EWMA 更新
         alpha = 0.3
@@ -355,14 +361,13 @@ class Relation:
             "last_validated": self.last_validated,
             "status": self.status,
             "evidence": [
-                {"type": e.evidence_type, "content": e.content}
-                for e in (self.evidence or [])
+                {"type": e.evidence_type, "content": e.content} for e in (self.evidence or [])
             ],
         }
 
     @classmethod
     def from_dict(cls, data: Dict) -> "Relation":
-        """从字典反序列化（向后兼容：旧数据中的 strength 映射为 base_strength）"""
+        """Deserialize both v1 strength payloads and current decomposed scores."""
         evidence = [
             RelationEvidence(
                 evidence_type=e.get("type", e.get("evidence_type", "")),
@@ -370,7 +375,7 @@ class Relation:
             )
             for e in data.get("evidence", [])
         ]
-        # 向后兼容：旧数据可能只有 strength 字段
+        # Version-1 payloads carry only the aggregate strength field.
         base_strength = data.get("base_strength")
         dynamic_strength = data.get("dynamic_strength")
         old_strength = data.get("strength", 0.5)
@@ -397,19 +402,20 @@ class Relation:
 
 # ========== 便捷函数 ==========
 
+
 def get_relation_description(relation_type: RelationType) -> str:
     """获取关系类型描述"""
-    return RELATION_META.get(relation_type, {}).get("description", "")
+    return RELATION_META.get(relation_type, {}).get("description", "")  # type: ignore[no-any-return]  # noqa: E501
 
 
 def get_relation_example(relation_type: RelationType) -> str:
     """获取关系类型示例"""
-    return RELATION_META.get(relation_type, {}).get("example", "")
+    return RELATION_META.get(relation_type, {}).get("example", "")  # type: ignore[no-any-return]
 
 
 def infer_symmetric_type(relation_type: RelationType) -> bool:
     """推断关系是否对称"""
-    return RELATION_META.get(relation_type, {}).get("symmetric", False)
+    return RELATION_META.get(relation_type, {}).get("symmetric", False)  # type: ignore[no-any-return]  # noqa: E501
 
 
 def get_all_relation_types() -> List[Tuple[str, str, str]]:
@@ -460,7 +466,7 @@ def suggest_relation_type(keywords: List[str]) -> List[Tuple[RelationType, float
         "类似": [(RelationType.SIMILAR_TO, 0.9)],
         "像": [(RelationType.SIMILAR_TO, 0.7)],
         "类比": [(RelationType.SIMILAR_TO, 0.8)],
-        # --- 扩展类型关键词（向后兼容）---
+        # --- 扩展类型关键词 ---
         "建立": [(RelationType.BUILDS_ON, 0.8)],
         "扩展": [(RelationType.BUILDS_ON, 0.8)],
         "深化": [(RelationType.BUILDS_ON, 0.7)],

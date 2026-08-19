@@ -18,38 +18,51 @@ Knowledge Trail - 知识使用轨迹追踪
 - 支持聚合分析，发现使用模式
 - 与推送系统联动（热门知识优先推送）
 """
+
 # Ariadne — 阿里阿德涅 — 知识轨迹，线团指引的迷宫之路
 # 原模块: knowledge_trail.py
 
 
-
 import json
 import sqlite3
+import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Generator, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from core.config import get_config
 from core.kia.adaptive_config import AdaptiveConfig
+from core.kia.policy import get_effective_policy
+
+# Constants extracted from magic numbers
+KNOWLEDGE_TRAIL_DURATION_BUCKET_MONTH_DAYS = 30
+KNOWLEDGE_TRAIL_DURATION_BUCKET_WEEK_DAYS = 7
+KNOWLEDGE_TRAIL_GET_EFFECT_REPORT_DAYS = 30
+KNOWLEDGE_TRAIL_DURATION_BUCKET_QUARTER_DAYS = 90
+INACTIVITY_SCORE_DAYS = 30
+EFFECT_DAYS = 7
 
 
 @dataclass
 class TrailEvent:
     """轨迹事件"""
-    event_type: str          # query / reference / modify / effect / push
+
+    event_type: str  # query / reference / modify / effect / push
     page_path: str
     timestamp: str
     session_id: str = ""
-    context: str = ""        # 查询/引用的上下文
-    source: str = ""         # 事件来源（对话ID、文档路径等）
-    quote: str = ""          # 引用的原文片段
-    success: bool = None     # 是否解决问题（effect 类型）
+    context: str = ""  # 查询/引用的上下文
+    source: str = ""  # 事件来源（对话ID、文档路径等）
+    quote: str = ""  # 引用的原文片段
+    success: Optional[bool] = None  # 是否解决问题（effect 类型）
     metadata: Dict = field(default_factory=dict)
 
 
 @dataclass
 class PageTrail:
     """单页面轨迹"""
+
     page_path: str
     page_title: str = ""
     total_queries: int = 0
@@ -57,29 +70,32 @@ class PageTrail:
     total_modifications: int = 0
     last_accessed: str = ""
     first_accessed: str = ""
-    effect_score: float = 0.0   # 0-1，基于 success 记录计算
+    effect_score: float = 0.0  # 0-1，基于 success 记录计算
     events: List[TrailEvent] = field(default_factory=list)
 
 
 class KnowledgeTrail:
     """知识轨迹追踪器"""
 
-    def __init__(self, wiki_base: str = None, db_path: str = None,
-                 adaptive_config: AdaptiveConfig = None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+    def __init__(
+        self,
+        wiki_base: str | None = None,
+        db_path: str | None = None,
+        adaptive_config: AdaptiveConfig | None = None,
+    ):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
         self.inbox = self.wiki_base / "00-Inbox"
-        self.adaptive_config = adaptive_config or AdaptiveConfig({
-            "trail.effect_ewma_alpha": 0.35,
-            "trail.effect_half_life_days": 30,
-            "trail.forgotten_effect_weight": 0.55,
-            "trail.forgotten_age_weight": 0.30,
-            "trail.forgotten_inactivity_weight": 0.15,
-        })
-        self.db_path = Path(db_path) if db_path else (
-            self.wiki_base / ".kg" / "trail.db"
+        self.adaptive_config = adaptive_config or AdaptiveConfig(
+            {
+                "trail.effect_ewma_alpha": 0.35,
+                "trail.effect_half_life_days": KNOWLEDGE_TRAIL_DURATION_BUCKET_MONTH_DAYS,
+                "trail.forgotten_effect_weight": 0.55,
+                "trail.forgotten_age_weight": 0.30,
+                "trail.forgotten_inactivity_weight": 0.15,
+            },
+            policy=get_effective_policy(),
         )
+        self.db_path = Path(db_path) if db_path else (self.wiki_base / ".kg" / "trail.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -117,17 +133,32 @@ class KnowledgeTrail:
         );
         """
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(schema)
             columns = {row[1] for row in conn.execute("PRAGMA table_info(page_stats)")}
             if "effect_count" not in columns:
                 conn.execute("ALTER TABLE page_stats ADD COLUMN effect_count INTEGER DEFAULT 0")
             if "effect_solved_count" not in columns:
-                conn.execute("ALTER TABLE page_stats ADD COLUMN effect_solved_count INTEGER DEFAULT 0")
+                conn.execute(
+                    "ALTER TABLE page_stats ADD COLUMN effect_solved_count INTEGER DEFAULT 0"
+                )
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self) -> Generator[sqlite3.Connection, None, None]:
         conn = sqlite3.connect(str(self.db_path), timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+        conn.row_factory = sqlite3.Row  # noqa
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        try:
+            yield conn
+        finally:
+            try:
+                if sys.exc_info()[0] is None:
+                    conn.commit()
+                else:
+                    conn.rollback()
+            finally:
+                conn.close()
 
     # ========== 事件记录 ==========
 
@@ -141,11 +172,16 @@ class KnowledgeTrail:
                         source, quote, success, metadata)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        event.event_type, event.page_path, event.timestamp,
-                        event.session_id, event.context, event.source,
-                        event.quote, event.success,
+                        event.event_type,
+                        event.page_path,
+                        event.timestamp,
+                        event.session_id,
+                        event.context,
+                        event.source,
+                        event.quote,
+                        event.success,
                         json.dumps(event.metadata, ensure_ascii=False),
-                    )
+                    ),
                 )
                 conn.commit()
 
@@ -155,112 +191,152 @@ class KnowledgeTrail:
         except sqlite3.Error:
             return False
 
-    def log_query(self, page_path: str, context: str = "",
-                  session_id: str = "", success: bool = None) -> bool:
+    def log_query(
+        self, page_path: str, context: str = "", session_id: str = "", success: bool | None = None
+    ) -> bool:
         """记录查询事件"""
-        return self.log_event(TrailEvent(
-            event_type="query",
-            page_path=page_path,
-            timestamp=datetime.now().isoformat()[:19],
-            session_id=session_id,
-            context=context[:500],
-            success=success,
-        ))
+        return self.log_event(
+            TrailEvent(
+                event_type="query",
+                page_path=page_path,
+                timestamp=datetime.now().isoformat()[:19],
+                session_id=session_id,
+                context=context[:500],
+                success=success,
+            )
+        )
 
-    def log_reference(self, page_path: str, source: str = "",
-                      quote: str = "", session_id: str = "") -> bool:
+    def log_reference(
+        self, page_path: str, source: str = "", quote: str = "", session_id: str = ""
+    ) -> bool:
         """记录引用事件"""
-        return self.log_event(TrailEvent(
-            event_type="reference",
-            page_path=page_path,
-            timestamp=datetime.now().isoformat()[:19],
-            session_id=session_id,
-            source=source,
-            quote=quote[:500],
-        ))
+        return self.log_event(
+            TrailEvent(
+                event_type="reference",
+                page_path=page_path,
+                timestamp=datetime.now().isoformat()[:19],
+                session_id=session_id,
+                source=source,
+                quote=quote[:500],
+            )
+        )
 
     def log_modification(self, page_path: str, change_summary: str = "") -> bool:
         """记录修改事件"""
-        return self.log_event(TrailEvent(
-            event_type="modify",
-            page_path=page_path,
-            timestamp=datetime.now().isoformat()[:19],
-            context=change_summary[:500],
-        ))
+        return self.log_event(
+            TrailEvent(
+                event_type="modify",
+                page_path=page_path,
+                timestamp=datetime.now().isoformat()[:19],
+                context=change_summary[:500],
+            )
+        )
 
-    def log_effect(self, page_path: str, solved: bool,
-                   context: str = "", session_id: str = "") -> bool:
+    def log_effect(
+        self, page_path: str, solved: bool, context: str = "", session_id: str = ""
+    ) -> bool:
         """记录效果反馈"""
-        return self.log_event(TrailEvent(
-            event_type="effect",
-            page_path=page_path,
-            timestamp=datetime.now().isoformat()[:19],
-            session_id=session_id,
-            context=context[:500],
-            success=solved,
-        ))
+        return self.log_event(
+            TrailEvent(
+                event_type="effect",
+                page_path=page_path,
+                timestamp=datetime.now().isoformat()[:19],
+                session_id=session_id,
+                context=context[:500],
+                success=solved,
+            )
+        )
 
-    def _update_page_stats(self, page_path: str, event_type: str,
-                           success: bool = None):
+    def _update_page_stats(self, page_path: str, event_type: str, success: bool | None = None):
         """更新页面统计"""
         with self._conn() as conn:
-            # 获取或创建记录
             row = conn.execute(
                 "SELECT * FROM page_stats WHERE page_path=?", (page_path,)
             ).fetchone()
-
             now = datetime.now().isoformat()[:19]
 
             if row:
-                updates = {"last_accessed": now}
-                if event_type == "query":
-                    updates["total_queries"] = row["total_queries"] + 1
-                elif event_type == "reference":
-                    updates["total_references"] = row["total_references"] + 1
-                elif event_type == "modify":
-                    updates["total_modifications"] = row["total_modifications"] + 1
-
-                # 效果分数更新
-                if event_type == "effect" and success is not None:
-                    old_score = row["effect_score"] if row["effect_score"] is not None else 0.5
-                    decayed_score = self._decay_effect_score(old_score, row["last_accessed"])
-                    alpha = self._config_value("trail.effect_ewma_alpha", 0.35)
-                    outcome = 1.0 if success else 0.0
-                    new_score = alpha * outcome + (1 - alpha) * decayed_score
-                    updates["effect_score"] = round(new_score, 3)
-                    updates["effect_count"] = (row["effect_count"] or 0) + 1
-                    updates["effect_solved_count"] = (row["effect_solved_count"] or 0) + (1 if success else 0)
-
+                updates = self._build_existing_updates(row, event_type, success, now)
                 set_clause = ", ".join(f"{k}=?" for k in updates)
                 conn.execute(
-                    f"UPDATE page_stats SET {set_clause} WHERE page_path=?",
-                    (*updates.values(), page_path)
+                    f"UPDATE page_stats SET {set_clause} WHERE page_path=?",  # nosec B608
+                    (*updates.values(), page_path),
                 )
             else:
-                # 新页面
-                title = Path(page_path).stem
-                conn.execute(
-                    """INSERT INTO page_stats
-                       (page_path, page_title, total_queries, total_references,
-                        total_modifications, first_accessed, last_accessed, effect_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        page_path, title,
-                        1 if event_type == "query" else 0,
-                        1 if event_type == "reference" else 0,
-                        1 if event_type == "modify" else 0,
-                        now, now,
-                        1.0 if success else 0.0 if success is not None else 0.5,
-                    )
-                )
-                if event_type == "effect" and success is not None:
-                    conn.execute(
-                        """UPDATE page_stats
-                           SET effect_count=1, effect_solved_count=?
-                           WHERE page_path=?""",
-                        (1 if success else 0, page_path)
-                    )
+                self._insert_new_page_stats(conn, page_path, event_type, success, now)
+
             conn.commit()
+
+    def _build_existing_updates(
+        self,
+        row,
+        event_type: str,
+        success: bool | None,
+        now: str,
+    ) -> Dict[str, object]:
+        """构建已有 page_stats 记录的更新字段。"""
+        updates: Dict[str, object] = {"last_accessed": now}
+        if event_type == "query":
+            updates["total_queries"] = row["total_queries"] + 1
+        elif event_type == "reference":
+            updates["total_references"] = row["total_references"] + 1
+        elif event_type == "modify":
+            updates["total_modifications"] = row["total_modifications"] + 1
+
+        if event_type == "effect" and success is not None:
+            updates.update(self._compute_effect_updates(row, success, now))
+
+        return updates
+
+    def _compute_effect_updates(self, row, success: bool, now: str) -> Dict[str, object]:
+        """计算效果分数相关更新字段。"""
+        old_score = row["effect_score"] if row["effect_score"] is not None else 0.5
+        decayed_score = self._decay_effect_score(old_score, row["last_accessed"])
+        alpha = self._config_value("trail.effect_ewma_alpha", 0.35)
+        outcome = 1.0 if success else 0.0
+        new_score = alpha * outcome + (1 - alpha) * decayed_score
+        return {
+            "effect_score": round(new_score, 3),
+            "effect_count": (row["effect_count"] or 0) + 1,
+            "effect_solved_count": (row["effect_solved_count"] or 0) + (
+                1 if success else 0
+            ),
+        }
+
+    def _insert_new_page_stats(
+        self,
+        conn,
+        page_path: str,
+        event_type: str,
+        success: bool | None,
+        now: str,
+    ):
+        """插入新的 page_stats 记录。"""
+        title = Path(page_path).stem
+        effect_score = 1.0 if success else 0.0 if success is not None else 0.5
+        conn.execute(
+            """INSERT INTO page_stats
+               (page_path, page_title, total_queries, total_references,
+                total_modifications, first_accessed, last_accessed, effect_score)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                page_path,
+                title,
+                1 if event_type == "query" else 0,
+                1 if event_type == "reference" else 0,
+                1 if event_type == "modify" else 0,
+                now,
+                now,
+                effect_score,
+            ),
+        )
+        if event_type == "effect" and success is not None:
+            conn.execute(
+                """UPDATE page_stats
+                   SET effect_count=1, effect_solved_count=?
+                   WHERE page_path=?""",
+                (1 if success else 0, page_path),
+            )
 
     # ========== 查询分析 ==========
 
@@ -276,7 +352,7 @@ class KnowledgeTrail:
             events = conn.execute(
                 """SELECT * FROM trail_events WHERE page_path=?
                    ORDER BY timestamp DESC LIMIT ?""",
-                (page_path, limit)
+                (page_path, limit),
             ).fetchall()
 
         trail = PageTrail(page_path=page_path)
@@ -290,21 +366,25 @@ class KnowledgeTrail:
             trail.effect_score = stats["effect_score"] or 0.0
 
         for row in events:
-            trail.events.append(TrailEvent(
-                event_type=row["event_type"],
-                page_path=row["page_path"],
-                timestamp=row["timestamp"],
-                session_id=row["session_id"] or "",
-                context=row["context"] or "",
-                source=row["source"] or "",
-                quote=row["quote"] or "",
-                success=row["success"],
-                metadata=json.loads(row["metadata"] or "{}"),
-            ))
+            trail.events.append(
+                TrailEvent(
+                    event_type=row["event_type"],
+                    page_path=row["page_path"],
+                    timestamp=row["timestamp"],
+                    session_id=row["session_id"] or "",
+                    context=row["context"] or "",
+                    source=row["source"] or "",
+                    quote=row["quote"] or "",
+                    success=row["success"],
+                    metadata=json.loads(row["metadata"] or "{}"),
+                )
+            )
 
         return trail
 
-    def get_popular_pages(self, days: int = 30, top_n: int = 10) -> List[Dict]:
+    def get_popular_pages(
+        self, days: int = KNOWLEDGE_TRAIL_DURATION_BUCKET_MONTH_DAYS, top_n: int = 10
+    ) -> List[Dict]:
         """获取热门知识排行"""
         since = (datetime.now() - timedelta(days=days)).isoformat()[:19]
 
@@ -322,7 +402,7 @@ class KnowledgeTrail:
                    GROUP BY t.page_path
                    ORDER BY event_count DESC
                    LIMIT ?""",
-                (since, top_n)
+                (since, top_n),
             ).fetchall()
 
         return [
@@ -336,8 +416,11 @@ class KnowledgeTrail:
             for row in rows
         ]
 
-    def get_forgotten_pages(self, days: int = 30,
-                            min_age_days: int = 7) -> List[Dict]:
+    def get_forgotten_pages(
+        self,
+        days: int = KNOWLEDGE_TRAIL_DURATION_BUCKET_MONTH_DAYS,
+        min_age_days: int = KNOWLEDGE_TRAIL_DURATION_BUCKET_WEEK_DAYS,
+    ) -> List[Dict]:
         """
         获取被遗忘的知识
 
@@ -351,9 +434,9 @@ class KnowledgeTrail:
         with self._conn() as conn:
             # 最近活跃的知识
             active_pages = set(
-                row[0] for row in conn.execute(
-                    "SELECT DISTINCT page_path FROM trail_events WHERE timestamp >= ?",
-                    (since,)
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT page_path FROM trail_events WHERE timestamp >= ?", (since,)
                 ).fetchall()
             )
 
@@ -362,26 +445,28 @@ class KnowledgeTrail:
                 """SELECT page_path, page_title, first_accessed, last_accessed, effect_score
                    FROM page_stats
                    WHERE first_accessed <= ?""",
-                (age_threshold,)
+                (age_threshold,),
             ).fetchall()
 
         forgotten = []
         for row in all_pages:
             if row["page_path"] not in active_pages:
-                forgotten.append({
-                    "page_path": row["page_path"],
-                    "page_title": row["page_title"],
-                    "first_accessed": row["first_accessed"],
-                    "effect_score": row["effect_score"],
-                    "last_accessed": row["last_accessed"] or self._get_last_access(row["page_path"]),
-                })
+                forgotten.append(
+                    {
+                        "page_path": row["page_path"],
+                        "page_title": row["page_title"],
+                        "first_accessed": row["first_accessed"],
+                        "effect_score": row["effect_score"],
+                        "last_accessed": row["last_accessed"]
+                        or self._get_last_access(row["page_path"]),
+                    }
+                )
                 forgotten[-1]["priority"] = self._forgotten_priority(forgotten[-1])
 
         forgotten.sort(key=lambda x: x["priority"], reverse=True)
         return forgotten
 
-    def get_user_journey(self, session_id: str = None,
-                         hours: int = 24) -> List[Dict]:
+    def get_user_journey(self, session_id: str | None = None, hours: int = 24) -> List[Dict]:
         """
         获取用户知识探索路径
 
@@ -397,7 +482,7 @@ class KnowledgeTrail:
                        FROM trail_events
                        WHERE session_id=? AND timestamp >= ?
                        ORDER BY timestamp""",
-                    (session_id, since)
+                    (session_id, since),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -405,7 +490,7 @@ class KnowledgeTrail:
                        FROM trail_events
                        WHERE timestamp >= ?
                        ORDER BY timestamp""",
-                    (since,)
+                    (since,),
                 ).fetchall()
 
         return [
@@ -418,19 +503,19 @@ class KnowledgeTrail:
             for row in rows
         ]
 
-    def get_effect_report(self, days: int = 30) -> Dict:
+    def get_effect_report(self, days: int = KNOWLEDGE_TRAIL_GET_EFFECT_REPORT_DAYS) -> Dict:
         """获取知识效果报告"""
         since = (datetime.now() - timedelta(days=days)).isoformat()[:19]
 
         with self._conn() as conn:
             total_effects = conn.execute(
                 "SELECT COUNT(*) FROM trail_events WHERE event_type='effect' AND timestamp >= ?",
-                (since,)
+                (since,),
             ).fetchone()[0]
 
             solved = conn.execute(
-                "SELECT COUNT(*) FROM trail_events WHERE event_type='effect' AND success=1 AND timestamp >= ?",
-                (since,)
+                "SELECT COUNT(*) FROM trail_events WHERE event_type='effect' AND success=1 AND timestamp >= ?",  # noqa: E501
+                (since,),
             ).fetchone()[0]
 
             # 效果最好的知识
@@ -443,13 +528,12 @@ class KnowledgeTrail:
             ).fetchall()
 
             # 效果最差的知识（被查询但很少解决问题）
-            least_effective = conn.execute(
-                """SELECT page_path, page_title, effect_score, total_queries, effect_count, effect_solved_count
+            least_effective = conn.execute("""SELECT page_path, page_title, effect_score,
+                          total_queries, effect_count, effect_solved_count
                    FROM page_stats
                    WHERE total_queries >= 3 AND effect_score < 0.5
                    ORDER BY effect_score ASC
-                   LIMIT 5"""
-            ).fetchall()
+                   LIMIT 5""").fetchall()
 
         return {
             "period_days": days,
@@ -457,11 +541,24 @@ class KnowledgeTrail:
             "solved_count": solved,
             "solve_rate": round(solved / max(total_effects, 1), 3),
             "top_effective": [
-                {"page": r[0], "title": r[1], "score": r[2], "effect_count": r[3], "solved_count": r[4]}
+                {
+                    "page": r[0],
+                    "title": r[1],
+                    "score": r[2],
+                    "effect_count": r[3],
+                    "solved_count": r[4],
+                }
                 for r in top_effective
             ],
             "needs_improvement": [
-                {"page": r[0], "title": r[1], "score": r[2], "queries": r[3], "effect_count": r[4], "solved_count": r[5]}
+                {
+                    "page": r[0],
+                    "title": r[1],
+                    "score": r[2],
+                    "queries": r[3],
+                    "effect_count": r[4],
+                    "solved_count": r[5],
+                }
                 for r in least_effective
             ],
         }
@@ -472,8 +569,7 @@ class KnowledgeTrail:
         """获取页面最后访问时间"""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT MAX(timestamp) FROM trail_events WHERE page_path=?",
-                (page_path,)
+                "SELECT MAX(timestamp) FROM trail_events WHERE page_path=?", (page_path,)
             ).fetchone()
         return row[0] if row and row[0] else ""
 
@@ -488,9 +584,11 @@ class KnowledgeTrail:
             days_old = max((datetime.now() - datetime.fromisoformat(last_accessed)).days, 0)
         except ValueError:
             return score
-        half_life = self._config_value("trail.effect_half_life_days", 30)
+        half_life = self._config_value(
+            "trail.effect_half_life_days", KNOWLEDGE_TRAIL_DURATION_BUCKET_MONTH_DAYS
+        )
         decay = 0.5 ** (days_old / max(half_life, 1))
-        return 0.5 + (score - 0.5) * decay
+        return 0.5 + (score - 0.5) * decay  # type: ignore[no-any-return]
 
     def _forgotten_priority(self, row: Dict) -> float:
         now = datetime.now()
@@ -499,17 +597,19 @@ class KnowledgeTrail:
         except ValueError:
             first = now
         try:
-            last = datetime.fromisoformat(row.get("last_accessed") or row.get("first_accessed") or now.isoformat())
+            last = datetime.fromisoformat(
+                row.get("last_accessed") or row.get("first_accessed") or now.isoformat()
+            )
         except ValueError:
             last = first
 
         age_days = max((now - first).days, 0)
         inactive_days = max((now - last).days, 0)
-        age_score = min(age_days / 90, 1.0)
-        inactivity_score = min(inactive_days / 30, 1.0)
+        age_score = min(age_days / KNOWLEDGE_TRAIL_DURATION_BUCKET_QUARTER_DAYS, 1.0)
+        inactivity_score = min(inactive_days / INACTIVITY_SCORE_DAYS, 1.0)
         effect_score = row.get("effect_score") if row.get("effect_score") is not None else 0.5
 
-        return round(
+        return round(  # type: ignore[no-any-return]
             effect_score * self._config_value("trail.forgotten_effect_weight", 0.55)
             + age_score * self._config_value("trail.forgotten_age_weight", 0.30)
             + inactivity_score * self._config_value("trail.forgotten_inactivity_weight", 0.15),
@@ -518,9 +618,10 @@ class KnowledgeTrail:
 
     def generate_weekly_report(self) -> str:
         """生成周报"""
-        popular = self.get_popular_pages(days=7, top_n=5)
-        forgotten = self.get_forgotten_pages(days=7)[:5]
-        effect = self.get_effect_report(days=7)
+        popular = self.get_popular_pages(days=KNOWLEDGE_TRAIL_DURATION_BUCKET_WEEK_DAYS, top_n=5)
+        forgotten = self.get_forgotten_pages(days=KNOWLEDGE_TRAIL_DURATION_BUCKET_WEEK_DAYS)[:5]
+        journey = self.get_user_journey(hours=24 * KNOWLEDGE_TRAIL_DURATION_BUCKET_WEEK_DAYS)[:10]
+        effect = self.get_effect_report(days=EFFECT_DAYS)
 
         lines = [
             "# 知识使用周报",
@@ -530,7 +631,20 @@ class KnowledgeTrail:
             "",
         ]
         for i, p in enumerate(popular, 1):
-            lines.append(f"{i}. **{p['page_title']}** — {p['event_count']} 次访问")
+            trail = self.get_page_trail(p["page_path"], limit=0)
+            lines.append(
+                f"{i}. **{p['page_title']}** — {p['event_count']} 次访问"
+                f"（累计查询 {trail.total_queries} / 引用 {trail.total_references} / "
+                f"修改 {trail.total_modifications}）"
+            )
+
+        lines.extend(["", "## 最近知识路径", ""])
+        if journey:
+            for item in journey:
+                context = f" — {item['context']}" if item.get("context") else ""
+                lines.append(f"- {item['event_type']}: {item['page_path']}{context}")
+        else:
+            lines.append("无")
 
         lines.extend(["", "## 被遗忘的知识", ""])
         if forgotten:
@@ -553,14 +667,16 @@ class KnowledgeTrail:
 
 # ========== 便捷函数 ==========
 
-def log_knowledge_usage(page_path: str, event_type: str = "query",
-                        context: str = "") -> bool:
+
+def log_knowledge_usage(page_path: str, event_type: str = "query", context: str = "") -> bool:
     """便捷函数：记录知识使用"""
     trail = KnowledgeTrail()
     if event_type == "query":
         return trail.log_query(page_path, context)
     elif event_type == "reference":
-        return trail.log_reference(page_path, context=context)
+        return trail.log_reference(page_path, source=context)
+    elif event_type == "modify":
+        return trail.log_modification(page_path, change_summary=context)
     elif event_type == "effect":
         return trail.log_effect(page_path, solved=True, context=context)
     return False

@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-P0-3 集成测试 — HephaestusWorker 同步蒸馏路径发射 knowledge_distilled 事件
-
-验证：_sync_distill_and_complete() 在成功蒸馏写页后会发射 knowledge_distilled
-事件并记录 Memos→Wiki 追溯链接。
-"""
+"""Worker delegates cognition projection publication to the write boundary."""
 
 from unittest.mock import patch, MagicMock
 
@@ -15,8 +10,12 @@ import pytest
 def mock_publish_event(monkeypatch):
     """捕获 publish_event 调用"""
     events = []
-    def _capture(event_type, agent, payload):
+
+    def _capture(event_type, agent, payload, *, trace_id="", subject_provenance=None):
+        del subject_provenance
         events.append({"type": event_type, "agent": agent, "payload": payload})
+        return trace_id or "worker-path-test-trace"
+
     monkeypatch.setattr("core.mnemos_bus.publish_event", _capture)
     return events
 
@@ -26,18 +25,28 @@ class FakeDistillTask:
     meta = {"source": "test"}
 
 
-def test_sync_distill_emits_knowledge_distilled(mock_publish_event, monkeypatch):
-    """_sync_distill_and_complete 成功蒸馏后应发射 knowledge_distilled 事件"""
+def test_sync_distill_does_not_duplicate_write_boundary_event(
+    mock_publish_event,
+    monkeypatch,
+):
+    """The engine write boundary owns the durable cognition event."""
     from core.hephaestus_worker import HephaestusWorker
     from core.hephaestus.distillation_engine import (
-        DistillationResult, KnowledgeFragment,
+        DistillationResult,
+        KnowledgeFragment,
     )
 
     worker = HephaestusWorker()
 
     frag = KnowledgeFragment(
-        form="note", title="测试", frontmatter={}, background="",
-        core_content="内容", boundaries={}, anti_patterns=[], related_concepts=[],
+        form="note",
+        title="测试",
+        frontmatter={},
+        background="",
+        core_content="内容",
+        boundaries={},
+        anti_patterns=[],
+        related_concepts=[],
     )
     frag.keywords = ["测试"]
     frag.cross_agent_links = []
@@ -50,11 +59,21 @@ def test_sync_distill_emits_knowledge_distilled(mock_publish_event, monkeypatch)
 
     mock_engine = MagicMock()
     mock_engine.process.return_value = result
-    mock_engine.write_pages.return_value = ["/wiki/00-Inbox/sess-worker-001_note_1.md"]
+    from core.pipeline_receipts import DistillationWriteReceipt
 
-    with patch("core.hephaestus.distillation_engine.HostAgentCaller") as MockCaller, \
-         patch("core.hephaestus.distillation_engine.DistillationEngine") as MockEngine, \
-         patch("core.hephaestus.distillation_engine._record_memos_wiki_links") as mock_link:
+    mock_engine.write_pages_with_receipt.return_value = DistillationWriteReceipt(
+        status="committed",
+        terminal_reason="test page committed",
+        written_pages=("/wiki/00-Inbox/sess-worker-001_note_1.md",),
+        expected_count=1,
+        written_count=1,
+    )
+
+    with (
+        patch("core.hephaestus.distillation_engine.HttpApiHostAgentCaller") as MockCaller,
+        patch("core.hephaestus.distillation_engine.DistillationEngine") as MockEngine,
+        patch("core.kia.amphora.mark_terminal", return_value=True),
+    ):
 
         MockCaller.return_value = MagicMock()
         MockEngine.return_value = mock_engine
@@ -62,12 +81,60 @@ def test_sync_distill_emits_knowledge_distilled(mock_publish_event, monkeypatch)
         ok = worker._sync_distill_and_complete("sess-worker-001", FakeDistillTask())
 
     assert ok is True
-    kg_events = [e for e in mock_publish_event if e["type"] == "knowledge_distilled"]
-    assert len(kg_events) == 1
-    evt = kg_events[0]
-    assert evt["payload"]["session_id"] == "sess-worker-001"
-    assert "/wiki/00-Inbox/sess-worker-001_note_1.md" in evt["payload"]["wiki_pages"]
-    mock_link.assert_called_once()
+    assert [e for e in mock_publish_event if e["type"] == "knowledge_distilled"] == []
+
+
+def test_sync_skill_does_not_duplicate_write_boundary_event(mock_publish_event):
+    """COG-013 skill writes use the same single durable write boundary."""
+    from core.hephaestus_worker import HephaestusWorker
+    from core.hephaestus.distillation_engine import DistillationResult, KnowledgeFragment
+    from core.hephaestus.distillation_models import CognitionAssetCommitReceipt
+    from core.pipeline_receipts import DistillationWriteReceipt
+
+    worker = HephaestusWorker()
+    fragment = KnowledgeFragment(
+        form="方法论",
+        title="完整认知资产与 Wiki 投影联动",
+        frontmatter={},
+        background="",
+        core_content="认知资产已持久化。",
+        boundaries={},
+        anti_patterns=[],
+        related_concepts=[],
+    )
+    result = DistillationResult(
+        session_id="sess-worker-skill",
+        judgment="skill",
+        fragments=[fragment],
+        cognition_asset_receipt=CognitionAssetCommitReceipt(
+            status="committed",
+            asset_id="cogasset-worker",
+            content_hash="sha256:worker",
+        ),
+    )
+    page = "/wiki/00-Inbox/sess-worker-skill_methodology.md"
+    mock_engine = MagicMock()
+    mock_engine.process.return_value = result
+    mock_engine.write_pages_with_receipt.return_value = DistillationWriteReceipt(
+        status="committed",
+        terminal_reason="skill asset and page committed",
+        written_pages=(page,),
+        expected_count=1,
+        written_count=1,
+        required_consumer_receipts=("cognition_asset:cogasset-worker:committed",),
+    )
+
+    with (
+        patch("core.hephaestus.distillation_engine.HttpApiHostAgentCaller") as MockCaller,
+        patch("core.hephaestus.distillation_engine.DistillationEngine") as MockEngine,
+        patch("core.kia.amphora.mark_terminal", return_value=True),
+    ):
+        MockCaller.return_value = MagicMock()
+        MockEngine.return_value = mock_engine
+        ok = worker._sync_distill_and_complete("sess-worker-skill", FakeDistillTask())
+
+    assert ok is True
+    assert [event for event in mock_publish_event if event["type"] == "knowledge_distilled"] == []
 
 
 def test_sync_distill_no_event_when_not_knowledge(mock_publish_event, monkeypatch):
@@ -85,10 +152,18 @@ def test_sync_distill_no_event_when_not_knowledge(mock_publish_event, monkeypatc
 
     mock_engine = MagicMock()
     mock_engine.process.return_value = result
+    from core.pipeline_receipts import DistillationWriteReceipt
 
-    with patch("core.hephaestus.distillation_engine.HostAgentCaller") as MockCaller, \
-         patch("core.hephaestus.distillation_engine.DistillationEngine") as MockEngine, \
-         patch("core.hephaestus.distillation_engine._record_memos_wiki_links") as mock_link:
+    mock_engine.write_pages_with_receipt.return_value = DistillationWriteReceipt(
+        status="intentional_skip",
+        terminal_reason="test skip",
+    )
+
+    with (
+        patch("core.hephaestus.distillation_engine.HttpApiHostAgentCaller") as MockCaller,
+        patch("core.hephaestus.distillation_engine.DistillationEngine") as MockEngine,
+        patch("core.kia.amphora.mark_terminal", return_value=True),
+    ):
 
         MockCaller.return_value = MagicMock()
         MockEngine.return_value = mock_engine
@@ -98,4 +173,3 @@ def test_sync_distill_no_event_when_not_knowledge(mock_publish_event, monkeypatc
     assert ok is True
     kg_events = [e for e in mock_publish_event if e["type"] == "knowledge_distilled"]
     assert len(kg_events) == 0
-    mock_link.assert_not_called()

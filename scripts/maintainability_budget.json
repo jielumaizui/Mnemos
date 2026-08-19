@@ -1,0 +1,27 @@
+{
+  "schema_version": "mnemos.maintainability_budget.v2",
+  "generated_at": "2026-07-19T18:53:12.393276+00:00",
+  "max_new_file_lines": 1500,
+  "max_new_broad_exceptions_per_file": 0,
+  "max_unclassified_broad_exceptions": 0,
+  "require_per_catch_classification": false,
+  "require_classified_broad_exception_paths": [
+    "core/cli/doctor_helpers.py",
+    "core/setup/install_lifecycle.py",
+    "core/sync_framework/capture_worker.py",
+    "core/sync_framework/sync_engine.py",
+    "daemon/raw_sync.py",
+    "scripts/distill_all.py",
+    "scripts/health_check.py"
+  ],
+  "scan_paths": [
+    "core",
+    "integrations",
+    "daemon",
+    "scripts",
+    "mnemos_cli.py",
+    "mnemos_daemon.py"
+  ],
+  "large_files": {},
+  "broad_exceptions": {}
+}

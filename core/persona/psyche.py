@@ -8,401 +8,190 @@ Signal Store - 用户行为信号数据库
 
 数据库位置：~/.mnemos/user_signals.db
 """
+
 # Psyche — 灵魂女神 — 信号存储，灵魂/行为数据的持久化
 # 原模块: signal_store.py
 
 
-
 import json
+from functools import wraps
+from os import PathLike
 import sqlite3
-import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Any
+from dataclasses import asdict
 from datetime import datetime
+from unittest.mock import Mock
 
+from core.db_utils import sqlite_artifact_exists, validate_sql_identifier
+from core.cognitive.material_effect_schema import (
+    initialize_material_effect_schema,
+)
+from core.cognitive.state_contract import sha256_json
+from core.persona.psyche_models import GitSignal, NoteSignal, SessionSignal, WechatSignal
+from core.persona.cognitive_profile import (  # noqa: F401
+    CognitiveProfileRepository,
+    ProfileAssertion,
+    ProfileSignal,
+    ProfileUsageLog,
+    register_cognitive_profile_runtime_schema,
+    validate_cognitive_profile_runtime_schema,
+)
+from core.persona.reflection_signal_persistence import (
+    ensure_source_event_schema,
+    persist_reflection_signal,
+)
+from core.persona.psyche_constants import (  # noqa: F401
+    CORE,
+    DURATION_BUCKET_WEEK_DAYS,
+    SIGNAL_STORE_BUSY_TIMEOUT_MS,
+    SIGNAL_STORE_DURATION_BUCKET_QUARTER_DAYS,
+    SIGNAL_STORE_GET_PROJECT_ISOLATED_SIGNALS_PROJECT_DIR_DAYS,
+    SIGNAL_STORE_GET_SIGNAL_HEALTH_DAYS,
+    SIGNAL_STORE_GET_SIGNAL_PROJECTS_DAYS,
+    SIGNAL_STORE_GET_SIGNAL_STATS_DAYS,
+    SIGNAL_STORE_SQLITE_TIMEOUT_SECONDS,
+)
+from core.persona.psyche_material_contracts import (  # noqa: F401
+    PERSONA_BLINDSPOT_ACTION,
+    PERSONA_BLINDSPOT_REVOKE_ACTION,
+    PERSONA_CALIBRATION_ACTION,
+    PERSONA_CALIBRATION_REVOKE_ACTION,
+    PERSONA_DECISION_CONTRACT_ID,
+    PERSONA_DECISION_CONTRACT_REVISION,
+    PERSONA_DECISION_CONTRACT_TEXT,
+    PERSONA_DECISION_PRODUCER_HASH,
+    PERSONA_VERSION_ACTION,
+    PERSONA_VERSION_EXECUTOR,
+    PERSONA_VERSION_OWNER,
+    PersonaBlindspotEffectOracle,
+    PersonaBlindspotRevokeEffectOracle,
+    PersonaCalibrationEffectOracle,
+    PersonaCalibrationRevokeEffectOracle,
+    PersonaVersionEffectOracle,
+    authorize_exact_persona_material_action,
+    persona_version_material_action_binding,
+)
+from core.persona.psyche_persona import SignalPersonaMixin
+from core.persona.psyche_schema import SCHEMA_SQL
+from core.persona.profile_assertion_schema import register_profile_assertion_schema
+from core.utils import LazyPath
 
 import logging
+
 logger = logging.getLogger(__name__)
-SIGNAL_DB_PATH = Path.home() / ".mnemos" / "user_signals.db"
+SIGNAL_DB_PATH = LazyPath("database_dir", "user_signals.db")
 
 
 # ========== Schema 定义 ==========
 
-SCHEMA_SQL = """
--- 核心信号表：AI对话session
-CREATE TABLE IF NOT EXISTS session_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    timestamp TEXT NOT NULL,           -- ISO format
-    task_type TEXT,                    -- e.g. "coding/python"
-    task_subtype TEXT,
-
-    -- 输入特征
-    user_msg_count INTEGER DEFAULT 0,
-    avg_user_msg_length REAL DEFAULT 0,
-    provided_context_richness REAL DEFAULT 0,  -- 0-1
-
-    -- 交互特征
-    correction_count INTEGER DEFAULT 0,
-    correction_domains TEXT,           -- JSON list
-    follow_up_depth INTEGER DEFAULT 0,
-
-    -- 决策特征
-    options_presented INTEGER DEFAULT 0,
-    option_selected INTEGER DEFAULT 0,
-    selection_rationale TEXT,
-
-    -- 终止特征
-    termination_type TEXT,             -- satisfied/abandoned/delegated/progress
-    final_feedback TEXT,
-
-    -- 产出特征
-    output_type TEXT,                  -- code/document/decision/none
-    output_file_count INTEGER DEFAULT 0,
-    duration_seconds INTEGER DEFAULT 0,
-
-    -- 画像元数据
-    working_dir TEXT,
-    agent TEXT DEFAULT 'claude',
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(session_id, timestamp, agent)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_time ON session_signals(timestamp);
-CREATE INDEX IF NOT EXISTS idx_session_task ON session_signals(task_type);
-
--- 核心信号表：知识库交互
-CREATE TABLE IF NOT EXISTS knowledge_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    page_path TEXT NOT NULL,
-    action_type TEXT NOT NULL,         -- access/modify/create/reference
-    timestamp TEXT NOT NULL,
-
-    -- 深度交互信号
-    dwell_time_seconds INTEGER DEFAULT 0,
-    scroll_depth REAL DEFAULT 0,       -- 0-1
-    copy_count INTEGER DEFAULT 0,
-    reference_count INTEGER DEFAULT 0,  -- 被其他页面引用次数
-
-    -- 内容信号
-    content_diff TEXT,                 -- 修改内容的diff
-    tags_added TEXT,                   -- JSON list
-    tags_removed TEXT,                 -- JSON list
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(page_path, timestamp, action_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_time ON knowledge_signals(timestamp);
-CREATE INDEX IF NOT EXISTS idx_knowledge_page ON knowledge_signals(page_path);
-
--- 核心信号表：微信聊天（只存储自己的发言）
-CREATE TABLE IF NOT EXISTS wechat_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
-    content_hash TEXT NOT NULL,        -- MD5 of content (privacy)
-    msg_length INTEGER DEFAULT 0,
-
-    -- 情感与语义
-    emotional_valence REAL DEFAULT 0,  -- -1 to 1
-    emotional_arousal REAL DEFAULT 0,  -- 0 to 1
-    topic_tags TEXT,                   -- JSON list
-
-    -- 上下文
-    chat_type TEXT,                    -- private/group
-    hour_of_day INTEGER,
-    day_of_week INTEGER,               -- 0=Monday
-    msg_sequence_in_day INTEGER,       -- 当天第几条消息
-
-    -- 隐私保护
-    has_sensitive_content INTEGER DEFAULT 0,  -- 是否含手机号/地址等
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_wechat_time ON wechat_signals(timestamp);
-
--- 核心信号表：Git行为
-CREATE TABLE IF NOT EXISTS git_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    repo_path TEXT NOT NULL,
-    commit_hash TEXT,
-    timestamp TEXT NOT NULL,
-
-    -- Commit特征
-    message_length INTEGER DEFAULT 0,
-    has_issue_reference INTEGER DEFAULT 0,
-    has_pr_reference INTEGER DEFAULT 0,
-
-    -- 代码变更
-    files_changed INTEGER DEFAULT 0,
-    lines_added INTEGER DEFAULT 0,
-    lines_deleted INTEGER DEFAULT 0,
-    test_files_changed INTEGER DEFAULT 0,
-
-    -- 推断特征
-    commit_type TEXT,                  -- feat/fix/docs/refactor/test/chore
-    is_weekend INTEGER DEFAULT 0,
-    hour_of_day INTEGER,
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(commit_hash)
-);
-
-CREATE INDEX IF NOT EXISTS idx_git_time ON git_signals(timestamp);
-CREATE INDEX IF NOT EXISTS idx_git_repo ON git_signals(repo_path);
-
--- 核心信号表：文件系统行为
-CREATE TABLE IF NOT EXISTS file_system_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_path TEXT,
-    action_type TEXT NOT NULL,         -- create/modify/delete/move
-    timestamp TEXT NOT NULL,
-
-    -- 文件特征
-    file_extension TEXT,
-    directory_depth INTEGER DEFAULT 0,
-    project_name TEXT,
-
-    -- 组织特征
-    is_in_inbox INTEGER DEFAULT 0,     -- 是否在临时/下载目录
-    is_versioned INTEGER DEFAULT 0,    -- 是否在git仓库中
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(file_path, timestamp, action_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_fs_time ON file_system_signals(timestamp);
-
--- 信号元数据：置信度与外部因素
-CREATE TABLE IF NOT EXISTS signal_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    signal_table TEXT NOT NULL,        -- session/knowledge/wechat/git/fs
-    signal_id INTEGER NOT NULL,
-
-    -- 质量标注
-    confidence REAL DEFAULT 1.0,       -- 0-1
-    possible_external_factors TEXT,    -- JSON list, e.g. ["company_policy"]
-
-    -- 处理状态
-    processed INTEGER DEFAULT 0,       -- 是否已纳入画像分析
-    processed_at TEXT,
-
-    -- 上下文
-    session_context TEXT,              -- JSON
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_meta_processed ON signal_metadata(processed);
-CREATE INDEX IF NOT EXISTS idx_meta_table_id ON signal_metadata(signal_table, signal_id);
-
--- 信号聚合索引（加速画像分析）
-CREATE TABLE IF NOT EXISTS signal_daily_index (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,                -- YYYY-MM-DD
-    source_type TEXT NOT NULL,         -- session/knowledge/wechat/git/fs
-    signal_count INTEGER DEFAULT 0,
-    summary_json TEXT,                 -- 聚合摘要
-
-    UNIQUE(date, source_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_daily_date ON signal_daily_index(date);
-
--- 画像基线版本记录
-CREATE TABLE IF NOT EXISTS persona_versions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    version INTEGER NOT NULL,
-    generated_at TEXT NOT NULL,
-    period_start TEXT,
-    period_end TEXT,
-
-    -- 三层雷达（JSON存储完整画像）
-    energy_profile TEXT,               -- JSON
-    cognitive_profile TEXT,            -- JSON
-    value_profile TEXT,                -- JSON
-
-    -- 盲区画像
-    blindspot_profile TEXT,            -- JSON
-
-    -- 元数据
-    signal_count_used INTEGER,
-    user_confirmed INTEGER DEFAULT 0,  -- 用户是否确认
-    confirmed_at TEXT,
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_persona_version ON persona_versions(version);
-
--- 核心信号表：Memos笔记
-CREATE TABLE IF NOT EXISTS memos_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    memo_uid TEXT,                     -- memos UID
-    timestamp TEXT NOT NULL,           -- 笔记创建时间
-
-    -- 内容特征
-    content_length INTEGER DEFAULT 0,
-    has_title INTEGER DEFAULT 0,       -- 是否有markdown标题
-    has_list INTEGER DEFAULT 0,        -- 是否有列表
-    has_code_block INTEGER DEFAULT 0,  -- 是否有代码块
-    has_link INTEGER DEFAULT 0,        -- 是否有链接
-    image_count INTEGER DEFAULT 0,     -- 图片数量
-
-    -- 标签特征
-    tag_count INTEGER DEFAULT 0,
-    tags_json TEXT,                    -- JSON list of tags
-
-    -- 行为特征
-    is_ai_generated INTEGER DEFAULT 0, -- 是否AI生成
-    ai_agent TEXT,                     -- 哪个AI生成
-
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_memos_time ON memos_signals(timestamp);
-CREATE INDEX IF NOT EXISTS idx_memos_ai ON memos_signals(is_ai_generated);
-
--- 核心信号表：外部文档导入
-CREATE TABLE IF NOT EXISTS document_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT,                   -- doc-{hash}
-    filename TEXT,
-    doc_type TEXT,                     -- pdf/ppt/xlsx/docx/epub/...
-    doc_category TEXT,                 -- book/strategy/data/report/manual/reference
-    title TEXT,
-    key_topics TEXT,                   -- JSON array
-    entity_type TEXT,                  -- concept/project/dataset/retrospective/technology
-    page_count INTEGER DEFAULT 0,
-    import_timestamp TEXT,
-    import_source TEXT,                -- file_path
-    confidence REAL DEFAULT 0.0,
-    processed INTEGER DEFAULT 0,       -- 是否已参与画像分析
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_doc_time ON document_signals(import_timestamp);
-CREATE INDEX IF NOT EXISTS idx_doc_category ON document_signals(doc_category);
-CREATE INDEX IF NOT EXISTS idx_doc_processed ON document_signals(processed);
-"""
-
-
-# ========== 数据类 ==========
-
-@dataclass
-class SessionSignal:
-    """AI对话session信号"""
-    session_id: str
-    timestamp: str
-    task_type: str = ""
-    task_subtype: str = ""
-    user_msg_count: int = 0
-    avg_user_msg_length: float = 0
-    provided_context_richness: float = 0
-    correction_count: int = 0
-    correction_domains: List[str] = None
-    follow_up_depth: int = 0
-    options_presented: int = 0
-    option_selected: int = 0
-    selection_rationale: str = ""
-    termination_type: str = ""
-    final_feedback: str = ""
-    output_type: str = ""
-    output_file_count: int = 0
-    duration_seconds: int = 0
-    working_dir: str = ""
-    agent: str = "claude"
-    context_tags: List[str] = None
-
-
-@dataclass
-class WechatSignal:
-    """微信聊天信号（仅自己的发言）"""
-    timestamp: str
-    content_hash: str
-    msg_length: int = 0
-    emotional_valence: float = 0
-    emotional_arousal: float = 0
-    topic_tags: List[str] = None
-    chat_type: str = ""
-    hour_of_day: int = 0
-    day_of_week: int = 0
-    msg_sequence_in_day: int = 0
-    has_sensitive_content: bool = False
-
-
-@dataclass
-class GitSignal:
-    """Git行为信号"""
-    repo_path: str
-    commit_hash: str
-    timestamp: str
-    message_length: int = 0
-    has_issue_reference: bool = False
-    has_pr_reference: bool = False
-    files_changed: int = 0
-    lines_added: int = 0
-    lines_deleted: int = 0
-    test_files_changed: int = 0
-    commit_type: str = ""
-    is_weekend: bool = False
-    hour_of_day: int = 0
-
-
-@dataclass
-class MemosSignal:
-    """Memos笔记信号"""
-    timestamp: str
-    content_length: int = 0
-    has_title: bool = False
-    has_list: bool = False
-    has_code_block: bool = False
-    has_link: bool = False
-    image_count: int = 0
-    tag_count: int = 0
-    tags_json: str = ""
-    is_ai_generated: bool = False
-    ai_agent: str = ""
-    memo_uid: str = ""
-
 
 # ========== SignalStore 类 ==========
 
-class SignalStore:
+
+class SignalStore(SignalPersonaMixin):
     """信号存储管理器"""
 
-    def __init__(self, db_path: Path = None):
+    def __getattribute__(self, name: str):
+        attr = object.__getattribute__(self, name)
+        if name.startswith("_") or name == "close" or not callable(attr):
+            return attr
+        class_attr = getattr(type(self), name, None)
+        if not callable(class_attr):
+            return attr
+        try:
+            pool = object.__getattribute__(self, "_pool")
+        except AttributeError:
+            return attr
+        if getattr(pool, "_persistent", True):
+            return attr
+
+        @wraps(attr)
+        def release_after_call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            finally:
+                pool.release_transient_connections()
+
+        return release_after_call
+
+    def __init__(
+        self,
+        db_path: Path | None = None,
+        *,
+        config: Any | None = None,
+        sqlite_timeout: float = SIGNAL_STORE_SQLITE_TIMEOUT_SECONDS,
+        busy_timeout_ms: int = SIGNAL_STORE_BUSY_TIMEOUT_MS,
+        initialize_schema: bool = False,
+    ):
         from core.db_utils import SqlitePool
-        self.db_path = db_path or SIGNAL_DB_PATH
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._pool = SqlitePool(self.db_path)
-        self._init_db()
+        from core.config import get_config
+
+        self.db_path = Path(db_path) if db_path is not None else Path(SIGNAL_DB_PATH)
+        self._ownership_config = config if config is not None else get_config()
+        if initialize_schema:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        elif not sqlite_artifact_exists(self.db_path):
+            raise RuntimeError(
+                "SignalStore is uninitialized; use an explicit bootstrap or reconciliation command"
+            )
+        self._pool = SqlitePool(
+            self.db_path,
+            timeout=sqlite_timeout,
+            busy_timeout_ms=busy_timeout_ms,
+            persistent=False,
+        )
+        self._cognitive_profiles = CognitiveProfileRepository(
+            self._pool,
+            ownership_config=self._ownership_config,
+        )
+        if initialize_schema:
+            self._init_db()
+        else:
+            try:
+                validate_cognitive_profile_runtime_schema(self._pool.get_conn())
+            except (RuntimeError, sqlite3.Error) as exc:
+                self._pool.close()
+                raise RuntimeError("SignalStore schema requires explicit reconciliation") from exc
+        release_transient = getattr(self._pool, "release_transient_connections", None)
+        if callable(release_transient):
+            release_transient()
 
     def close(self):
         """关闭持久连接"""
-        if hasattr(self, '_pool'):
+        if hasattr(self, "_pool"):
             self._pool.close()
 
     def _init_db(self):
         """初始化数据库"""
         conn = self._pool.get_conn()
+        initialize_material_effect_schema(conn)
         conn.executescript(SCHEMA_SQL)
+        register_profile_assertion_schema(conn)
+        register_cognitive_profile_runtime_schema(conn)
+        persona_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(persona_versions)").fetchall()
+        }
+        if "calibration_score" not in persona_columns:
+            conn.execute("ALTER TABLE persona_versions ADD COLUMN calibration_score REAL")
+        ensure_source_event_schema(conn)
         conn.commit()
 
     # ---- Session Signals ----
 
-    def insert_session_signal(self, signal: SessionSignal, session_context: dict = None) -> int:
-        """插入session信号，返回id"""
+    def insert_session_signal(
+        self, signal: SessionSignal, session_context: dict | None = None
+    ) -> int:
+        """插入session信号，返回id。信号表与metadata表在同一事务中写入。"""
         data = asdict(signal)
+        data["avg_user_msg_length"] = float(signal.avg_user_msg_length or 0)
         # JSON序列化列表
         if data.get("correction_domains"):
             data["correction_domains"] = json.dumps(data["correction_domains"], ensure_ascii=False)
 
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT OR IGNORE INTO session_signals (
                 session_id, timestamp, task_type, task_subtype,
                 user_msg_count, avg_user_msg_length, provided_context_richness,
@@ -418,135 +207,210 @@ class SignalStore:
                 :termination_type, :final_feedback, :output_type, :output_file_count,
                 :duration_seconds, :working_dir, :agent
             )
-        """, data)
+        """,
+            data,
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             # 被 IGNORE 了（重复信号），查询已有记录的 id
             existing = conn.execute(
-                "SELECT id FROM session_signals WHERE session_id = ? AND timestamp = ? AND agent = ?",
-                (data["session_id"], data["timestamp"], data["agent"])
+                "SELECT id FROM session_signals WHERE session_id = ? AND timestamp = ? AND agent = ?",  # noqa: E501
+                (data["session_id"], data["timestamp"], data["agent"]),
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
+            return existing[0] if existing else 0
 
         # 插入元数据（支持 session_context JSON）
         context_json = json.dumps(session_context, ensure_ascii=False) if session_context else None
-        conn.execute("""
-            INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed, session_context)
+        conn.execute(
+            """
+            INSERT INTO signal_metadata (
+                signal_table, signal_id, confidence, processed, session_context
+            )
             VALUES (?, ?, ?, ?, ?)
-        """, ("session", signal_id, 1.0, 0, context_json))
+        """,
+            ("session", signal_id, 1.0, 0, context_json),
+        )
         conn.commit()
         return signal_id
 
-    def get_recent_session_signals(self, days: int = 90) -> List[Dict]:
+    def get_recent_session_signals(
+        self, days: int = SIGNAL_STORE_DURATION_BUCKET_QUARTER_DAYS
+    ) -> List[Dict]:
         """获取最近N天的session信号"""
         conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
+        conn.row_factory = sqlite3.Row  # noqa
+        cursor = conn.execute(
+            """
             SELECT * FROM session_signals
             WHERE timestamp >= date('now', ?)
             ORDER BY timestamp DESC
-        """, (f'-{days} days',))
+        """,
+            (f"-{days} days",),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
-    # ---- Wechat Signals ----
-
-    def insert_wechat_signal(self, signal: WechatSignal) -> int:
-        """微信采集已下线，保留空实现以兼容旧调用方。"""
-        logger_msg = "wechat_signals 已废弃，忽略写入"
-        try:
-            logging.getLogger(__name__).debug(logger_msg)
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-            pass
-        return 0
-
-    def _insert_wechat_signal_legacy(self, signal: WechatSignal) -> int:
-        """旧微信信号写入实现，保留为迁移参考，不再由正式路径调用。"""
-        data = asdict(signal)
-        if data.get("topic_tags"):
-            data["topic_tags"] = json.dumps(data["topic_tags"], ensure_ascii=False)
-
+    def get_recent_reflection_signals(
+        self, days: int = SIGNAL_STORE_DURATION_BUCKET_QUARTER_DAYS
+    ) -> List[Dict]:
+        """获取最近N天的 Layer 5 反射信号（供画像分析消费）。"""
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
-            INSERT INTO wechat_signals (
-                timestamp, content_hash, msg_length,
-                emotional_valence, emotional_arousal, topic_tags,
-                chat_type, hour_of_day, day_of_week, msg_sequence_in_day,
-                has_sensitive_content
-            ) VALUES (
-                :timestamp, :content_hash, :msg_length,
-                :emotional_valence, :emotional_arousal, :topic_tags,
-                :chat_type, :hour_of_day, :day_of_week, :msg_sequence_in_day,
-                :has_sensitive_content
-            )
-        """, data)
-        signal_id = cursor.lastrowid
+        conn.row_factory = sqlite3.Row  # noqa
+        cursor = conn.execute(
+            """
+            SELECT * FROM reflection_signals
+            WHERE timestamp >= date('now', ?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM reflection_signal_suppressions AS suppressed
+                  WHERE suppressed.signal_id = reflection_signals.id
+              )
+            ORDER BY timestamp DESC
+        """,
+            (f"-{days} days",),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
-        conn.execute("""
-            INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
-            VALUES (?, ?, ?, ?)
-        """, ("wechat", signal_id, 0.8, 0))  # 微信信号置信度稍低
-        conn.commit()
-        return signal_id
+    def get_reflection_signals_since(self, since_iso: str, limit: int = 1000) -> List[Dict]:
+        """获取自指定 ISO 时间戳以来的 Layer 5 反射信号（供增量画像分析使用）。"""
+        if not since_iso:
+            return []
+        conn = self._pool.get_conn()
+        conn.row_factory = sqlite3.Row  # noqa
+        cursor = conn.execute(
+            """
+            SELECT * FROM reflection_signals
+            WHERE timestamp > ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM reflection_signal_suppressions AS suppressed
+                  WHERE suppressed.signal_id = reflection_signals.id
+              )
+            ORDER BY timestamp DESC LIMIT ?
+            """,
+            (since_iso, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
-    def get_recent_wechat_signals(self, days: int = 90) -> List[Dict]:
-        """微信信号已不参与画像分析。"""
-        return []
+    # ---- Note Signals ----
 
-    # ---- Memos Signals ----
-
-    def insert_memos_signal(self, signal: MemosSignal) -> int:
-        """插入memos笔记信号"""
+    def insert_note_signal(self, signal: NoteSignal) -> int:
+        """插入笔记信号。信号表与metadata表在同一事务中写入。"""
         data = asdict(signal)
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
-            INSERT OR IGNORE INTO memos_signals (
-                memo_uid, timestamp, content_length,
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO note_signals (
+                note_uid, timestamp, content_length,
                 has_title, has_list, has_code_block, has_link, image_count,
                 tag_count, tags_json, is_ai_generated, ai_agent
             ) VALUES (
-                :memo_uid, :timestamp, :content_length,
+                :note_uid, :timestamp, :content_length,
                 :has_title, :has_list, :has_code_block, :has_link, :image_count,
                 :tag_count, :tags_json, :is_ai_generated, :ai_agent
             )
-        """, data)
+        """,
+            data,
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             existing = conn.execute(
-                "SELECT id FROM memos_signals WHERE memo_uid = ?",
-                (data["memo_uid"],)
+                "SELECT id FROM note_signals WHERE note_uid = ?", (data["note_uid"],)
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
+            return existing[0] if existing else 0
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
             VALUES (?, ?, ?, ?)
-        """, ("memos", signal_id, 0.8 if not signal.is_ai_generated else 0.5, 0))
+        """,
+            ("notes", signal_id, 0.8 if not signal.is_ai_generated else 0.5, 0),
+        )
         conn.commit()
         return signal_id
 
-    def get_recent_memos_signals(self, days: int = 90) -> List[Dict]:
-        """获取最近N天的memos信号"""
+    def insert_wechat_signal(self, signal: WechatSignal) -> int:
+        """插入微信聊天信号。信号表与metadata表在同一事务中写入。"""
+        data = asdict(signal)
+        topic_tags_json = json.dumps(data.get("topic_tags") or [], ensure_ascii=False)
         conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
-            SELECT * FROM memos_signals
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO wechat_signals (
+                timestamp, content_hash, msg_length, has_sensitive_content,
+                emotional_valence, emotional_arousal, topic_tags,
+                chat_type, hour_of_day, day_of_week, msg_sequence_in_day
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                data["timestamp"],
+                data["content_hash"],
+                data["msg_length"],
+                int(data["has_sensitive_content"]),
+                data["emotional_valence"],
+                data["emotional_arousal"],
+                topic_tags_json,
+                data["chat_type"],
+                data["hour_of_day"],
+                data["day_of_week"],
+                data["msg_sequence_in_day"],
+            ),
+        )
+        signal_id = cursor.lastrowid
+        if cursor.rowcount == 0 or signal_id is None:
+            existing = conn.execute(
+                "SELECT id FROM wechat_signals WHERE timestamp = ? AND content_hash = ?",
+                (data["timestamp"], data["content_hash"]),
+            ).fetchone()
+            return existing[0] if existing else 0
+
+        conn.execute(
+            """
+            INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
+            VALUES (?, ?, ?, ?)
+        """,
+            ("wechat", signal_id, 0.8, 0),
+        )
+        conn.commit()
+        return signal_id
+
+    def get_recent_wechat_signals(
+        self, days: int = SIGNAL_STORE_DURATION_BUCKET_QUARTER_DAYS
+    ) -> List[Dict]:
+        """获取最近N天的微信信号"""
+        conn = self._pool.get_conn()
+        conn.row_factory = sqlite3.Row  # noqa
+        cursor = conn.execute(
+            """
+            SELECT * FROM wechat_signals
             WHERE timestamp >= date('now', ?)
             ORDER BY timestamp DESC
-        """, (f'-{days} days',))
+        """,
+            (f"-{days} days",),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_recent_note_signals(
+        self, days: int = SIGNAL_STORE_DURATION_BUCKET_QUARTER_DAYS
+    ) -> List[Dict]:
+        """获取最近N天的笔记信号"""
+        conn = self._pool.get_conn()
+        conn.row_factory = sqlite3.Row  # noqa
+        cursor = conn.execute(
+            """
+            SELECT * FROM note_signals
+            WHERE timestamp >= date('now', ?)
+            ORDER BY timestamp DESC
+        """,
+            (f"-{days} days",),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
     # ---- Git Signals ----
 
     def insert_git_signal(self, signal: GitSignal) -> int:
-        """插入git信号"""
+        """插入git信号。信号表与metadata表在同一事务中写入。"""
         data = asdict(signal)
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT OR IGNORE INTO git_signals (
                 repo_path, commit_hash, timestamp,
                 message_length, has_issue_reference, has_pr_reference,
@@ -558,29 +422,33 @@ class SignalStore:
                 :files_changed, :lines_added, :lines_deleted, :test_files_changed,
                 :commit_type, :is_weekend, :hour_of_day
             )
-        """, data)
+        """,
+            data,
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             existing = conn.execute(
-                "SELECT id FROM git_signals WHERE commit_hash = ?",
-                (data["commit_hash"],)
+                "SELECT id FROM git_signals WHERE commit_hash = ?", (data["commit_hash"],)
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
+            return existing[0] if existing else 0
 
         # Git信号可能有外部因素（公司规范）
         confidence = 0.7  # 默认较低，需要外部因素标注
-        conn.execute("""
-            INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed, possible_external_factors)
+        conn.execute(
+            """
+            INSERT INTO signal_metadata (
+                signal_table, signal_id, confidence, processed, possible_external_factors
+            )
             VALUES (?, ?, ?, ?, ?)
-        """, ("git", signal_id, confidence, 0, json.dumps(["possible_company_policy"])))
+        """,
+            ("git", signal_id, confidence, 0, json.dumps(["possible_company_policy"])),
+        )
         conn.commit()
         return signal_id
 
     # ---- 通用查询 ----
 
-    ALLOWED_SOURCES = {"session", "git", "memos", "knowledge", "wiki", "file_system", "wechat"}
+    ALLOWED_SOURCES = {"session", "git", "notes", "knowledge", "wiki", "file_system", "wechat"}
 
     def _validate_source(self, source_type: str):
         """校验数据源类型，防止 SQL 注入"""
@@ -595,15 +463,19 @@ class SignalStore:
         """获取未处理的信号（用于画像分析）"""
         self._validate_source(source_type)
         conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
+        conn.row_factory = sqlite3.Row  # noqa
+        table = validate_sql_identifier(self._table_for_source(source_type))
+        cursor = conn.execute(
+            """
             SELECT s.*, m.confidence, m.possible_external_factors
             FROM {} s
             JOIN signal_metadata m ON m.signal_id = s.id AND m.signal_table = ?
             WHERE m.processed = 0
             ORDER BY s.timestamp ASC
             LIMIT ?
-        """.format(self._table_for_source(source_type)), (source_type, limit))
+        """.format(table),  # nosec B608: table name validated by validate_sql_identifier
+            (source_type, limit),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
     def mark_signals_processed(self, source_type: str, signal_ids: List[int]):
@@ -612,121 +484,189 @@ class SignalStore:
             return
         placeholders = ",".join("?" * len(signal_ids))
         conn = self._pool.get_conn()
-        conn.execute(f"""
+        conn.execute(
+            f"""
             UPDATE signal_metadata
             SET processed = 1, processed_at = ?
             WHERE signal_table = ? AND signal_id IN ({placeholders})
-        """, (datetime.now().isoformat(), source_type, *signal_ids))
+        """,  # nosec B608: internally generated ? placeholders
+            (datetime.now().isoformat(), source_type, *signal_ids),
+        )
         conn.commit()
 
-    def insert_knowledge_signal(self, page_path: str, action_type: str, timestamp: str,
-                                 tags_added: str = "[]", tags_removed: str = "[]") -> int:
-        """插入知识库交互信号"""
+    def insert_knowledge_signal(
+        self,
+        page_path: str,
+        action_type: str,
+        timestamp: str,
+        tags_added: str = "[]",
+        tags_removed: str = "[]",
+    ) -> int:
+        """插入知识库交互信号。信号表与metadata表在同一事务中写入。"""
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT OR IGNORE INTO knowledge_signals (
                 page_path, action_type, timestamp,
                 tags_added, tags_removed
             ) VALUES (?, ?, ?, ?, ?)
-        """, (page_path, action_type, timestamp, tags_added, tags_removed))
+        """,
+            (page_path, action_type, timestamp, tags_added, tags_removed),
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             existing = conn.execute(
-                "SELECT id FROM knowledge_signals WHERE page_path = ? AND timestamp = ? AND action_type = ?",
-                (page_path, timestamp, action_type)
+                "SELECT id FROM knowledge_signals WHERE page_path = ? AND timestamp = ? AND action_type = ?",  # noqa: E501
+                (page_path, timestamp, action_type),
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
-        conn.execute("""
+            return existing[0] if existing else 0
+        conn.execute(
+            """
             INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
             VALUES (?, ?, ?, ?)
-        """, ("knowledge", signal_id, 0.7, 0))
+        """,
+            ("knowledge", signal_id, 0.7, 0),
+        )
         conn.commit()
         return signal_id
 
-    def insert_file_system_signal(self, file_path: str, action_type: str, timestamp: str,
-                                   file_extension: str = "", directory_depth: int = 0,
-                                   project_name: str = "", is_in_inbox: int = 0,
-                                   is_versioned: int = 0) -> int:
-        """插入文件系统行为信号"""
+    def insert_file_system_signal(
+        self,
+        file_path: str,
+        action_type: str,
+        timestamp: str,
+        file_extension: str = "",
+        directory_depth: int = 0,
+        project_name: str = "",
+        is_in_inbox: int = 0,
+        is_versioned: int = 0,
+    ) -> int:
+        """插入文件系统行为信号。信号表与metadata表在同一事务中写入。"""
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT OR IGNORE INTO file_system_signals (
                 file_path, action_type, timestamp,
                 file_extension, directory_depth, project_name,
                 is_in_inbox, is_versioned
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (file_path, action_type, timestamp, file_extension,
-              directory_depth, project_name, is_in_inbox, is_versioned))
+        """,
+            (
+                file_path,
+                action_type,
+                timestamp,
+                file_extension,
+                directory_depth,
+                project_name,
+                is_in_inbox,
+                is_versioned,
+            ),
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             existing = conn.execute(
-                "SELECT id FROM file_system_signals WHERE file_path = ? AND timestamp = ? AND action_type = ?",
-                (file_path, timestamp, action_type)
+                "SELECT id FROM file_system_signals WHERE file_path = ? AND timestamp = ? AND action_type = ?",  # noqa: E501
+                (file_path, timestamp, action_type),
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
-        conn.execute("""
+            return existing[0] if existing else 0
+        conn.execute(
+            """
             INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
             VALUES (?, ?, ?, ?)
-        """, ("file_system", signal_id, 0.6, 0))
+        """,
+            ("file_system", signal_id, 0.6, 0),
+        )
         conn.commit()
         return signal_id
 
-    def insert_document_signal(self, session_id: str, filename: str, doc_type: str,
-                                doc_category: str, title: str, key_topics: str,
-                                entity_type: str, page_count: int,
-                                import_timestamp: str, import_source: str,
-                                confidence: float = 0.0) -> int:
-        """插入外部文档导入信号"""
+    def insert_document_signal(
+        self,
+        session_id: str,
+        filename: str,
+        doc_type: str,
+        doc_category: str,
+        title: str,
+        key_topics: str,
+        entity_type: str,
+        page_count: int,
+        import_timestamp: str,
+        import_source: str,
+        confidence: float = 0.0,
+    ) -> int:
+        """插入外部文档导入信号。信号表与metadata表在同一事务中写入。"""
         conn = self._pool.get_conn()
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             INSERT OR IGNORE INTO document_signals (
                 session_id, filename, doc_type, doc_category,
                 title, key_topics, entity_type, page_count,
                 import_timestamp, import_source, confidence, processed
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, filename, doc_type, doc_category,
-              title, key_topics, entity_type, page_count,
-              import_timestamp, import_source, confidence, 0))
+        """,
+            (
+                session_id,
+                filename,
+                doc_type,
+                doc_category,
+                title,
+                key_topics,
+                entity_type,
+                page_count,
+                import_timestamp,
+                import_source,
+                confidence,
+                0,
+            ),
+        )
         signal_id = cursor.lastrowid
-        if signal_id is None:
+        if cursor.rowcount == 0 or signal_id is None:
             existing = conn.execute(
                 "SELECT id FROM document_signals WHERE session_id = ? AND import_timestamp = ?",
-                (session_id, import_timestamp)
+                (session_id, import_timestamp),
             ).fetchone()
-            signal_id = existing[0] if existing else 0
-            conn.commit()
-            return signal_id
-        conn.execute("""
+            return existing[0] if existing else 0
+        conn.execute(
+            """
             INSERT INTO signal_metadata (signal_table, signal_id, confidence, processed)
             VALUES (?, ?, ?, ?)
-        """, ("document", signal_id, confidence, 0))
+        """,
+            ("document", signal_id, confidence, 0),
+        )
         conn.commit()
         return signal_id
 
-    def get_signal_stats(self, days: int = 30) -> Dict[str, Any]:
+    def get_signal_stats(self, days: int = SIGNAL_STORE_GET_SIGNAL_STATS_DAYS) -> Dict[str, Any]:
         """获取信号统计摘要"""
         stats = {}
         conn = self._pool.get_conn()
-        for source in ["session", "knowledge", "wechat", "git", "file_system", "memos"]:
-            cursor = conn.execute(f"""
-                SELECT COUNT(*) FROM {source}_signals
+        # source -> table name 映射（note_signals 是单数，其余是复数）
+        table_map = {
+            "session": "session_signals",
+            "knowledge": "knowledge_signals",
+            "git": "git_signals",
+            "file_system": "file_system_signals",
+            "notes": "note_signals",
+            "wechat": "wechat_signals",
+        }
+        for source in ["session", "knowledge", "git", "file_system", "notes", "wechat"]:
+            cursor = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM {table_map[source]}
                 WHERE timestamp >= date('now', ?)
-            """, (f'-{days} days',))
+            """,  # nosec B608: table_map is a fixed internal mapping
+                (f"-{days} days",),
+            )
             stats[source] = cursor.fetchone()[0]
         return stats
 
-    def get_signal_health(self, days: int = 30) -> Dict[str, Dict]:
-        """返回四类核心信号健康度；fs 为可选，wechat 不参与。"""
+    def get_signal_health(self, days: int = SIGNAL_STORE_GET_SIGNAL_HEALTH_DAYS) -> Dict[str, Dict]:
+        """返回四类核心信号健康度；fs 为可选。"""
         stats = self.get_signal_stats(days=days)
         core = {
             "session": {"count": stats.get("session", 0), "min": 10, "weight": 0.35},
             "git": {"count": stats.get("git", 0), "min": 5, "weight": 0.25},
             "wiki": {"count": stats.get("knowledge", 0), "min": 5, "weight": 0.20},
-            "memos": {"count": stats.get("memos", 0), "min": 30, "weight": 0.20},
+            "notes": {"count": stats.get("notes", 0), "min": CORE, "weight": 0.20},
         }
         for data in core.values():
             data["healthy"] = data["count"] >= data["min"]
@@ -743,273 +683,81 @@ class SignalStore:
         """事件式信号注入入口。"""
         now = data.get("timestamp") or datetime.now().isoformat()
         if event_type == "session_completed":
-            return self.insert_session_signal(SessionSignal(
-                session_id=data.get("session_id", ""),
-                timestamp=now,
-                task_type=data.get("task_type", ""),
-                task_subtype=data.get("task_subtype", ""),
-                follow_up_depth=int(data.get("follow_up_depth", 0) or 0),
-                termination_type=data.get("termination_type", ""),
-                output_type=data.get("output_type", ""),
-                duration_seconds=int(data.get("duration_seconds", 0) or 0),
-                working_dir=data.get("working_dir", ""),
-                agent=data.get("agent", "unknown"),
-            ), session_context=data)
+            try:
+                return self.insert_session_signal(
+                    SessionSignal(
+                        session_id=data.get("session_id", ""),
+                        timestamp=now,
+                        task_type=data.get("task_type", ""),
+                        task_subtype=data.get("task_subtype", ""),
+                        follow_up_depth=int(data.get("follow_up_depth", 0) or 0),
+                        termination_type=data.get("termination_type", ""),
+                        output_type=data.get("output_type", ""),
+                        duration_seconds=int(data.get("duration_seconds", 0) or 0),
+                        working_dir=data.get("working_dir", ""),
+                        agent=data.get("agent", "unknown"),
+                    ),
+                    session_context=data,
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning("session_completed 信号类型转换失败: %s", e, exc_info=True)
+                return 0
         if event_type == "wiki_page_accessed":
             return self.insert_knowledge_signal(
                 data.get("page_path", ""),
                 data.get("action_type", "access"),
                 now,
             )
-        if event_type == "memos_synced":
-            return self.insert_memos_signal(MemosSignal(
-                memo_uid=data.get("memo_uid", ""),
-                timestamp=now,
-                content_length=int(data.get("content_length", 0) or 0),
-                has_title=bool(data.get("has_title", False)),
-                has_code_block=bool(data.get("has_code_block", False)),
-                tags_json=json.dumps(data.get("tags", []), ensure_ascii=False),
-            ))
+        if event_type == "notes_synced":
+            try:
+                return self.insert_note_signal(
+                    NoteSignal(
+                        note_uid=data.get("note_uid", ""),
+                        timestamp=now,
+                        content_length=int(data.get("content_length", 0) or 0),
+                        has_title=bool(data.get("has_title", False)),
+                        has_code_block=bool(data.get("has_code_block", False)),
+                        tags_json=json.dumps(data.get("tags", []), ensure_ascii=False),
+                    )
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning("notes_synced 信号类型转换失败: %s", e, exc_info=True)
+                return 0
         if event_type == "git_commit_detected":
-            return self.insert_git_signal(GitSignal(
-                repo_path=data.get("repo_path", ""),
-                commit_hash=data.get("commit_hash", ""),
-                timestamp=now,
-                message_length=int(data.get("message_length", 0) or 0),
-                commit_type=data.get("commit_type", ""),
-                is_weekend=bool(data.get("is_weekend", False)),
-                hour_of_day=int(data.get("hour_of_day", 12) or 12),
-            ))
+            try:
+                return self.insert_git_signal(
+                    GitSignal(
+                        repo_path=data.get("repo_path", ""),
+                        commit_hash=data.get("commit_hash", ""),
+                        timestamp=now,
+                        message_length=int(data.get("message_length", 0) or 0),
+                        commit_type=data.get("commit_type", ""),
+                        is_weekend=bool(data.get("is_weekend", False)),
+                        hour_of_day=int(data.get("hour_of_day", 12) or 12),
+                    )
+                )
+            except (ValueError, TypeError) as e:
+                logger.warning("git_commit_detected 信号类型转换失败: %s", e, exc_info=True)
+                return 0
         return None
 
-    def get_daily_summary(self, date: str) -> Dict[str, Any]:
-        """获取某天的信号聚合摘要"""
-        conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
-            SELECT * FROM signal_daily_index WHERE date = ?
-        """, (date,))
-        rows = cursor.fetchall()
-        return {row["source_type"]: dict(row) for row in rows}
-
-    # ---- 跨项目隔离 ----
-
-    def get_recent_session_signals_by_project(self, working_dir: str, days: int = 90) -> List[Dict]:
-        """
-        按工作目录（项目）获取session信号。
-
-        用于防止跨项目污染：不同项目的信号可能反映不同的工作偏好，
-        不应混为一谈。
-        """
-        conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
-            SELECT * FROM session_signals
-            WHERE working_dir LIKE ?
-              AND timestamp >= date('now', ?)
-            ORDER BY timestamp DESC
-        """, (f"%{working_dir}%", f'-{days} days'))
-        return [dict(row) for row in cursor.fetchall()]
-
-    def get_signal_projects(self, days: int = 90) -> List[Dict]:
-        """获取所有有信号的项目列表"""
-        projects = []
-        conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        # Session项目
-        cursor = conn.execute("""
-            SELECT working_dir, COUNT(*) as count
-            FROM session_signals
-            WHERE timestamp >= date('now', ?)
-              AND working_dir IS NOT NULL
-            GROUP BY working_dir
-            ORDER BY count DESC
-        """, (f'-{days} days',))
-        for row in cursor.fetchall():
-            projects.append({
-                "type": "session",
-                "identifier": row["working_dir"],
-                "signal_count": row["count"],
-            })
-        # Git项目
-        cursor = conn.execute("""
-            SELECT repo_path, COUNT(*) as count
-            FROM git_signals
-            WHERE timestamp >= date('now', ?)
-            GROUP BY repo_path
-            ORDER BY count DESC
-        """, (f'-{days} days',))
-        for row in cursor.fetchall():
-            projects.append({
-                "type": "git",
-                "identifier": row["repo_path"],
-                "signal_count": row["count"],
-            })
-        return projects
-
-    # ---- 去重检查 ----
-
-    def session_exists(self, session_id: str) -> bool:
-        """检查 session 信号是否已存在"""
-        conn = self._pool.get_conn()
-        cursor = conn.execute(
-            "SELECT 1 FROM session_signals WHERE session_id = ? LIMIT 1",
-            (session_id,)
+    def add_signal(
+        self,
+        dimension: str,
+        value: str,
+        confidence: float = 0.0,
+        source: str = "",
+        source_event_id: str = "",
+    ) -> int:
+        """写入一条 Layer 5 反射信号（供 PersonaSignalConsumer 使用）"""
+        return persist_reflection_signal(
+            self,
+            dimension=dimension,
+            value=value,
+            confidence=confidence,
+            source=source,
+            source_event_id=source_event_id,
         )
-        return cursor.fetchone() is not None
-
-    def git_commit_exists(self, commit_hash: str) -> bool:
-        """检查 git commit 信号是否已存在"""
-        conn = self._pool.get_conn()
-        cursor = conn.execute(
-            "SELECT 1 FROM git_signals WHERE commit_hash = ? LIMIT 1",
-            (commit_hash,)
-        )
-        return cursor.fetchone() is not None
-
-    def memos_exists(self, memo_uid: str) -> bool:
-        """检查 memos 信号是否已存在（memo_uid 为空时不检查）"""
-        if not memo_uid:
-            return False
-        conn = self._pool.get_conn()
-        cursor = conn.execute(
-            "SELECT 1 FROM memos_signals WHERE memo_uid = ? LIMIT 1",
-            (memo_uid,)
-        )
-        return cursor.fetchone() is not None
-
-    def knowledge_page_exists(self, page_path: str, since: str = None) -> bool:
-        """检查知识库页面信号是否已存在"""
-        conn = self._pool.get_conn()
-        if since:
-            cursor = conn.execute(
-                "SELECT 1 FROM knowledge_signals WHERE page_path = ? AND timestamp >= ? LIMIT 1",
-                (page_path, since)
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT 1 FROM knowledge_signals WHERE page_path = ? LIMIT 1",
-                (page_path,)
-            )
-        return cursor.fetchone() is not None
-
-    def file_system_exists(self, file_path: str, since: str = None) -> bool:
-        """检查文件系统信号是否已存在"""
-        conn = self._pool.get_conn()
-        if since:
-            cursor = conn.execute(
-                "SELECT 1 FROM file_system_signals WHERE file_path = ? AND timestamp >= ? LIMIT 1",
-                (file_path, since)
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT 1 FROM file_system_signals WHERE file_path = ? LIMIT 1",
-                (file_path,)
-            )
-        return cursor.fetchone() is not None
-
-    def wechat_exists(self, content_hash: str) -> bool:
-        """检查微信信号是否已存在"""
-        conn = self._pool.get_conn()
-        cursor = conn.execute(
-            "SELECT 1 FROM wechat_signals WHERE content_hash = ? LIMIT 1",
-            (content_hash,)
-        )
-        return cursor.fetchone() is not None
-
-    def get_project_isolated_signals(self, project_dir: str, days: int = 90) -> Dict[str, List[Dict]]:
-        """
-        获取单个项目隔离后的所有信号。
-
-        Returns:
-            {"session": [...], "git": [...], "file_system": [...]}
-        """
-        results = {
-            "session": self.get_recent_session_signals_by_project(project_dir, days),
-        }
-
-        conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-
-        # Git信号（匹配repo_path前缀）
-        cursor = conn.execute("""
-            SELECT * FROM git_signals
-            WHERE repo_path LIKE ?
-              AND timestamp >= date('now', ?)
-            ORDER BY timestamp DESC
-        """, (f"%{project_dir}%", f'-{days} days'))
-        results["git"] = [dict(row) for row in cursor.fetchall()]
-
-        # 文件系统信号
-        cursor = conn.execute("""
-            SELECT * FROM file_system_signals
-            WHERE file_path LIKE ?
-              AND timestamp >= date('now', ?)
-            ORDER BY timestamp DESC
-        """, (f"%{project_dir}%", f'-{days} days'))
-        results["file_system"] = [dict(row) for row in cursor.fetchall()]
-
-        return results
-
-    # ---- Persona 版本管理 ----
-
-    def save_persona_version(self, version: int, period_start: str, period_end: str,
-                             energy: Dict, cognitive: Dict, value: Dict,
-                             blindspot: Dict, signal_count: int) -> int:
-        """保存画像版本"""
-        conn = self._pool.get_conn()
-        cursor = conn.execute("""
-            INSERT INTO persona_versions (
-                version, generated_at, period_start, period_end,
-                energy_profile, cognitive_profile, value_profile,
-                blindspot_profile, signal_count_used
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            version, datetime.now().isoformat(), period_start, period_end,
-            json.dumps(energy, ensure_ascii=False),
-            json.dumps(cognitive, ensure_ascii=False),
-            json.dumps(value, ensure_ascii=False),
-            json.dumps(blindspot, ensure_ascii=False),
-            signal_count
-        ))
-        conn.commit()
-        return cursor.lastrowid
-
-    def get_latest_persona_version(self) -> Optional[Dict]:
-        """获取最新画像版本"""
-        conn = self._pool.get_conn()
-        conn.row_factory = sqlite3.Row
-        cursor = conn.execute("""
-            SELECT * FROM persona_versions
-            ORDER BY version DESC LIMIT 1
-        """)
-        row = cursor.fetchone()
-        if row:
-            result = dict(row)
-            result["energy_profile"] = json.loads(result["energy_profile"] or "{}")
-            result["cognitive_profile"] = json.loads(result["cognitive_profile"] or "{}")
-            result["value_profile"] = json.loads(result["value_profile"] or "{}")
-            result["blindspot_profile"] = json.loads(result["blindspot_profile"] or "{}")
-            return result
-        return None
-
-    def update_blindspot_profile(self, blindspot_data: Dict) -> bool:
-        """更新最新画像版本的盲区数据（独立保存时调用）"""
-        conn = self._pool.get_conn()
-        cursor = conn.execute("""
-            SELECT id FROM persona_versions ORDER BY version DESC LIMIT 1
-        """)
-        row = cursor.fetchone()
-        if not row:
-            return False
-        latest_id = row[0]
-        conn.execute("""
-            UPDATE persona_versions
-            SET blindspot_profile = ?
-            WHERE id = ?
-        """, (json.dumps(blindspot_data, ensure_ascii=False), latest_id))
-        conn.commit()
-        return True
 
 
 # ========== 单例 ==========
@@ -1017,15 +765,172 @@ class SignalStore:
 _signal_store: Optional[SignalStore] = None
 
 
+def _default_signal_db_path() -> Path:
+    if not isinstance(SIGNAL_DB_PATH, LazyPath):
+        return Path(SIGNAL_DB_PATH).expanduser()
+    try:
+        from core.config import get_config
+
+        config = get_config()
+    except (ImportError, OSError, RuntimeError, AttributeError, ValueError, TypeError, KeyError):
+        config = None
+    for attr_name in ("database_dir", "data_dir"):
+        candidate = getattr(config, attr_name, None) if config is not None else None
+        if isinstance(candidate, Mock) or not isinstance(candidate, (str, PathLike)):
+            continue
+        base = Path(candidate).expanduser()
+        if "MagicMock" in str(base):
+            continue
+        return base / "user_signals.db"
+    return Path.home() / ".mnemos" / "user_signals.db"
+
+
+def _same_signal_store_path(store: SignalStore, db_path: Path) -> bool:
+    try:
+        current = Path(store.db_path).expanduser()
+    except (TypeError, ValueError, AttributeError):
+        return False
+    try:
+        return current.resolve(strict=False) == db_path.resolve(strict=False)
+    except OSError:
+        return current == db_path
+
+
 def get_signal_store() -> SignalStore:
     """获取SignalStore单例"""
     global _signal_store
+    db_path = _default_signal_db_path()
+    stale = False
+    if _signal_store is not None:
+        stale = not _same_signal_store_path(_signal_store, db_path)
+        if not stale and not sqlite_artifact_exists(db_path):
+            stale = True
+    if stale:
+        old_store = _signal_store
+        try:
+            if old_store is not None:
+                old_store.close()
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError, sqlite3.Error):
+            logger.warning("Failed to close stale SignalStore singleton", exc_info=True)
+        _signal_store = None
     if _signal_store is None:
-        _signal_store = SignalStore()
+        _signal_store = SignalStore(db_path=db_path)
     return _signal_store
 
 
+def suppress_reflection_signal(
+    *,
+    signal_id: int,
+    source_event_id: str,
+    reason: str,
+    evidence: Dict[str, Any],
+) -> Dict[str, str]:
+    """Append an exact suppression receipt and prove the signal is inactive."""
+
+    if signal_id <= 0 or not source_event_id or not reason:
+        raise ValueError("reflection signal suppression identity is incomplete")
+    store = get_signal_store()
+    conn = store._pool.get_conn()
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        signal = conn.execute(
+            "SELECT * FROM reflection_signals WHERE id=?",
+            (signal_id,),
+        ).fetchone()
+        if signal is None:
+            raise ValueError("reflection signal suppression target is missing")
+        signal_payload = dict(signal)
+        before_hash = sha256_json(
+            {
+                "schema_version": "mnemos.reflection_signal_state.v1",
+                "signal": signal_payload,
+                "active": True,
+            }
+        )
+        after_hash = sha256_json(
+            {
+                "schema_version": "mnemos.reflection_signal_state.v1",
+                "signal": signal_payload,
+                "active": False,
+                "suppression_source_event_id": source_event_id,
+            }
+        )
+        suppression_id = sha256_json(
+            {
+                "schema_version": "mnemos.reflection_signal_suppression.v1",
+                "signal_id": signal_id,
+                "source_event_id": source_event_id,
+                "reason": reason,
+                "before_hash": before_hash,
+                "after_hash": after_hash,
+            }
+        )
+        existing = conn.execute(
+            """
+            SELECT suppression_id, signal_id, before_hash, after_hash
+            FROM reflection_signal_suppressions
+            WHERE source_event_id=?
+            """,
+            (source_event_id,),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO reflection_signal_suppressions (
+                    suppression_id, signal_id, source_event_id, reason,
+                    evidence_json, before_hash, after_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    suppression_id,
+                    signal_id,
+                    source_event_id,
+                    reason,
+                    json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+                    before_hash,
+                    after_hash,
+                    datetime.now().astimezone().isoformat(),
+                ),
+            )
+        elif (
+            str(existing["suppression_id"]) != suppression_id
+            or int(existing["signal_id"]) != signal_id
+            or str(existing["before_hash"]) != before_hash
+            or str(existing["after_hash"]) != after_hash
+        ):
+            raise ValueError("reflection signal suppression replay conflicts")
+        active = conn.execute(
+            """
+            SELECT 1 FROM reflection_signals AS signal
+            WHERE signal.id=?
+              AND NOT EXISTS (
+                  SELECT 1 FROM reflection_signal_suppressions AS suppressed
+                  WHERE suppressed.signal_id=signal.id
+              )
+            """,
+            (signal_id,),
+        ).fetchone()
+        if active is not None:
+            raise RuntimeError("reflection signal remained active after suppression")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        release = getattr(store._pool, "release_transient_connections", None)
+        if callable(release):
+            release()
+    return {
+        "receipt_ref": f"reflection-signal-suppression:{suppression_id}",
+        "target_oracle": f"reflection-signal:{signal_id}:inactive:{after_hash}",
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+    }
+
+
 # ========== 便捷函数 ==========
+
 
 def log_session_signal(**kwargs) -> int:
     """便捷函数：记录session信号"""
@@ -1033,7 +938,7 @@ def log_session_signal(**kwargs) -> int:
     return get_signal_store().insert_session_signal(signal)
 
 
-def get_recent_signals_summary(days: int = 7) -> str:
+def get_recent_signals_summary(days: int = DURATION_BUCKET_WEEK_DAYS) -> str:
     """获取最近信号摘要（用于调试）"""
     store = get_signal_store()
     stats = store.get_signal_stats(days=days)
@@ -1043,6 +948,16 @@ def get_recent_signals_summary(days: int = 7) -> str:
     total = sum(stats.values())
     lines.append(f"  总计: {total}")
     return "\n".join(lines)
+
+
+def build_persona_feedback_proposal_owner(database_dir: Path):
+    """Return the persona-owned pending-review journal for feedback commands."""
+
+    from core.cognitive.feedback_target_registry import (
+        build_registered_feedback_proposal_owner,
+    )
+
+    return build_registered_feedback_proposal_owner(database_dir, "persona_proposal")
 
 
 if __name__ == "__main__":

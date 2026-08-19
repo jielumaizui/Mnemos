@@ -1,0 +1,436 @@
+{
+  "schema_version": "mnemos_acceptance_contracts.v1",
+  "target_agents": [
+    "codex",
+    "claude",
+    "hermes",
+    "opencode",
+    "openclaw",
+    "crush",
+    "kiro",
+    "kimi"
+  ],
+  "sample_types": [
+    "ordinary_qa",
+    "tool_call",
+    "long_multiturn",
+    "file_attachment_context",
+    "artifact_uri_context",
+    "reasoning_metadata",
+    "cross_directory_project",
+    "interrupted_error"
+  ],
+  "agents": {
+    "codex": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning",
+        "attachments"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/codex/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "claude": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/claude/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "hermes": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/hermes/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "opencode": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/opencode/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "openclaw": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/openclaw/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "crush": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "attachments"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/crush/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "kiro": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning",
+        "attachments"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kiro/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    },
+    "kimi": {
+      "required_capabilities": [
+        "visible_text",
+        "tool_calls",
+        "tool_results",
+        "source_fidelity",
+        "reasoning",
+        "attachments"
+      ],
+      "samples": {
+        "ordinary_qa": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/ordinary_qa",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "tool_call": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/tool_call",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "long_multiturn": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/long_multiturn",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "file_attachment_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/file_attachment_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "artifact_uri_context": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/artifact_uri_context",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "reasoning_metadata": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/reasoning_metadata",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "cross_directory_project": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/cross_directory_project",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        },
+        "interrupted_error": {
+          "fixture_ref": "tests/fixtures/agent_acceptance_samples/manifest.json#/agents/kimi/samples/interrupted_error",
+          "expected_raw_contract": "raw_event_contract.v1",
+          "expected_distilled_contract": "distilled_knowledge_contract.v1"
+        }
+      }
+    }
+  }
+}

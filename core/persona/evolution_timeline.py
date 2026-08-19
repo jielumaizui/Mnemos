@@ -9,9 +9,8 @@ PersonaEvolutionTimeline — 14 维度长期变化可视化
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EvolutionEvent:
     """演化事件"""
+
     date: str
     event_type: str  # burnout_signal / cognitive_shift / value_flip
     dimension: str
@@ -48,15 +48,39 @@ TRACKED_DIMENSIONS = [
 class PersonaEvolutionTimeline:
     """画像演化时间线"""
 
-    def __init__(self):
-        self._snapshots: List[Dict] = []
+    def __init__(self, snapshots: Optional[List[Dict]] = None):
+        if snapshots is not None:
+            self._snapshots = snapshots
+        else:
+            self._snapshots = self._load_snapshots_from_store()
 
-    def add_snapshot(self, profile: Dict, date: str = None) -> None:
-        """添加画像快照"""
-        self._snapshots.append({
-            "date": date or datetime.now().strftime("%Y-%m-%d"),
-            "profile": profile,
-        })
+    @staticmethod
+    def _load_snapshots_from_store(limit: int = 14) -> List[Dict]:
+        """从 user_signals.db 的 persona_versions 表加载最近快照。"""
+        try:
+            from core.persona.psyche import get_signal_store
+
+            store = get_signal_store()
+            versions = store.get_recent_persona_versions(limit=limit)
+            snapshots = []
+            for v in versions:
+                profile = {
+                    "energy": v.get("energy_profile") or {},
+                    "cognitive": v.get("cognitive_profile") or {},
+                    "value": v.get("value_profile") or {},
+                }
+                snapshots.append(
+                    {
+                        "date": (v.get("generated_at") or "")[:10],
+                        "profile": profile,
+                    }
+                )
+            # 时间升序，方便 _detect_events 按时间线处理
+            snapshots.sort(key=lambda s: s["date"])  # type: ignore[arg-type, return-value]
+            return snapshots
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+            logger.warning("[PersonaEvolutionTimeline] 加载 persona 版本快照失败", exc_info=True)
+            return []
 
     def generate(self) -> str:
         """生成演化时间线报告
@@ -76,8 +100,9 @@ class PersonaEvolutionTimeline:
             lines.append("")
             for ev in events:
                 icon = "🔴" if ev.severity == "high" else "🟡"
-                lines.append(f"- {icon} **{ev.date}** [{ev.event_type}] "
-                           f"{ev.dimension}: {ev.detail}")
+                lines.append(
+                    f"- {icon} **{ev.date}** [{ev.event_type}] " f"{ev.dimension}: {ev.detail}"
+                )
             lines.append("")
 
         # 维度变化表
@@ -91,7 +116,9 @@ class PersonaEvolutionTimeline:
             if first_val is not None and last_val is not None:
                 delta = last_val - first_val
                 arrow = "↑" if delta > 0.05 else "↓" if delta < -0.05 else "→"
-                lines.append(f"| {label} | {first_val:.2f} | {last_val:.2f} | {arrow} {abs(delta):.2f} |")
+                lines.append(
+                    f"| {label} | {first_val:.2f} | {last_val:.2f} | {arrow} {abs(delta):.2f} |"
+                )
         lines.append("")
 
         # Mermaid 图表
@@ -103,7 +130,7 @@ class PersonaEvolutionTimeline:
 
     def _detect_events(self) -> List[EvolutionEvent]:
         """检测画像关键事件"""
-        events = []
+        events = []  # type: ignore[var-annotated]
         if len(self._snapshots) < 3:
             return events
 
@@ -115,13 +142,20 @@ class PersonaEvolutionTimeline:
             # 倦怠信号：专注深度下降 >= 0.2
             focus_prev = self._get_value(prev, "energy.focus_depth")
             focus_curr = self._get_value(curr, "energy.focus_depth")
-            if focus_prev is not None and focus_curr is not None and (focus_prev - focus_curr) >= 0.2:
-                events.append(EvolutionEvent(
-                    date=date, event_type="burnout_signal",
-                    dimension="专注深度",
-                    detail=f"专注深度从 {focus_prev:.2f} 降至 {focus_curr:.2f}",
-                    severity="high",
-                ))
+            if (
+                focus_prev is not None
+                and focus_curr is not None
+                and (focus_prev - focus_curr) >= 0.2
+            ):
+                events.append(
+                    EvolutionEvent(
+                        date=date,
+                        event_type="burnout_signal",
+                        dimension="专注深度",
+                        detail=f"专注深度从 {focus_prev:.2f} 降至 {focus_curr:.2f}",
+                        severity="high",
+                    )
+                )
 
             # 认知转变：抽象能力连续3版本上升
             if i >= 2:
@@ -130,15 +164,18 @@ class PersonaEvolutionTimeline:
                     for j in range(max(0, i - 2), i + 1)
                 ]
                 if all(v is not None for v in abs_vals):
-                    if abs_vals[0] < abs_vals[1] < abs_vals[2]:
-                        total_change = abs_vals[2] - abs_vals[0]
+                    if abs_vals[0] < abs_vals[1] < abs_vals[2]:  # type: ignore[operator]
+                        total_change = abs_vals[2] - abs_vals[0]  # type: ignore[operator]
                         if total_change > 0.15:
-                            events.append(EvolutionEvent(
-                                date=date, event_type="cognitive_shift",
-                                dimension="抽象与具象",
-                                detail=f"抽象能力持续上升 {total_change:.2f}",
-                                severity="medium",
-                            ))
+                            events.append(
+                                EvolutionEvent(
+                                    date=date,
+                                    event_type="cognitive_shift",
+                                    dimension="抽象与具象",
+                                    detail=f"抽象能力持续上升 {total_change:.2f}",
+                                    severity="medium",
+                                )
+                            )
 
             # 价值翻转：跨越 0.5 中点
             for label, attr_path in TRACKED_DIMENSIONS:
@@ -148,21 +185,24 @@ class PersonaEvolutionTimeline:
                 val_curr = self._get_value(curr, attr_path)
                 if val_prev and val_curr:
                     if (val_prev < 0.5 <= val_curr) or (val_prev >= 0.5 > val_curr):
-                        events.append(EvolutionEvent(
-                            date=date, event_type="value_flip",
-                            dimension=label,
-                            detail=f"从 {val_prev:.2f} 翻转为 {val_curr:.2f}",
-                            severity="medium",
-                        ))
+                        events.append(
+                            EvolutionEvent(
+                                date=date,
+                                event_type="value_flip",
+                                dimension=label,
+                                detail=f"从 {val_prev:.2f} 翻转为 {val_curr:.2f}",
+                                severity="medium",
+                            )
+                        )
 
         return events
 
     def _generate_mermaid_chart(self) -> str:
         """生成 Mermaid xychart-beta 时序图"""
         lines = ["```mermaid", "xychart-beta"]
-        lines.append(f'  title "画像演化趋势"')
+        lines.append('  title "画像演化趋势"')
         dates = ", ".join(f'"{s["date"]}"' for s in self._snapshots[-6:])
-        lines.append(f'  x-axis [{dates}]')
+        lines.append(f"  x-axis [{dates}]")
 
         for label, attr_path in TRACKED_DIMENSIONS[:5]:  # 最多5条线
             values = []
@@ -185,6 +225,6 @@ class PersonaEvolutionTimeline:
             else:
                 return None
         try:
-            return float(current)
+            return float(current)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return None

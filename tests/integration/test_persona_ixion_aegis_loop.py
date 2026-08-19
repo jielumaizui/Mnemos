@@ -2,16 +2,28 @@
 """
 P2-1 长链路测试 — Persona / Ixion / Aegis 链路
 
-链路：ProfileGenerator → SkillWikiFlywheel → SmartMatcher → InProcessGuard
+链路：ProfileGenerator → CognitiveDecisionFlywheel（CognitiveDecisionFlywheel 兼容名）
+→ SmartMatcher → InProcessGuard
 
 策略：临时 wiki 目录/SQLite，mock 外部依赖（persona 子系统）。
 断言目标：画像生成、技能匹配、守护检查。
 """
 
-from pathlib import Path
-from unittest.mock import MagicMock
-
 import pytest
+
+
+@pytest.fixture(autouse=True)  # noqa
+def _block_event_bus_leakage(monkeypatch):
+    """阻止测试期间发布的事件进入 daemon 共享 events.db / 真实 wiki。
+
+    KnowledgeImmuneSystem 等模块继承 PluggableModule，测试运行时会向全局
+    EventBus 发布 immune.report 事件；运行中的 daemon 会消费并写入真实 wiki。
+    这里把 _emit_event 短路为 no-op，保持测试隔离。
+    """
+    monkeypatch.setattr(
+        "core.pluggable.PluggableModule._emit_event",
+        lambda self, event_type, payload: None,
+    )
 
 
 class TestProfileGeneratorLoop:

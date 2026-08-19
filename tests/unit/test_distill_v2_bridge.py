@@ -9,14 +9,8 @@
   4. DistillFeedbackLoop.evaluate() 的 V2 ground_truth 写入
 """
 
-import sqlite3
-from dataclasses import field
-from typing import Dict, List
-
-import pytest
-
-
 # ==================== 1. DistillScorerV2 ====================
+
 
 class TestDistillScorerV2:
     def test_score_returns_scorecardv2(self):
@@ -29,6 +23,18 @@ class TestDistillScorerV2:
         assert "distill" in card.scores
         assert 0.0 <= card.scores["distill"] <= 1.0
         assert card.features["content_len"] > 0
+
+    def test_default_dimensions_include_l1_alias(self):
+        from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
+
+        scorer = DistillScorerV2()
+        card = scorer.score("Redis Cluster 方案选择：采用三主三从架构。")
+
+        # DEFAULT_DIMENSIONS 中的 "l1" 是 "l1_storage" 别名，必须命中规则先验。
+        assert "l1" in card.scores
+        # 默认 frontmatter 为空，规则先验给出 0.735 左右；若未命中规则则 fusion 返回 0.5/0.0。
+        assert card.scores["l1"] > 0.55
+        assert card.confidences["l1"] > 0.0
 
     def test_should_distill_above_threshold(self):
         from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
@@ -55,20 +61,30 @@ class TestDistillScorerV2:
         should = scorer.should_distill(content, threshold=0.9)
         assert should is False
 
-    def test_score_with_sources(self):
-        from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
+    def test_trigger_threshold_from_effective_policy(self, monkeypatch):
+        """触发阈值应从 EffectivePolicy 读取。"""
 
+        class _FakePolicy:
+            def __init__(self, values):
+                self._values = values
+
+            def get(self, key, default=None):
+                return self._values.get(key, default)
+
+        from core.scoring.scorers.distill_scorer_v2 import DistillScorerV2
+        from core.scoring.scorers import distill_scorer_v2 as mod
+
+        monkeypatch.setattr(
+            mod,
+            "get_effective_policy",
+            lambda: _FakePolicy({"distill.trigger_threshold": 0.95}),
+        )
         scorer = DistillScorerV2()
-        result = scorer.score_with_sources("测试内容")
-        assert "scores" in result
-        assert "confidences" in result
-        assert "features" in result
-        assert "model_version" in result
-        assert "should_distill" in result
-        assert isinstance(result["should_distill"], bool)
+        assert scorer._trigger_threshold == 0.95
 
 
 # ==================== 2. layer2_value_prejudge V2 融合 ====================
+
 
 class TestLayer2ValuePrejudgeV2:
     def test_rule_only_backward_compatible(self):
@@ -89,7 +105,7 @@ class TestLayer2ValuePrejudgeV2:
         from core.scoring.adaptive_scorer_v2 import ScoreCardV2
 
         v2_card = ScoreCardV2(
-            scores={"distill": 0.9},      # 映射到 90 分
+            scores={"distill": 0.9},  # 映射到 90 分
             confidences={"distill": 0.8},
             features={"content_len": 100},
             model_version="v2-test",
@@ -110,7 +126,7 @@ class TestLayer2ValuePrejudgeV2:
         from core.scoring.adaptive_scorer_v2 import ScoreCardV2
 
         v2_card = ScoreCardV2(
-            scores={"distill": 0.2},      # 映射到 20 分
+            scores={"distill": 0.2},  # 映射到 20 分
             confidences={"distill": 0.5},
             features={},
             model_version="v2-test",
@@ -131,8 +147,8 @@ class TestLayer2ValuePrejudgeV2:
         from core.scoring.adaptive_scorer_v2 import ScoreCardV2
 
         v2_card = ScoreCardV2(
-            scores={"memos": 0.8},  # 没有 distill
-            confidences={"memos": 0.7},
+            scores={"backend": 0.8},  # 没有 distill
+            confidences={"backend": 0.7},
             features={},
             model_version="v2-test",
         )
@@ -147,87 +163,60 @@ class TestLayer2ValuePrejudgeV2:
 
 # ==================== 3. ValuePrejudgment V2 路径 ====================
 
+
 class TestValuePrejudgmentV2:
     def test_judge_falls_back_when_v2_unavailable(self, monkeypatch):
-        """V2 scorer 初始化失败时回退到规则+V1。"""
+        """V2 scorer 初始化失败时回退到纯规则评估。"""
         from core.hephaestus.distillation_engine import ValuePrejudgment
 
         vp = ValuePrejudgment()
-        # 强制 V2 和 V1 都失败，走纯规则路径（避免初始化耗时）
+        # 强制 V2 失败，走纯规则路径（避免初始化耗时）
         monkeypatch.setattr(vp, "_distill_scorer_v2", None)
-        monkeypatch.setattr(vp, "_distill_scorer", None)
         monkeypatch.setattr(
-            ValuePrejudgment, "_get_scorer_v2",
-            lambda self: None,
-        )
-        monkeypatch.setattr(
-            ValuePrejudgment, "_get_scorer",
+            ValuePrejudgment,
+            "_get_scorer_v2",
             lambda self: None,
         )
 
-        verdict, conf = vp.judge([
-            {"role": "user", "content": "原来 Redis Cluster 的选举机制是这样的..."},
-        ])
-        assert verdict in (ValuePrejudgment.CERTAINLY_YES,
-                           ValuePrejudgment.CERTAINLY_NO,
-                           ValuePrejudgment.MAYBE)
+        verdict, conf = vp.judge(
+            [
+                {"role": "user", "content": "原来 Redis Cluster 的选举机制是这样的..."},
+            ]
+        )
+        assert verdict in (
+            ValuePrejudgment.CERTAINLY_YES,
+            ValuePrejudgment.CERTAINLY_NO,
+            ValuePrejudgment.MAYBE,
+        )
         assert 0.0 <= conf <= 1.0
 
 
-# ==================== 4. DistillFeedbackLoop V2 ground_truth 写入 ====================
+# ==================== 4. DistillFeedbackLoop operational signals ====================
+
 
 class TestDistillFeedbackLoopV2:
-    @pytest.fixture
-    def db_with_gt(self, tmp_path):
-        db = tmp_path / "feedback.db"
-        with sqlite3.connect(str(db)) as conn:
-            conn.execute("""
-                CREATE TABLE ground_truth_signals (
-                    id INTEGER PRIMARY KEY,
-                    session_id TEXT,
-                    signal_type TEXT,
-                    signal_value INTEGER,
-                    confidence REAL,
-                    latency_hours INTEGER,
-                    created_at TEXT,
-                    UNIQUE(session_id, signal_type) ON CONFLICT REPLACE
-                )
-            """)
-        return db
-
-    def _patch_v2_db(self, monkeypatch, db_with_gt):
-        """辅助：将 V2 insert_ground_truth 重定向到临时库（避免递归）。"""
+    @staticmethod
+    def _reject_legacy_training_sink(monkeypatch):
+        """Install a tripwire proving operational signals never become labels."""
         from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
 
-        def _mock_insert(session_id, signal_type, label, confidence=1.0,
-                         latency_hours=0, db_path=None):
-            db = db_path or db_with_gt
-            try:
-                with sqlite3.connect(str(db)) as conn:
-                    conn.execute("""
-                        INSERT INTO ground_truth_signals
-                        (session_id, signal_type, signal_value, confidence, latency_hours, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(session_id, signal_type) DO UPDATE SET
-                            signal_value = excluded.signal_value,
-                            confidence = excluded.confidence,
-                            created_at = excluded.created_at
-                    """, (session_id, signal_type, label, confidence, latency_hours,
-                          __import__("datetime").datetime.now().isoformat()))
-                    conn.commit()
-            except Exception:
-                pass
+        def _unexpected_legacy_write(*_args, **_kwargs):
+            raise AssertionError("distillation feedback reached legacy training sink")
 
-        monkeypatch.setattr(AdaptiveScorerV2, "insert_ground_truth", staticmethod(_mock_insert))
+        monkeypatch.setattr(
+            AdaptiveScorerV2,
+            "insert_ground_truth",
+            staticmethod(_unexpected_legacy_write),
+        )
 
-    def test_evaluate_writes_v2_ground_truth(self, monkeypatch, db_with_gt):
+    def test_evaluate_emits_prejudgment_signal_without_legacy_training(self, monkeypatch):
         from core.hephaestus.distillation_engine import (
             DistillFeedbackLoop,
             DistillationResult,
             ValuePrejudgment,
         )
 
-        self._patch_v2_db(monkeypatch, db_with_gt)
+        self._reject_legacy_training_sink(monkeypatch)
 
         result = DistillationResult(
             session_id="sess-001",
@@ -242,23 +231,18 @@ class TestDistillFeedbackLoopV2:
         # 应生成 prejudgment_mismatch 信号
         assert any(s["type"] == "prejudgment_mismatch" for s in signals)
 
-        # V2 ground_truth 应写入
-        with sqlite3.connect(str(db_with_gt)) as conn:
-            rows = conn.execute(
-                "SELECT signal_type, signal_value, confidence FROM ground_truth_signals WHERE session_id='sess-001'"
-            ).fetchall()
-            assert len(rows) >= 1
-            # 预判 NO 但 judgment knowledge → expected(0.3) < actual(0.7) → label=0
-            assert any(r[0] == "prejudgment_mismatch" for r in rows)
+        mismatch = next(s for s in signals if s["type"] == "prejudgment_mismatch")
+        assert mismatch["expected"] == 0.3
+        assert mismatch["actual"] == 0.7
 
-    def test_evaluate_self_check_failure_signal(self, monkeypatch, db_with_gt):
+    def test_evaluate_emits_self_check_signal_without_legacy_training(self, monkeypatch):
         from core.hephaestus.distillation_engine import (
             DistillFeedbackLoop,
             DistillationResult,
             KnowledgeFragment,
         )
 
-        self._patch_v2_db(monkeypatch, db_with_gt)
+        self._reject_legacy_training_sink(monkeypatch)
 
         # 构造自检失败的 fragment
         frag = KnowledgeFragment(
@@ -285,19 +269,16 @@ class TestDistillFeedbackLoopV2:
 
         assert any(s["type"] == "self_check_failure" for s in signals)
 
-        with sqlite3.connect(str(db_with_gt)) as conn:
-            rows = conn.execute(
-                "SELECT signal_type FROM ground_truth_signals WHERE session_id='sess-002'"
-            ).fetchall()
-            assert any(r[0] == "self_check_failure" for r in rows)
+        failure = next(s for s in signals if s["type"] == "self_check_failure")
+        assert failure["actual"] == 0.0
 
-    def test_evaluate_zero_extraction_signal(self, monkeypatch, db_with_gt):
+    def test_evaluate_zero_extraction_signal(self, monkeypatch):
         from core.hephaestus.distillation_engine import (
             DistillFeedbackLoop,
             DistillationResult,
         )
 
-        self._patch_v2_db(monkeypatch, db_with_gt)
+        self._reject_legacy_training_sink(monkeypatch)
 
         result = DistillationResult(
             session_id="sess-003",
@@ -309,3 +290,108 @@ class TestDistillFeedbackLoopV2:
         signals = loop.evaluate(result)
 
         assert any(s["type"] == "zero_extraction" for s in signals)
+
+
+# ==================== 5. DistillFeedbackLoop 关系置信度更新（P1-12） ====================
+
+
+def _make_fragment_with_relation(relations):
+    from core.hephaestus.distillation_engine import KnowledgeFragment
+
+    return KnowledgeFragment(
+        form="concept",
+        title="关系测试",
+        frontmatter={"领域": "test", "摘要": "测试关系置信度更新。"},
+        background="",
+        core_content="## 核心内容\n\n这是为了保证内容长度超过阈值而添加的说明文字。",
+        boundaries={},
+        anti_patterns=[],
+        related_concepts=[],
+        relations=relations,
+    )
+
+
+def test_evaluate_updates_relation_confidence_on_success(monkeypatch):
+    """高质量蒸馏结果应对片段关系给出正向置信度反馈。"""
+    from core.hephaestus.distillation_engine import (
+        DistillFeedbackLoop,
+        DistillationResult,
+    )
+    from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+
+    monkeypatch.setattr(
+        AdaptiveScorerV2, "enqueue_training_sample", staticmethod(lambda **kwargs: None)
+    )
+    monkeypatch.setattr(
+        AdaptiveScorerV2, "insert_ground_truth", staticmethod(lambda **kwargs: None)
+    )
+
+    updated = []
+
+    def _fake_update_confidence(self, source, target, relation_type, feedback):
+        updated.append((source, target, relation_type, feedback))
+
+    monkeypatch.setattr(
+        "core.kia.relation_manager.RelationManager.update_confidence",
+        _fake_update_confidence,
+    )
+
+    frag = _make_fragment_with_relation(
+        [
+            {"source": "Redis", "target": "[[Docker]]", "type": "related_to", "context": ""},
+        ]
+    )
+    result = DistillationResult(
+        session_id="sess-rel-ok",
+        judgment="knowledge",
+        fragments=[frag],
+    )
+
+    loop = DistillFeedbackLoop()
+    loop.evaluate(result)
+
+    assert len(updated) == 1
+    assert updated[0] == ("Redis", "Docker", "related_to", 1.0)
+
+
+def test_evaluate_updates_relation_confidence_on_failure(monkeypatch):
+    """低质量/跳过结果应对片段关系给出负向置信度反馈。"""
+    from core.hephaestus.distillation_engine import (
+        DistillFeedbackLoop,
+        DistillationResult,
+    )
+    from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+
+    monkeypatch.setattr(
+        AdaptiveScorerV2, "enqueue_training_sample", staticmethod(lambda **kwargs: None)
+    )
+    monkeypatch.setattr(
+        AdaptiveScorerV2, "insert_ground_truth", staticmethod(lambda **kwargs: None)
+    )
+
+    updated = []
+
+    def _fake_update_confidence(self, source, target, relation_type, feedback):
+        updated.append((source, target, relation_type, feedback))
+
+    monkeypatch.setattr(
+        "core.kia.relation_manager.RelationManager.update_confidence",
+        _fake_update_confidence,
+    )
+
+    frag = _make_fragment_with_relation(
+        [
+            {"source": "A", "target": "B", "type": "depends_on", "context": ""},
+        ]
+    )
+    result = DistillationResult(
+        session_id="sess-rel-bad",
+        judgment="skip",
+        fragments=[frag],
+    )
+
+    loop = DistillFeedbackLoop()
+    loop.evaluate(result)
+
+    assert len(updated) == 1
+    assert updated[0][3] == 0.0

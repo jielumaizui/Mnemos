@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 Curator - Wiki 页面自动合并编排器
 
@@ -20,31 +21,31 @@ Curator - Wiki 页面自动合并编排器
   - 报告留存供人工复查
 """
 
-import json
 import sys
 import re
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
-from core.config import get_config
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from core.config import get_config
+
 WIKI_DIR = get_config().wiki_dir
-CURATOR_LOG_DIR = get_config().data_dir / "logs/curator"
+CURATOR_LOG_DIR = get_config().database_dir / "logs/curator"
 ARCHIVE_DIR = get_config().wiki_dir / ".archive"
 
 # 堆积阈值
-PILEUP_THRESHOLD = 50       # 单主题超过此数量触发紧急合并
-P2_P1_DAYS = 1              # P2→P1 合并周期（天）
-P1_P0_DAYS = 7              # P1→P0 合并周期（天）
+PILEUP_THRESHOLD = 50  # 单主题超过此数量触发紧急合并
+P2_P1_DAYS = 1  # P2→P1 合并周期（天）
+P1_P0_DAYS = 7  # P1→P0 合并周期（天）
 
 
 def scan_wiki_pages() -> List[Dict]:
     """扫描 wiki 目录下的所有页面（递归，支持 workspace 隔离）"""
-    pages = []
+    pages: List[Dict] = []
     if not WIKI_DIR.exists():
         return pages
 
@@ -64,14 +65,16 @@ def scan_wiki_pages() -> List[Dict]:
         # category 保留完整的相对目录路径（如 claude/entities）
         category = "/".join(rel_parts[:-1]) if len(rel_parts) > 1 else "root"
 
-        pages.append({
-            "path": str(md_file),
-            "name": md_file.stem,
-            "category": category,
-            "size": stat.st_size,
-            "mtime": stat.st_mtime,
-            "ctime": stat.st_ctime,
-        })
+        pages.append(
+            {
+                "path": str(md_file),
+                "name": md_file.stem,
+                "category": category,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "ctime": stat.st_ctime,
+            }
+        )
 
     return pages
 
@@ -83,15 +86,18 @@ def group_by_topic(pages: List[Dict]) -> Dict[str, List[Dict]]:
     for page in pages:
         name = page["name"]
         # 提取主题前缀（如 "api-design-v1", "api-design-v2" → "api-design"）
-        base = re.sub(r'[-_]?v?\d+$', '', name)
-        base = re.sub(r'[-_]?\d{4}-\d{2}-\d{2}$', '', base)
+        base = re.sub(r"[-_]?v?\d+$", "", name)
+        base = re.sub(r"[-_]?\d{4}-\d{2}-\d{2}$", "", base)
         topics[base].append(page)
 
     return dict(topics)
 
 
-def detect_pileups(topics: Dict[str, List[Dict]], pages: List[Dict] = None,
-                   threshold: int = PILEUP_THRESHOLD) -> List[Tuple[str, List[Dict]]]:
+def detect_pileups(
+    topics: Dict[str, List[Dict]],
+    pages: Optional[List[Dict]] = None,
+    threshold: int = PILEUP_THRESHOLD,
+) -> List[Tuple[str, List[Dict]]]:
     """检测堆积的主题
 
     两个维度：
@@ -108,6 +114,7 @@ def detect_pileups(topics: Dict[str, List[Dict]], pages: List[Dict] = None,
     # 维度2：按目录堆积（中文页面无版本号，按 category 检测）
     if pages:
         from collections import Counter
+
         category_counts = Counter(p.get("category", "unknown") for p in pages)
         for cat, count in category_counts.items():
             if count >= threshold:
@@ -136,10 +143,11 @@ def find_stale_pages(pages: List[Dict], days: int) -> List[Dict]:
     return [p for p in pages if p["mtime"] < cutoff_ts]
 
 
-def generate_merge_plan(topics: Dict[str, List[Dict]],
-                        pileups: List[Tuple[str, List[Dict]]]) -> Dict:
+def generate_merge_plan(
+    topics: Dict[str, List[Dict]], pileups: List[Tuple[str, List[Dict]]]
+) -> Dict:
     """生成合并计划"""
-    plan = {
+    plan: Dict[str, Any] = {
         "generated_at": datetime.now().isoformat(),
         "total_pages": sum(len(pages) for pages in topics.values()),
         "total_topics": len(topics),
@@ -150,34 +158,39 @@ def generate_merge_plan(topics: Dict[str, List[Dict]],
 
     # 堆积主题
     for topic, pages in pileups:
-        plan["pileups"].append({
-            "topic": topic,
-            "page_count": len(pages),
-            "pages": [p["name"] for p in pages],
-            "suggested_action": "merge_to_p1",
-        })
+        plan["pileups"].append(
+            {
+                "topic": topic,
+                "page_count": len(pages),
+                "pages": [p["name"] for p in pages],
+                "suggested_action": "merge_to_p1",
+            }
+        )
 
     # 日常合并候选（最近1天修改的页面）
     recent_cutoff = (datetime.now() - timedelta(days=P2_P1_DAYS)).timestamp()
     for topic, pages in topics.items():
         recent = [p for p in pages if p["mtime"] >= recent_cutoff]
         if len(recent) >= 2:
-            plan["daily_merge_candidates"].append({
-                "topic": topic,
-                "recent_pages": [p["name"] for p in recent],
-                "count": len(recent),
-            })
+            plan["daily_merge_candidates"].append(
+                {
+                    "topic": topic,
+                    "recent_pages": [p["name"] for p in recent],
+                    "count": len(recent),
+                }
+            )
 
     # 周合并候选（超过7天未修改的页面）
-    stale_cutoff = (datetime.now() - timedelta(days=P1_P0_DAYS)).timestamp()
     for topic, pages in topics.items():
-        stale = [p for p in pages if p["mtime"] < stale_cutoff]
+        stale = find_stale_pages(pages, P1_P0_DAYS)
         if len(stale) >= 3:
-            plan["weekly_merge_candidates"].append({
-                "topic": topic,
-                "stale_pages": [p["name"] for p in stale],
-                "count": len(stale),
-            })
+            plan["weekly_merge_candidates"].append(
+                {
+                    "topic": topic,
+                    "stale_pages": [p["name"] for p in stale],
+                    "count": len(stale),
+                }
+            )
 
     return plan
 
@@ -203,60 +216,73 @@ def generate_curator_report(plan: Dict) -> str:
 
     # 堆积告警
     if plan["pileups"]:
-        lines.append(f"## 堆积告警（需立即合并）")
-        lines.append(f"")
+        lines.append("## 堆积告警（需立即合并）")
+        lines.append("")
         for pileup in plan["pileups"]:
             lines.append(f"- **{pileup['topic']}**: {pileup['page_count']} 页")
             lines.append(f"  - 页面: {', '.join(pileup['pages'][:5])}")
-            if len(pileup['pages']) > 5:
+            if len(pileup["pages"]) > 5:
                 lines.append(f"  - ... 等共 {pileup['page_count']} 页")
-        lines.append(f"")
+        lines.append("")
     else:
-        lines.append(f"## 无堆积告警")
-        lines.append(f"")
+        lines.append("## 无堆积告警")
+        lines.append("")
 
     # 日常合并候选
     if plan["daily_merge_candidates"]:
-        lines.append(f"## 日常合并候选（P2→P1）")
-        lines.append(f"")
+        lines.append("## 日常合并候选（P2→P1）")
+        lines.append("")
         for candidate in plan["daily_merge_candidates"]:
             lines.append(f"- **{candidate['topic']}**: {candidate['count']} 个新页面")
-        lines.append(f"")
+        lines.append("")
 
     # 周合并候选
     if plan["weekly_merge_candidates"]:
-        lines.append(f"## 周合并候选（P1→P0）")
-        lines.append(f"")
+        lines.append("## 周合并候选（P1→P0）")
+        lines.append("")
         for candidate in plan["weekly_merge_candidates"]:
             lines.append(f"- **{candidate['topic']}**: {candidate['count']} 个旧页面")
-        lines.append(f"")
+        lines.append("")
 
     # 操作建议
-    lines.append(f"---")
-    lines.append(f"")
-    lines.append(f"## 操作建议")
-    lines.append(f"")
+    lines.append("---")
+    lines.append("")
+    lines.append("## 操作建议")
+    lines.append("")
     if plan["pileups"]:
         lines.append(f"1. **优先处理堆积主题**（>{PILEUP_THRESHOLD} 页）")
-        lines.append(f"   ```bash")
+        lines.append("   ```bash")
         for pileup in plan["pileups"][:3]:
             lines.append(f"   python3 scripts/curator.py --merge-topic '{pileup['topic']}'")
-        lines.append(f"   ```")
+        lines.append("   ```")
     if plan["daily_merge_candidates"]:
-        lines.append(f"2. **日常合并**（P2→P1）")
-        lines.append(f"   ```bash")
-        lines.append(f"   python3 scripts/curator.py --daily-merge")
-        lines.append(f"   ```")
+        lines.append("2. **日常合并**（P2→P1）")
+        lines.append("   ```bash")
+        lines.append("   python3 scripts/curator.py --daily-merge")
+        lines.append("   ```")
     if plan["weekly_merge_candidates"]:
-        lines.append(f"3. **周合并**（P1→P0）")
-        lines.append(f"   ```bash")
-        lines.append(f"   python3 scripts/curator.py --weekly-merge")
-        lines.append(f"   ```")
+        lines.append("3. **周合并**（P1→P0）")
+        lines.append("   ```bash")
+        lines.append("   python3 scripts/curator.py --weekly-merge")
+        lines.append("   ```")
 
     return "\n".join(lines)
 
 
-def archive_pages(pages: List[Dict]) -> None:
+def write_curator_report(plan: Dict, timestamp: str | None = None) -> tuple[Path, Path]:
+    """Write the curator report to both Wiki and local log storage."""
+    report_timestamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    report = generate_curator_report(plan)
+    WIKI_DIR.mkdir(parents=True, exist_ok=True)
+    CURATOR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    wiki_path = WIKI_DIR / f"curator-report-{report_timestamp}.md"
+    log_path = CURATOR_LOG_DIR / f"curator-report-{report_timestamp}.md"
+    wiki_path.write_text(report, encoding="utf-8")
+    log_path.write_text(report, encoding="utf-8")
+    return wiki_path, log_path
+
+
+def archive_pages(pages: List[Dict]) -> Path:
     """归档页面（备份，不删除）"""
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -269,10 +295,52 @@ def archive_pages(pages: List[Dict]) -> None:
             shutil.copy2(src, archive_subdir / src.name)
 
     print(f"[Curator] 已归档 {len(pages)} 个页面到: {archive_subdir}")
+    return archive_subdir
+
+
+def _dedupe_pages(pages: List[Dict]) -> List[Dict]:
+    seen = set()
+    unique_pages = []
+    for page in pages:
+        key = page.get("path")
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_pages.append(page)
+    return unique_pages
+
+
+def _select_pages_by_name(pages: List[Dict], names: List[str]) -> List[Dict]:
+    wanted = set(names)
+    return [page for page in pages if page.get("name") in wanted]
+
+
+def _merge_request_pages(args, topics: Dict[str, List[Dict]], pileups, plan: Dict) -> List[Dict]:
+    selected: List[Dict] = []
+
+    if args.merge_topic:
+        matched_pileup = next(
+            (pages for topic, pages in pileups if topic == args.merge_topic),
+            None,
+        )
+        selected.extend(matched_pileup or topics.get(args.merge_topic, []))
+
+    if args.daily_merge:
+        for candidate in plan["daily_merge_candidates"]:
+            topic_pages = topics.get(candidate["topic"], [])
+            selected.extend(_select_pages_by_name(topic_pages, candidate["recent_pages"]))
+
+    if args.weekly_merge:
+        for candidate in plan["weekly_merge_candidates"]:
+            topic_pages = topics.get(candidate["topic"], [])
+            selected.extend(_select_pages_by_name(topic_pages, candidate["stale_pages"]))
+
+    return _dedupe_pages(selected)
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Curator - Wiki 页面自动合并编排器")
     parser.add_argument("--status", action="store_true", help="查看当前状态")
     parser.add_argument("--merge-topic", help="合并指定主题的所有页面")
@@ -302,18 +370,27 @@ def main():
     plan = generate_merge_plan(topics, pileups)
 
     # 保存报告到 wiki/ 目录（Obsidian 可直接查看）
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    report_path = WIKI_DIR / f"curator-report-{timestamp}.md"
-    report = generate_curator_report(plan)
-    report_path.write_text(report, encoding="utf-8")
+    report_path, log_path = write_curator_report(plan)
     print(f"[Curator] 报告已保存: {report_path}")
+    print(f"[Curator] 日志副本已保存: {log_path}")
+
+    if args.merge_topic or args.daily_merge or args.weekly_merge:
+        merge_pages = _merge_request_pages(args, topics, pileups, plan)
+        if not merge_pages:
+            print("[Curator] 没有找到本次合并候选页面")
+        elif args.dry_run:
+            print(f"[Curator] dry-run: 将归档 {len(merge_pages)} 个候选页面")
+        else:
+            archive_dir = archive_pages(merge_pages)
+            print(f"[Curator] 合并前备份完成: {archive_dir}")
+            print("[Curator] 实际合并仍需人工根据报告执行")
 
     # 自动模式：堆积时告警
     if pileups and args.auto:
         print(f"[Curator] 检测到 {len(pileups)} 个堆积主题")
         if not args.dry_run:
             print("[Curator] 自动合并模式：请查看报告后手动执行合并")
-            print(f"  python3 scripts/curator.py --merge-topic 'TOPIC_NAME'")
+            print("  python3 scripts/curator.py --merge-topic 'TOPIC_NAME'")
 
     print("[Curator] 完成")
 

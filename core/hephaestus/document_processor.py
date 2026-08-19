@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import logging
+
+logger = logging.getLogger(__name__)
+
 """
 Document Processor - 文档处理器
 
@@ -10,47 +13,82 @@ Document Processor - 文档处理器
 - Word (.docx) → Markdown
 - HTML (.html, .htm) → Markdown
 
-处理流程：
+默认导入流程：
 1. 检测文件类型
 2. 提取内容并转为 Markdown
-3. 保存到 Memos (source=human-local)
-4. 进入 Ingest 流程 → Wiki
+3. DocumentImportService/FileIngestor 写 canonical raw
+4. capture outbox → Amphora → 质量门 → Wiki
+
+旧 ``--save``/StorageBackend 直写入口已退役，避免与 raw projection 争夺所有权。
 """
 
-# Document Processor - 文档处理器（开源版 · 同源复用改造）
-# 原模块: memos-client/document_processor.py
+# Document Processor - 文档处理器
 #
-# 改造说明：
-# - 去掉直接调用 ANTHROPIC_API_KEY 的 Claude Vision 验证
-# - 改为通过 AgentDelegate 委托本地 Agent 进行验证和摘要
-# - Memos 写入改为可选（开源版优先写入 Wiki 00-Inbox）
+# 默认导入流程：
+# 1. 检测文件类型
+# 2. 提取内容并转为 Markdown
+# 3. 写 canonical raw
+# 4. capture outbox 异步进入质量门与 Wiki
+#
+# 注意：旧 AgentDelegate 委托验证模式已退役。
+# 本模块保留的是当前本地规则验证入口；Mnemos 直接调用 LLM API 执行蒸馏。
 
-import os
-import sys
-import json
-import re
-import shutil
-import subprocess
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass
-from enum import Enum
+import sys  # noqa: E402
+import importlib  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+import subprocess  # noqa: E402
+from datetime import datetime  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Dict, List, Optional, Tuple, Union  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from enum import Enum  # noqa: E402
 
-# 使用当前项目的 MemosClient
-logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from integrations.styx import MemosClient
-from core.config import get_config
 
-# 延迟导入 AgentDelegate（避免循环依赖）
-def _get_agent_delegate():
-    from core.prometheus_fire import AgentDelegate
-    return AgentDelegate()
+# Constants extracted from magic numbers
+RESULT_SECONDS = 30
+
+
+DOCUMENT_OPERATION_ERRORS = (
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+    subprocess.SubprocessError,
+)
+
+
+def _document_processing_errors():
+    """Return the concrete optional-library errors handled at the public boundary."""
+    error_types = list(DOCUMENT_OPERATION_ERRORS)
+    optional_errors = (
+        ("bs4.exceptions", "ParserRejectedMarkup"),
+        ("docx.opc.exceptions", "OpcError"),
+        ("ebooklib.epub", "EpubException"),
+        ("openpyxl.utils.exceptions", "InvalidFileException"),
+        ("pptx.exc", "PythonPptxError"),
+        ("pypdf.errors", "PyPdfError"),
+    )
+    for module_name, error_name in optional_errors:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        error_type = getattr(module, error_name, None)
+        if isinstance(error_type, type) and issubclass(error_type, BaseException):
+            error_types.append(error_type)
+    return tuple(error_types)
 
 
 class DocumentType(Enum):
     """文档类型"""
+
     EXCEL = "excel"
     PPT = "ppt"
     PDF = "pdf"
@@ -63,308 +101,245 @@ class DocumentType(Enum):
 @dataclass
 class ExtractedDocument:
     """提取的文档内容"""
+
     doc_type: DocumentType
     filename: str
     title: str
-    content: str          # Markdown 格式
-    metadata: Dict        # 文档元数据
-    summary: str          # 内容摘要
+    content: str  # Markdown 格式
+    metadata: Dict  # 文档元数据
+    summary: str  # 内容摘要
     # 验证相关字段
-    validation_status: str = "pending"  # pending, validated, review, failed
+    validation_status: str = "pending"  # pending, validated, review, rejected
     needs_review: bool = False
     review_reason: str = ""
-    confidence: float = 0.0             # 提取置信度
-    processing_method: str = "local"    # local, cloud, fallback
+    confidence: float = 0.0  # 提取置信度
+    processing_method: str = "local"  # local, cloud, fallback
 
 
 class DocumentProcessor:
     """
     文档处理器 v2.0
 
-    【使用Claude Vision API进行验证和处理】
-    【支持人工核对机制】
-
-    自动检测文档类型并提取内容为 Markdown
+    使用本地规则验证提取质量，并支持人工核对机制。
+    自动检测文档类型并提取内容为 Markdown。
     """
 
     SUPPORTED_EXTENSIONS = {
-        '.xlsx', '.xls',           # Excel
-        '.pptx', '.ppt',            # PowerPoint
-        '.pdf',                     # PDF
-        '.docx',                    # Word (doc不支持，需另存为docx)
-        '.html', '.htm',            # HTML
-        '.epub', '.mobi', '.azw3',  # Ebook
+        ".xlsx",
+        ".xls",  # Excel
+        ".pptx",  # PowerPoint (.ppt 老格式不直接支持，需另存为 .pptx)
+        ".pdf",  # PDF
+        ".docx",  # Word (.doc 老格式不直接支持，需另存为 .docx)
+        ".html",
+        ".htm",  # HTML
+        ".epub",
+        ".mobi",
+        ".azw3",  # Ebook
     }
 
     # 验证阈值（与ImageProcessor保持一致）
-    VALIDATION_CONFIDENCE_THRESHOLD = 0.85    # 验证通过阈值
-    REVIEW_CONFIDENCE_THRESHOLD = 0.60        # 人工核对阈值
+    VALIDATION_CONFIDENCE_THRESHOLD = 0.85  # 验证通过阈值
+    REVIEW_CONFIDENCE_THRESHOLD = 0.60  # 人工核对阈值
 
-    def __init__(self, memos_client: MemosClient = None):
-        # Memos 客户端（可选，开源版优先写入 Wiki）
-        self.client = memos_client
-        if self.client is None:
-            try:
-                config = get_config()
-                if config.memos_enabled and config.memos_token:
-                    self.client = MemosClient(
-                        base_url=config.memos_api_url,
-                        token=config.memos_token,
-                    )
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
-                pass
-
-        # 检查依赖
+    def __init__(self):
         self._check_dependencies()
 
     def _check_dependencies(self):
         """检查并报告依赖可用性"""
         self.deps = {
-            'pandas': False,
-            'openpyxl': False,
-            'pptx': False,
-            'PyPDF2': False,
-            'docx': False,
-            'beautifulsoup4': False,
-            'markdownify': False,
-            'ebooklib': False,
+            "pandas": False,
+            "openpyxl": False,
+            "pptx": False,
+            "pypdf": False,
+            "docx": False,
+            "beautifulsoup4": False,
+            "markdownify": False,
+            "ebooklib": False,
         }
 
         try:
-            import pandas
-            self.deps['pandas'] = True
+            import pandas  # noqa: F401
+
+            self.deps["pandas"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import openpyxl
-            self.deps['openpyxl'] = True
+            import openpyxl  # noqa: F401
+
+            self.deps["openpyxl"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import pptx
-            self.deps['pptx'] = True
+            from pptx import Presentation  # noqa: F401
+
+            self.deps["pptx"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import PyPDF2
-            self.deps['PyPDF2'] = True
+            import pypdf  # noqa: F401
+
+            self.deps["pypdf"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import docx
-            self.deps['docx'] = True
+            from docx import Document  # noqa: F401
+
+            self.deps["docx"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            from bs4 import BeautifulSoup
-            self.deps['beautifulsoup4'] = True
+            from bs4 import BeautifulSoup  # noqa: F401
+
+            self.deps["beautifulsoup4"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import markdownify
-            self.deps['markdownify'] = True
+            import markdownify  # noqa: F401
+
+            self.deps["markdownify"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         try:
-            import ebooklib
-            self.deps['ebooklib'] = True
+            import ebooklib  # noqa: F401
+
+            self.deps["ebooklib"] = True
         except ImportError:
-            pass
+            logger.debug("[document_processor] ImportError suppressed", exc_info=True)
 
         # 打印依赖状态（首次初始化时检查，缺失时仅 INFO 提示避免刷屏）
         missing = [k for k, v in self.deps.items() if not v]
         if missing:
-            logger.info(f"[DocumentProcessor] 可选依赖未安装: {', '.join(missing)} — 对应文档格式处理将不可用")
-
-    def _call_claude_vision(self, file_content: str, doc_type: DocumentType, prompt: str) -> Optional[str]:
-        """
-        【同源复用】委托本地 Agent 进行验证
-
-        开源版不直接调用 LLM API，而是通过 AgentDelegate 将验证任务
-        委托给用户本地的 AI Agent（Claude Code / Codex / Hermes 等）。
-
-        委托方式：写入任务文件到 ~/.mnemos/distill_tasks/，由 Agent 后台处理。
-        如果无可用的 Agent，回退到本地规则验证（不依赖 LLM）。
-        """
-        try:
-            delegate = _get_agent_delegate()
-            from core.prometheus_fire import DistillTask
-
-            full_prompt = prompt + f"\n\n【文档类型】: {doc_type.value}\n【内容预览】: {file_content[:5000]}"
-            task = DistillTask(
-                session_id=f"doc-verify-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
-                messages=[{"role": "user", "content": full_prompt}],
-                meta={"source": "document-processor", "task_type": "document_validation"},
+            logger.info(
+                "[DocumentProcessor] 可选依赖未安装: %s — 对应文档格式处理将不可用",
+                ", ".join(missing),
             )
-            # 生成输出路径
-            output_path = Path.home() / ".mnemos" / "distill_output" / f"{task.session_id}.md"
-            ok = delegate.delegate(task, output_path)
-            if not ok:
-                logger.warning(f"[DocumentProcessor] ⚠️ 无可用的 Agent 执行验证，回退到本地规则")
-                return None
 
-            # 等待结果（短时间轮询）
-            result = delegate.wait_for_result(output_path, timeout=60)
-            if result:
-                return result
-            logger.warning(f"[DocumentProcessor] ⚠️ Agent 验证超时，回退到本地规则")
-            return None
+    def _score_content_length(self, content: str) -> Tuple[float, Optional[str]]:
+        """内容长度评分（1分）。"""
+        if len(content) > 100:
+            return 1.0, None
+        return 0.0, f"内容过短 ({len(content)} 字符)"
 
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ⚠️ Agent 委托验证失败: {e}")
-            return None
+    def _score_title(self, title: str, file_path: Path) -> Tuple[float, Optional[str]]:
+        """标题有效性评分（1分）。"""
+        if title and title != file_path.stem:
+            return 1.0, None
+        if title:
+            return 0.5, None
+        return 0.0, "标题为空"
+
+    def _score_structure(self, content: str) -> Tuple[float, Optional[str]]:
+        """Markdown 结构评分（1分）。"""
+        has_headers = "#" in content
+        has_lists = "- " in content or "* " in content
+        has_paragraphs = "\n\n" in content
+        structure_score = sum([has_headers, has_lists, has_paragraphs])
+        score = min(structure_score / 2, 1.0)
+        issue = None if structure_score >= 2 else "结构简单（缺少标题/列表/段落）"
+        return score, issue
+
+    def _score_type_match(
+        self, doc: ExtractedDocument, file_path: Path
+    ) -> Tuple[float, Optional[str]]:
+        """文件类型匹配评分（1分）。"""
+        expected_type = self.detect_type(file_path)
+        if expected_type and doc.doc_type == expected_type:
+            return 1.0, None
+        return (
+            0.0,
+            f"类型可能不匹配 (检测到 {doc.doc_type.value}, 期望 {expected_type.value if expected_type else 'unknown'})",  # noqa: E501
+        )
+
+    def _score_metadata(self, doc: ExtractedDocument) -> Tuple[float, Optional[str]]:
+        """元数据完整性评分（1分）。"""
+        meta = doc.metadata or {}
+        has_pages = meta.get("pages") or meta.get("sheets") or meta.get("slides")
+        has_summary = bool(doc.summary)
+        if has_pages and has_summary:
+            return 1.0, None
+        if has_pages or has_summary:
+            return 0.5, None
+        return 0.0, "缺少元数据或摘要"
+
+    @staticmethod
+    def _validation_outcome(score: float, issues: List[str]) -> Dict:
+        """根据总分计算验证结果。"""
+        confidence = round(score / 5.0, 2)
+        if confidence >= 0.85:
+            suggested_action = "pass"
+            is_valid = True
+        elif confidence >= 0.60:
+            suggested_action = "review"
+            is_valid = True
+        else:
+            suggested_action = "review"
+            is_valid = False
+        return {
+            "is_valid": is_valid,
+            "confidence": confidence,
+            "issues": issues or ["本地规则验证通过"],
+            "suggested_action": suggested_action,
+        }
 
     def validate_extraction(self, doc: ExtractedDocument, file_path: Path) -> Dict:
         """
-        使用 Claude Vision 验证文档提取结果
+        文档提取结果本地规则验证。
 
-        Args:
-            doc: 提取的文档内容
-            file_path: 文件路径
+        旧 AgentDelegate 委托验证模式已退役；本方法仍是当前验证入口。
 
-        Returns:
-            验证结果字典
+        基于内容质量指标计算置信度：
+        - 非空内容、合理长度、结构完整性、标题有效性
         """
-        # 读取原始文件内容用于验证
-        try:
-            raw_content = self._get_raw_content_for_validation(file_path, doc.doc_type)
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ⚠️ 无法读取原始内容进行验证: {e}")
-            return {
-                "is_valid": True,
-                "confidence": 0.7,
-                "issues": ["无法验证（依赖缺失）"],
-                "suggested_action": "accept"
-            }
+        issues: List[str] = []
+        score = 0.0
 
-        prompt = f"""
-请验证以下从文档中提取的Markdown内容是否准确。
+        content = (doc.content or "").strip()
+        title = (doc.title or "").strip()
 
-【提取的Markdown内容】:
-{doc.content[:3000]}
+        sub_score, issue = self._score_content_length(content)
+        score += sub_score
+        if issue:
+            issues.append(issue)
 
-【原始文档的部分内容】:
-{raw_content[:3000]}
+        sub_score, issue = self._score_title(title, file_path)
+        score += sub_score
+        if issue:
+            issues.append(issue)
 
-请对比检查：
-1. 内容是否完整？有没有遗漏重要信息？
-2. 表格/列表结构是否正确？
-3. 文字是否有误读、错漏？
-4. 文档类型判断是否正确？
+        sub_score, issue = self._score_structure(content)
+        score += sub_score
+        if issue:
+            issues.append(issue)
 
-返回JSON格式：
-{{
-    "is_valid": true/false,
-    "confidence": 0.85,
-    "completeness": 0.9,
-    "accuracy": 0.85,
-    "issues": ["问题1", "问题2"],
-    "suggested_action": "accept|reprocess|review|reject"
-}}
+        sub_score, issue = self._score_type_match(doc, file_path)
+        score += sub_score
+        if issue:
+            issues.append(issue)
 
-判断标准：
-- is_valid=true: 内容准确完整，可直接使用
-- is_valid=false + suggested_action="reprocess": 错误较多，需要重新提取
-- is_valid=false + suggested_action="review": 置信度低，需要人工核对
-- is_valid=false + suggested_action="reject": 内容严重不可信（如乱码、大面积错漏），不应入库
+        sub_score, issue = self._score_metadata(doc)
+        score += sub_score
+        if issue:
+            issues.append(issue)
 
-只返回JSON，不要其他文字。
-"""
-
-        response = self._call_claude_vision(doc.content, doc.doc_type, prompt)
-        if not response:
-            # API 不可用，直接通过但标记待审
-            return {
-                "is_valid": True,
-                "confidence": 0.5,
-                "issues": ["Claude Vision API 不可用，跳过验证"],
-                "suggested_action": "review"
-            }
-
-        try:
-            # 提取JSON
-            json_match = response.strip()
-            if '```json' in json_match:
-                json_match = json_match.split('```json')[1].split('```')[0].strip()
-            elif '```' in json_match:
-                json_match = json_match.split('```')[1].split('```')[0].strip()
-
-            result = json.loads(json_match)
-            return {
-                "is_valid": result.get("is_valid", False),
-                "confidence": result.get("confidence", 0.0),
-                "issues": result.get("issues", []),
-                "suggested_action": result.get("suggested_action", "review")
-            }
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ⚠️ 验证结果解析失败: {e}")
-            return {
-                "is_valid": False,
-                "confidence": 0.0,
-                "issues": [f"验证结果解析失败: {e}"],
-                "suggested_action": "review"
-            }
-
-    def _get_raw_content_for_validation(self, file_path: Path, doc_type: DocumentType) -> str:
-        """获取原始内容用于验证"""
-        # 根据文档类型读取原始文本
-        if doc_type == DocumentType.PDF:
-            # 尝试读取PDF文本
-            try:
-                import PyPDF2
-                with open(file_path, 'rb') as f:
-                    reader = PyPDF2.PdfReader(f)
-                    text_parts = []
-                    for i, page in enumerate(reader.pages[:3]):  # 前3页
-                        try:
-                            text = page.extract_text()
-                            if text:
-                                text_parts.append(f"--- Page {i+1} ---\n{text}")
-                        except Exception:
-                            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-                            pass
-                    return "\n".join(text_parts) if text_parts else ""
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
-                return ""
-        elif doc_type == DocumentType.WORD:
-            try:
-                import docx
-                doc = docx.Document(file_path)
-                texts = []
-                for para in doc.paragraphs[:50]:  # 前50段
-                    if para.text.strip():
-                        texts.append(para.text)
-                return "\n".join(texts)
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at document_processor.py", exc_info=True)
-                return ""
-        elif doc_type == DocumentType.HTML:
-            content = file_path.read_text(encoding='utf-8', errors='ignore')
-            # 简单去除标签
-            return re.sub(r'<[^>]+>', ' ', content)[:10000]
-        else:
-            # Excel, PPT等返回摘要
-            return f"文档类型: {doc_type.value}, 大小: {file_path.stat().st_size} bytes"
+        return self._validation_outcome(score, issues)
 
     def process_document_with_validation(self, file_path: Path) -> Optional[ExtractedDocument]:
         """
-        处理文档（带验证流程）
+        处理文档（带本地规则验证流程）
 
         完整流程：
         1. 本地提取文档内容
-        2. Claude Vision 验证提取准确性
-        3. 根据验证结果决定：通过/重处理/标记人工审核
+        2. 本地规则验证提取质量
+        3. 根据验证结果决定：通过/标记人工审核/拒绝
         """
-        logger.info(f"[DocumentProcessor] 📄 开始处理（带验证）: {file_path.name}")
+        logger.info("[DocumentProcessor] 📄 开始处理（带验证）: %s", file_path.name)
 
         # Step 1: 本地提取
         doc = self.process_document(file_path)
@@ -372,7 +347,7 @@ class DocumentProcessor:
             return None
 
         # Step 2: 验证提取结果
-        logger.info(f"[DocumentProcessor] 🔎 使用Claude Vision验证提取结果...")
+        logger.info("[DocumentProcessor] 🔎 使用本地规则验证提取结果...")
         validation = self.validate_extraction(doc, file_path)
 
         confidence = validation.get("confidence", 0.0)
@@ -382,35 +357,39 @@ class DocumentProcessor:
 
         if suggested_action == "reject":
             # 严重不可信，拒绝入库
-            logger.info(f"[DocumentProcessor] ❌ 验证拒绝 (置信度: {confidence:.2f})")
-            logger.info(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '内容严重不可信'}")
+            logger.info("[DocumentProcessor] ❌ 验证拒绝 (置信度: %.2f)", confidence)
+            logger.info(
+                "[DocumentProcessor] 原因: %s", ", ".join(issues) if issues else "内容严重不可信"
+            )
             doc.validation_status = "rejected"
             doc.needs_review = False
             doc.confidence = confidence
-            doc.review_reason = f"验证拒绝 ({confidence:.2f}): {', '.join(issues) if issues else '内容严重不可信'}"
+            doc.review_reason = (
+                f"验证拒绝 ({confidence:.2f}): {', '.join(issues) if issues else '内容严重不可信'}"
+            )
 
         elif is_valid and confidence >= self.VALIDATION_CONFIDENCE_THRESHOLD:
             # 验证通过
-            logger.info(f"[DocumentProcessor] ✅ 验证通过 (置信度: {confidence:.2f})")
+            logger.info("[DocumentProcessor] ✅ 验证通过 (置信度: %.2f)", confidence)
             doc.validation_status = "validated"
             doc.confidence = confidence
             doc.needs_review = False
 
         elif suggested_action == "reprocess" or confidence < self.REVIEW_CONFIDENCE_THRESHOLD:
             # 需要重新处理（使用云端）
-            logger.warning(f"[DocumentProcessor] ⚠️ 验证失败/置信度低，需要人工核对...")
-            logger.info(f"[DocumentProcessor] 原因: {', '.join(issues) if issues else '未知'}")
+            logger.warning("[DocumentProcessor] ⚠️ 验证失败/置信度低，需要人工核对...")
+            logger.info("[DocumentProcessor] 原因: %s", ", ".join(issues) if issues else "未知")
 
             # 对于文档，我们无法像图片那样云端重处理
             # 标记为需要人工审核
             doc.validation_status = "review"
             doc.needs_review = True
             doc.confidence = confidence
-            doc.review_reason = f"验证置信度低 ({confidence:.2f}): {', '.join(issues) if issues else '结构可能不准确'}"
+            doc.review_reason = f"验证置信度低 ({confidence:.2f}): {', '.join(issues) if issues else '结构可能不准确'}"  # noqa: E501
 
         else:
             # 标记人工核对
-            logger.warning(f"[DocumentProcessor] ⚠️ 标记待人工核对 (置信度: {confidence:.2f})")
+            logger.warning("[DocumentProcessor] ⚠️ 标记待人工核对 (置信度: %.2f)", confidence)
             doc.validation_status = "review"
             doc.needs_review = True
             doc.confidence = confidence
@@ -422,17 +401,17 @@ class DocumentProcessor:
         """检测文档类型"""
         ext = file_path.suffix.lower()
 
-        if ext in ['.xlsx', '.xls']:
+        if ext in [".xlsx", ".xls"]:
             return DocumentType.EXCEL
-        elif ext in ['.pptx', '.ppt']:
+        elif ext == ".pptx":
             return DocumentType.PPT
-        elif ext == '.pdf':
+        elif ext == ".pdf":
             return DocumentType.PDF
-        elif ext == '.docx':
+        elif ext == ".docx":
             return DocumentType.WORD
-        elif ext in ['.html', '.htm']:
+        elif ext in [".html", ".htm"]:
             return DocumentType.HTML
-        elif ext in ['.epub', '.mobi', '.azw3']:
+        elif ext in [".epub", ".mobi", ".azw3"]:
             return DocumentType.EBOOK
         else:
             return DocumentType.UNKNOWN
@@ -444,16 +423,16 @@ class DocumentProcessor:
         自动检测类型并提取内容
         """
         if not file_path.exists():
-            logger.info(f"[DocumentProcessor] ❌ 文件不存在: {file_path}")
+            logger.info("[DocumentProcessor] ❌ 文件不存在: %s", file_path)
             return None
 
         doc_type = self.detect_type(file_path)
 
         if doc_type == DocumentType.UNKNOWN:
-            logger.warning(f"[DocumentProcessor] ❌ 不支持的文件类型: {file_path.suffix}")
+            logger.warning("[DocumentProcessor] ❌ 不支持的文件类型: %s", file_path.suffix)
             return None
 
-        logger.info(f"[DocumentProcessor] 📄 处理 {doc_type.value}: {file_path.name}")
+        logger.info("[DocumentProcessor] 📄 处理 %s: %s", doc_type.value, file_path.name)
 
         # 根据类型处理
         processors = {
@@ -467,47 +446,146 @@ class DocumentProcessor:
 
         processor = processors.get(doc_type)
         if not processor:
-            logger.warning(f"[DocumentProcessor] ⚠️ 暂无 {doc_type.value} 类型处理器")
+            logger.warning("[DocumentProcessor] ⚠️ 暂无 %s 类型处理器", doc_type.value)
             return None
 
         try:
-            return processor(file_path)
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ 处理失败: {e}")
+            doc = processor(file_path)
+            if doc is not None:
+                doc.metadata["source_path"] = str(file_path)
+            return doc
+        except _document_processing_errors() as e:
+            logger.warning("[DocumentProcessor] ❌ 处理失败: %s", e, exc_info=True)
             return None
 
-    def process_and_distill(self, file_path: Path, inbox: Path = None, force_provider: str = "api") -> int:
+    def process_and_distill(
+        self,
+        file_path: Path,
+        inbox: Path | None = None,
+        force_provider: str = "api",
+        source: str = "human",
+        doc: Optional[ExtractedDocument] = None,
+        return_details: bool = False,
+    ) -> Union[int, Dict[str, Any]]:
         """
-        直接处理本地文档并蒸馏入 wiki（不走 Memos）
+        CLI 快速路径：直接处理本地文档并蒸馏入 wiki。
+
+        为保证 provenance 一致，提取后的文档先写 canonical raw revision；该显式
+        直出入口声明自己是 distillation owner，使 capture outbox 不再重复投递。
 
         Args:
             file_path: 本地文件路径
             inbox: wiki Inbox 目录（默认自动检测）
-            force_provider: 强制 LLM 提供商 — "api" 强制走 API（默认），"cli" 强制走本地 CLI，None 自动选择
+            force_provider: 强制 LLM 提供商 — "api"/None 使用默认 API chain，
+                具体 provider 名（如 dmxapi/siliconflow/openai）会收窄 API chain；
+                不存在的 provider 会返回明确错误。
+            source: Wiki frontmatter / 训练样本中的来源标记
+            doc: 已解析出的文档对象；MCP parse 阶段可传入以避免重复解析
+            return_details: True 时返回包含 storage_uid/session_id/wiki_paths 的详情字典
         """
         from core.hephaestus.document_pipeline import DocumentDistillationPipeline
-        from core.hephaestus.distillation_engine import HostAgentCaller
+        from core.hephaestus.distillation_engine import HttpApiHostAgentCaller
+        from core.document_import import file_sha256
         import hashlib
 
-        doc = self.process_document(file_path)
+        doc = doc or self.process_document(file_path)
         if not doc:
+            if return_details:
+                return {
+                    "page_count": 0,
+                    "wiki_paths": [],
+                    "storage_uid": None,
+                    "session_id": "",
+                    "fragment_count": 0,
+                    "judgment": "parse_failed",
+                }
             return 0
 
-        # 生成 session_id
-        session_id = f"doc-{hashlib.md5(str(file_path).encode()).hexdigest()[:8]}"
+        from core.privacy.ingestion_security import assess_ingestion_security
+
+        security = assess_ingestion_security(doc.content or "")
+
+        file_hash = hashlib.md5(str(file_path).encode(), usedforsecurity=False).hexdigest()[:8]
+        asset_id = f"document:{file_sha256(file_path)[:24]}"
+        provisional_session_id = f"doc-{file_hash}"
+        from core.sync_framework.ingestion_receipt import create_ingestion_receipt
+
+        ingestion_receipt = create_ingestion_receipt(
+            content=doc.content or "",
+            source_agent="document_processor",
+            source_path=str(file_path),
+            session_id=provisional_session_id,
+            title=doc.title or doc.filename,
+            metadata={
+                "source": source,
+                "filename": doc.filename,
+                "doc_type": doc.doc_type.value,
+                "asset_kind": "trusted_user_document",
+                "asset_id": asset_id,
+                "asset_title": doc.title or doc.filename,
+                "distill_requested": False,
+                "distillation_owner": "document_pipeline_direct",
+                "content_source": "external_file",
+                "source_authority": "external_content",
+                "source_authority_purpose": "searchable_reference_or_pending_hypothesis",
+                "security": security.as_dict(),
+            },
+        )
+        blocked_details = {
+            "page_count": 0,
+            "wiki_paths": [],
+            "storage_uid": None,
+            "session_id": provisional_session_id,
+            "fragment_count": 0,
+            "judgment": "capture_failed_recoverable",
+            "ingestion_receipt": ingestion_receipt,
+        }
+        if not ingestion_receipt.get("success"):
+            logger.warning("[DocumentProcessor] canonical capture receipt failed: %s", file_path.name)
+            return blocked_details if return_details else 0
+
+        storage_uid = str(ingestion_receipt.get("raw_event_id") or "")
+        if not storage_uid:
+            logger.warning(
+                "[DocumentProcessor] canonical raw revision 缺失，阻断正式蒸馏: %s",
+                file_path.name,
+            )
+            return blocked_details if return_details else 0
+
+        session_id = storage_uid
 
         # 构建 messages（模拟 reconstruct_session 输出）
-        messages = [{"role": "system", "content": doc.content}]
+        messages = [
+            {
+                "role": "user",
+                "content": doc.content,
+                "content_source": "external_file",
+                "asset_kind": "trusted_user_document",
+                "source_authority": "external_content",
+                "source_authority_purpose": "searchable_reference_or_pending_hypothesis",
+            }
+        ]
         meta = {
-            "source": "human",
+            "source": source,
             "filename": doc.filename,
             "file_path": str(file_path),
             "doc_type": doc.doc_type.value,
-            "pages": doc.metadata.get("pages", doc.metadata.get("slides", doc.metadata.get("chapters", 0))),
+            "storage_uid": storage_uid,
+            "file_hash": file_hash,
+            "source_event_id": ingestion_receipt.get("source_event_id", ""),
+            "raw_event_id": ingestion_receipt.get("raw_event_id", ""),
+            "provenance_id": ingestion_receipt.get("provenance_id", ""),
+            "content_source": "external_file",
+            "source_authority": "external_content",
+            "source_authority_purpose": "searchable_reference_or_pending_hypothesis",
+            "security": security.as_dict(),
+            "pages": doc.metadata.get(
+                "pages", doc.metadata.get("slides", doc.metadata.get("chapters", 0))
+            ),
         }
 
         # 调用文档蒸馏管道（支持强制 provider）
-        caller = HostAgentCaller(force_provider=force_provider)
+        caller = HttpApiHostAgentCaller(force_provider=force_provider)
         pipeline = DocumentDistillationPipeline(caller=caller)
         if inbox:
             pipeline.inbox_dir = inbox
@@ -515,16 +593,27 @@ class DocumentProcessor:
         result = pipeline.process(session_id, messages, meta)
 
         if result.judgment == "skip" or not result.fragments:
-            logger.info(f"[DocumentProcessor] 文档被跳过: {file_path.name}")
+            logger.info("[DocumentProcessor] 文档被跳过: %s", file_path.name)
+            if return_details:
+                return {
+                    "page_count": 0,
+                    "wiki_paths": [],
+                    "storage_uid": storage_uid,
+                    "session_id": session_id,
+                    "fragment_count": 0,
+                    "judgment": result.judgment,
+                    "doc_category": getattr(result, "doc_category", ""),
+                }
             return 0
 
         # 写入 wiki
-        paths = pipeline.write_to_wiki(result, source="human")
+        paths = pipeline.write_to_wiki(result, source=source)
 
         # 写入画像信号
         try:
             from core.persona.psyche import get_signal_store
             from datetime import datetime
+
             store = get_signal_store()
             store.insert_document_signal(
                 session_id=session_id,
@@ -532,17 +621,36 @@ class DocumentProcessor:
                 doc_type=doc.doc_type.value,
                 doc_category=result.doc_category,
                 title=doc.title,
-                key_topics=json.dumps(result.fragments[0].keywords if result.fragments else [], ensure_ascii=False),
-                entity_type=result.fragments[0].frontmatter.get("类型", "reference") if result.fragments else "reference",
+                key_topics=json.dumps(
+                    result.fragments[0].keywords if result.fragments else [], ensure_ascii=False
+                ),
+                entity_type=(
+                    result.fragments[0].frontmatter.get("类型", "reference")
+                    if result.fragments
+                    else "reference"
+                ),
                 page_count=meta.get("pages", 0),
                 import_timestamp=datetime.now().isoformat(),
                 import_source=str(file_path),
                 confidence=0.8,
             )
-        except Exception as e:
-            logger.debug(f"[DocumentProcessor] 文档信号写入失败: {e}")
+        except DOCUMENT_OPERATION_ERRORS as e:
+            logger.debug("[DocumentProcessor] 文档信号写入失败: %s", e)
 
-        logger.info(f"[DocumentProcessor] ✅ 文档已蒸馏入 wiki: {file_path.name} → {len(paths)} 页")
+        logger.info(
+            "[DocumentProcessor] ✅ 文档已蒸馏入 wiki: %s → %s 页", file_path.name, len(paths)
+        )
+        if return_details:
+            return {
+                "page_count": len(paths),
+                "wiki_paths": paths,
+                "storage_uid": storage_uid,
+                "session_id": session_id,
+                "fragment_count": len(result.fragments) if result and result.fragments else 0,
+                "judgment": result.judgment,
+                "doc_category": getattr(result, "doc_category", ""),
+                "ingestion_receipt": ingestion_receipt,
+            }
         return len(paths)
 
     def _process_excel(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -551,7 +659,7 @@ class DocumentProcessor:
 
         提取所有工作表为 Markdown 表格
         """
-        if not self.deps['pandas'] or not self.deps['openpyxl']:
+        if not self.deps["pandas"] or not self.deps["openpyxl"]:
             # 回退：使用系统命令转换为 CSV 再处理
             return self._process_excel_fallback(file_path)
 
@@ -566,7 +674,7 @@ class DocumentProcessor:
             "sheets": len(sheet_names),
             "sheet_names": sheet_names,
             "total_rows": 0,
-            "total_cells": 0
+            "total_cells": 0,
         }
 
         for sheet_name in sheet_names:
@@ -580,7 +688,7 @@ class DocumentProcessor:
             content_lines.append("")
 
             # 转换为 Markdown 表格
-            # 保留完整数据（分片保存由 save_to_memos 处理）
+            # 保留全部行；canonical raw 与后续 token 分块负责完整内容。
             display_df = df
 
             # 生成表头
@@ -613,18 +721,19 @@ class DocumentProcessor:
             needs_review=False,
             review_reason="",
             confidence=0.8,  # Excel提取通常较准确
-            processing_method="local"
+            processing_method="local",
         )
 
     def _process_excel_fallback(self, file_path: Path) -> Optional[ExtractedDocument]:
         """Excel 处理回退方案（使用系统命令）"""
-        logger.warning(f"[DocumentProcessor] ⚠️ 使用回退方案处理 Excel...")
+        logger.warning("[DocumentProcessor] ⚠️ 使用回退方案处理 Excel...")
 
         import tempfile
+
         tmp_dir = Path(tempfile.gettempdir())
 
         # 尝试使用 ssconvert (Gnumeric) 或 LibreOffice 转换
-        temp_csv = tmp_dir / f"excel_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+        tmp_dir / f"excel_export_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
 
         try:
             # 检查 LibreOffice 是否可用
@@ -633,9 +742,17 @@ class DocumentProcessor:
 
             # 尝试使用 LibreOffice 转换
             result = subprocess.run(
-                ['libreoffice', '--headless', '--convert-to', 'csv', '--outdir', str(tmp_dir), str(file_path)],
+                [
+                    "libreoffice",
+                    "--headless",
+                    "--convert-to",
+                    "csv",
+                    "--outdir",
+                    str(tmp_dir),
+                    str(file_path),
+                ],
                 capture_output=True,
-                timeout=30
+                timeout=RESULT_SECONDS,
             )
 
             if result.returncode == 0:
@@ -645,18 +762,18 @@ class DocumentProcessor:
                     # 读取 CSV 并转为 Markdown
                     content_lines = [f"# 📊 Excel: {file_path.stem}", ""]
 
-                    with open(csv_files[0], 'r', encoding='utf-8', errors='ignore') as f:
+                    with open(csv_files[0], "r", encoding="utf-8", errors="ignore") as f:
                         lines = f.readlines()
 
                     if lines:
                         # 第一行作为表头
-                        headers = lines[0].strip().split(',')
+                        headers = lines[0].strip().split(",")
                         content_lines.append("| " + " | ".join(headers) + " |")
                         content_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
 
                         # 数据行（限制前100行）
                         for line in lines[1:101]:
-                            cells = line.strip().split(',')
+                            cells = line.strip().split(",")
                             content_lines.append("| " + " | ".join(cells) + " |")
 
                         if len(lines) > 101:
@@ -672,16 +789,16 @@ class DocumentProcessor:
                         title=file_path.stem,
                         content="\n".join(content_lines),
                         metadata={"method": "libreoffice_fallback"},
-                        summary=f"Excel文件（LibreOffice转换）",
+                        summary="Excel文件（LibreOffice转换）",
                         validation_status="pending",
                         needs_review=False,
                         review_reason="",
                         confidence=0.6,  # 回退方案置信度较低
-                        processing_method="fallback"
+                        processing_method="fallback",
                     )
 
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
+        except (OSError, TypeError, ValueError, subprocess.SubprocessError) as e:
+            logger.warning("[DocumentProcessor] ❌ 回退处理失败: %s", e)
 
         return None
 
@@ -691,14 +808,14 @@ class DocumentProcessor:
 
         提取每页的标题和内容
         """
-        if not self.deps['pptx']:
-            logger.info(f"[DocumentProcessor] ❌ 缺少 python-pptx，无法处理 PPT")
-            logger.info(f"[DocumentProcessor] 安装: pip install python-pptx")
+        if not self.deps["pptx"]:
+            logger.info("[DocumentProcessor] ❌ 缺少 python-pptx，无法处理 PPT")
+            logger.info("[DocumentProcessor] 安装: pip install python-pptx")
             return None
 
         from pptx import Presentation
 
-        prs = Presentation(file_path)
+        prs = Presentation(file_path)  # type: ignore[arg-type]
 
         content_lines = [f"# 📽️ PowerPoint: {file_path.stem}", ""]
         content_lines.append(f"**幻灯片数量**: {len(prs.slides)}")
@@ -725,7 +842,7 @@ class DocumentProcessor:
                 # 其余作为内容
                 for text in slide_texts[1:]:
                     # 分段处理
-                    paragraphs = text.split('\n')
+                    paragraphs = text.split("\n")
                     for para in paragraphs:
                         if para.strip():
                             slide_lines.append(para.strip())
@@ -735,10 +852,7 @@ class DocumentProcessor:
         # 合并所有幻灯片内容
         content_lines.extend(slides_content)
 
-        metadata = {
-            "slides": len(prs.slides),
-            "total_text_chars": total_text_chars
-        }
+        metadata = {"slides": len(prs.slides), "total_text_chars": total_text_chars}
 
         summary = f"PPT文件：{len(prs.slides)}页幻灯片"
 
@@ -753,7 +867,7 @@ class DocumentProcessor:
             needs_review=False,
             review_reason="",
             confidence=0.75,
-            processing_method="local"
+            processing_method="local",
         )
 
     def _process_pdf(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -762,21 +876,20 @@ class DocumentProcessor:
 
         提取文本并保留页码信息
         """
-        if not self.deps['PyPDF2']:
+        if not self.deps["pypdf"]:
             # 回退到 pdftotext (poppler)
             return self._process_pdf_fallback(file_path)
 
-        import PyPDF2
+        import pypdf
+
+        pdf_error_type = getattr(getattr(pypdf, "errors", None), "PyPdfError", OSError)
 
         content_lines = [f"# 📄 PDF: {file_path.stem}", ""]
-        metadata = {
-            "pages": 0,
-            "extracted_pages": 0
-        }
+        metadata = {"pages": 0, "extracted_pages": 0}
 
         try:
-            with open(file_path, 'rb') as f:
-                pdf_reader = PyPDF2.PdfReader(f)
+            with open(file_path, "rb") as f:
+                pdf_reader = pypdf.PdfReader(f)
                 num_pages = len(pdf_reader.pages)
                 metadata["pages"] = num_pages
 
@@ -793,12 +906,12 @@ class DocumentProcessor:
                             content_lines.append(text.strip())
                             content_lines.append("")
                             metadata["extracted_pages"] += 1
-                    except Exception as e:
+                    except (pdf_error_type, TypeError, ValueError) as e:
                         content_lines.append(f"*第 {i} 页提取失败: {e}*")
                         content_lines.append("")
 
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ PDF 处理失败: {e}")
+        except (OSError, pdf_error_type, TypeError, ValueError) as e:
+            logger.warning("[DocumentProcessor] ❌ PDF 处理失败: %s", e, exc_info=True)
             return self._process_pdf_fallback(file_path)
 
         summary = f"PDF文件：{metadata['pages']}页，成功提取{metadata['extracted_pages']}页"
@@ -814,24 +927,24 @@ class DocumentProcessor:
             needs_review=False,
             review_reason="",
             confidence=0.7,
-            processing_method="local"
+            processing_method="local",
         )
 
     def _process_pdf_fallback(self, file_path: Path) -> Optional[ExtractedDocument]:
         """PDF 处理回退方案（使用 pdftotext）"""
-        logger.warning(f"[DocumentProcessor] ⚠️ 使用回退方案处理 PDF...")
+        logger.warning("[DocumentProcessor] ⚠️ 使用回退方案处理 PDF...")
 
         # 检查 pdftotext 是否可用
         if not shutil.which("pdftotext"):
-            logger.warning(f"[DocumentProcessor] ⚠️ pdftotext 未安装，跳过 PDF 回退处理")
+            logger.warning("[DocumentProcessor] ⚠️ pdftotext 未安装，跳过 PDF 回退处理")
             return None
 
         try:
             result = subprocess.run(
-                ['pdftotext', '-layout', str(file_path), '-'],
+                ["pdftotext", "-layout", str(file_path), "-"],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
             )
 
             if result.returncode == 0 and result.stdout:
@@ -847,16 +960,16 @@ class DocumentProcessor:
                     title=file_path.stem,
                     content="\n".join(content_lines),
                     metadata={"method": "pdftotext_fallback"},
-                    summary=f"PDF文件（pdftotext提取）",
+                    summary="PDF文件（pdftotext提取）",
                     validation_status="pending",
                     needs_review=False,
                     review_reason="",
                     confidence=0.5,  # 回退方案置信度低
-                    processing_method="fallback"
+                    processing_method="fallback",
                 )
 
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ 回退处理失败: {e}")
+        except (OSError, TypeError, ValueError, subprocess.SubprocessError) as e:
+            logger.warning("[DocumentProcessor] ❌ 回退处理失败: %s", e)
 
         return None
 
@@ -866,28 +979,25 @@ class DocumentProcessor:
 
         提取段落和表格
         """
-        if not self.deps['docx']:
-            logger.info(f"[DocumentProcessor] ❌ 缺少 python-docx，无法处理 Word")
-            logger.info(f"[DocumentProcessor] 安装: pip install python-docx")
+        if not self.deps["docx"]:
+            logger.info("[DocumentProcessor] ❌ 缺少 python-docx，无法处理 Word")
+            logger.info("[DocumentProcessor] 安装: pip install python-docx")
             return None
 
         from docx import Document
 
-        doc = Document(file_path)
+        doc = Document(file_path)  # type: ignore[arg-type]
 
         content_lines = [f"# 📝 Word: {file_path.stem}", ""]
-        metadata = {
-            "paragraphs": len(doc.paragraphs),
-            "tables": len(doc.tables)
-        }
+        metadata = {"paragraphs": len(doc.paragraphs), "tables": len(doc.tables)}
 
         # 提取段落
         for para in doc.paragraphs:
             text = para.text.strip()
             if text:
                 # 根据样式判断标题级别
-                if para.style.name.startswith('Heading'):
-                    level = para.style.name.replace('Heading ', '')
+                if para.style.name.startswith("Heading"):  # type: ignore[union-attr]
+                    level = para.style.name.replace("Heading ", "")  # type: ignore[union-attr]
                     try:
                         level_num = int(level)
                         content_lines.append(f"{'#' * level_num} {text}")
@@ -925,7 +1035,7 @@ class DocumentProcessor:
             needs_review=False,
             review_reason="",
             confidence=0.75,
-            processing_method="local"
+            processing_method="local",
         )
 
     def _process_html(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -934,28 +1044,30 @@ class DocumentProcessor:
 
         转换为 Markdown
         """
-        content = file_path.read_text(encoding='utf-8', errors='ignore')
+        content = file_path.read_text(encoding="utf-8", errors="ignore")
 
-        if self.deps['markdownify']:
+        if self.deps["markdownify"]:
             import markdownify
+
             markdown_content = markdownify.markdownify(content, heading_style="ATX")
-        elif self.deps['beautifulsoup4']:
+        elif self.deps["beautifulsoup4"]:
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(content, 'html.parser')
+
+            soup = BeautifulSoup(content, "html.parser")
             # 移除 script 和 style
             for script in soup(["script", "style"]):
                 script.decompose()
-            markdown_content = soup.get_text(separator='\n', strip=True)
+            markdown_content = soup.get_text(separator="\n", strip=True)
         else:
             # 纯文本提取
             # 移除 HTML 标签的简单实现
-            markdown_content = re.sub(r'<[^>]+>', '', content)
-            markdown_content = re.sub(r'\n\s*\n', '\n\n', markdown_content)
+            markdown_content = re.sub(r"<[^>]+>", "", content)
+            markdown_content = re.sub(r"\n\s*\n", "\n\n", markdown_content)
 
         # 添加标题
         title = file_path.stem
         # 尝试从 HTML 中提取 title
-        title_match = re.search(r'<title[^>]*>([^<]+)</title>', content, re.IGNORECASE)
+        title_match = re.search(r"<title[^>]*>([^<]+)</title>", content, re.IGNORECASE)
         if title_match:
             title = title_match.group(1).strip()
 
@@ -964,13 +1076,10 @@ class DocumentProcessor:
             "",
             f"**源文件**: {file_path.name}",
             "",
-            markdown_content
+            markdown_content,
         ]
 
-        metadata = {
-            "original_size": len(content),
-            "extracted_size": len(markdown_content)
-        }
+        metadata = {"original_size": len(content), "extracted_size": len(markdown_content)}
 
         summary = f"HTML文件：原始{len(content)}字符，提取{len(markdown_content)}字符"
 
@@ -985,7 +1094,7 @@ class DocumentProcessor:
             needs_review=False,
             review_reason="",
             confidence=0.7,
-            processing_method="local"
+            processing_method="local",
         )
 
     def _process_ebook(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -995,12 +1104,12 @@ class DocumentProcessor:
         提取章节结构和文本内容
         """
         ext = file_path.suffix.lower()
-        if ext == '.epub':
+        if ext == ".epub":
             return self._process_epub(file_path)
         # mobi/azw3 暂不支持，返回基础信息
-        logger.warning(f"[DocumentProcessor] ⚠️ {ext} 格式暂不支持完整提取，尝试作为纯文本读取")
+        logger.warning("[DocumentProcessor] ⚠️ %s 格式暂不支持完整提取，尝试作为纯文本读取", ext)
         try:
-            content = file_path.read_text(encoding='utf-8', errors='ignore')
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
             return ExtractedDocument(
                 doc_type=DocumentType.EBOOK,
                 filename=file_path.name,
@@ -1012,10 +1121,10 @@ class DocumentProcessor:
                 needs_review=True,
                 review_reason=f"{ext}格式暂不支持完整提取，仅保留前5000字符",
                 confidence=0.3,
-                processing_method="fallback"
+                processing_method="fallback",
             )
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ 电子书处理失败: {e}")
+        except (OSError, TypeError, ValueError) as e:
+            logger.warning("[DocumentProcessor] ❌ 电子书处理失败: %s", e)
             return None
 
     def _process_epub(self, file_path: Path) -> Optional[ExtractedDocument]:
@@ -1023,6 +1132,7 @@ class DocumentProcessor:
         try:
             import ebooklib
             from ebooklib import epub
+            from ebooklib.epub import EpubException
         except ImportError:
             logger.warning("[DocumentProcessor] ⚠️ 缺少 ebooklib，无法处理 EPUB")
             logger.info("[DocumentProcessor] 安装: pip install EbookLib")
@@ -1034,11 +1144,16 @@ class DocumentProcessor:
             # 提取元数据
             title = file_path.stem
             try:
-                titles = book.get_metadata('DC', 'title')
+                titles = book.get_metadata("DC", "title")
                 if titles:
                     title = titles[0][0]
-            except Exception:
-                pass
+            except (
+                OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError,
+                subprocess.SubprocessError
+            ):
+                logger.debug(
+                    "[DocumentProcessor] EPUB 元数据提取失败，使用文件名: %s", file_path.name
+                )
 
             # 提取章节内容
             content_lines = [f"# 📖 Ebook: {title}", ""]
@@ -1050,31 +1165,34 @@ class DocumentProcessor:
                     chapter_count += 1
                     try:
                         from bs4 import BeautifulSoup
-                        soup = BeautifulSoup(item.get_content(), 'html.parser')
+                        from bs4.exceptions import ParserRejectedMarkup
+
+                        soup = BeautifulSoup(item.get_content(), "html.parser")
                         # 移除 script/style
                         for tag in soup(["script", "style"]):
                             tag.decompose()
-                        text = soup.get_text(separator='\n', strip=True)
+                        text = soup.get_text(separator="\n", strip=True)
                         if text.strip():
                             chapters.append(f"## 第 {chapter_count} 章\n\n{text.strip()}")
-                    except Exception:
+                    except (OSError, ParserRejectedMarkup, TypeError, ValueError) as e:
+                        logger.debug("[DocumentProcessor] BeautifulSoup 解析失败，尝试回退: %s", e)
                         # 回退：直接提取文本
                         try:
-                            text = item.get_content().decode('utf-8', errors='ignore')
-                            text = re.sub(r'<[^>]+>', '', text)
-                            text = re.sub(r'\n\s*\n', '\n\n', text)
+                            raw_content = item.get_content()
+                            if not isinstance(raw_content, (bytes, bytearray)):
+                                raise TypeError("EPUB chapter content must be bytes")
+                            text = raw_content.decode("utf-8", errors="ignore")
+                            text = re.sub(r"<[^>]+>", "", text)
+                            text = re.sub(r"\n\s*\n", "\n\n", text)
                             if text.strip():
                                 chapters.append(f"## 第 {chapter_count} 章\n\n{text.strip()}")
-                        except Exception:
+                        except (OSError, TypeError, UnicodeError, ValueError) as e2:
+                            logger.debug("[DocumentProcessor] EPUB 章节文本提取失败，跳过: %s", e2)
                             continue
 
             content_lines.extend(chapters)
 
-            metadata = {
-                "format": "epub",
-                "chapters": chapter_count,
-                "title": title
-            }
+            metadata = {"format": "epub", "chapters": chapter_count, "title": title}
 
             summary = f"EPUB电子书：{title}，共{chapter_count}章"
 
@@ -1089,197 +1207,12 @@ class DocumentProcessor:
                 needs_review=False,
                 review_reason="",
                 confidence=0.7,
-                processing_method="local"
+                processing_method="local",
             )
 
-        except Exception as e:
-            logger.warning(f"[DocumentProcessor] ❌ EPUB 处理失败: {e}")
+        except (OSError, EpubException, TypeError, ValueError, KeyError) as e:
+            logger.warning("[DocumentProcessor] ❌ EPUB 处理失败: %s", e, exc_info=True)
             return None
-
-    def save_to_memos(self, doc: ExtractedDocument) -> Optional[str]:
-        """保存提取的内容到 Memos，大文档自动分片"""
-        import hashlib
-        session_id = f"doc-{hashlib.md5(doc.filename.encode()).hexdigest()[:8]}"
-
-        # 构建元数据块
-        meta_block = f"""---
-
-## 元数据
-
-- **原始文件**: {doc.filename}
-- **文档类型**: {doc.doc_type.value}
-- **提取时间**: {datetime.now().isoformat()}
-- **内容摘要**: {doc.summary}
-- **验证状态**: {doc.validation_status}
-- **置信度**: {doc.confidence:.2f}
-
-## 详细信息
-
-```json
-{json.dumps(doc.metadata, ensure_ascii=False, indent=2)}
-```
-"""
-        if doc.needs_review:
-            meta_block += f"""
-
----
-
-## ⚠️ 人工核对提醒
-
-此文档由系统自动提取，验证置信度较低（{doc.confidence:.2f}），需要人工核对。
-
-**核对要点**:
-1. 内容是否完整？
-2. 表格/结构是否正确？
-3. 文字是否有误？
-
-**需要核对的原因**: {doc.review_reason}
-
-核对后请删除此提醒，并将 scope:private 标签移除。
-"""
-
-        full_content = doc.content + meta_block
-
-        # 分片阈值：单条 memo 最大约 30000 字符（预留元数据空间）
-        MAX_MEMO_SIZE = 30000
-
-        if len(full_content) <= MAX_MEMO_SIZE:
-            # 小文档：单条保存
-            tags = [
-                "source=human",
-                "layer=L1",
-                f"session={session_id}",
-                f"time={datetime.now().strftime('%Y%m%d')}",
-                "scope=public",
-                f"doc:type={doc.doc_type.value}",
-                f"doc:file={doc.filename}",
-                "inbox:document"
-            ]
-            if doc.validation_status == "validated":
-                tags.append("validation:passed")
-            elif doc.validation_status == "review":
-                tags.append("validation:needs-review")
-                tags.append("scope:private")
-            try:
-                result = self.client.save(content=full_content, tags=tags)
-                memos_uid = result.uid if hasattr(result, 'uid') else str(result)
-                logger.info(f"[DocumentProcessor] ✅ 已保存: {memos_uid[:16]}...")
-                return memos_uid
-            except Exception as e:
-                logger.warning(f"[DocumentProcessor] ❌ 保存失败: {e}")
-                return None
-
-        # 大文档：分片保存
-        logger.info(f"[DocumentProcessor] 📦 内容较长({len(full_content)}字符)，分片保存...")
-        # 内容分片，每片预留元数据空间
-        content_chunks = self._split_content(doc.content, chunk_size=25000)
-        total = len(content_chunks)
-        uids = []
-
-        for i, chunk in enumerate(content_chunks, 1):
-            is_first = (i == 1)
-            is_last = (i == total)
-
-            # 只有第一片包含文档标题和元数据
-            if is_first:
-                chunk_content = f"{chunk}\n{meta_block}"
-            else:
-                chunk_content = chunk
-
-            tags = [
-                "source=human",
-                "layer=L1",
-                f"session={session_id}",
-                f"segment={i}/{total}",
-                f"time={datetime.now().strftime('%Y%m%d')}",
-                "scope=public",
-                f"doc:type={doc.doc_type.value}",
-                f"doc:file={doc.filename}",
-                "inbox:document"
-            ]
-            if doc.validation_status == "validated":
-                tags.append("validation:passed")
-            elif doc.validation_status == "review":
-                tags.append("validation:needs-review")
-                tags.append("scope:private")
-
-            try:
-                result = self.client.save(content=chunk_content, tags=tags)
-                uid = result.uid if hasattr(result, 'uid') else str(result)
-                uids.append(uid)
-                logger.info(f"[DocumentProcessor] ✅ 分片 {i}/{total} 已保存: {uid[:16]}...")
-            except Exception as e:
-                logger.warning(f"[DocumentProcessor] ❌ 分片 {i}/{total} 保存失败: {e}")
-
-        return uids[0] if uids else None
-
-    def _split_content(self, content: str, chunk_size: int = 25000) -> List[str]:
-        """按自然边界（段落/表格/章节）分片内容"""
-        if len(content) <= chunk_size:
-            return [content]
-
-        chunks = []
-        # 按二级标题（##）分割，尽量保持章节完整
-        sections = re.split(r'\n(?=##\s)', content)
-        current_chunk = ""
-
-        for section in sections:
-            if not section.strip():
-                continue
-            # 如果当前章节本身超过 chunk_size，按段落再分
-            if len(section) > chunk_size:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = ""
-                paragraphs = section.split('\n\n')
-                for para in paragraphs:
-                    # 如果单个段落就超过 chunk_size，按句子强制分割
-                    if len(para) > chunk_size:
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                            current_chunk = ""
-                        sentences = re.split(r'(?<=[.!?。！？])\s+', para)
-                        for sent in sentences:
-                            if len(current_chunk) + len(sent) + 1 > chunk_size and current_chunk:
-                                chunks.append(current_chunk.strip())
-                                current_chunk = sent
-                            else:
-                                current_chunk = (current_chunk + " " + sent).strip() if current_chunk else sent
-                        continue
-                    if len(current_chunk) + len(para) + 2 > chunk_size and current_chunk:
-                        chunks.append(current_chunk.strip())
-                        current_chunk = para
-                    else:
-                        current_chunk = (current_chunk + "\n\n" + para).strip() if current_chunk else para
-            else:
-                if len(current_chunk) + len(section) + 1 > chunk_size and current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = section
-                else:
-                    current_chunk = (current_chunk + "\n" + section).strip() if current_chunk else section
-
-        if current_chunk.strip():
-            chunks.append(current_chunk.strip())
-
-        return chunks if chunks else [content]
-
-    def save_to_memos_with_review(self, file_path: Path, doc: ExtractedDocument) -> Optional[str]:
-        """
-        保存需要人工审核的文档到 Memos
-
-        与 save_to_memos 的区别：
-        1. 强制标记为需要审核
-        2. 设为私有可见性
-        3. 添加审核提醒
-        """
-        # 强制设置审核标记
-        doc.needs_review = True
-        doc.validation_status = "review"
-
-        if not doc.review_reason:
-            doc.review_reason = "验证置信度低，需要人工核对"
-
-        return self.save_to_memos(doc)
 
     def save_to_rejected(self, doc: ExtractedDocument, file_path: Path) -> Path:
         """
@@ -1287,7 +1220,8 @@ class DocumentProcessor:
         返回保存路径
         """
         from core.config import get_config
-        rejected_dir = get_config().data_dir / "rejected_documents"
+
+        rejected_dir = get_config().database_dir / "rejected_documents"
         rejected_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1310,20 +1244,21 @@ class DocumentProcessor:
         # 保存原始文件副本
         if file_path.exists():
             import shutil
+
             dest = rejected_dir / f"{base_name}_orig{file_path.suffix}"
             shutil.copy2(file_path, dest)
 
-        logger.info(f"[DocumentProcessor] 🚫 已拒绝并隔离: {meta_path}")
+        logger.info("[DocumentProcessor] 🚫 已拒绝并隔离: %s", meta_path)
         return meta_path
 
 
 def main():
     """CLI入口"""
     import argparse
+
     parser = argparse.ArgumentParser(description="Document Processor")
     parser.add_argument("file", nargs="?", help="文档文件路径")
     parser.add_argument("--check-deps", action="store_true", help="检查依赖")
-    parser.add_argument("--save", action="store_true", help="保存到Memos")
 
     args = parser.parse_args()
 
@@ -1333,7 +1268,7 @@ def main():
         logger.info("📦 依赖状态:")
         for dep, available in processor.deps.items():
             status = "✅" if available else "❌"
-            logger.info(f"  {status} {dep}")
+            logger.info("  %s %s", status, dep)
         return
 
     if not args.file:
@@ -1344,20 +1279,16 @@ def main():
     doc = processor.process_document(file_path)
 
     if doc:
-        logger.info(f"\n{'='*50}")
-        logger.info(f"处理结果:")
-        logger.info(f"  类型: {doc.doc_type.value}")
-        logger.info(f"  标题: {doc.title}")
-        logger.info(f"  摘要: {doc.summary}")
-        logger.info(f"{'='*50}")
-        logger.info(f"\n内容预览（前500字符）:")
+        logger.info("\n%s", "=" * 50)
+        logger.info("处理结果:")
+        logger.info("  类型: %s", doc.doc_type.value)
+        logger.info("  标题: %s", doc.title)
+        logger.info("  摘要: %s", doc.summary)
+        logger.info("%s", "=" * 50)
+        logger.info("\n内容预览（前500字符）:")
         logger.info(doc.content[:500])
-        logger.info(f"\n... ({len(doc.content)} 字符)")
+        logger.info("\n... (%s 字符)", len(doc.content))
 
-        if args.save:
-            memos_uid = processor.save_to_memos(doc)
-            if memos_uid:
-                logger.info(f"\n✅ 已保存到Memos: {memos_uid}")
     else:
         logger.warning("❌ 处理失败")
 

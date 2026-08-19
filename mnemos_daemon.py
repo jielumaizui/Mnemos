@@ -1,2592 +1,1405 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Mnemos Daemon — 后台守护进程 (v2.0.0)
+Mnemos Daemon — 后台守护进程
 
-职责（全自动闭环）：
-1. L1同步：监控Claude session文件变化 → 自动进Memos
-2. 蒸馏：distill_queue新任务 → 触发蒸馏
-3. 合并：Memos → 蒸馏 → Wiki（Orchestrator全流程）
-4. 心跳：定期健康检查 + 热力衰减
-5. 收件箱：扫描inbox目录 → 处理文件进Memos
-6. 画像：定期采集信号
-
-启动: mnemos daemon start
-停止: mnemos daemon stop
-状态: mnemos daemon status
+CLI:
+    python mnemos_daemon.py start      # 后台启动
+    python mnemos_daemon.py stop       # 停止
+    python mnemos_daemon.py status     # 查看状态
+    python mnemos_daemon.py run        # 前台运行（用于 cron / 调试）
+    python mnemos_daemon.py install-windows
+    python mnemos_daemon.py uninstall-windows
 """
 
-import os
-import sys
-import time
-import json
-import signal
+from __future__ import annotations
+
+import argparse  # noqa: F401
+import concurrent.futures
 import logging
-import logging.handlers
-import argparse
+import os
+import platform  # noqa: F401
+import shutil
+import sqlite3
+import subprocess  # noqa: F401
+import sys
 import threading
+import traceback
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, cast
 
-# 配置日志（使用 RotatingFileHandler 避免单文件无限膨胀）
-log_dir = Path.home() / ".mnemos"
-log_dir.mkdir(parents=True, exist_ok=True)
-log_file = log_dir / "daemon.log"
+# ── 项目路径注入 ──
+_PROJECT_ROOT = Path(__file__).resolve().parent
 
-# 默认保留 5 个备份文件，单个文件最大 10MB
-max_bytes = 10 * 1024 * 1024
-backup_count = 5
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [daemon] %(levelname)s: %(message)s",
-    handlers=[
-        logging.handlers.RotatingFileHandler(
-            log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
-        ),
-        logging.StreamHandler(sys.stderr),
-    ],
+def _resolve_executable(name: str) -> Optional[str]:
+    """将命令名解析为绝对路径；未找到返回 None。"""
+    return shutil.which(name)
+
+
+def _windows_executable(name: str) -> str:
+    """返回 Windows 系统命令的绝对路径（优先 shutil.which，回退 System32）。"""
+    resolved = _resolve_executable(name)
+    if resolved:
+        return resolved
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return os.path.join(system_root, "System32", name)
+
+
+from daemon import process_control as _process_control
+from daemon import adaptive_service as _adaptive_service  # noqa: F401
+from daemon import agent_source_runtime as _agent_source_runtime
+from daemon import command_control as _command_control
+from daemon import event_handlers as _event_handlers  # noqa: F401
+from daemon import entrypoint_support as _entrypoint_support
+from daemon import file_ingest as _file_ingest
+from daemon import heartbeat as _heartbeat
+from daemon import instance_control as _instance_control
+from daemon import intervals as _intervals
+from daemon import kia_services as _kia_services  # noqa: F401
+from daemon import link_probe as _link_probe  # noqa: F401
+from daemon import maintenance as _maintenance
+from daemon import observation_service as _observation_service  # noqa: F401
+from daemon import prediction_service as _prediction_service  # noqa: F401
+from daemon import training_governance_service as _training_governance_service  # noqa: F401
+from daemon import consolidation_service as _consolidation_service  # noqa: F401
+from daemon import raw_sync as _raw_sync
+from daemon import raw_projection_service as _raw_projection_service
+from daemon import reflection_services as _reflection_services  # noqa: F401
+from daemon import resource_budget as _resource_budget
+from daemon import runtime as _runtime
+from daemon import scoring_signals as _scoring_signals  # noqa: F401
+from daemon import service_registry as _service_registry
+from daemon import service_state as _service_state
+from daemon import triggers as _triggers
+from core.sync_framework.agent_path_watcher import AgentPathWatcher
+from core.sync_framework.storage_backend import StorageError
+
+_runtime.ensure_project_on_path(_PROJECT_ROOT)
+
+logger = logging.getLogger("mnemos.daemon")
+_ENTRYPOINT_HOST = sys.modules[__name__]
+
+DAEMON_OPERATION_ERRORS = (
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+    StorageError,
 )
-logger = logging.getLogger(__name__)
 
-PID_FILE = log_dir / "daemon.pid"
+
+# ── Vault 目录自动初始化 ──
+def _ensure_vault_directories():
+    """首次启动时确保两个 Vault 的骨架目录存在。"""
+    _runtime.ensure_vault_directories(log=logger)
+
+
+def _bootstrap_runtime_schema():
+    """Daemon 启动时幂等初始化当前运行所需的关键数据库表。"""
+    _runtime.bootstrap_runtime_schema(log=logger)
+
+
+def _bootstrap_runtime_flow_ledger(cfg: Any) -> None:
+    """Provision flow declarations outside the read-only health path."""
+    from daemon.runtime_flow_receipts import bootstrap_runtime_flow_ledger
+
+    bootstrap_runtime_flow_ledger(cfg, log=logger)
+
+
+# ── 文件守护（自动防 0 字节腐败）──
+def _start_file_guardian():
+    """启动文件守护线程，无需用户干预。
+
+    1. 立即检查一次关键文件完整性
+    2. 启动后台线程持续轮询
+    """
+    _runtime.start_file_guardian(_PROJECT_ROOT, log=logger)
+
+
+# ── 配置 ──
+# 优先从 Config 读取数据目录，支持 MNEMOS_DIR / MNEMOS_DATABASE_DIR 环境变量。
+# 导入阶段只保留占位路径；run/main 阶段再读取真实配置。
+_RUNTIME_PATHS: Optional[Any] = None
+_DATA_DIR = Path(".mnemos")
+_DATABASE_DIR = Path(".mnemos")
+PID_FILE = _DATABASE_DIR / "daemon.pid"
+STATUS_FILE = _DATABASE_DIR / "daemon.status"  # 子进程写入启动状态
+DAEMON_LOG = _DATABASE_DIR / "logs" / "daemon.log"
+DAEMON_HEARTBEAT_FILE = _DATABASE_DIR / "daemon_heartbeat.json"
+STARTUP_STATUS_TIMEOUT_SECONDS = 45.0
+
+INTERVALS: Dict[str, int] = _intervals.build_default_intervals(capture_tick=300)
+_daemon_instance_identity: Dict[str, Any] | None = None
+
+# A constrained profile is intentionally explicit instead of relying on a long
+# list of environment-disabled services.  That keeps the OS-bound instance
+# identity, heartbeat, and scheduler aligned with what is actually running.
+_PRODUCTION_RUN_PROFILE = "production"
+_CONTROLLED_RAW_SYNC_ONLY_RUN_PROFILE = "controlled_raw_sync_only_v1"
+_CONTROLLED_RAW_SYNC_ONLY_SERVICE_NAMES = ("heartbeat", "raw_sync")
+_daemon_run_profile = _PRODUCTION_RUN_PROFILE
+_daemon_service_names: tuple[str, ...] | None = None
+
+
+def _service_names_for_profile(*, controlled_raw_sync_only: bool) -> tuple[str, ...]:
+    """Return the complete, auditable service manifest for one daemon profile."""
+    return _entrypoint_support.service_names_for_profile(
+        _ENTRYPOINT_HOST,
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+def _activate_daemon_profile(*, controlled_raw_sync_only: bool) -> None:
+    """Bind process-global runtime reporting to the selected daemon profile."""
+    global _daemon_run_profile, _daemon_service_names
+    _daemon_run_profile = (
+        _CONTROLLED_RAW_SYNC_ONLY_RUN_PROFILE
+        if controlled_raw_sync_only
+        else _PRODUCTION_RUN_PROFILE
+    )
+    _daemon_service_names = _service_names_for_profile(
+        controlled_raw_sync_only=controlled_raw_sync_only
+    )
+
+
+def _reset_daemon_profile() -> None:
+    """Restore import-time defaults after a daemon instance exits or fails to start."""
+    global _daemon_run_profile, _daemon_service_names
+    _daemon_run_profile = _PRODUCTION_RUN_PROFILE
+    _daemon_service_names = None
+
+
+def _active_service_names() -> tuple[str, ...]:
+    """Return the services bound to this process, preserving test-time intervals."""
+    return _daemon_service_names or tuple(INTERVALS)
+
+
+def _active_intervals() -> Dict[str, int]:
+    """Return intervals for the services the current daemon instance may schedule."""
+    return _entrypoint_support.active_intervals(_ENTRYPOINT_HOST)
+
+
+def _apply_runtime_paths(paths: Any) -> None:
+    """Apply resolved runtime paths to the daemon entrypoint host."""
+    _entrypoint_support.apply_runtime_paths(_ENTRYPOINT_HOST, paths)
+
+
+def _configure_runtime_paths(cfg=None) -> Any:
+    """Resolve daemon runtime paths at command/runtime entrypoints."""
+    try:
+        paths = _runtime.RuntimePaths.from_config(cfg)
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+        paths = _runtime.RuntimePaths.fallback()
+    _apply_runtime_paths(paths)
+    return paths
+
 
 # 全局停止事件
-_stop_event = threading.Event()
+stop_event = threading.Event()
+
+# 正在线程池中执行的服务 Future（P105：避免重服务重叠执行）
+_service_futures: Dict[str, Any] = {}
+
+# 各服务最近一次执行结果摘要（供 heartbeat/status 使用）
+_service_results: Dict[str, Dict[str, Any]] = {}
+
+# 各服务最近捕获的已知运维错误摘要，供 health/doctor 展示。
+_service_error_state: Dict[str, Dict[str, Any]] = {}
 
 
-def _as_bool(value: Any, default: bool = False) -> bool:
-    """配置布尔值归一化，兼容 JSON/env 中的字符串写法。"""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on", "enabled")
-    return bool(value)
+def _service_enabled(cfg, service_name: str) -> bool:
+    """Read one canonical daemon service switch."""
+    return _entrypoint_support.service_enabled(
+        _ENTRYPOINT_HOST,
+        cfg,
+        service_name,
+    )
 
 
-def _config_int(config: Any, key: str, default: int) -> int:
+def _start_wiki_auto_commit(cfg) -> None:
+    """启动 Wiki 数据仓库自动提交监控（如果服务启用）。"""
+    global _wiki_auto_commit_handler
+    if _wiki_auto_commit_handler is not None:
+        return
+    if not _service_enabled(cfg, "wiki_auto_commit"):
+        logger.info("[DAEMON] wiki_auto_commit 服务已关闭，跳过")
+        return
+
     try:
-        return int(config.get(key, default))
-    except (TypeError, ValueError):
-        return default
+        from scripts.auto_commit_wiki import start_auto_commit
+
+        _wiki_auto_commit_handler = start_auto_commit()
+        if _wiki_auto_commit_handler is not None:
+            logger.info("[DAEMON] Wiki 自动提交服务已启动")
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] Wiki 自动提交服务启动失败: %s", exc, exc_info=True)
 
 
-def _config_float(config: Any, key: str, default: float) -> float:
+# 全局 EventBus 实例（daemon 生命周期内复用）
+_event_bus_instance: Optional[Any] = None
+
+# Wiki 自动提交监控句柄（daemon 生命周期内复用）
+_wiki_auto_commit_handler: Optional[Any] = None
+
+# 全局 CognitiveGraphUpdater 实例（daemon 生命周期内复用）
+_cognitive_graph_updater: Optional[Any] = None
+
+_cognition_episode_dispatch_owner: Optional[Any] = None
+
+# 全局 ReflectionEngine 实例（daemon 生命周期内复用，已注册 Layer 5 消费者）
+_reflection_engine_instance: Optional[Any] = None
+
+# 全局 AdaptiveConfig 实例（daemon 生命周期内复用）
+_adaptive_config_instance: Optional[Any] = None
+
+# 全局 KIA PluggableModule registry（daemon 生命周期内复用）
+_kia_module_registry: Optional[Any] = None
+
+# 全局 CaptureWorkerPool 实例（daemon 生命周期内复用）
+_capture_worker_pool: Optional[Any] = None
+
+# 数据库维护任务单例（daemon 生命周期内复用）
+_db_maintenance_task: Optional[_maintenance.DatabaseMaintenanceTask] = None
+
+# KIA scheduler singleton（daemon 生命周期内复用，避免每次 tick 重复订阅 EventBus）
+_knowledge_scheduler_instance: Optional[Any] = None
+
+# TriggerDispatcher 相关（事件驱动 Raw 同步）
+_trigger_dispatcher: Optional[Any] = None
+_trigger_dirty_sources: set = set()
+_trigger_lock: threading.Lock = threading.Lock()
+
+# FileIngestor 相关（守护进程定时摄入目录）
+_file_ingestor_instance: Optional[Any] = None
+
+# Stat-based watchers（轻量轮询后备）
+_agent_path_watcher: Optional[AgentPathWatcher] = None
+_agent_path_watcher_primed: bool = False
+
+# 统一运行时上下文（由 run_daemon 设置，供延迟创建的资源注册）
+_runtime_context: Optional[Any] = None
+
+
+def _get_adaptive_config():
+    """懒加载 AdaptiveConfig，复用 daemon 生命周期内的实例，并注入全局 EffectivePolicy。"""
+    return _entrypoint_support.get_adaptive_config(_ENTRYPOINT_HOST)
+
+
+def _get_kia_module_registry(cfg=None):
+    """Build and reuse the daemon-level KIA pluggable module registry."""
+    return _entrypoint_support.get_kia_module_registry(_ENTRYPOINT_HOST, cfg)
+
+
+def _kia_stress_test_dry_run(cfg: Any) -> bool:
+    return bool(cfg.get("stress_test.dry_run", True))
+
+
+def _start_kia_modules(cfg=None) -> Dict[str, Any]:
+    """Start enabled KIA modules in registry dependency order."""
+    registry = _get_kia_module_registry(cfg)
+    if registry is None:
+        return {}
     try:
-        return float(config.get(key, default))
-    except (TypeError, ValueError):
-        return default
+        status = cast(Dict[str, Any], registry.start_enabled())
+        running = sum(1 for item in status.values() if item.get("state") == "running")
+        logger.info("[DAEMON] KIA modules started: %d running / %d total", running, len(status))
+        return status
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("kia_modules", exc)
+        return {"errors": 1, "error": str(exc)}
 
 
-def _service_enabled(config: Any, key: str, default: bool = True) -> bool:
-    return _as_bool(config.get(key, default), default)
-
-
-class _L1ScanState:
-    """记录 L1 扫描游标，避免 daemon 每轮重复解析历史文件。"""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self._data: Dict[str, Dict[str, Any]] = {}
-        self._dirty = False
-        self._load()
-
-    def _load(self) -> None:
-        try:
-            if self.path.exists():
-                loaded = json.loads(self.path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    self._data = loaded
-        except Exception as e:
-            logger.warning(f"[L1同步] 扫描游标读取失败，使用空游标: {e}")
-            self._data = {}
-
-    def _key(self, source_name: str, session_info: Any) -> str:
-        return f"{source_name}:{session_info.session_id}:{session_info.source_path}"
-
-    def _source_key(self, source_name: str) -> str:
-        return f"__source__:{source_name}"
-
-    def source_scanned_at(self, source_name: str) -> str:
-        record = self._data.get(self._source_key(source_name), {})
-        return str(record.get("scanned_at", ""))
-
-    def mark_source_scanned(self, source_name: str) -> None:
-        self._data[self._source_key(source_name)] = {
-            "source": source_name,
-            "scanned_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._dirty = True
-
-    def is_unchanged(
-        self,
-        source_name: str,
-        session_info: Any,
-        file_state: Dict[str, Any],
-    ) -> bool:
-        record = self._data.get(self._key(source_name, session_info))
-        if not record:
-            return False
-        # 优先使用 fingerprint（支持多文件聚合状态）
-        if "fingerprint" in file_state and "fingerprint" in record:
-            return record.get("fingerprint") == file_state.get("fingerprint")
-        return (
-            record.get("mtime") == file_state.get("mtime")
-            and record.get("size") == file_state.get("size")
-        )
-
-    def mark_scanned(
-        self,
-        source_name: str,
-        session_info: Any,
-        file_state: Dict[str, Any],
-        status: str,
-    ) -> None:
-        entry = {
-            "path": str(session_info.source_path),
-            "session_id": session_info.session_id,
-            "mtime": file_state.get("mtime"),
-            "size": file_state.get("size"),
-            "status": status,
-            "scanned_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if "fingerprint" in file_state:
-            entry["fingerprint"] = file_state["fingerprint"]
-        if "file_count" in file_state:
-            entry["file_count"] = file_state["file_count"]
-        self._data[self._key(source_name, session_info)] = entry
-        self._dirty = True
-
-    def save(self) -> None:
-        if not self._dirty:
-            return
-        # 防止内存/磁盘无限增长：只保留最近 1000 条扫描记录
-        if len(self._data) > 1000:
-            sorted_items = sorted(
-                self._data.items(),
-                key=lambda kv: kv[1].get("scanned_at", ""),
-                reverse=True,
-            )
-            self._data = dict(sorted_items[:1000])
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp_path.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp_path.replace(self.path)
-        self._dirty = False
-
-
-def _l1_scan_limits(config: Any) -> Dict[str, Any]:
-    return {
-        "poll_interval": max(10, _config_int(config, "sync.l1_scan_poll_interval_seconds", 60)),
-        "max_sources_per_cycle": max(0, _config_int(config, "sync.l1_scan_max_sources_per_cycle", 3)),
-        "max_sessions_per_source": max(1, _config_int(config, "sync.l1_scan_max_sessions_per_source", 20)),
-        "max_turns_per_session": max(1, _config_int(config, "sync.l1_scan_max_turns_per_session", 50)),
-        "max_file_bytes": max(0, _config_int(config, "sync.l1_scan_max_file_bytes", 2 * 1024 * 1024)),
-        "recent_hours": max(0.0, _config_float(config, "sync.l1_scan_recent_hours", 24.0)),
-    }
-
-
-def _l1_session_file_state(source: Any, session_info: Any) -> Optional[Dict[str, Any]]:
-    """获取 session 状态：优先使用 source 的聚合状态，回退到单文件 stat"""
-    # P0-2: 优先使用 AgentSource 自己的 get_session_state()
+def _stop_kia_modules() -> Dict[str, Any]:
+    """Stop daemon-level KIA modules in reverse start order."""
+    global _kia_module_registry
+    registry = _kia_module_registry
+    if registry is None:
+        return {}
     try:
-        if hasattr(source, "get_session_state"):
-            state = source.get_session_state(session_info)
-            if state is not None:
-                return state
-    except Exception:
-        pass
-    # 回退到单文件 stat
-    try:
-        stat = session_info.source_path.stat()
-        return {
-            "mtime": session_info.mtime if session_info.mtime is not None else stat.st_mtime,
-            "size": stat.st_size,
-            "file_count": 1,
-            "fingerprint": f"{session_info.source_path.name}:{stat.st_size}:{stat.st_mtime}",
-        }
-    except OSError:
-        return None
+        status = cast(Dict[str, Any], registry.stop_all())
+        logger.info("[DAEMON] KIA modules stopped: %d", len(status))
+        return status
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] KIA modules 停止失败: %s", exc, exc_info=True)
+        return {"errors": 1, "error": str(exc)}
+    finally:
+        _kia_module_registry = None
 
 
-def _select_l1_sessions(
-    source: Any,
-    sessions: List[Any],
-    state: _L1ScanState,
-    limits: Dict[str, Any],
-) -> Tuple[List[Tuple[Any, Dict[str, Any]]], Dict[str, int]]:
-    """按安全策略选择本轮允许解析的 session。"""
-    now = time.time()
-    recent_seconds = float(limits["recent_hours"]) * 3600
-    max_file_bytes = int(limits["max_file_bytes"])
-    max_sessions = int(limits["max_sessions_per_source"])
-    stats = {
-        "discovered": len(sessions),
-        "selected": 0,
-        "skipped_missing": 0,
-        "skipped_large": 0,
-        "skipped_stale": 0,
-        "skipped_unchanged": 0,
-        "skipped_over_limit": 0,
-    }
-
-    source_name = source.name if hasattr(source, "name") else str(source)
-    candidates: List[Tuple[float, Any, Dict[str, Any]]] = []
-    for session_info in sessions:
-        file_state = _l1_session_file_state(source, session_info)
-        if file_state is None:
-            stats["skipped_missing"] += 1
-            continue
-        if max_file_bytes and file_state["size"] > max_file_bytes:
-            stats["skipped_large"] += 1
-            continue
-        if recent_seconds and (now - float(file_state["mtime"])) > recent_seconds:
-            stats["skipped_stale"] += 1
-            continue
-        if state.is_unchanged(source_name, session_info, file_state):
-            stats["skipped_unchanged"] += 1
-            continue
-        candidates.append((float(file_state["mtime"]), session_info, file_state))
-
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    selected = candidates[:max_sessions]
-    stats["selected"] = len(selected)
-    stats["skipped_over_limit"] = max(0, len(candidates) - len(selected))
-    return [(session_info, file_state) for _, session_info, file_state in selected], stats
+# ── 文件锁（Unix）──
 
 
-def _select_l1_sources(agents: List[Any], state: _L1ScanState, max_sources: int) -> List[Any]:
-    """Select sources by round-robin age instead of stable registry order."""
-    if not max_sources or len(agents) <= max_sources:
-        return agents
-    return sorted(
-        agents,
-        key=lambda source: (state.source_scanned_at(source.name), source.name),
-    )[:max_sources]
+def _acquire_pid_lock(cfg: Any | None = None) -> bool:
+    """Acquire the PID lock and bind it to a complete OS-derived instance identity."""
+    global _daemon_instance_identity
+    record = _instance_control.acquire_instance_lock(
+        PID_FILE,
+        database_dir=PID_FILE.parent,
+        service_names=_active_service_names(),
+        project_root=_PROJECT_ROOT,
+        config_fingerprint=getattr(cfg, "config_fingerprint", None),
+        log=logger,
+    )
+    _daemon_instance_identity = record
+    return record is not None
 
 
-def _is_process_running(pid: int) -> bool:
-    """跨平台进程存在性检测"""
-    if sys.platform == "win32":
-        import subprocess
-        try:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
-            return str(pid) in result.stdout
-        except Exception:
-            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
-            return False
-    else:
-        try:
-            os.kill(pid, 0)
-            return True
-        except (OSError, ProcessLookupError):
-            return False
+def _release_pid_lock() -> None:
+    """释放 PID 文件锁并删除文件。"""
+    global _daemon_instance_identity
+    _process_control.release_pid_lock(PID_FILE, log=logger)
+    _daemon_instance_identity = None
 
 
 def _count_daemon_processes() -> int:
-    """通过 pgrep/tasklist 统计实际运行的 mnemos_daemon 进程数（不依赖 pid 文件）"""
-    if sys.platform == "win32":
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
-                capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
-            return sum(1 for line in result.stdout.splitlines() if "mnemos_daemon" in line)
-        except Exception:
-            return 0
-    else:
-        try:
-            import subprocess
-            import platform
-            if platform.system() == "Darwin":
-                result = subprocess.run(
-                    ["pgrep", "-f", "mnemos_daemon.py"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode not in (0, 1):
-                    return 0
-                count = 0
-                for pid in result.stdout.splitlines():
-                    pid = pid.strip()
-                    if not pid.isdigit():
-                        continue
-                    ps_result = subprocess.run(
-                        ["ps", "-p", pid, "-o", "args="],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if ps_result.returncode == 0:
-                        cmd = ps_result.stdout.strip()
-                        if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
-                            count += 1
-                return count
-            else:
-                result = subprocess.run(
-                    ["pgrep", "-af", "mnemos_daemon.py"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode not in (0, 1):
-                    return 0
-                return sum(
-                    1 for line in result.stdout.splitlines()
-                    if "mnemos_daemon.py" in line and "pgrep" not in line
-                )
-        except Exception:
-            return 0
+    """统计 mnemos_daemon.py 进程数，排除当前进程和测试进程。"""
+    return _process_control.count_daemon_processes(log=logger)
 
 
-def is_daemon_running() -> bool:
-    """检查 daemon 是否已在运行（pid 文件 + 进程扫描双重验证）"""
-    # 1. 先检查 pid 文件
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-            if _is_process_running(pid):
-                return True
-            # pid 文件存在但进程已死，清理脏文件
-            PID_FILE.unlink()
-        except (ValueError, OSError, ProcessLookupError):
-            pass
+# ── 状态文件（子进程 ↔ 父进程通信）──
 
-    # 2. 再扫描实际进程（防止 pid 文件被删除或覆盖后重复启动）
-    return _count_daemon_processes() > 0
 
+def _write_startup_status(success: bool, error: str = "") -> None:
+    _process_control.write_startup_status(STATUS_FILE, success, error, log=logger)
 
-def write_pid():
-    """写入 PID 文件"""
-    PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
 
+def _read_startup_status(timeout: float = 3.0) -> tuple[bool, Optional[int], str]:
+    """读取子进程启动状态。返回 (成功, pid, 错误信息)。"""
+    return _process_control.read_startup_status(STATUS_FILE, timeout, log=logger)
 
-def remove_pid():
-    """删除 PID 文件"""
-    try:
-        PID_FILE.unlink()
-    except FileNotFoundError:
-        pass
 
+def _write_daemon_heartbeat(snapshot: Dict[str, Any]) -> None:
+    """Persist the latest daemon heartbeat for out-of-process health checks."""
+    _heartbeat.write_daemon_heartbeat(DAEMON_HEARTBEAT_FILE, snapshot, log=logger)
 
-# ==================== 自动化服务 ====================
 
-def service_l1_sync(stop_event: threading.Event):
-    """
-    服务1: L1同步 — 通过 CaptureService 监控所有 Agent 源文件变化，自动同步到 Memos
+def _clear_startup_status() -> None:
+    _process_control.clear_startup_status(STATUS_FILE, log=logger)
 
-    架构约束：
-    - 所有 AgentSource 必须走 CaptureService → CaptureQueue → CaptureWorkerPool → SyncEngine
-    - 不复用旧的 sync_engine.sync_batch() 直接写入路径
-    - 原始 L0 解析能力复用（discover_sessions + parse_turns），写入路径废弃/下沉
-    """
-    logger.info("[L1同步] 服务启动")
-    capture_service = None
-    try:
-        from core.sync_framework.capture_service import CaptureService
-        from core.sync_framework.registry import AgentRegistry
-        from core.config import get_config
 
-        config = get_config()
-        limits = _l1_scan_limits(config)
-        state = _L1ScanState(config.data_dir / "l1_scan_state.json")
+# ── Daemonize ──
 
-        # 1. 先注册内置 Agent（确保 Worker 能正确解析来源标签）
-        AgentRegistry.register_builtin_agents()
 
-        # 2. 初始化 CaptureService（producer 模式）。
-        # CaptureQueue consumer 已由独立的 service_capture_worker 负责，避免 L1 扫描和队列消费互相拖死。
-        capture_service = CaptureService(start_worker=False)
+def _daemonize_unix() -> None:
+    """Unix 平台 double-fork 到后台。"""
+    _command_control.daemonize_unix(os, sys)
 
-        # 定时轮询模式（watchdog 由 TriggerDispatcher 管理）
-        poll_interval = limits["poll_interval"]
 
-        while not stop_event.is_set():
-            try:
-                # 重新发现活跃 Agent
-                agents = AgentRegistry.auto_discover()
-                max_sources = limits["max_sources_per_cycle"]
-                if max_sources and len(agents) > max_sources:
-                    logger.info(
-                        f"[L1同步] 本轮发现 {len(agents)} 个 Agent，轮转扫描 {max_sources} 个"
-                    )
-                    agents = _select_l1_sources(agents, state, max_sources)
-                logger.debug(f"[L1同步] 发现 {len(agents)} 个活跃 Agent 源")
+def _daemonize_windows() -> None:
+    """Windows is already detached by cmd_start; lock acquisition is shared below."""
+    _command_control.daemonize_windows()
 
-                for source in agents:
-                    try:
-                        sessions = source.discover_sessions()
-                        if not sessions:
-                            state.mark_source_scanned(source.name)
-                            state.save()
-                            continue
 
-                        selected_sessions, scan_stats = _select_l1_sessions(
-                            source, sessions, state, limits
-                        )
-                        if not selected_sessions:
-                            if any(v for k, v in scan_stats.items() if k.startswith("skipped_")):
-                                logger.debug(f"[L1同步] {source.name}: {scan_stats}")
-                            state.mark_source_scanned(source.name)
-                            state.save()
-                            continue
+# ── 异常分类 ──
 
-                        queued_count = 0
-                        dup_count = 0
-                        bp_count = 0
-                        error_count = 0
-                        scanned_count = 0
-                        parsed_turns = 0
 
-                        for session_info, file_state in selected_sessions:
-                            try:
-                                turns = source.parse_turns(session_info.source_path)
-                                if not turns:
-                                    state.mark_scanned(source.name, session_info, file_state, "empty")
-                                    continue
+def _log_service_error(service_name: str, exc: Exception) -> None:
+    """按异常类型分级记录服务错误。"""
+    _service_state.log_service_error(_service_error_state, service_name, exc, log=logger)
 
-                                # 确保按 turn_number 顺序入队，避免增量跳过逻辑错乱
-                                turns = sorted(turns, key=lambda t: t.turn_number)
-                                max_turns = limits["max_turns_per_session"]
-                                if max_turns and len(turns) > max_turns:
-                                    turns = turns[-max_turns:]
-                                parsed_turns += len(turns)
 
-                                session_new_turns = 0
-                                session_started = False
-                                try:
-                                    for turn in turns:
-                                        result = capture_service.capture_turn(
-                                            source_agent=source.name,
-                                            session_id=session_info.session_id,
-                                            turn_number=turn.turn_number,
-                                            user_content=turn.user_content,
-                                            assistant_content=turn.assistant_content,
-                                            timestamp=turn.timestamp,
-                                            model=source.model_tag,
-                                            cwd=str(session_info.source_path),
-                                            metadata=turn.metadata,
-                                            tool_calls=turn.tool_calls,
-                                            tool_results=turn.tool_results,
-                                            reasoning=turn.reasoning,
-                                            attachments=turn.attachments,
-                                            raw_event_refs=turn.raw_event_refs,
-                                            source_files=turn.source_files,
-                                            completeness=turn.completeness,
-                                        )
-                                        status = result.get("status")
-                                        if status == "queued":
-                                            queued_count += 1
-                                            session_new_turns += 1
-                                        elif status == "duplicate":
-                                            dup_count += 1
-                                        elif status == "backpressure":
-                                            bp_count += 1
-                                        elif status == "error":
-                                            error_count += 1
+def _record_service_recovery_action(
+    service_name: str,
+    previous_error: Dict[str, Any],
+    result: Dict[str, Any],
+    cfg: Any,
+) -> None:
+    from daemon.runtime_flow_receipts import record_service_recovery_action
 
-                                        # 只对新入队 turn 发布事件；duplicate 不应重复驱动 KIA/EventBus。
-                                        if status == "queued":
-                                            try:
-                                                from core.mnemos_bus import publish_event
-                                                if not session_started:
-                                                    source.on_session_start(
-                                                        session_info.session_id,
-                                                        {"working_dir": session_info.working_dir, "agent": source.name},
-                                                    )
-                                                    publish_event("session.start", source.name, {
-                                                        "session_id": session_info.session_id,
-                                                        "user_message": turns[0].user_content if turns else "",
-                                                        "working_dir": str(session_info.working_dir) if session_info.working_dir else "",
-                                                    })
-                                                    session_started = True
-                                                publish_event("message.exchanged", source.name, {
-                                                    "session_id": session_info.session_id,
-                                                    "turn_number": turn.turn_number,
-                                                    "role": "user" if turn.user_content else "assistant",
-                                                    "content_preview": (turn.user_content or turn.assistant_content or "")[:200],
-                                                })
-                                            except Exception:
-                                                pass
+    record_service_recovery_action(service_name, previous_error, result, cfg, log=logger)
 
-                                    scanned_count += 1
-                                    state.mark_scanned(source.name, session_info, file_state, "scanned")
-                                finally:
-                                    if session_new_turns > 0:
-                                        try:
-                                            capture_service.end_session(source.name, session_info.session_id)
-                                        except Exception as e:
-                                            logger.warning(f"[L1同步] end_session 失败: {e}")
-                                        all_messages = []
-                                        for turn in turns:
-                                            if turn.user_content:
-                                                all_messages.append({"role": "user", "content": turn.user_content})
-                                            if turn.assistant_content:
-                                                all_messages.append({"role": "assistant", "content": turn.assistant_content})
-                                        source.on_session_end(session_info.session_id, all_messages)
 
-                            except Exception as e:
-                                error_count += 1
-                                state.mark_scanned(source.name, session_info, file_state, "error")
-                                logger.error(
-                                    f"[L1同步] {source.name}/{session_info.session_id} 解析失败: {e}"
-                                )
-
-                        try:
-                            state.mark_source_scanned(source.name)
-                            state.save()
-                        except Exception as e:
-                            logger.warning(f"[L1同步] 扫描游标保存失败: {e}")
-
-                        if queued_count > 0 or dup_count > 0 or bp_count > 0 or error_count > 0:
-                            logger.info(
-                                f"[L1同步] {source.name}: "
-                                f"discovered={scan_stats['discovered']}, "
-                                f"selected={scan_stats['selected']}, "
-                                f"scanned={scanned_count}, "
-                                f"turns={parsed_turns}, "
-                                f"queued={queued_count}, "
-                                f"duplicate={dup_count}, "
-                                f"backpressure={bp_count}, "
-                                f"error={error_count}, "
-                                f"skipped={{{', '.join(f'{k[8:]}={v}' for k, v in scan_stats.items() if k.startswith('skipped_') and v)}}}"
-                            )
-                            try:
-                                from core.mnemos_bus import publish_event
-                                publish_event("polled", source.name, {
-                                    "sessions_discovered": scan_stats["discovered"],
-                                    "sessions_selected": scan_stats["selected"],
-                                    "sessions_scanned": scanned_count,
-                                    "turns_seen": parsed_turns,
-                                    "queued": queued_count,
-                                    "duplicate": dup_count,
-                                    "backpressure": bp_count,
-                                    "errors": error_count,
-                                    "limits": limits,
-                                })
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        logger.error(f"[L1同步] {source.name} 同步失败: {e}")
-            except Exception as e:
-                logger.error(f"[L1同步] 轮询失败: {e}")
-
-            stop_event.wait(timeout=poll_interval)
-
-        logger.info("[L1同步] 已停止")
-    except Exception as e:
-        logger.error(f"[L1同步] 服务异常: {e}")
-    finally:
-        if capture_service is not None:
-            try:
-                capture_service.close()
-            except Exception as e:
-                logger.warning(f"[L1同步] 关闭 capture_service 失败: {e}")
-
-
-def service_capture_worker(stop_event: threading.Event):
-    """
-    服务0: CaptureQueue 消费者 — 独立消费 MCP / L1 producer 入队的 capture_events。
-
-    这个服务不扫描任何 Agent 历史文件，只负责把 pending 队列写入 Memos。
-    这样 daemon 可以在 L1 扫描关闭时仍然消费 MCP/Hook 上报，避免“扫描爆炸”和“队列堵塞”绑定。
-    """
-    logger.info("[捕获消费] 服务启动")
-    worker = None
-    queue = None
-    try:
-        from core.sync_framework.capture_queue import CaptureQueue
-        from core.sync_framework.capture_worker import CaptureWorkerPool
-
-        queue = CaptureQueue()
-        worker = CaptureWorkerPool(queue=queue)
-        worker.start()
-
-        while not stop_event.is_set():
-            stop_event.wait(timeout=1)
-    except Exception as e:
-        logger.error(f"[捕获消费] 服务异常: {e}", exc_info=True)
-    finally:
-        if worker is not None:
-            try:
-                worker.close()
-            except Exception as e:
-                logger.warning(f"[捕获消费] 停止 worker 失败: {e}")
-        if queue is not None:
-            try:
-                queue.close()
-            except Exception as e:
-                logger.warning(f"[捕获消费] 关闭队列连接失败: {e}")
-        logger.info("[捕获消费] 服务已停止")
-
-
-def service_distill_and_merge(stop_event: threading.Event):
-    """
-    服务2: 蒸馏+合并 — 高频处理 distill_queue + 定时运行 KIA 调度器
-
-    高频（每60秒）：
-    - 处理 distill_queue 中的待蒸馏任务
-    - 收集已完成的蒸馏结果
-
-    中频（每5分钟）：
-    - 运行 KnowledgeScheduler.tick() 并行调度 KIA 步骤
-    """
-    logger.info("[蒸馏合并] 服务启动")
-    from core.config import get_config
-
-    config = get_config()
-    poll_interval = max(10, _config_int(config, "distill.poll_interval_seconds", 60))
-    tick_interval = max(60, _config_int(config, "distill.tick_interval_seconds", 300))
-    tick_counter = 0
-
-    # 初始化 KnowledgeScheduler
-    scheduler = None
-    try:
-        from core.kia.chronos import KnowledgeScheduler
-        kia_max_workers = max(1, _config_int(config, "scheduler.worker_threads", 4))
-        scheduler = KnowledgeScheduler(max_workers=kia_max_workers)
-        scheduler.register_all_default_steps()
-        logger.info(f"[蒸馏合并] KnowledgeScheduler 已初始化（max_workers={kia_max_workers}）")
-    except Exception as e:
-        logger.warning(f"[蒸馏合并] KnowledgeScheduler 初始化失败: {e}，回退到 Orchestrator")
-
-    # 初始化 JobScheduler（KG 维护任务：每周自动清洗）
-    job_scheduler = None
-    try:
-        from core.job_scheduler import JobScheduler
-        job_scheduler = JobScheduler()
-        job_scheduler.register_job(
-            name="kg_clean_entities",
-            script="clean_kg.py",
-            cron="0 3 * * 0",  # 每周日 03:00
-            description="清洗知识图谱噪声实体（哈希前缀/MOC/片段等）",
-            timeout_seconds=300,
-            max_retries=1,
-        )
-        job_scheduler.register_job(
-            name="kg_clean_relations",
-            script="clean_relations.py",
-            cron="30 3 * * 0",  # 每周日 03:30
-            description="清洗知识图谱低质量关系（悬空引用/通用关键词相似/高密度溢出）",
-            timeout_seconds=300,
-            max_retries=1,
-        )
-        logger.info("[蒸馏合并] JobScheduler 已注册 KG 维护任务（每周日 03:00/03:30）")
-    except Exception as e:
-        logger.warning(f"[蒸馏合并] JobScheduler 初始化失败: {e}")
-
-    # 在循环外初始化 worker，避免每次循环新建连接/资源
-    from core.hephaestus_worker import HephaestusWorker
-    worker = HephaestusWorker()
-
-    # Memos 客户端（复用，避免每次循环新建）
-    memos_client = None
-    try:
-        from integrations.styx import MemosClient
-        memos_client = MemosClient()
-    except Exception as e:
-        logger.warning(f"[蒸馏合并] MemosClient 初始化失败，无法自动入队: {e}")
-
-    while not stop_event.is_set():
-        try:
-            # Step 0: 扫描 Memos，将新完成的 L1 sessions 自动入队到 amphora
-            if memos_client:
-                try:
-                    from core.hephaestus.wiki_builder import (
-                        fetch_l1_sessions, reconstruct_session,
-                        _is_session_completed, _is_processed,
-                    )
-                    from core.kia import amphora
-
-                    sessions = fetch_l1_sessions(memos_client)
-                    enqueued = 0
-                    doc_processed = 0
-                    for sid, memos in sessions.items():
-                        if _is_session_completed(sid, memos) and not _is_processed(sid):
-                            try:
-                                messages, meta = reconstruct_session(memos)
-                                # Doc sessions (external documents) — 深度蒸馏，不入队
-                                if sid.startswith('doc-'):
-                                    from core.hephaestus.document_pipeline import process_doc_session
-                                    inbox = worker.inbox_dir
-                                    pages = process_doc_session(sid, messages, meta, inbox)
-                                    if pages > 0:
-                                        from core.hephaestus.wiki_builder import _mark_processed
-                                        _mark_processed(sid, meta.get('source', 'unknown'), len(messages), 0, 'pipeline')
-                                        doc_processed += 1
-                                    continue
-                                # Regular chat sessions — 质量门槛后入队
-                                if len(messages) >= 5:
-                                    amphora.enqueue(sid, messages, meta)
-                                    enqueued += 1
-                            except Exception:
-                                continue
-                    if enqueued > 0:
-                        logger.info(f"[蒸馏合并] Memos 扫描: {enqueued} 个新 session 已入队")
-                    if doc_processed > 0:
-                        logger.info(f"[蒸馏合并] Memos 扫描: {doc_processed} 个外部文档已直接入库")
-                except Exception as e:
-                    logger.debug(f"[蒸馏合并] Memos 扫描失败: {e}")
-
-            # 高频：处理 distill_queue
-            pending = worker.process_all()
-            if pending > 0:
-                logger.info(f"[蒸馏合并] 处理了 {pending} 个待蒸馏任务")
-
-            collected = worker.collect_completed()
-            if collected > 0:
-                logger.info(f"[蒸馏合并] 收集了 {collected} 个完成的蒸馏结果")
-
-            # 中频：运行 KIA 调度器
-            tick_counter += poll_interval
-            if tick_counter >= tick_interval:
-                tick_counter = 0
-                # 构造 Teiresias 推送上下文（从最近 memos）
-                push_context = _build_push_context(memos_client)
-                if scheduler:
-                    results = scheduler.tick()
-                    if results:
-                        ok_count = sum(1 for r in results.values() if r.get("status") == "ok")
-                        err_count = sum(1 for r in results.values() if r.get("status") == "error")
-                        skip_count = sum(1 for r in results.values() if r.get("status") == "skipped")
-                        logger.info(f"[蒸馏合并] KIA tick: {ok_count}成功, {err_count}失败, {skip_count}跳过")
-                    # KIA tick 后额外运行 Teiresias 推送引擎
-                    orch = None
-                    if push_context:
-                        try:
-                            from core.orchestrator import Orchestrator
-                            orch = Orchestrator(wiki_dir=get_config().wiki_dir)
-                            push_result = orch.run_push(context=push_context)
-                            if push_result.get("triggered"):
-                                logger.info(f"[推送] Teiresias 触发推送: {push_result.get('reason', '')}")
-                        except Exception:
-                            pass
-                else:
-                    # 回退到 Orchestrator
-                    orch = None
-                    from core.orchestrator import Orchestrator
-                    orch = Orchestrator(wiki_dir=get_config().wiki_dir)
-                    report = orch.run_full(push_context=push_context)
-                    logger.info(f"[蒸馏合并] Orchestrator 完成: {len(report.get('errors', []))} 错误")
-                    # 报告推送结果
-                    push_res = report.get("push", {})
-                    if push_res.get("triggered"):
-                        logger.info(f"[推送] Teiresias 触发推送: {push_res.get('reason', '')}")
-
-                # tick 后释放 Orchestrator 等大对象，避免内存累积
-                if orch is not None:
-                    del orch
-                import gc
-                gc.collect()
-
-                # 同 tick 内运行 JobScheduler（KG 维护任务等）
-                if job_scheduler:
-                    try:
-                        job_results = job_scheduler.run_due_jobs()
-                        if job_results:
-                            for jr in job_results:
-                                if jr.status == "success":
-                                    logger.info(f"[JobScheduler] {jr.job_name} 成功 ({jr.duration_ms}ms)")
-                                elif jr.status == "failed":
-                                    logger.warning(f"[JobScheduler] {jr.job_name} 失败: {jr.error_message}")
-                                elif jr.status == "skipped":
-                                    logger.info(f"[JobScheduler] {jr.job_name} 跳过")
-                    except Exception as e:
-                        logger.warning(f"[JobScheduler] 运行失败: {e}")
-
-        except Exception as e:
-            logger.error(f"[蒸馏合并] 运行失败: {e}")
-
-        stop_event.wait(timeout=poll_interval)
-
-    # 服务停止时清理大对象
-    if scheduler is not None:
-        del scheduler
-    if job_scheduler is not None:
-        del job_scheduler
-    if worker is not None:
-        del worker
-    if memos_client is not None:
-        del memos_client
-    import gc
-    gc.collect()
-    logger.info("[蒸馏合并] 服务已停止")
-
-
-def service_heartbeat(stop_event: threading.Event):
-    """
-    服务3: 心跳守护 — OpsScorer 健康评分 + 热力衰减
-    每60秒运行一次
-    """
-    logger.info("[心跳] 服务启动")
-    from core.config import get_config
-    config = get_config()
-    interval = max(10, _config_int(config, "ops.health_check_interval", 60))
-
-    # 在循环外初始化评分器，避免每次循环新建
-    scorer = None
-    daemon = None
-    try:
-        from core.scoring.scorers.ops_scorer import OpsScorer
-        scorer = OpsScorer()
-    except ImportError:
-        from core.heartbeat import HeartbeatDaemon
-        daemon = HeartbeatDaemon()
-
-    # 初始化蒸馏评分器状态追踪
-    distill_scorer = None
-    try:
-        from core.scoring.scorers.distill_scorer import DistillScorer
-        distill_scorer = DistillScorer()
-    except Exception:
-        pass
-
-    heartbeat_count = 0
-
-    while not stop_event.is_set():
-        try:
-            # 优先使用 OpsScorer
-            if scorer is not None and hasattr(scorer, "score_system"):
-                result = scorer.score_system()
-                health = result.get("health_score", 0)
-                if health > 0:
-                    logger.debug(f"[心跳] 系统健康度: {health:.1f}")
-            elif daemon is not None:
-                daemon.run_once()
-            else:
-                logger.debug("[心跳] OpsScorer 未提供 score_system，跳过系统评分")
-
-            # 每 5 次心跳（5 分钟）报告蒸馏评分器状态
-            heartbeat_count += 1
-            if heartbeat_count % 5 == 0 and distill_scorer is not None:
-                try:
-                    status = distill_scorer._scorer.get_status()
-                    mode = status.get("mode", "unknown")
-                    version = status.get("model_version", 0)
-                    buffer = status.get("retrain_buffer_size", 0)
-                    threshold = status.get("retrain_threshold", 40)
-                    dims = status.get("dimensions", [])
-                    versions = status.get("versions_on_disk", [])
-
-                    if version == 0 and buffer == 0:
-                        logger.info(
-                            f"[心跳] 蒸馏评分器: 模式={mode}, 尚未积累反馈样本"
-                        )
-                    elif version == 0 and buffer > 0:
-                        progress = min(100, int(buffer / threshold * 100))
-                        logger.info(
-                            f"[心跳] 蒸馏评分器: 模式={mode}, 重训练缓冲={buffer}/{threshold} "
-                            f"({progress}%), 维度={dims}"
-                        )
-                    else:
-                        logger.info(
-                            f"[心跳] 蒸馏评分器: 模式={mode}, 版本=v{version}, "
-                            f"缓冲={buffer}/{threshold}, 维度={dims}, "
-                            f"磁盘版本={len(versions)}"
-                        )
-                except Exception:
-                    pass
-
-            # 每 24 小时（1440 次心跳）运行一次争议扫描
-            if heartbeat_count % 1440 == 0:
-                try:
-                    dr = _run_dispute_scan()
-                    logger.info(
-                        f"[争议] 每日扫描: 新建={dr.get('new_disputes', 0)}, "
-                        f"未解决={dr.get('unresolved', 0)}, "
-                        f"需升级={dr.get('escalated', 0)}"
-                    )
-                except Exception:
-                    pass
-
-            # 每 60 次心跳（1 小时）清理 stale events + 无消费者事件
-            if heartbeat_count % 60 == 0:
-                try:
-                    from core.mnemos_bus import _get_bus
-                    bus = _get_bus()
-                    archived = bus.cleanup_stale(max_age_hours=24)
-                    if archived > 0:
-                        logger.info(f"[事件总线] 清理 {archived} 个 stale 事件为 archived")
-                    no_consumer = bus.archive_no_consumer_events()
-                    if no_consumer > 0:
-                        logger.info(f"[事件总线] 归档 {no_consumer} 个无消费者事件")
-                except Exception:
-                    pass
-
-            # 每 24 小时运行知识新鲜度检查
-            if heartbeat_count % 1440 == 0:
-                try:
-                    from core.app.freshness_alert import FreshnessAlertChecker
-                    checker = FreshnessAlertChecker()
-                    alerts = checker.scan_all_freshness()
-                    if alerts:
-                        logger.info(
-                            f"[新鲜度] 发现 {len(alerts)} 条过期知识: "
-                            f"{', '.join(a.entity_name for a in alerts[:3])}"
-                        )
-                    else:
-                        logger.debug("[新鲜度] 知识库状态良好")
-                except Exception:
-                    pass
-
-            # 每 12 小时（720 次心跳）注入 synthetic ground_truth
-            if heartbeat_count % 720 == 0:
-                try:
-                    injected = _inject_synthetic_ground_truth()
-                    if injected > 0:
-                        logger.info(f"[评分器] 注入 {injected} 条 synthetic ground_truth")
-                except Exception:
-                    pass
-
-            # 每 12 小时（720 次心跳）运行评分器训练调度
-            if heartbeat_count % 720 == 0:
-                try:
-                    from core.scoring.training_scheduler import ScorerTrainingScheduler
-                    sched = ScorerTrainingScheduler()
-                    jobs = sched.on_hourly_tick()
-                    if jobs:
-                        logger.info(
-                            f"[评分调度] 触发 {len(jobs)} 个训练任务: "
-                            f"{', '.join(j.dimension for j in jobs)}"
-                        )
-                    cleanup = sched.on_daily_cleanup()
-                    if cleanup.get("cleaned"):
-                        logger.info(
-                            f"[评分调度] 清理 {cleanup.get('cleaned', 0)} 个过期任务"
-                        )
-                except Exception:
-                    pass
-
-            # 每 30 分钟（30 次心跳）运行搜索索引健康检查
-            if heartbeat_count % 30 == 0:
-                try:
-                    from core.app.context_search import ContextAwareSearch
-                    searcher = ContextAwareSearch()
-                    # 用最近更新页面做一次空查询，验证索引连通性
-                    results = searcher.search("recent", limit=3)
-                    if results:
-                        logger.debug(
-                            f"[搜索] 索引健康: {len(results)} 条候选"
-                        )
-                except Exception:
-                    pass
-
-            # 每 30 分钟运行问答检索缓存刷新
-            if heartbeat_count % 30 == 0:
-                try:
-                    from core.app.question_answer_search import QuestionAnswerSearch
-                    qa = QuestionAnswerSearch()
-                    # 空查询验证模块可用
-                    _ = qa.search("", limit=1)
-                    logger.debug("[问答检索] 模块可用")
-                    del qa
-                except Exception:
-                    pass
-
-            # 每小时强制垃圾回收，防止长期运行内存膨胀
-            if heartbeat_count % 60 == 0:
-                import gc
-                gc.collect()
-        except Exception as e:
-            logger.error(f"[心跳] 运行失败: {e}")
-
-        stop_event.wait(timeout=interval)
-
-    # 服务停止时清理
-    if scorer is not None:
-        del scorer
-    if daemon is not None:
-        del daemon
-    if distill_scorer is not None:
-        del distill_scorer
-    import gc
-    gc.collect()
-    logger.info("[心跳] 服务已停止")
-
-
-def service_inbox_scanner(stop_event: threading.Event):
-    """
-    服务4: 收件箱扫描 — 扫描inbox目录，处理文件进Memos
-    每10分钟扫描一次
-    """
-    logger.info("[收件箱] 服务启动")
-    from core.config import get_config
-
-    config = get_config()
-    interval = max(60, _config_int(config, "ops.inbox_scan_interval_seconds", 600))
-
-    # 在循环外初始化处理器，避免每次循环新建
-    try:
-        from core.kia.knowledge_inbox import KnowledgeInboxProcessor
-        inbox = KnowledgeInboxProcessor()
-    except ImportError:
-        inbox = None
-
-    while not stop_event.is_set():
-        try:
-            if inbox is None:
-                from core.kia.knowledge_inbox import KnowledgeInboxProcessor
-                inbox = KnowledgeInboxProcessor()
-            inbox_dir = get_config().data_dir / "inbox"
-            if inbox_dir.exists():
-                result = inbox.scan_inbox()
-                processed = result.get("processed", 0) if isinstance(result, dict) else 0
-                errors = result.get("errors", 0) if isinstance(result, dict) else 0
-                if processed > 0 or errors > 0:
-                    logger.info(f"[收件箱] 扫描完成: {processed}已处理, {errors}错误")
-        except ImportError as e:
-            logger.warning(f"[收件箱] knowledge_inbox不可用，服务降级: {e}")
-        except Exception as e:
-            logger.error(f"[收件箱] 扫描失败: {e}")
-
-        stop_event.wait(timeout=interval)
-
-    # 服务停止时清理
-    if inbox is not None:
-        del inbox
-    import gc
-    gc.collect()
-    logger.info("[收件箱] 服务已停止")
-
-
-def service_signal_collector(stop_event: threading.Event):
-    """
-    服务5: 画像信号采集 — 定期采集信号更新用户画像
-    每小时运行一次，轮询所有 Agent 适配器。
-    采集后检查信号总数，达到阈值时自动触发画像分析。
-    """
-    logger.info("[画像] 服务启动")
-
-    from core.config import get_config
-    config = get_config()
-    interval = max(60, _config_int(config, "ops.persona_analysis_interval_seconds", 3600))
-    MIN_SIGNALS_FOR_ANALYSIS = 10  # 触发画像分析的最小信号数
-
-    while not stop_event.is_set():
-        try:
-            from integrations.olympus import AgentRegistry
-            from core.persona.psyche import get_signal_store
-
-            store = get_signal_store()
-            adapters = AgentRegistry.discover_all()
-            total_signals = 0
-
-            for agent in adapters:
-                if stop_event.is_set():
-                    break
-                try:
-                    signals = agent.collect_signals(days=7)
-                    # 限制单次采集数量，防止内存/时间爆炸
-                    max_signals_per_agent = 10000
-                    if len(signals) > max_signals_per_agent:
-                        logger.warning(f"[画像] {agent.name} 信号数 {len(signals)} 超过限制，截断到 {max_signals_per_agent}")
-                        signals = signals[:max_signals_per_agent]
-                    for sig in signals:
-                        if stop_event.is_set():
-                            break
-                        if isinstance(sig, dict):
-                            # 统一转换为 SessionSignal，确保 agent 字段正确
-                            from core.persona.psyche import SessionSignal
-                            sid = sig.get("session_id") or ""
-                            if not sid:
-                                continue
-                            session_signal = SessionSignal(
-                                session_id=sid,
-                                timestamp=sig.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                                task_type=sig.get("task_type", "unknown"),
-                                task_subtype=sig.get("task_subtype", ""),
-                                user_msg_count=sig.get("user_msg_count", 0),
-                                avg_user_msg_length=sig.get("avg_user_msg_length", 0),
-                                correction_count=sig.get("correction_count", 0),
-                                follow_up_depth=sig.get("follow_up_depth", 0),
-                                termination_type=sig.get("termination_type", "unknown"),
-                                output_type=sig.get("output_type", "discussion"),
-                                working_dir=sig.get("working_dir", ""),
-                                agent=agent.name,
-                            )
-                            store.insert_session_signal(session_signal)
-                            total_signals += 1
-                    # 释放信号列表
-                    del signals
-                except Exception as e:
-                    logger.warning(f"[画像] {agent.name} 信号采集失败: {e}")
-
-            if total_signals > 0:
-                logger.info(f"[画像] 信号采集完成: {total_signals}条")
-
-            # 释放大对象引用
-            try:
-                del adapters
-            except NameError:
-                pass
-            import gc
-            gc.collect()
-
-            # 采集后检查信号总数，达到阈值时自动触发画像分析
-            stats = store.get_signal_stats(days=30)
-            total_all = sum(v for v in stats.values() if v > 0)
-            if total_all >= MIN_SIGNALS_FOR_ANALYSIS:
-                _trigger_persona_analysis()
-            else:
-                logger.debug(f"[画像] 信号数 {total_all} < {MIN_SIGNALS_FOR_ANALYSIS}，暂不分析")
-        except Exception as e:
-            logger.error(f"[画像] 信号采集失败: {e}")
-
-        stop_event.wait(timeout=interval)
-
-    logger.info("[画像] 服务已停止")
-
-
-# 画像分析全局锁，防止多个服务线程同时触发分析
-_persona_analysis_lock = threading.Lock()
-
-def _run_persona_extensions(profile):
-    """激活所有 Persona 边缘/死代码模块。在画像分析完成后调用。"""
-    results = {}
-
-    # ── 1. Daimon — 补充信号采集 ──────────────────────────────────
-    try:
-        from core.persona.daimon import SignalCollector
-        collector = SignalCollector()
-        d_total = 0
-        d_total += collector.collect_from_distill_queue()
-        d_total += collector.collect_from_wiki_state()
-        if d_total:
-            logger.info(f"[画像扩展] Daimon 补充采集 {d_total} 条信号")
-        results["daimon"] = {"signals_collected": d_total}
-    except Exception as e:
-        logger.debug(f"[画像扩展] Daimon 失败: {e}")
-
-    # ── 2. Echo — 微信信号采集（条件性）────────────────────────────
-    try:
-        from core.persona.echo import WeChatCollector
-        wc = WeChatCollector()
-        dbs = wc.discover_databases()
-        if dbs:
-            count = wc.collect_and_store(days=7)
-            if count:
-                logger.info(f"[画像扩展] Echo 采集 {count} 条微信信号")
-            results["echo"] = {"wechat_signals": count}
-    except Exception as e:
-        logger.debug(f"[画像扩展] Echo 失败: {e}")
-
-    # ── 3. ContextualPersona — 情境隔离画像 ────────────────────────
-    try:
-        from core.persona.contextual_persona import ContextualPersona
-        cp = ContextualPersona()
-        context = cp.detect_context()
-        # 将当前画像按情境存储
-        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
-        cp.add_signal(profile_dict, context=context)
-        contexts = list(cp.get_profile().keys())
-        logger.info(f"[画像扩展] ContextualPersona 情境: {contexts}")
-        results["contextual_persona"] = {"contexts": contexts}
-    except Exception as e:
-        logger.debug(f"[画像扩展] ContextualPersona 失败: {e}")
-
-    # ── 4. EvolutionTimeline — 14 维演化时间线 ─────────────────────
-    try:
-        from core.persona.evolution_timeline import PersonaEvolutionTimeline
-        timeline = PersonaEvolutionTimeline()
-        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
-        timeline.add_snapshot(profile_dict)
-        report_path = timeline.generate()
-        logger.info(f"[画像扩展] 演化时间线更新: {report_path}")
-        results["evolution_timeline"] = {"report_path": str(report_path)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] EvolutionTimeline 失败: {e}")
-
-    # ── 5. CrossValidator — 双画像交叉验证 ─────────────────────────
-    try:
-        from core.persona.cross_validator import ProfileCrossValidator
-        validator = ProfileCrossValidator()
-        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
-        behavior = {}
-        for layer in ("energy", "cognitive", "value"):
-            layer_data = profile_dict.get(layer, {})
-            if hasattr(layer_data, "items"):
-                behavior.update(layer_data)
-        knowledge = {}  # 知识画像暂时为空，待后续接入
-        contradictions = validator.validate(behavior, knowledge)
-        if contradictions:
-            logger.info(f"[画像扩展] CrossValidator 发现 {len(contradictions)} 个矛盾")
-        results["cross_validator"] = {"contradictions": len(contradictions)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] CrossValidator 失败: {e}")
-
-    # ── 6. Rhapsode — 画像报告生成 ─────────────────────────────────
-    try:
-        from core.persona.rhapsode import SelfReportGenerator
-        gen = SelfReportGenerator()
-        report = gen.generate(days=30)
-        if report:
-            path = gen.save_to_wiki(report)
-            logger.info(f"[画像扩展] Rhapsode 报告: {path}")
-            results["rhapsode"] = {"report_path": str(path)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] Rhapsode 失败: {e}")
-
-    # ── 7. Harmonia + CalibrationCLI — 自动校准 ────────────────────
-    try:
-        from core.persona.calibration_cli import run_calibration
-        # 提取非交互式校准（使用当前画像作为 ground_truth）
-        cal_result = run_calibration()
-        logger.info(f"[画像扩展] 自动校准完成")
-        results["harmonia"] = {"calibrated": True}
-    except Exception as e:
-        logger.debug(f"[画像扩展] Harmonia 失败: {e}")
-
-    # ── 8. DialogueStrategy — 对话策略 ─────────────────────────────
-    try:
-        from core.persona.dialogue_strategy import PersonaDrivenDialogueStrategy
-        strategy = PersonaDrivenDialogueStrategy()
-        profile_dict = profile.to_dict() if hasattr(profile, "to_dict") else {}
-        adapted = strategy.adapt_prompt("", preference_profile=profile_dict)
-        # 保存策略到画像元数据
-        logger.info(f"[画像扩展] DialogueStrategy 策略已生成")
-        results["dialogue_strategy"] = {"adapted": bool(adapted)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] DialogueStrategy 失败: {e}")
-
-    # ── 9. BehaviorDrivenSkillEngine — 行为驱动技能 ────────────────
-    try:
-        from core.persona.behavior_driven_skill_engine import BehaviorDrivenSkillEngine
-        from core.persona.psyche import get_signal_store
-        engine = BehaviorDrivenSkillEngine()
-        store = get_signal_store()
-        # 获取最近行为数据（session 信号）
-        actions = []
-        try:
-            stats = store.get_signal_stats(days=30)
-            for sig in store.get_recent_signals(limit=100):
-                if hasattr(sig, "task_type"):
-                    actions.append({
-                        "action": sig.task_type,
-                        "timestamp": sig.timestamp if hasattr(sig, "timestamp") else "",
-                        "context": sig.working_dir if hasattr(sig, "working_dir") else "",
-                    })
-        except Exception:
-            pass
-        if actions:
-            patterns = engine.analyze_behavior(actions)
-            suggestions = engine.suggest_skill_updates([], patterns)
-            if patterns:
-                logger.info(f"[画像扩展] BehaviorDrivenSkillEngine: {len(patterns)} 个模式, {len(suggestions)} 个建议")
-            results["behavior_driven_skill"] = {
-                "patterns": len(patterns),
-                "suggestions": len(suggestions),
-            }
-    except Exception as e:
-        logger.debug(f"[画像扩展] BehaviorDrivenSkillEngine 失败: {e}")
-
-    # ── 10. AvoidanceDetector — 回避模式检测 ───────────────────────
-    try:
-        from core.app.avoidance_detector import AvoidanceDetector
-        from core.persona.psyche import get_signal_store
-        detector = AvoidanceDetector()
-        store = get_signal_store()
-        history = []
-        try:
-            for sig in store.get_recent_signals(limit=200):
-                content = getattr(sig, "working_dir", "") or ""
-                history.append({
-                    "query": content,
-                    "timestamp": getattr(sig, "timestamp", ""),
-                    "clicked": True,
-                })
-        except Exception:
-            pass
-        if len(history) >= 3:
-            patterns = detector.analyze(history)
-            if patterns:
-                logger.info(
-                    f"[画像扩展] AvoidanceDetector: {len(patterns)} 个回避模式, "
-                    f"主题: {', '.join(p.topic for p in patterns[:3])}"
-                )
-            results["avoidance_detector"] = {"patterns": len(patterns)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] AvoidanceDetector 失败: {e}")
-
-    # ── 11. CrossAgentDivergenceDetector — 跨 Agent 分歧检测 ───────
-    try:
-        from core.app.cross_agent_divergence_detector import CrossAgentDivergenceDetector
-        from core.persona.psyche import get_signal_store
-        detector = CrossAgentDivergenceDetector()
-        store = get_signal_store()
-        # 按 agent 分组收集最近信号
-        agent_outputs: Dict[str, List[str]] = {}
-        try:
-            for sig in store.get_recent_signals(limit=300):
-                agent = getattr(sig, "agent", "unknown") or "unknown"
-                content = getattr(sig, "working_dir", "") or ""
-                if content:
-                    agent_outputs.setdefault(agent, []).append(content)
-        except Exception:
-            pass
-        # 当存在 2+ 个 agent 且每个都有足够数据时检测分歧
-        if len(agent_outputs) >= 2:
-            # 构建对比列表：取每个 agent 的输出拼接
-            outputs_for_comparison = []
-            for agent, texts in agent_outputs.items():
-                if len(texts) >= 5:
-                    outputs_for_comparison.append({
-                        "agent_id": agent,
-                        "output": " ".join(texts[:20]),
-                        "topic": "behavior_patterns",
-                    })
-            if len(outputs_for_comparison) >= 2:
-                reports = detector.detect_divergence(outputs_for_comparison)
-                if reports:
-                    logger.info(
-                        f"[画像扩展] CrossAgentDivergenceDetector: {len(reports)} 个分歧报告, "
-                        f"主题: {', '.join(r.topic for r in reports[:3])}"
-                    )
-                results["cross_agent_divergence"] = {"reports": len(reports)}
-    except Exception as e:
-        logger.debug(f"[画像扩展] CrossAgentDivergenceDetector 失败: {e}")
-
-    # 汇总日志
-    active = [k for k, v in results.items() if v]
-    if active:
-        logger.info(f"[画像扩展] 激活模块: {', '.join(active)}")
-    return results
-
-
-def _inject_synthetic_ground_truth() -> int:
-    """从 persona 信号中推断并注入 synthetic ground_truth，加速评分器冷启动。"""
-    import sqlite3
-    from pathlib import Path
-
-    db_dir = Path.home() / ".mnemos"
-    signals_db = db_dir / "user_signals.db"
-    gt_db = db_dir / "mnemos.db"
-
-    if not signals_db.exists():
-        return 0
-
-    try:
-        with sqlite3.connect(str(signals_db)) as conn:
-            # 读取最近 7 天未处理的 session_signals
-            rows = conn.execute("""
-                SELECT session_id, task_type, user_msg_count, avg_user_msg_length,
-                       correction_count, follow_up_depth, working_dir
-                FROM session_signals
-                WHERE timestamp > datetime('now', '-7 days')
-                ORDER BY timestamp DESC
-                LIMIT 50
-            """).fetchall()
-    except Exception:
-        return 0
-
-    if not rows:
-        return 0
-
-    injected = 0
-    try:
-        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-        for row in rows:
-            session_id, task_type, msg_count, avg_len, corrections, follow_up, wd = row
-            if msg_count is None or avg_len is None:
-                continue
-            base_confidence = min(1.0, 0.5 + msg_count * 0.05 + avg_len * 0.001)
-
-            # 为每个 session 生成 3 个维度的 ground_truth
-            signals = [
-                (task_type or "session_quality", 1 if (msg_count >= 3 and corrections == 0) else 0),
-                ("engagement", 1 if msg_count >= 5 else 0),
-                ("correction_pattern", 0 if corrections == 0 else 1),
-            ]
-            for signal_type, label in signals:
-                try:
-                    AdaptiveScorerV2.insert_ground_truth(
-                        session_id=session_id,
-                        signal_type=signal_type,
-                        label=label,
-                        confidence=round(base_confidence, 2),
-                        latency_hours=0,
-                        db_path=gt_db,
-                    )
-                    injected += 1
-                except Exception:
-                    continue
-
-            # 同步写入 scorer_training_queue，确保训练样本充足
-            try:
-                from core.scoring.adaptive_scorer_v2 import FeedbackV2
-                scorer = AdaptiveScorerV2()
-                features = {
-                    "msg_count": msg_count or 0,
-                    "avg_len": avg_len or 0,
-                    "corrections": corrections or 0,
-                    "follow_up": follow_up or 0,
-                }
-                for signal_type, label in signals:
-                    fb = FeedbackV2(
-                        session_id=session_id,
-                        dimension=signal_type,
-                        expected=float(label),
-                        actual=float(label),
-                        features=features,
-                        source="synthetic",
-                    )
-                    scorer._insert_training_queue(fb)
-            except Exception:
-                pass
-    except Exception:
-        return 0
-
-    return injected
-
-
-def _trigger_persona_analysis():
-    """触发画像分析（被 signal_collector 调用）"""
-    if not _persona_analysis_lock.acquire(blocking=False):
-        logger.debug("[画像] 分析已在进行中，跳过重复触发")
-        return
-    try:
-        from core.persona.pythia import analyze_preferences
-        from core.persona.delphi import get_persona_store
-
-        logger.info("[画像] 信号数达标，触发画像分析...")
-        profile = analyze_preferences(days=30)
-        if profile:
-            store = get_persona_store()
-            store.save_persona(profile)
-            logger.info(f"[画像] 画像分析完成，signal_count={profile.signal_count}")
-            # 生成盲区挑战问题，供用户校准
-            _generate_blindspot_challenges(profile)
-            # 激活所有 Persona 边缘模块
-            _run_persona_extensions(profile)
-    except Exception as e:
-        logger.error(f"[画像] 画像分析失败: {e}")
-    finally:
-        _persona_analysis_lock.release()
-
-
-def _build_push_context(memos_client) -> str:
-    """从最近 memos 笔记构造 Teiresias 推送上下文。"""
-    if not memos_client:
-        return ""
-    try:
-        recent = memos_client.list_all_memos(max_records=3)
-        if not recent:
-            return ""
-        # 取最近一条的非空内容作为 push context
-        for m in recent:
-            content = m.get("content", "").strip()
-            if content:
-                # 截断过长内容，保留前 300 字符
-                return content[:300] if len(content) <= 300 else content[:300] + "..."
-    except Exception:
-        pass
-    return ""
-
-
-def _run_dispute_scan() -> Dict:
-    """运行争议扫描：检测知识图谱 suspect 关系 + wiki 争议标记，生成仲裁页面。"""
-    result = {"new_disputes": 0, "unresolved": 0, "escalated": 0}
-    try:
-        from core.app.dispute_resolver import DisputeResolver, DisputeAssertion
-        resolver = DisputeResolver()
-
-        # 1. 报告未解决争议（含升级）
-        unresolved = resolver.get_unresolved_disputes()
-        result["unresolved"] = len(unresolved)
-        escalated = [d for d in unresolved if d.get("needs_escalation")]
-        result["escalated"] = len(escalated)
-        if escalated:
-            titles = ", ".join(d["title"] for d in escalated[:3])
-            logger.warning(f"[争议] {len(escalated)} 个争议超过 7 天未解决: {titles}")
-        elif unresolved:
-            logger.info(f"[争议] 当前 {len(unresolved)} 个未解决争议")
-
-        # 2. 扫描知识图谱 suspect 关系，生成新争议
-        try:
-            from core.kia.knowledge_graph import DB_PATH
-            import sqlite3
-            if DB_PATH.exists():
-                with sqlite3.connect(str(DB_PATH)) as conn:
-                    # 取最近 7 天内标记为 suspect 的关系
-                    week_ago = (datetime.now(timezone.utc) - __import__(
-                        "datetime"
-                    ).timedelta(days=7)).isoformat()
-                    rows = conn.execute("""
-                        SELECT source, target, relation_type, confidence, created_at
-                        FROM relations
-                        WHERE source_method = 'suspect'
-                          AND created_at >= ?
-                        ORDER BY confidence ASC
-                        LIMIT 10
-                    """, (week_ago,)).fetchall()
-
-                    seen_topics = set()
-                    for source, target, rel_type, confidence, created_at in rows:
-                        topic = f"{source} → {target} ({rel_type})"
-                        if topic in seen_topics:
-                            continue
-                        seen_topics.add(topic)
-
-                        new_assertion = DisputeAssertion(
-                            page_path=source,
-                            title=source,
-                            content=f"实体 '{source}' 与 '{target}' 存在低置信度关系（{rel_type}），置信度 {confidence:.2f}",
-                            reference_count=1,
-                        )
-                        conflicts = [DisputeAssertion(
-                            page_path=target,
-                            title=target,
-                            content=f"目标实体 '{target}' 在知识图谱中被质疑",
-                            reference_count=1,
-                        )]
-                        resolver.create_dispute_page(
-                            new_assertion=new_assertion,
-                            conflicts=conflicts,
-                            conflict_strength=1.0 - confidence,
-                            is_core_knowledge=(confidence < 0.1),
-                        )
-                        result["new_disputes"] += 1
-        except Exception as e:
-            logger.debug(f"[争议] suspect 扫描失败: {e}")
-
-        # 3. 扫描 wiki 中的争议标记
-        try:
-            from core.config import get_config
-            wiki_base = get_config().wiki_dir
-            dispute_markers = ["⚠️ 争议", "conflict:", "contradiction", "TODO: verify"]
-            for md_file in wiki_base.rglob("*.md"):
-                if "08-Disputes" in str(md_file):
-                    continue
-                try:
-                    content = md_file.read_text(encoding="utf-8")
-                    lower = content.lower()
-                    if any(m.lower() in lower for m in dispute_markers):
-                        rel_path = str(md_file.relative_to(wiki_base))
-                        topic = md_file.stem
-                        # 避免重复创建（检查 08-Disputes 中是否已有）
-                        dispute_dir = wiki_base / "08-Disputes"
-                        existing = list(dispute_dir.glob(f"*-{topic[:30].replace('/', '-').replace(' ', '_')}.md"))
-                        if existing:
-                            continue
-                        new_assertion = DisputeAssertion(
-                            page_path=rel_path,
-                            title=topic,
-                            content=f"页面中包含争议标记: {[m for m in dispute_markers if m.lower() in lower][0]}",
-                            reference_count=1,
-                        )
-                        resolver.create_dispute_page(
-                            new_assertion=new_assertion,
-                            conflicts=[],
-                            conflict_strength=0.5,
-                            is_core_knowledge=False,
-                        )
-                        result["new_disputes"] += 1
-                except Exception:
-                    continue
-        except Exception as e:
-            logger.debug(f"[争议] wiki 标记扫描失败: {e}")
-
-        if result["new_disputes"]:
-            logger.info(f"[争议] 新建 {result['new_disputes']} 个争议仲裁页面")
-    except Exception as e:
-        logger.debug(f"[争议] 扫描失败: {e}")
+def _mark_service_recovered(
+    service_name: str,
+    result: Dict[str, Any],
+    cfg: Any,
+) -> Dict[str, Any]:
+    previous_error = _service_state.clear_service_error(_service_error_state, service_name)
+    if not previous_error:
+        return result
+    result["_recovered_error_count"] = int(previous_error.get("count", 0) or 0)
+    result["_recovered_error_type"] = previous_error.get("last_error_type", "")
+    result["_recovered_error_context"] = previous_error.get("last_context", service_name)
+    _record_service_recovery_action(service_name, previous_error, result, cfg)
     return result
 
 
-def _generate_blindspot_challenges(profile):
-    """基于画像生成盲区挑战问题，写入待处理队列。
+def _make_service_done_callback(service_name: str):
+    """线程池服务完成回调：保存结果摘要、清理 future 并记录未捕获异常。"""
+    return _service_state.make_service_done_callback(
+        service_name,
+        service_futures=_service_futures,
+        service_results=_service_results,
+        error_state=_service_error_state,
+        service_enabled=_service_enabled,
+        log=logger,
+    )
 
-    整合硬编码规则（确定性画像挑战）与 BlindspotDiscovery 动态检测。
-    """
+
+def _resolve_service_call(cfg, service_name: str):
+    """将服务名解析为可调用的无参函数（P105 线程池调度用）。"""
+    return _service_registry.resolve_service_call(service_name, globals(), cfg)
+
+
+def _get_file_ingest_dir(cfg) -> Optional[Path]:
+    """解析 FileIngestor 监控目录，默认使用 DATA_DIR/file_ingest"""
+    return _file_ingest.resolve_ingest_dir(cfg, _DATA_DIR)
+
+
+def _start_trigger_dispatcher(cfg) -> None:
+    """启动 TriggerDispatcher，为已发现的 AgentSource 注册事件触发器，并监控文件摄入目录。"""
+    global _trigger_dispatcher, _file_ingestor_instance
+    if _trigger_dispatcher is not None:
+        return
+    if not _service_enabled(cfg, "trigger_dispatcher"):
+        return
+
     try:
-        challenges = []
-        # ── 1. 硬编码画像挑战（确定性规则）─────────────────────────────
-        if profile.energy.confidence >= 0.6:
-            if profile.energy.focus_depth > 0.7:
-                challenges.append({
-                    "dimension": "energy.focus_depth",
-                    "type": "反向验证",
-                    "source": "profile_rule",
-                    "question": "系统推断你倾向于深度专注。但最近你是否有刻意浅层浏览、快速扫过大量信息的时刻？",
-                    "suggestion": "如果经常有这样的时刻，你的专注模式可能比画像显示的更灵活。",
-                })
-            if profile.energy.switching_flexibility < 0.3:
-                challenges.append({
-                    "dimension": "energy.switching_flexibility",
-                    "type": "盲区检测",
-                    "source": "profile_rule",
-                    "question": "画像显示你偏单线程。你是否注意到有些任务并行处理反而更高效？",
-                    "suggestion": "多线程不一定意味着分心，有些组合任务可以并行而不损失质量。",
-                })
-        if profile.cognitive.confidence >= 0.6:
-            if profile.cognitive.skepticism > 0.7:
-                challenges.append({
-                    "dimension": "cognitive.skepticism",
-                    "type": "反向验证",
-                    "source": "profile_rule",
-                    "question": "画像显示你经常质疑前提。但你是否有时会过度质疑，导致决策拖延？",
-                    "suggestion": "质疑是优点，但时机和对象很重要。",
-                })
-        if profile.value.confidence >= 0.6:
-            if profile.value.perfection_vs_completion > 0.7:
-                challenges.append({
-                    "dimension": "value.perfection_vs_completion",
-                    "type": "盲区检测",
-                    "source": "profile_rule",
-                    "question": "画像显示你追求完美。回想一下，是否有'先完成再优化'反而效果更好的经历？",
-                    "suggestion": "完成度有时候比完美度更有价值，尤其是在信息不完备的早期阶段。",
-                })
+        from core.sync_framework.triggers import TriggerDispatcher
+        from core.sync_framework.registry import SourceRegistry, PathDiscover
+        from core.sync_framework.file_ingestor import FileIngestor
+        from core.agent_kit.source_support_manifest import (
+            AgentSourceSupportManifestError,
+            get_agent_source_support_manifest,
+        )
 
-        # ── 2. 激活 BlindspotDiscovery 动态模块 ──────────────────────
-        try:
-            from core.app.blindspot_discovery import BlindspotDiscovery
-            bd = BlindspotDiscovery()
+        class _SourceAwareDispatcher:
+            """为每个来源维护独立 TriggerDispatcher，避免单一回调无法区分来源。"""
 
-            # 2a. 触发周期性信用恢复
-            credit_resp = bd.handle_event("periodic_persona_analysis")
-            if credit_resp.get("status") == "ok":
-                logger.debug(
-                    f"[画像] 盲区信用恢复: {credit_resp.get('challenge_credit', 'n/a')}"
+            def __init__(self):
+                self._dispatchers: Dict[str, Any] = {}
+
+            def register(
+                self, source_name: str, strategy: Dict[str, Any], watch_path: Path, callback
+            ):
+                dispatcher = TriggerDispatcher(callback=callback)
+                dispatcher.register(source_name, strategy, watch_path)
+                self._dispatchers[source_name] = dispatcher
+
+            def start_all(self):
+                for dispatcher in self._dispatchers.values():
+                    dispatcher.start_all()
+
+            def stop_all(self):
+                for dispatcher in self._dispatchers.values():
+                    try:
+                        dispatcher.stop_all()
+                    except (
+                        OSError,
+                        ValueError,
+                        TypeError,
+                        KeyError,
+                        ImportError,
+                        AttributeError,
+                        RuntimeError,
+                    ):
+                        logger.debug("TriggerDispatcher 子调度器停止失败", exc_info=True)
+
+        dispatcher = _SourceAwareDispatcher()
+
+        # 1. 为每个已发现的 AgentSource 注册触发器
+        SourceRegistry.register_builtin_agents()
+        support_manifest = get_agent_source_support_manifest()
+        for source in SourceRegistry.auto_discover():
+            try:
+                data_dir = source.data_dir
+                if data_dir is None:
+                    data_dir = PathDiscover.find(source.name)
+                if data_dir and data_dir.exists():
+                    source_name = source.name
+                    source_spec = support_manifest.require_active_source(source_name)
+                    strategy = source.trigger_strategy
+                    expected_trigger = str(source_spec.continuous["trigger"])
+                    if not isinstance(strategy, dict) or strategy.get("type") != expected_trigger:
+                        raise AgentSourceSupportManifestError(
+                            f"{source_spec.name}: runtime trigger strategy does not match "
+                            "the manifest continuous contract"
+                        )
+
+                    def _on_agent_change(path: str, name=source_name):
+                        logger.debug("[DAEMON] Trigger dirty: %s from %s", name, path)
+                        with _trigger_lock:
+                            _trigger_dirty_sources.add(name)
+
+                    dispatcher.register(source_name, strategy, data_dir, _on_agent_change)
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                ImportError,
+                AttributeError,
+                RuntimeError,
+            ):
+                logger.warning(
+                    "[DAEMON] TriggerDispatcher 注册 %s 失败",
+                    getattr(source, "name", "?"),
+                    exc_info=True,
                 )
 
-            # 2b. 获取本周动态盲点并转成挑战格式
-            weekly = bd.get_weekly_summary()
-            for bs in weekly:
-                if bs.get("status") not in ("resolved", "mitigated"):
-                    challenges.append({
-                        "dimension": bs.get("topic", "unknown"),
-                        "type": "动态盲点",
-                        "source": "blindspot_discovery",
-                        "confidence": bs.get("confidence", 0.5),
-                        "question": bs.get("description", ""),
-                        "suggestion": "可在 mnemos-cli 中通过 `blindspot-feedback <topic> resolved|mitigated|ignored` 反馈。",
-                    })
-        except Exception as e:
-            logger.debug(f"[画像] BlindspotDiscovery 调用失败: {e}")
+        # 2. 监控文件摄入目录，变化时直接调用 FileIngestor
+        ingest_dir = _get_file_ingest_dir(cfg)
+        if ingest_dir and ingest_dir.exists():
+            _file_ingestor_instance = FileIngestor()
 
-        # ── 3. 持久化 ────────────────────────────────────────────────
-        if challenges:
-            calib_dir = Path.home() / ".mnemos" / "calibrations"
-            calib_dir.mkdir(parents=True, exist_ok=True)
-            challenge_file = calib_dir / "pending_challenges.json"
-            profile_rules = sum(1 for c in challenges if c.get("source") == "profile_rule")
-            dynamic = sum(1 for c in challenges if c.get("source") == "blindspot_discovery")
-            challenge_file.write_text(
-                json.dumps({
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                    "profile_version": getattr(profile, "version", "unknown"),
-                    "summary": {
-                        "total": len(challenges),
-                        "profile_rules": profile_rules,
-                        "dynamic_blindspots": dynamic,
-                    },
-                    "challenges": challenges,
-                }, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            logger.info(
-                f"[画像] 已生成 {len(challenges)} 个盲区挑战问题"
-                f"（规则{profile_rules} / 动态{dynamic}）"
-            )
-    except Exception as e:
-        logger.debug(f"[画像] 生成挑战问题失败: {e}")
-
-
-def service_persona_analyzer(stop_event: threading.Event):
-    """
-    服务6: 画像分析 — 定期全量分析生成用户画像
-    每天运行一次（24小时），确保画像定期更新。
-    """
-    logger.info("[画像分析] 服务启动")
-
-    interval = 24 * 60 * 60  # 24小时
-
-    while not stop_event.is_set():
-        try:
-            _trigger_persona_analysis()
-        except Exception as e:
-            logger.error(f"[画像分析] 定期分析失败: {e}")
-
-        stop_event.wait(timeout=interval)
-
-    logger.info("[画像分析] 服务已停止")
-
-
-def service_event_bus(stop_event: threading.Event):
-    """
-    服务7: 事件总线 — 轮询并处理所有 Agent 发布的事件
-    每10秒运行一次
-    """
-    logger.info("[事件总线] 服务启动")
-
-    from core.config import get_config
-    config = get_config()
-    interval = max(1, _config_int(config, "event_bus.poll_interval_seconds", 10))
-
-    from core.mnemos_bus import EventProcessor, EventBus, _get_bus
-
-    bus = _get_bus()
-    processor = EventProcessor(bus=bus)
-
-    # 注册事件处理器
-    def _handle_session_start(event):
-        """处理 session.start 事件：KIA 预加载"""
-        try:
-            from core.kia.preflight import run_preflight
-
-            payload = event.payload
-            user_message = payload.get("user_message", "")
-            working_dir = payload.get("working_dir", "")
-            agent = event.source
-
-            # 统一 KIA 预加载入口（Agent-agnostic）
-            context = run_preflight(agent, user_message, working_dir)
-            if context:
-                # 将结果写回事件 payload，供 Agent 读取
-                payload["kia_context"] = context
-                logger.info(f"[事件总线] KIA 预加载完成: agent={agent}")
-        except Exception as e:
-            logger.warning(f"[事件总线] session.start 处理失败: {e}")
-
-    def _handle_session_end(event):
-        """处理 session.end 事件：入蒸馏队列 + 采集信号"""
-        try:
-            payload = event.payload
-            session_id = payload.get("session_id")
-            messages = payload.get("messages", [])
-            meta = payload.get("meta", {})
-
-            if messages and session_id:
-                # 入蒸馏队列
-                from core.kia.amphora import enqueue
-                enqueue(session_id=session_id, messages=messages, meta=meta)
-                logger.info(f"[事件总线] 蒸馏入队: {session_id}")
-
-                # 采集信号
-                from core.persona.psyche import get_signal_store, SessionSignal
-                store = get_signal_store()
-
-                user_msgs = [m for m in messages if m.get("role") == "user"]
-                if user_msgs:
-                    user_contents = [m.get("content", "") for m in user_msgs]
-                    avg_len = sum(len(c) for c in user_contents) / max(len(user_contents), 1)
-
-                    signal = SessionSignal(
-                        session_id=session_id,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                        task_type=meta.get("source", "unknown"),
-                        task_subtype="",
-                        user_msg_count=len(user_msgs),
-                        avg_user_msg_length=avg_len,
-                        correction_count=0,
-                        follow_up_depth=0,
-                        termination_type="unknown",
-                        output_type="discussion",
-                        working_dir=meta.get("working_dir", ""),
-                        agent=event.source,
-                    )
-                    store.insert_session_signal(signal)
-
-                # 自动回顾触发
+            def _on_file_change(path: str):
                 try:
-                    from core.kia.epimetheus import AutoRetrospective, generate_retrospective
-                    ar = AutoRetrospective()
-                    if ar.should_trigger(messages):
-                        result = generate_retrospective(
-                            task_type=meta.get("source", "unknown"),
-                            subtype="",
-                            messages=messages,
-                            checklist_usage=[],
-                        )
-                        if result and result.lessons:
-                            logger.info(
-                                f"[事件总线] 自动复盘生成: {len(result.lessons)} 条教训, "
-                                f"gaps={len(result.gaps)}"
-                            )
-                except Exception:
-                    pass
+                    _file_ingestor_instance.ingest_file(Path(path), agent_name="file")
+                except (
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    ImportError,
+                    AttributeError,
+                    RuntimeError,
+                ):
+                    logger.warning("[DAEMON] 文件摄入失败: %s", path, exc_info=True)
 
-                # Session 跳过检测：如果被蒸馏系统标记为 skipped，自动创建复盘任务
-                try:
-                    if session_id:
-                        import sqlite3
-                        from core.config import get_config
-                        wiki_state_db = get_config().data_dir / "wiki_state.db"
-                        if wiki_state_db.exists():
-                            with sqlite3.connect(str(wiki_state_db), timeout=5) as conn:
-                                cursor = conn.execute(
-                                    "SELECT distill_method FROM processed_sessions WHERE session_id = ?",
-                                    (session_id,),
-                                )
-                                row = cursor.fetchone()
-                                if row and row[0] in ("skipped_low_quality", "skipped_by_pipeline"):
-                                    from core.app.forced_retrospective import ForcedRetrospective
-                                    fr = ForcedRetrospective()
-                                    fr._create_from_session_end(session_id, row[0])
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"[事件总线] session.end 处理失败: {e}")
+            dispatcher.register(
+                "file_ingestor",
+                {"type": "watchdog", "events": ["created", "modified"], "debounce": 5.0},
+                ingest_dir,
+                _on_file_change,
+            )
 
-    # 复用 HephaestusWorker 实例，避免事件高频触发时反复新建
-    _distill_worker = None
+        dispatcher.start_all()
+        _trigger_dispatcher = dispatcher
+        logger.info("[DAEMON] TriggerDispatcher 已启动")
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] TriggerDispatcher 启动失败: %s", exc, exc_info=True)
+        _trigger_dispatcher = None
 
-    def _handle_distill_request(event):
-        """处理 distill.request 事件：触发蒸馏"""
+
+def _sync_trigger_dirty_sources(cfg) -> None:
+    """同步被 TriggerDispatcher 标记为 dirty 的 AgentSource"""
+    with _trigger_lock:
+        dirty = list(_trigger_dirty_sources)
+        _trigger_dirty_sources.clear()
+    _agent_source_runtime.sync_dirty_sources(
+        dirty,
+        cfg,
+        raw_sync=_raw_sync,
+        trigger_sync=_triggers.sync_dirty_sources,
+        log_service_error=_log_service_error,
+        log=logger,
+    )
+
+
+def _get_agent_path_watcher(cfg) -> Optional[AgentPathWatcher]:
+    """Lazy singleton for the agent path watcher."""
+    global _agent_path_watcher
+    if _agent_path_watcher is not None:
+        return _agent_path_watcher
+    try:
+        from core.sync_framework.registry import SourceRegistry
+
+        SourceRegistry.register_builtin_agents()
+        agents = [source.name for source in SourceRegistry.auto_discover()]
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+        logger.debug("[DAEMON] AgentPathWatcher 未发现 Agent", exc_info=True)
+        raise
+    _agent_path_watcher = AgentPathWatcher(agents)
+    return _agent_path_watcher
+
+
+def service_agent_path_watch() -> Dict[str, Any]:
+    """Poll discovered Agent data paths and mark changed sources dirty.
+
+    This feeds the existing trigger_dispatcher/sync pipeline: the next
+    trigger_dispatcher tick will sync any sources added to
+    _trigger_dirty_sources.
+    """
+    global _agent_path_watcher_primed
+    result: Dict[str, Any] = {"enabled": False, "changed": 0, "marked_dirty": 0, "errors": 0}
+    try:
+        from core.config import get_config
+
+        cfg = get_config()
+        if not _service_enabled(cfg, "agent_path_watch"):
+            return result
+        if not cfg.get("watchers.enabled", False):
+            return result
+        if not cfg.get("watchers.agent_paths.enabled", False):
+            return result
+        watcher = _get_agent_path_watcher(cfg)
+        if watcher is None:
+            return result
+        states = watcher.refresh()
+        unavailable = [
+            state for state in states if state.availability_state == "unavailable"
+        ]
+        result["errors"] += len(unavailable)
+        for state in unavailable:
+            _log_service_error(
+                "agent_path_watch",
+                RuntimeError(state.error_code or "agent_path_inspection_unavailable"),
+            )
+        if not _agent_path_watcher_primed:
+            if not unavailable:
+                _agent_path_watcher_primed = True
+            return result
+        result["enabled"] = True
+        changed = [state for state in states if state.changed and state.exists]
+        result["changed"] = len(changed)
+        for state in changed:
+            logger.debug("[DAEMON] agent path changed: %s %s", state.agent, state.path)
+            with _trigger_lock:
+                _trigger_dirty_sources.add(state.agent)
+            result["marked_dirty"] += 1
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("agent_path_watch", exc)
+        result["errors"] += 1
+    return result
+
+
+def _get_reflection_engine():
+    """获取 daemon 全局 ReflectionEngine，已注册 Layer 5 消费者。"""
+    return _entrypoint_support.get_reflection_engine(_ENTRYPOINT_HOST)
+
+
+# ── 服务函数 ──
+
+
+def service_capture_worker() -> Dict[str, Any]:
+    global _capture_worker_pool
+    result = {"processed": 0, "errors": 0}
+    try:
+        if _capture_worker_pool is None:
+            from core.sync_framework.capture_worker import CaptureWorkerPool
+
+            _capture_worker_pool = CaptureWorkerPool()
+            _capture_worker_pool.start()
+            if _runtime_context is not None:
+                _runtime_context.register(
+                    "capture_worker_pool",
+                    _capture_worker_pool,
+                    closer=lambda pool: pool.close(),
+                )
         try:
-            nonlocal _distill_worker
-            if _distill_worker is None:
-                from core.hephaestus_worker import HephaestusWorker
-                _distill_worker = HephaestusWorker()
-            processed = _distill_worker.process_all()
-            if processed > 0:
-                logger.info(f"[事件总线] 处理 {processed} 个蒸馏任务")
-        except Exception as e:
-            logger.warning(f"[事件总线] distill.request 处理失败: {e}")
+            from core.config import get_config
 
-    def _handle_polled(event):
-        """L1 轮询审计事件：已完成同步侧处理，这里只确认消费。"""
+            limit = int(get_config().get("capture.max_batch_per_tick", 10))
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ImportError,
+            AttributeError,
+            RuntimeError,
+        ):
+            limit = 10
+        batch_result = _capture_worker_pool.process_batch(limit=limit)
+        result["processed"] = batch_result.get("processed", 0)
+        result["errors"] = batch_result.get("errors", 0)
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("capture_worker", exc)
+        result["errors"] += 1
+    return result
+
+
+def service_heartbeat() -> Dict[str, Any]:
+    """返回 daemon 心跳，包含各服务最近执行摘要。"""
+    return _entrypoint_support.service_heartbeat(_ENTRYPOINT_HOST)
+
+
+def service_inbox_scanner() -> Dict[str, Any]:
+    result = {"processed": 0}
+    try:
+        from core.kia.knowledge_inbox import KnowledgeInbox
+
+        inbox = KnowledgeInbox()
+        items = inbox.scan_inbox()
+        for item in items:
+            inbox.process_file(item)
+        result["processed"] = len(items)
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("inbox_scanner", exc)
+    return result
+
+
+def service_file_ingestor(cfg=None) -> Dict[str, Any]:
+    """扫描文件摄入目录并将新文件写入 L1"""
+    return _entrypoint_support.service_file_ingestor(_ENTRYPOINT_HOST, cfg)
+
+
+def service_signal_collector() -> Dict[str, Any]:
+    result: Dict[str, Any] = {"collected": 0, "errors": 0}
+    try:
+        from core.config import get_config
+
+        cfg = get_config()
+        if cfg.get("persona.enabled", True):
+            from core.persona.daimon import SignalCollector
+
+            collector = SignalCollector()
+            stats = collector.collect_all()
+            result["collected"] = sum(v for v in stats.values() if v > 0)
+            result["sources"] = stats
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("signal_collector", exc)
+        result["errors"] += 1
+    try:
+        from core.app.application_signal_service import ApplicationSignalService
+        from core.config import get_config
+
+        app_stats = ApplicationSignalService(config=get_config()).run()
+        result["application_signals"] = app_stats
+        result["collected"] += int(app_stats.get("persisted", 0) or 0)
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("application_signals", exc)
+        result["errors"] += 1
+    return result
+
+
+def service_persona_analyzer() -> Dict[str, Any]:
+    result: Dict[str, Any] = {"analyzed": False}
+    try:
+        from core.config import get_config
+
+        cfg = get_config()
+        if not cfg.get("persona.enabled", True):
+            return result
+
+        from core.application.persona import PersonaApplicationService
+        from core.persona.psyche import get_signal_store
+
+        store = get_signal_store()
+        replayed = store.replay_profile_usage_outbox()
+        result = PersonaApplicationService().run_canonical_revision_cycle(
+            signal_store=store,
+            days=30,
+        )
+        result["profile_usage_replayed"] = len(replayed)
+        return result
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("persona_analyzer", exc)
+    return result
+
+
+def service_eventbus_health() -> Dict[str, Any]:
+    """EventBus 健康检查：确保后台分发线程存活，并报告队列深度。
+
+    事件消费统一由 run_daemon() 中启动的后台分发线程负责，本服务不再
+    额外轮询/处理 SQLite 中的 pending 事件，避免与后台线程竞争状态或
+    重复确认事件。
+    """
+    result = {"status": "ok", "queue_depth": 0}
+    if _event_bus_instance is None:
+        logger.debug("[DAEMON] EventBus 未初始化，跳过健康检查")
+        return result
+    try:
+        dispatch_thread = getattr(_event_bus_instance, "_dispatch_thread", None)
+        if dispatch_thread is None or not dispatch_thread.is_alive():
+            logger.warning("[DAEMON] EventBus 分发线程停止，尝试重启")
+            _event_bus_instance.start_dispatch()
+            result["restarted"] = True
+        result["queue_depth"] = (
+            getattr(_event_bus_instance, "_queue", None) and _event_bus_instance._queue.qsize() or 0
+        )
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("eventbus", exc)
+        result["status"] = "error"
+    return result
+
+
+# 历史服务名兼容：外部监控/测试仍可通过 service_eventbus 引用。
+service_eventbus = service_eventbus_health
+
+
+def service_raw_sync() -> Dict[str, Any]:
+    return _entrypoint_support.service_raw_sync(_ENTRYPOINT_HOST)
+
+
+service_l1_sync = service_raw_sync  # noqa: Vulture - legacy daemon service alias.
+
+
+def service_raw_projection() -> Dict[str, Any]:
+    return _raw_projection_service.service_raw_projection(_ENTRYPOINT_HOST)
+
+
+def service_retry_failed(cfg=None) -> Dict[str, Any]:
+    """重试 sync_log 中失败的同步记录。"""
+    result = {"retried": 0, "errors": 0}
+    try:
+        from core.config import get_config
+        from core.sync_framework.sync_engine import SyncEngine
+
+        engine = SyncEngine()
+        try:
+            limit = int(get_config().get("sync.retry_failed_limit", 50))
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ImportError,
+            AttributeError,
+            RuntimeError,
+        ):
+            limit = 50
+        try:
+            results = engine.retry_failed(agent_name=None, limit=limit)
+            result["retried"] = len(results)
+        except DAEMON_OPERATION_ERRORS as exc:
+            _log_service_error("retry_failed", exc)
+            result["errors"] += 1
+        finally:
+            engine.close()
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("retry_failed", exc)
+        result["errors"] += 1
+    return result
+
+
+service_distill_and_merge = lambda: _entrypoint_support.service_distill_and_merge(_ENTRYPOINT_HOST)  # noqa: E501,E731
+service_distill_cognitive_actions = lambda: _entrypoint_support.service_distill_cognitive_actions(_ENTRYPOINT_HOST)  # noqa: E501,E731
+service_operational_incidents = lambda: _entrypoint_support.service_operational_incidents(_ENTRYPOINT_HOST)  # noqa: E501,E731
+
+
+def service_wiki_route() -> Dict[str, Any]:
+    """Route classifiable Inbox Wiki pages into formal Obsidian folders."""
+    return _entrypoint_support.service_wiki_route(_ENTRYPOINT_HOST)
+
+
+def service_scheduler_tick() -> Dict[str, Any]:
+    """Chronos 知识调度器 tick — 驱动影子页面、scorer 训练队列等定时步骤。"""
+    global _knowledge_scheduler_instance
+    result = {"steps_run": 0, "steps": []}
+    try:
+        from core.config import get_config
+        from core.kia.chronos import KnowledgeScheduler
+
+        if _knowledge_scheduler_instance is None:
+            cfg = get_config()
+            include_heavy = bool(cfg.get("daemon.scheduler_heavy_steps_enabled", False))
+            _knowledge_scheduler_instance = KnowledgeScheduler()
+            _knowledge_scheduler_instance.register_all_default_steps(
+                include_heavy_steps=include_heavy
+            )
+            if _runtime_context is not None:
+                _runtime_context.register(
+                    "knowledge_scheduler",
+                    _knowledge_scheduler_instance,
+                    closer=lambda scheduler: scheduler.shutdown(),
+                )
+        scheduler = _knowledge_scheduler_instance
+        tick_results = scheduler.tick()
+        result["steps_run"] = len(tick_results)
+        result["steps"] = [
+            {"name": name, "status": r.get("status", "unknown")} for name, r in tick_results.items()
+        ]
+        if tick_results:
+            logger.info("scheduler.tick: %d 个步骤执行完成", len(tick_results))
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("scheduler_tick", exc)
+    return result
+
+
+def service_adaptive_config() -> Dict[str, Any]:
+    """AdaptiveConfig 自适应调整 tick — 采集指标、检查回滚、建议调整、应用调整。"""
+    return _entrypoint_support.service_adaptive_config(_ENTRYPOINT_HOST)
+
+
+def service_search_ignore_detection() -> Dict[str, Any]:
+    """[P2-10] 检测搜索忽略信号：超过 5 分钟未被点击的搜索会话记为 ignore。"""
+    return _entrypoint_support.service_search_ignore_detection(_ENTRYPOINT_HOST)
+
+
+def service_user_correction_detection() -> Dict[str, Any]:
+    """[P2-10] 检测用户修正信号：蒸馏生成的 wiki 页面被用户手动编辑。"""
+    return _entrypoint_support.service_user_correction_detection(_ENTRYPOINT_HOST)
+
+
+def service_observation_engine() -> Dict[str, Any]:
+    """L3 Observation Engine — 从 L1 raw + L2 wiki 增量提取客观观察并持久化。"""
+    return _entrypoint_support.service_observation_engine(_ENTRYPOINT_HOST)
+
+
+def service_reflection_engine() -> Dict[str, Any]:
+    """L4 Reflection Engine — 定时触发一次通用 Reflection。"""
+    return _entrypoint_support.service_reflection_engine(_ENTRYPOINT_HOST)
+
+
+def service_feedback_prompt() -> Dict[str, Any]:
+    """L5 Feedback — 扫描 pending feedback 并通过 daemon 全局 EventBus 发布提示事件。"""
+    return _entrypoint_support.service_feedback_prompt(_ENTRYPOINT_HOST)
+
+
+def service_recap_consumption() -> Dict[str, Any]:
+    """Retry durable recap target and correction receipts."""
+    return _entrypoint_support.service_recap_consumption(_ENTRYPOINT_HOST)
+
+
+def service_cognitive_graph_reconcile() -> Dict[str, Any]:
+    """跨层认知图 reconciliation — 消费 outbox 并补全缺失关系。"""
+    return _entrypoint_support.service_cognitive_graph_reconcile(_ENTRYPOINT_HOST)
+
+
+def service_prediction_maturity() -> Dict[str, Any]:
+    """Close mature canonical predictions in one bounded idempotent batch."""
+
+    return _prediction_service.run_service(_log_service_error)
+
+
+def service_training_governance() -> Dict[str, Any]:
+    """Reconcile canonical training projections and deterministic runs."""
+
+    return _training_governance_service.run_service(_log_service_error)
+
+
+def service_cognitive_consolidation() -> Dict[str, Any]:
+    """Generate a read-only consolidation plan; trusted commit stays external."""
+
+    return _consolidation_service.run_service(_log_service_error)
+
+
+def service_reminder_scan() -> Dict[str, Any]:
+    """统一提醒引擎 — 全量扫描 wiki 新鲜度，高优先级过期页面入队提醒。"""
+    return _entrypoint_support.service_reminder_scan(_ENTRYPOINT_HOST)
+
+
+def service_freshness_refresh() -> Dict[str, Any]:
+    """自动刷新高优先级过期页面，并归档超期冷知识。"""
+    return _entrypoint_support.service_freshness_refresh(_ENTRYPOINT_HOST)
+
+
+def service_entropy_scan() -> Dict[str, Any]:
+    """熵减扫描 — 将高相似候选入队到对话提醒。"""
+    return _entrypoint_support.service_entropy_scan(_ENTRYPOINT_HOST)
+
+
+def service_dispute_scan() -> Dict[str, Any]:
+    """争议自动扫描与仲裁 — 检测知识冲突并自动裁决或生成争议页。"""
+    return _entrypoint_support.service_dispute_scan(_ENTRYPOINT_HOST)
+
+
+def service_link_probe(cfg=None) -> Dict[str, Any]:
+    """外部链接可达性探测 — 批量扫描 pending 链接并反写失效链接到 frontmatter。"""
+    return _entrypoint_support.service_link_probe(_ENTRYPOINT_HOST, cfg)
+
+
+def service_db_maintenance(cfg=None) -> Dict[str, Any]:
+    """数据库定期维护：保留期清理、WAL checkpoint、optimize、VACUUM。"""
+    return _entrypoint_support.service_db_maintenance(_ENTRYPOINT_HOST, cfg)
+
+
+# ── 辅助函数 ──
+
+
+def _run_startup_compensation() -> Dict[str, Any]:
+    return _entrypoint_support.run_startup_compensation(_ENTRYPOINT_HOST)
+
+
+def _run_startup_cleanup() -> Dict[str, Any]:
+    return _entrypoint_support.run_startup_cleanup(_ENTRYPOINT_HOST)
+
+
+def _print_model_status(daemon_pid: int) -> str:
+    return _entrypoint_support.print_model_status(_ENTRYPOINT_HOST, daemon_pid)
+
+
+def _generate_drift_report() -> Dict[str, Any]:
+    return _entrypoint_support.generate_drift_report(_ENTRYPOINT_HOST)
+
+
+def _run_preflight_checks() -> Dict[str, Any]:
+    return _entrypoint_support.run_preflight_checks(_ENTRYPOINT_HOST)
+
+
+def _on_session_end(event) -> None:
+    """session.end 事件处理器：增量提取 Observation + 自动触发 Reflection。"""
+    _entrypoint_support.on_session_end(_ENTRYPOINT_HOST, event)
+
+
+def _on_observation_updated(event) -> None:
+    """observation.updated 事件处理器：对高置信度/突变观察自动触发 Reflection。
+
+    把 L3 Observation 层的变化作为 L4 Reflection 的触发源之一，补齐
+    Observation → Reflection 的事件驱动链路。
+    """
+    _entrypoint_support.on_observation_updated(_ENTRYPOINT_HOST, event)
+
+
+def _on_knowledge_stale(event) -> None:
+    """knowledge_stale 事件处理器：自动刷新过期知识页面。
+
+    把 EvolutionTracker 检测到的 stale 页面作为自动刷新触发源，
+    补齐 knowledge_stale → FreshnessRefreshWorker 的事件驱动链路。
+    """
+    _entrypoint_support.on_knowledge_stale(_ENTRYPOINT_HOST, event)
+
+
+def _run_persona_challenge() -> Dict[str, Any]:
+    """Consume one durable challenge command emitted by a real DecisionTrace."""
+
+    try:
+        from core.config import get_config
+        from core.persona.challenge_queue import PersonaChallengeQueueConsumer
+
+        cfg = get_config()
+        if not cfg.get("persona.enabled", True):
+            return {
+                "challenges": 0,
+                "consumed": 0,
+                "status": "noop",
+                "reason": "persona_disabled",
+            }
+        return PersonaChallengeQueueConsumer(cfg).run_once()
+    except DAEMON_OPERATION_ERRORS as exc:
+        _log_service_error("persona_challenge", exc)
         return {
-            "status": "ack",
-            "source": event.source,
-            "session_id": event.payload.get("session_id"),
+            "challenges": 0,
+            "consumed": 0,
+            "status": "retry",
+            "reason": "persona_challenge_consumer_error",
         }
 
-    processor.register("session.start", _handle_session_start)
-    processor.register("session.end", _handle_session_end)
-    processor.register("distill.request", _handle_distill_request)
-    processor.register("polled", _handle_polled)
 
-    # KIA 事件触发步骤：由事件总线直接调用
-    # 复用 KnowledgeScheduler 实例，避免每次事件新建
-    _kia_scheduler = None
-
-    def _handle_page_created(event):
-        """页面创建 → 直接触发 connect_worker"""
-        try:
-            nonlocal _kia_scheduler
-            if _kia_scheduler is None:
-                from core.kia.chronos import KnowledgeScheduler
-                _kia_scheduler = KnowledgeScheduler()
-            result = _kia_scheduler.trigger_event("page.created", event.payload)
-            logger.info(f"[事件总线] connect_worker: {result.get('status')}")
-        except Exception as e:
-            logger.warning(f"[事件总线] page.created 处理失败: {e}")
-
-    def _handle_page_modified(event):
-        """页面修改 → 直接触发 iteration_tracker"""
-        try:
-            nonlocal _kia_scheduler
-            if _kia_scheduler is None:
-                from core.kia.chronos import KnowledgeScheduler
-                _kia_scheduler = KnowledgeScheduler()
-            result = _kia_scheduler.trigger_event("page.modified", event.payload)
-            logger.info(f"[事件总线] iteration_tracker: {result.get('status')}")
-        except Exception as e:
-            logger.warning(f"[事件总线] page.modified 处理失败: {e}")
-
-    def _handle_message_exchanged(event):
-        """消息交换 → 直接触发 KIA 守护"""
-        try:
-            nonlocal _kia_scheduler
-            if _kia_scheduler is None:
-                from core.kia.chronos import KnowledgeScheduler
-                _kia_scheduler = KnowledgeScheduler()
-            result = _kia_scheduler.trigger_event("message.exchanged", event.payload)
-            if result.get("status") == "error":
-                logger.warning(f"[事件总线] KIA guard: {result.get('error')}")
-        except Exception as e:
-            logger.debug(f"[事件总线] message.exchanged 处理: {e}")
-
-    processor.register("page.created", _handle_page_created)
-    processor.register("page.modified", _handle_page_modified)
-    processor.register("message.exchanged", _handle_message_exchanged)
-
-    # 注册知识图谱事件处理器（蒸馏完成后自动更新实体和关系）
-    try:
-        from core.kia.kg_event_handler import KGEventHandler
-        _kg_handler = KGEventHandler()
-
-        def _handle_knowledge_distilled(event):
-            return _kg_handler.on_distilled(event.payload)
-
-        processor.register("knowledge_distilled", _handle_knowledge_distilled)
-        logger.info("[事件总线] 已注册 KGEventHandler 到 knowledge_distilled")
-    except Exception as e:
-        logger.warning(f"[事件总线] KGEventHandler 注册失败: {e}")
-
-    # 启动新分发线程（与旧轮询双轨运行，逐步过渡）
-    try:
-        bus.start_dispatch()
-        logger.info("[事件总线] 后台分发线程已启动")
-    except Exception as e:
-        logger.warning(f"[事件总线] 启动分发线程失败: {e}")
-
-    while not stop_event.is_set():
-        try:
-            stats_before = bus.stats()
-            processed = processor.process_all(
-                event_types=list(processor._handlers.keys()),
-                limit=50,
-            )
-            if processed > 0:
-                logger.info(f"[事件总线] 处理 {processed} 个事件")
-        except Exception as e:
-            logger.error(f"[事件总线] 运行失败: {e}")
-
-        stop_event.wait(timeout=interval)
-
-    # 服务停止时清理
-    try:
-        bus.stop_dispatch()
-    except Exception:
-        pass
-    import gc
-    gc.collect()
-    logger.info("[事件总线] 服务已停止")
+# ── 主循环 ──
 
 
-# ==================== 主循环 ====================
-
-def _run_startup_compensation():
-    """启动补偿：扫描关机期间过期的复盘预约，立即补发。
-
-    蓝图 §9 关键边界：
-    - 用户预约过期 → 直接打开 Obsidian
-    - 系统提醒过期 → 走组合权重判断
-    """
-    try:
-        from core.app.forced_retrospective import ForcedRetrospective
-        fr = ForcedRetrospective()
-        expired = fr.startup_compensation()
-        if expired:
-            logger.info(f"启动补偿: {len(expired)} 个过期复盘任务已处理")
-        else:
-            logger.debug("启动补偿: 无过期任务")
-    except Exception as e:
-        logger.warning(f"启动补偿执行失败: {e}")
+def _setup_logging() -> None:
+    _entrypoint_support.setup_logging(_ENTRYPOINT_HOST)
 
 
-def _print_model_status():
-    """CLI: 打印蒸馏评分器模型状态"""
-    try:
-        from core.scoring.scorers.distill_scorer import DistillScorer
-        scorer = DistillScorer()
-        status = scorer._scorer.get_status()
-
-        print("\n" + "=" * 50)
-        print("🧠 Mnemos 蒸馏评分器模型状态")
-        print("=" * 50)
-        print(f"  Domain:        {status.get('domain', '?')}")
-        print(f"  Mode:          {status.get('mode', '?').upper()}")
-        print(f"  Dimensions:    {', '.join(status.get('dimensions', []))}")
-        print(f"  Model Version: v{status.get('model_version', 0)}")
-        print(f"  Retrain Buffer: {status.get('retrain_buffer_size', 0)} / {status.get('retrain_threshold', 40)}")
-        print(f"  Min Samples/Dim: {status.get('min_samples_per_dim', 12)}")
-        print(f"  Model Dir:     {status.get('model_dir', '?')}")
-
-        versions = status.get("versions_on_disk", [])
-        if versions:
-            print(f"\n  📦 磁盘版本 ({len(versions)} 个):")
-            for v in versions:
-                print(f"    v{v.get('version', '?')} | {v.get('mode', '?')} | {', '.join(v.get('dimensions', []))} | {v.get('timestamp', '?')}")
-        else:
-            print("\n  📦 磁盘版本: 无 (模型尚未持久化)")
-
-        print("=" * 50 + "\n")
-    except Exception as e:
-        print(f"获取模型状态失败: {e}")
-
-
-def _generate_drift_report():
-    """CLI: 生成漂移检测报告"""
-    try:
-        from scripts.drift_report import generate_report
-        path = generate_report()
-        print(f"\n✅ 漂移检测报告已生成: {path}")
-        print("   请用浏览器打开查看")
-    except Exception as e:
-        print(f"生成报告失败: {e}")
-
-
-def _run_preflight_checks() -> List[str]:
-    """启动前置检查，返回警告列表（非阻塞，仅日志提示）"""
-    warnings = []
-
-    # 1. 目录可写检查
+def _register_kg_event_handlers(event_bus: Any) -> None:
+    """注册 Wiki 生命周期的 KG、索引、MOC 与 metrics 投影消费者。"""
     from core.config import get_config
-    config = get_config()
-    critical_dirs = [
-        ("数据目录", config.data_dir),
-        ("Wiki 目录", config.wiki_dir),
-        ("蒸馏队列", config.claude_data_dir / "distill_queue"),
-        ("蒸馏输出", Path.home() / ".mnemos" / "distill_output"),
-    ]
-    for name, path in critical_dirs:
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-            test_file = path / ".mnemos_writable_test"
-            test_file.write_text("test")
-            test_file.unlink()
-        except Exception as e:
-            warnings.append(f"{name} ({path}) 不可写: {e}")
+    from daemon.wiki_projection_handlers import register_wiki_projection_handlers
 
-    # 2. Memos API 可访问性（如果启用）
-    if config.memos_enabled:
-        try:
-            import requests
-            # 轻量探测：尝试访问 memos 列表（不依赖 token 有效性）
-            resp = requests.get(
-                f"{config.memos_api_url}/api/v1/memos",
-                timeout=5,
-            )
-            if resp.status_code not in (200, 401):
-                resp.raise_for_status()
-        except Exception as e:
-            warnings.append(f"Memos API 连接异常: {e}")
+    register_wiki_projection_handlers(event_bus, get_config())
 
-    # 3. Agent 可用性检查
+
+def _register_kia_event_handlers(event_bus: Any) -> None:
+    """注册免疫/DNA/熵减报告消费者。"""
     try:
-        from integrations.olympus import AgentRegistry
-        adapters = AgentRegistry.discover_all()
-        available = [a for a in adapters if a.is_available()]
-        if not available:
-            warnings.append("未检测到可用 Agent，蒸馏任务将无法处理")
-        else:
-            logger.info(f"[前置检查] 检测到 {len(available)} 个可用 Agent: {[a.name for a in available]}")
-    except Exception as e:
-        warnings.append(f"Agent 检测失败: {e}")
+        from core.kia.kia_event_consumer import KIAEventConsumer
 
-    # 4. 资源健康检查（防止重复启动导致资源爆炸）
-    try:
-        import resource
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        used_fd = len(os.listdir(f"/proc/{os.getpid()}/fd")) if os.path.exists(f"/proc/{os.getpid()}/fd") else 0
-        if soft - used_fd < 100:
-            warnings.append(f"文件句柄紧张: 已用 {used_fd}/{soft}，daemon 可能因 Too many open files 崩溃")
-    except Exception:
-        pass
+        consumer = KIAEventConsumer()
 
-    try:
-        events_db = config.data_dir / "events.db"
-        if events_db.exists():
-            size_mb = events_db.stat().st_size / (1024 * 1024)
-            if size_mb > 500:
-                warnings.append(f"events.db 过大 ({size_mb:.0f}MB)，建议先运行 `mnemos events cleanup` 清理")
-            elif size_mb > 100:
-                logger.info(f"[前置检查] events.db {size_mb:.0f}MB，建议定期 cleanup")
-    except Exception:
-        pass
+        def _on_immune_report(event):
+            return consumer.on_immune_report(event.payload)
 
-    # 5. 数据库可访问性
-    try:
-        from core.persona.psyche import get_signal_store
-        store = get_signal_store()
-        stats = store.get_signal_stats(days=1)
-        logger.info(f"[前置检查] 信号数据库正常，最近1天 {sum(stats.values())} 条信号")
-    except Exception as e:
-        warnings.append(f"信号数据库访问异常: {e}")
+        def _on_dna_computed(event):
+            return consumer.on_dna_computed(event.payload)
 
-    return warnings
+        def _on_entropy_suggestions(event):
+            return consumer.on_entropy_suggestions(event.payload)
 
-
-def run_daemon():
-    """主循环 — 启动所有自动化服务"""
-    logger.info("=" * 50)
-    logger.info("Mnemos daemon v2.0.0 starting...")
-    logger.info("=" * 50)
-    write_pid()
-
-    # 启动前置检查
-    preflight_warnings = _run_preflight_checks()
-    for w in preflight_warnings:
-        logger.warning(f"[前置检查] {w}")
-    if preflight_warnings:
-        logger.warning(f"[前置检查] 共 {len(preflight_warnings)} 项警告，服务继续启动")
-    else:
-        logger.info("[前置检查] 全部通过")
-
-    # 确保数据目录存在
-    from core.config import get_config
-    config = get_config()
-    config.data_dir.mkdir(parents=True, exist_ok=True)
-    (config.data_dir / "inbox").mkdir(parents=True, exist_ok=True)
-
-    # 初始化所有数据库表（幂等）
-    try:
-        from core.db_init import init_all_tables
-        init_all_tables()
-        logger.info("[DB] 数据库表初始化完成")
-    except Exception as e:
-        logger.warning(f"[DB] 数据库表初始化失败（非阻塞）: {e}")
-
-    # 启动补偿：检查关机期间过期的复盘预约
-    _run_startup_compensation()
-
-    # 归档无消费者的历史 pending 事件（升级收尾）
-    try:
-        from core.mnemos_bus import _get_bus
-        bus = _get_bus()
-        archived = bus.archive_no_consumer_events()
-        if archived > 0:
-            logger.info(f"[EventBus] 启动归档: {archived} 个无消费者历史事件已归档")
-    except Exception as e:
-        logger.debug(f"[EventBus] 启动归档失败（非阻塞）: {e}")
-
-    # 注册信号处理（优雅退出）
-    def handle_signal(signum, frame):
-        logger.info(f"收到信号 {signum}，正在停止所有服务...")
-        _stop_event.set()
-
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-
-    # 注册线程异常钩子，防止未捕获异常导致线程静默崩溃
-    def handle_thread_exception(args):
-        logger.error(f"未捕获的线程异常 in {args.thread.name}: {args.exc_type.__name__}: {args.exc_value}", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
-
-    threading.excepthook = handle_thread_exception
-
-    # 启动所有服务线程。L1 扫描默认关闭：只消费 MCP/Hook 入队，避免首次运行全量扫历史会话。
-    service_defs = [
-        ("捕获消费", service_capture_worker, "daemon.services.capture_worker", True),
-        ("L1同步", service_l1_sync, "daemon.services.l1_sync", False),
-        ("蒸馏合并", service_distill_and_merge, "daemon.services.distill_merge", True),
-        ("心跳", service_heartbeat, "daemon.services.heartbeat", True),
-        ("收件箱", service_inbox_scanner, "daemon.services.inbox_scanner", True),
-        ("画像信号", service_signal_collector, "daemon.services.signal_collector", True),
-        ("画像分析", service_persona_analyzer, "daemon.services.persona_analyzer", True),
-        ("事件总线", service_event_bus, "daemon.services.event_bus", True),
-    ]
-    services = []
-    for name, func, key, default in service_defs:
-        if _service_enabled(config, key, default):
-            services.append((name, func))
-        else:
-            logger.info(f"服务 [{name}] 已禁用 ({key}=false)")
-
-    threads = []
-    for name, func in services:
-        t = threading.Thread(target=func, args=(_stop_event,), name=name, daemon=True)
-        t.start()
-        threads.append(t)
-        logger.info(f"服务 [{name}] 已启动 (thread: {t.ident})")
-
-    logger.info(f"所有 {len(threads)} 个服务已启动")
-    logger.info(f"日志文件: {log_file}")
-    logger.info(f"数据目录: {config.data_dir}")
-    logger.info(f"Wiki目录: {config.wiki_dir}")
-
-    # 主线程等待停止信号
-    try:
-        while not _stop_event.is_set():
-            _stop_event.wait(timeout=1)
-    except KeyboardInterrupt:
-        logger.info("收到键盘中断，正在停止...")
-        _stop_event.set()
-
-    # 等待所有线程退出（最多30秒，给 Worker 足够时间 flush）
-    logger.info("等待所有服务停止...")
-    for t in threads:
-        t.join(timeout=30)
-        if t.is_alive():
-            logger.warning(f"服务 [{t.name}] 未能在30秒内停止")
-
-    remove_pid()
-    logger.info("Mnemos daemon 已停止")
-
-
-def _daemonize_unix():
-    """Unix 平台：使用 fork 后台化"""
-    pid = os.fork()
-    if pid > 0:
-        print(f"Mnemos daemon 已启动 (PID: {pid})")
-        print(f"日志: {log_file}")
-        return
-
-    os.setsid()
-    os.umask(0o022)  # 安全默认值: owner=rwx, group=rx, other=rx
-
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
-
-    run_daemon()
-
-
-def _daemonize_windows():
-    """Windows 平台：使用 CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS 启动独立子进程"""
-    import subprocess
-
-    # 使用 pythonw.exe 避免控制台窗口
-    python_exe = Path(sys.executable)
-    pythonw_exe = python_exe.parent / "pythonw.exe"
-    if pythonw_exe.exists():
-        python_exe = str(pythonw_exe)
-    else:
-        python_exe = sys.executable
-
-    cmd = [python_exe, "-c",
-           "import mnemos_daemon; mnemos_daemon.run_daemon()"]
-
-    creation_flags = (
-        subprocess.CREATE_NO_WINDOW
-        | subprocess.CREATE_NEW_PROCESS_GROUP
-        | subprocess.DETACHED_PROCESS
-    )
-
-    proc = subprocess.Popen(
-        cmd,
-        creationflags=creation_flags,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
-    PID_FILE.write_text(str(proc.pid), encoding="utf-8")
-    print(f"Mnemos daemon 已启动 (PID: {proc.pid})")
-    print(f"日志: {log_file}")
-
-
-def start_daemon():
-    """启动守护进程（跨平台）"""
-    if is_daemon_running():
-        print("Mnemos daemon 已在运行")
-        return
-
-    if sys.platform == "win32":
-        _daemonize_windows()
-    else:
-        _daemonize_unix()
-
-
-def stop_daemon():
-    """停止守护进程（跨平台）"""
-    # 先扫描并终止所有 mnemos_daemon 残留进程
-    _kill_all_daemon_processes()
-
-    if not PID_FILE.exists():
-        print("Mnemos daemon 未运行")
-        return
-
-    try:
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-        if sys.platform == "win32":
-            import subprocess
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                           capture_output=True, timeout=10)
-        else:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                # 等待进程退出
-                for _ in range(30):
-                    try:
-                        os.kill(pid, 0)
-                        time.sleep(0.5)
-                    except OSError:
-                        break
-            except OSError:
-                pass  # 进程已不存在
-        remove_pid()
-        print("Mnemos daemon 已停止")
-    except Exception as e:
-        print(f"停止 daemon 失败: {e}")
-
-
-def _kill_all_daemon_processes():
-    """终止所有 mnemos_daemon.py 进程（清理残留）"""
-    try:
-        import subprocess
-        import platform
-        if platform.system() == "Darwin":
-            result = subprocess.run(
-                ["pgrep", "-f", "mnemos_daemon.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode not in (0, 1):
-                return
-            for pid_str in result.stdout.splitlines():
-                pid_str = pid_str.strip()
-                if not pid_str.isdigit():
-                    continue
-                pid = int(pid_str)
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
-        elif sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "python.exe"],
-                capture_output=True, timeout=10,
-            )
-        else:
-            result = subprocess.run(
-                ["pgrep", "-af", "mnemos_daemon.py"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode not in (0, 1):
-                return
-            for line in result.stdout.splitlines():
-                if "mnemos_daemon.py" in line and "pgrep" not in line:
-                    try:
-                        pid = int(line.split()[0])
-                        os.kill(pid, signal.SIGTERM)
-                    except (ValueError, OSError):
-                        pass
-    except Exception:
-        pass
-
-
-def status_daemon():
-    """查看守护进程状态"""
-    def _fmt(size: int) -> str:
-        value = float(size)
-        for unit in ("B", "KB", "MB", "GB"):
-            if value < 1024 or unit == "GB":
-                return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
-            value /= 1024
-
-    def _daemon_process_count() -> int:
-        try:
-            import subprocess
-            import platform
-            if platform.system() == "Darwin":
-                result = subprocess.run(
-                    ["pgrep", "-f", "mnemos_daemon.py"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode not in (0, 1):
-                    return 0
-                count = 0
-                for pid in result.stdout.splitlines():
-                    pid = pid.strip()
-                    if not pid.isdigit():
-                        continue
-                    ps_result = subprocess.run(
-                        ["ps", "-p", pid, "-o", "args="],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if ps_result.returncode == 0:
-                        cmd = ps_result.stdout.strip()
-                        if "mnemos_daemon.py" in cmd and "pgrep" not in cmd:
-                            count += 1
-                return count
-            else:
-                result = subprocess.run(
-                    ["pgrep", "-af", "mnemos_daemon.py"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode not in (0, 1):
-                    return 0
-                return sum(
-                    1 for line in result.stdout.splitlines()
-                    if "mnemos_daemon.py" in line and "pgrep" not in line
-                )
-        except Exception:
-            return 0
-
-    def _print_runtime_stats(config):
-        print(f"\n配置:")
-        print(f"  当前读取: {config.config_path}")
-        print(f"  配置存在: {'是' if config.config_path.exists() else '否（使用默认值）'}")
-        print(f"  数据目录: {config.data_dir}")
-        print(f"  Wiki目录: {config.wiki_dir}")
-        print(f"  Memos: {'已配置' if config.memos_token else '未配置'}")
-        services = config.get("daemon.services", {})
-        if services:
-            print("  服务开关:")
-            for key in sorted(services):
-                print(f"    {'✓' if services[key] else '☐'} {key}")
-
-        print(f"\n运行态:")
-        print(f"  daemon 进程数: {_daemon_process_count()}")
-        if log_file.exists():
-            print(f"  daemon.log: {_fmt(log_file.stat().st_size)}")
-        events_db = config.data_dir / "events.db"
-        if events_db.exists():
-            print(f"  events.db: {_fmt(events_db.stat().st_size)}")
-            try:
-                import sqlite3
-                with sqlite3.connect(str(events_db), timeout=5) as conn:
-                    pending_total = conn.execute(
-                        "SELECT COUNT(*) FROM events WHERE status IN ('pending', 'processing')"
-                    ).fetchone()[0]
-                    rows = conn.execute(
-                        "SELECT event_type, status, COUNT(*) FROM events "
-                        "GROUP BY event_type, status ORDER BY COUNT(*) DESC LIMIT 5"
-                    ).fetchall()
-                print(f"  events pending/processing: {pending_total}")
-                for event_type, status, count in rows:
-                    print(f"    - {event_type}/{status}: {count}")
-            except Exception as e:
-                print(f"  events.db 统计失败: {e}")
-
-    if is_daemon_running():
-        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
-        print(f"Mnemos daemon 运行中 (PID: {pid})")
-        print(f"日志: {log_file}")
-
-        # 显示服务状态
-        try:
-            from core.config import get_config
-            config = get_config()
-            _print_runtime_stats(config)
-
-            from core.hephaestus_worker import HephaestusWorker
-            worker = HephaestusWorker()
-            stats = worker.get_stats()
-            print(f"\n蒸馏队列:")
-            print(f"  待处理: {stats['pending']}")
-            print(f"  已委托: {stats['delegated']}")
-        except Exception:
-            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
-            pass
-    else:
-        print("Mnemos daemon 未运行")
-        print(f"日志文件: {log_file}")
-        try:
-            from core.config import get_config
-            _print_runtime_stats(get_config())
-        except Exception:
-            logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
-        if log_file.exists():
-            print(f"\n最近日志:")
-            try:
-                # 只读取最后 5 行，避免大日志文件导致内存问题
-                import subprocess
-                result = subprocess.run(
-                    ["tail", "-n", "5", str(log_file)],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        print(f"  {line}")
-            except Exception:
-                # 回退：逐行读取最后 5 行
-                lines = []
-                with open(log_file, "rb") as f:
-                    f.seek(0, 2)
-                    pos = f.tell()
-                    while pos > 0 and len(lines) < 5:
-                        pos -= 1
-                        f.seek(pos)
-                        if f.read(1) == b"\n":
-                            line = f.readline().decode("utf-8", errors="ignore").strip()
-                            if line:
-                                lines.insert(0, line)
-                for line in lines:
-                    print(f"  {line}")
-
-
-def install_windows_task() -> bool:
-    """将 daemon 注册为 Windows Task Scheduler 任务，开机自动启动"""
-    if sys.platform != "win32":
-        print("[ERR] 此命令仅支持 Windows")
-        return False
-
-    from core.config import get_config
-    import subprocess
-    task_name = "MnemosDaemon"
-    python_exe = sys.executable
-    script_path = Path(__file__).resolve()
-    logs_dir = get_config().data_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    log_out = logs_dir / "daemon_scheduler.log"
-    log_err = logs_dir / "daemon_scheduler.error.log"
-
-    # 先卸载旧任务（如果存在）
-    uninstall_windows_task()
-
-    cmd = [
-        "schtasks", "/Create", "/F",
-        "/TN", task_name,
-        "/TR", f'"{python_exe}" "{script_path}" run',
-        "/SC", "ONLOGON",
-        "/RL", "HIGHEST",
-        "/NP",
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
-                                creationflags=subprocess.CREATE_NO_WINDOW)
-        if result.returncode == 0 or "SUCCESS" in result.stdout:
-            print(f"[OK] Windows Task Scheduler 任务已注册: {task_name}")
-            print(f"  触发: 用户登录时自动启动")
-            print(f"  命令: {python_exe} {script_path} run")
-            print(f"  日志: {log_out}")
-            return True
-        else:
-            print(f"[ERR] 注册失败: {result.stderr}")
-            return False
-    except FileNotFoundError:
-        print("[ERR] schtasks 命令未找到，请确保 Windows 系统正常")
-        return False
-    except Exception as e:
-        print(f"[ERR] 注册失败: {e}")
-        return False
-
-
-def uninstall_windows_task() -> bool:
-    """从 Windows Task Scheduler 注销 daemon 任务"""
-    if sys.platform != "win32":
-        return False
-
-    import subprocess
-    task_name = "MnemosDaemon"
-    try:
-        result = subprocess.run(
-            ["schtasks", "/Delete", "/F", "/TN", task_name],
-            capture_output=True, text=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW
+        event_bus.subscribe("immune.report", _on_immune_report)
+        event_bus.subscribe("dna.computed", _on_dna_computed)
+        event_bus.subscribe("entropy.suggestions", _on_entropy_suggestions)
+        logger.info(
+            "[DAEMON] KIAEventConsumer 已订阅 immune.report / dna.computed / entropy.suggestions"
         )
-        if result.returncode == 0 or "SUCCESS" in result.stdout:
-            print(f"[OK] 已注销任务: {task_name}")
-            return True
-        return False
-    except Exception:
-        logger.warning(f"Unexpected error in mnemos_daemon.py", exc_info=True)
-        return False
+    except DAEMON_OPERATION_ERRORS as kia_exc:
+        logger.warning("[DAEMON] KIAEventConsumer 订阅失败: %s", kia_exc, exc_info=True)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Mnemos Daemon v2.0.0")
-    sub = parser.add_subparsers(dest="cmd")
-    sub.add_parser("start", help="启动守护进程（全自动模式）")
-    sub.add_parser("stop", help="停止守护进程")
-    sub.add_parser("status", help="查看状态")
-    sub.add_parser("run", help="前台运行（调试用）")
-    sub.add_parser("install-windows", help="注册为 Windows 开机启动任务")
-    sub.add_parser("uninstall-windows", help="注销 Windows 开机启动任务")
-    sub.add_parser("model-status", help="查看蒸馏评分器模型状态")
-    sub.add_parser("drift-report", help="生成漂移检测报告 HTML")
-    args = parser.parse_args()
+def _register_telemetry_handlers(event_bus: Any) -> None:
+    """注册 telemetry 事件的审计 sink。"""
+    _entrypoint_support.register_telemetry_handlers(_ENTRYPOINT_HOST, event_bus)
 
-    if args.cmd == "start":
-        start_daemon()
-    elif args.cmd == "stop":
-        stop_daemon()
-    elif args.cmd == "status":
-        status_daemon()
-    elif args.cmd == "run":
-        # 前台运行，方便调试
-        run_daemon()
-    elif args.cmd == "install-windows":
-        install_windows_task()
-    elif args.cmd == "uninstall-windows":
-        uninstall_windows_task()
-    elif args.cmd == "model-status":
-        _print_model_status()
-    elif args.cmd == "drift-report":
-        _generate_drift_report()
-    else:
-        parser.print_help()
+
+def _register_cognitive_graph(event_bus: Any) -> None:
+    """注册 CognitiveGraphUpdater 订阅跨层事件。"""
+    try:
+        from core.cognitive_graph import CognitiveGraphStore, CognitiveGraphUpdater
+
+        global _cognitive_graph_updater
+        cg_store = CognitiveGraphStore()
+        _cognitive_graph_updater = CognitiveGraphUpdater(store=cg_store)
+        _cognitive_graph_updater.subscribe(event_bus)
+        logger.info("[DAEMON] CognitiveGraphUpdater 已订阅 EventBus")
+    except DAEMON_OPERATION_ERRORS as cg_exc:
+        logger.warning("[DAEMON] CognitiveGraphUpdater 订阅失败: %s", cg_exc, exc_info=True)
+
+
+def _register_cognition_episode_dispatch(event_bus: Any, cfg: Optional[Any]) -> None:
+    from daemon.cognition_episode_dispatch import register_cognition_episode_dispatch
+
+    global _cognition_episode_dispatch_owner
+    _cognition_episode_dispatch_owner = register_cognition_episode_dispatch(
+        event_bus,
+        cfg,
+        cognitive_graph_store=getattr(_cognitive_graph_updater, "store", None),
+    )
+
+
+def _register_session_event_handlers(event_bus: Any) -> None:
+    """注册 session.start / session.end / observation.updated / knowledge_stale 处理器。"""
+    _entrypoint_support.register_session_event_handlers(
+        _ENTRYPOINT_HOST,
+        event_bus,
+    )
+
+
+def _replay_dead_letters(event_bus: Any, cfg: Optional[Any]) -> None:
+    """启动时重放已有消费者的 no_consumer 死信事件。"""
+    try:
+        replayed = event_bus.replay_no_consumer_dead_letters(
+            limit=int(cfg.get("event_bus.startup_replay_limit", 500)) if cfg else 500,
+            max_age_hours=(
+                int(cfg.get("event_bus.dead_letter_replay_max_age_hours", 168)) if cfg else 168
+            ),  # noqa: E501
+            per_type_limit=(
+                int(cfg.get("event_bus.dead_letter_replay_per_type_limit", 100)) if cfg else 100
+            ),  # noqa: E501
+        )
+        if replayed:
+            logger.info("[DAEMON] 已重放 %d 个已有消费者的 no_consumer 死信事件", replayed)
+    except DAEMON_OPERATION_ERRORS as replay_exc:
+        logger.warning("[DAEMON] no_consumer 死信重放失败: %s", replay_exc, exc_info=True)
+
+
+def _start_event_bus_dispatch(event_bus: Any) -> None:
+    event_bus.start_dispatch()
+    logger.info("[DAEMON] EventBus 分发线程已启动")
+
+
+def _initialize_event_bus(cfg: Optional[Any], *, start_dispatch: bool = True) -> Any:
+    """初始化 EventBus 并注册所有处理器；失败时返回 None 并写入启动状态。"""
+    try:
+        from core.mnemos_bus import get_event_bus
+
+        event_bus = get_event_bus(config=cfg)
+        _register_kg_event_handlers(event_bus)
+        _register_kia_event_handlers(event_bus)
+        _register_telemetry_handlers(event_bus)
+        _register_cognitive_graph(event_bus)
+        _register_cognition_episode_dispatch(event_bus, cfg)
+        _register_session_event_handlers(event_bus)
+        _replay_dead_letters(event_bus, cfg)
+
+        if start_dispatch:
+            _start_event_bus_dispatch(event_bus)
+        return event_bus
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] EventBus 初始化失败: %s", exc, exc_info=True)
+        _write_startup_status(success=False, error=f"EventBus 初始化失败: {exc}")
+        return None
+
+
+def _load_daemon_config() -> Optional[Any]:
+    """加载 daemon 配置，失败时返回 None 并记录警告。"""
+    try:
+        from core.config import get_config
+
+        return get_config()
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] 加载配置失败，使用默认开关: %s", exc)
+        return None
+
+
+def _register_wiki_auto_commit(ctx: Any, cfg: Optional[Any]) -> None:
+    """启动并注册 Wiki 自动提交监控。"""
+    _start_wiki_auto_commit(cfg)
+    if _wiki_auto_commit_handler is not None:
+        ctx.register(
+            "wiki_auto_commit",
+            _wiki_auto_commit_handler,
+            closer=lambda handler: handler.stop(),
+        )
+
+
+def _apply_interval_overrides(cfg: Optional[Any]) -> None:
+    """用已加载配置覆盖默认服务间隔。"""
+    if cfg is None:
+        return
+    _intervals.apply_interval_overrides(INTERVALS, cfg)
+
+
+def _register_kia_modules(ctx: Any, cfg: Optional[Any]) -> None:
+    """启动并注册 KIA 模块。"""
+    if cfg is None:
+        return
+    _start_kia_modules(cfg)
+    if _kia_module_registry is not None:
+        if _event_bus_instance is not None:
+            _kia_module_registry.subscribe_to_event_bus(_event_bus_instance)
+            logger.info("[DAEMON] KIA module registry 已订阅 EventBus")
+        ctx.register("kia_modules", _kia_module_registry, closer=lambda reg: reg.stop_all())
+
+
+def _register_trigger_dispatcher(ctx: Any, cfg: Optional[Any]) -> None:
+    """启动并注册 TriggerDispatcher。"""
+    _start_trigger_dispatcher(cfg)
+    if _trigger_dispatcher is not None:
+        ctx.register(
+            "trigger_dispatcher",
+            _trigger_dispatcher,
+            closer=lambda dispatcher: dispatcher.stop_all(),
+        )
+
+
+def _build_service_executor(cfg: Optional[Any]) -> concurrent.futures.ThreadPoolExecutor:
+    """创建服务调度线程池。"""
+    max_workers = 2
+    if cfg is not None:
+        try:
+            max_workers = max(1, min(16, int(cfg.get("daemon.max_workers", 2))))
+        except (TypeError, ValueError) as exc:
+            logger.debug("daemon.max_workers 配置无效，使用默认值: %s", exc)
+    return concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="daemon_service"
+    )
+
+
+def _schedule_service_if_due(
+    cfg: Optional[Any],
+    service_name: str,
+    interval: float,
+    now: float,
+    last_run: Dict[str, float],
+    executor: concurrent.futures.ThreadPoolExecutor,
+) -> None:
+    """检查并提交到期的周期性服务任务。"""
+    if now - last_run.get(service_name, 0) < interval:
+        return
+    if not _service_enabled(cfg, service_name):
+        last_run[service_name] = now
+        logger.debug("[DAEMON] 服务 %s 已关闭，跳过", service_name)
+        return
+
+    existing = _service_futures.get(service_name)
+    if existing is not None and not existing.done():
+        logger.debug("[DAEMON] 服务 %s 仍在运行，跳过本次调度", service_name)
+        return
+
+    if _resource_budget.defer_if_needed(
+        service_name,
+        now,
+        interval,
+        last_run,
+        _service_results,
+        config=cfg,
+    ):
+        return
+    last_run[service_name] = now
+    try:
+        fn = _resolve_service_call(cfg, service_name)
+        future = executor.submit(fn)
+        _service_futures[service_name] = future
+        future.add_done_callback(_make_service_done_callback(service_name))
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.error("调度服务 %s 失败: %s", service_name, exc, exc_info=True)
+        logger.debug(traceback.format_exc())
+
+
+def _run_daemon_main_loop(
+    cfg: Optional[Any],
+    executor: concurrent.futures.ThreadPoolExecutor,
+    *,
+    service_names: tuple[str, ...] | None = None,
+) -> None:
+    """daemon 主循环：调度周期性服务。"""
+    _entrypoint_support.run_daemon_main_loop(
+        _ENTRYPOINT_HOST,
+        cfg,
+        executor,
+        service_names=service_names,
+    )
+
+
+def _shutdown_daemon(ctx: Any) -> None:
+    """关闭 RuntimeContext 并清理 daemon 全局引用。"""
+    global _event_bus_instance, _capture_worker_pool, _trigger_dispatcher
+    global _wiki_auto_commit_handler, _kia_module_registry, _runtime_context
+    global _knowledge_scheduler_instance
+
+    try:
+        ctx.shutdown()
+    except DAEMON_OPERATION_ERRORS as exc:
+        logger.warning("[DAEMON] RuntimeContext shutdown 失败: %s", exc, exc_info=True)
+
+    # 清空 daemon 级全局引用（资源本身已由 RuntimeContext 关闭）
+    _event_bus_instance = None
+    _capture_worker_pool = None
+    _trigger_dispatcher = None
+    _wiki_auto_commit_handler = None
+    _kia_module_registry = None
+    _knowledge_scheduler_instance = None
+    _runtime_context = None
+
+    _release_pid_lock()
+    _reset_daemon_profile()
+    logger.info("Mnemos Daemon 已退出")
+
+
+def run_daemon(
+    foreground: bool = False,
+    *,
+    controlled_raw_sync_only: bool = False,
+) -> None:
+    """Run the production daemon or an explicit, constrained Raw-sync profile.
+
+    The constrained profile is for auditable Source-to-Raw recovery only. It
+    intentionally excludes unrelated writers, EventBus replay, KIA modules,
+    and startup compensation; the identity and heartbeat make the distinction
+    durable and visible to the operator.
+    """
+    _entrypoint_support.run_daemon(
+        _ENTRYPOINT_HOST,
+        foreground,
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+# ── CLI ──
+
+
+def _daemon_command_context() -> _command_control.DaemonCommandContext:
+    return _entrypoint_support.daemon_command_context(_ENTRYPOINT_HOST)
+
+
+def cmd_start(*, controlled_raw_sync_only: bool = False) -> int:
+    return _command_control.start(
+        _daemon_command_context(),
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+def cmd_stop(*, controlled_raw_sync_only: bool = False) -> int:
+    return _command_control.stop(
+        _daemon_command_context(),
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+def cmd_status(*, controlled_raw_sync_only: bool = False) -> int:
+    return _command_control.status(
+        _daemon_command_context(),
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+def cmd_run(*, controlled_raw_sync_only: bool = False) -> int:
+    return _command_control.run(
+        _daemon_command_context(),
+        controlled_raw_sync_only=controlled_raw_sync_only,
+    )
+
+
+def _windows_task_command(script: Path) -> str:
+    return _command_control.windows_task_command(_daemon_command_context(), script)
+
+
+def cmd_install_windows() -> int:
+    return _command_control.install_windows(_daemon_command_context())
+
+
+def cmd_uninstall_windows() -> int:
+    return _command_control.uninstall_windows(_daemon_command_context())
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    return _entrypoint_support.main(_ENTRYPOINT_HOST, argv)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

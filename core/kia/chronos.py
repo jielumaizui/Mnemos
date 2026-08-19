@@ -5,196 +5,88 @@ Chronos — 时间之神 — KIA 步骤调度中心
 
 16 个步骤按触发方式分为：
 - 事件触发（实时响应，不经调度器）：connect_worker, iteration_tracker, task_classifier, aegis
-- 定时触发（按 cron 节奏运行）：immune, dna, entropy, profile, capsule, dark_knowledge, shadow_page, stress_test
-- 条件触发（满足条件才执行）：skill_flywheel
+- 定时触发（按 cron 节奏运行）：immune, dna, entropy, profile, capsule, shadow_page, stress_test
+- 条件触发（满足条件才执行）：cognitive_decision_flywheel（legacy step name: skill_flywheel）
 - 被动调用（工具函数）：time_parser
 - 调度中心自身：knowledge_sched
 
 同时保留原有任务调度/提醒功能（ScheduledTask）。
+
+调度器仅隔离已知 I/O、配置、SQLite、存储与任务运行时故障；未知编程错误保持可见。
 """
 
 from __future__ import annotations
 
 import logging
 import hashlib
+import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, is_dataclass
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, cast, ClassVar, Dict, List, Mapping, Optional
 
-
-
-# ============================================================
-# 原有任务调度/提醒功能（保留）
-# ============================================================
+from core.cognitive.decision_trace import (
+    MaterialActionAuthorization,
+    MaterialActionCoordinator,
+    MaterialActionPermit,
+    MaterialActionRequest,
+    MaterialActionTerminal,
+    authorize_exact_project_contract_action,
+    find_pending_material_action_authorization,
+    require_material_action,
+)
+from core.cognitive.state_contract import sha256_json
+from core.cognitive.state_store import CognitiveStateStore
+from core.kia.chronos_builtin_steps import ChronosBuiltinStepMixin
+from core.kia.chronos_contracts import (  # noqa: F401
+    CHRONOS_DECISION_CONTRACT_ID,
+    CHRONOS_DECISION_CONTRACT_REVISION,
+    CHRONOS_DECISION_CONTRACT_TEXT,
+    CHRONOS_DECISION_PRODUCER_HASH,
+    CHRONOS_EXECUTOR,
+    CHRONOS_OPERATION_ERRORS,
+    CHRONOS_OWNER,
+    CHRONOS_STEP_EXECUTE_ACTION,
+    CHRONOS_STEP_SUCCESS_STATUSES,
+    CHRONOS_TASK_CREATE_ACTION,
+    CRON_DOW_DAYS,
+    CRON_TRIGGER__MATCHES_CRON_DOW_DAYS,
+    ConditionTrigger,
+    CronTrigger,
+    EventTrigger,
+    KNOWLEDGE_SCHEDULER_CLEANUP_OLD_TASKS_DAYS,
+    KNOWLEDGE_SCHEDULER_DURATION_BUCKET_MONTH_DAYS,
+    KNOWLEDGE_SCHEDULER_DURATION_BUCKET_QUARTER_DAYS,
+    KNOWLEDGE_SCHEDULER_DURATION_BUCKET_WEEK_DAYS,
+    KNOWLEDGE_SCHEDULER_DURATION_BUCKET_YEAR_DAYS,
+    KNOWLEDGE_SCHEDULER__REMINDER_DATE_FOR_DAYS_UNTIL_DAYS,
+    KNOWLEDGE_SCHEDULER__REMINDER_DATE_FOR_DAYS_UNTIL_DAYS_2,
+    KNOWLEDGE_SCHEDULER__ROW_TO_TASK_ROW,
+    PassiveTrigger,
+    REMINDER_DAYS,
+    STATS_DAYS,
+    ScheduledStep,
+    ScheduledStepEffectOracle,
+    ScheduledTask,
+    ScheduledTaskEffectOracle,
+    TIMEOUT_SECONDS,
+    TIMEOUT_SECONDS_2,
+    Trigger,
+    scheduled_step_material_action_binding,
+    scheduled_task_material_action_binding,
+)
+from core.kia.chronos_scheduler_support import SchedulerSupportMixin
 
 logger = logging.getLogger(__name__)
-@dataclass
-class ScheduledTask:
-    """调度任务"""
-    task_id: str
-    task_type: str
-    subtype: str
-    due_date: str
-    reminder_date: str
-    is_periodic: bool
-    period: Optional[str]
-    status: str
-    context: str
-    created_at: str
-    reminded_at: Optional[str] = None
-    priority: int = 0
-
-
-# ============================================================
-# Trigger 类层次
-# ============================================================
-
-class Trigger:
-    """触发条件基类"""
-
-    def is_due(self) -> bool:
-        raise NotImplementedError
-
-    def update_last_run(self, ts: Optional[str] = None) -> None:
-        # TODO: 子类可覆盖以持久化 last_run 时间戳（基类默认空实现）
-        pass
-
-    def describe(self) -> str:
-        return self.__class__.__name__
-
-
-class CronTrigger(Trigger):
-    """Cron 表达式触发器"""
-
-    def __init__(self, cron: str, last_run: Optional[str] = None):
-        self.cron = cron
-        self._last_run: Optional[datetime] = (
-            datetime.fromisoformat(last_run) if last_run else None
-        )
-        parts = cron.split()
-        self.minute = parts[0] if len(parts) > 0 else "*"
-        self.hour = parts[1] if len(parts) > 1 else "*"
-        self.day_of_month = parts[2] if len(parts) > 2 else "*"
-        self.month = parts[3] if len(parts) > 3 else "*"
-        self.day_of_week = parts[4] if len(parts) > 4 else "*"
-
-    def is_due(self) -> bool:
-        now = datetime.now()
-        if self._last_run:
-            # 同一分钟内不重复触发
-            if (now - self._last_run).total_seconds() < 60:
-                return False
-
-        return self._matches(now)
-
-    def _matches(self, now: datetime) -> bool:
-        if not self._field_matches(self.minute, now.minute, 0, 59):
-            return False
-        if not self._field_matches(self.hour, now.hour, 0, 23):
-            return False
-        if not self._field_matches(self.day_of_month, now.day, 1, 31):
-            return False
-        if not self._field_matches(self.month, now.month, 1, 12):
-            return False
-        if not self._field_matches(self.day_of_week, now.weekday() + 1, 0, 7):
-            return False
-        return True
-
-    @staticmethod
-    def _field_matches(field: str, value: int, min_val: int, max_val: int) -> bool:
-        if field == "*":
-            return True
-        # 简单步长：*/N
-        if field.startswith("*/"):
-            step = int(field[2:])
-            return value % step == 0
-        # 枚举：1,3,5
-        if "," in field:
-            return value in [int(x) for x in field.split(",")]
-        # 范围：1-5
-        if "-" in field:
-            lo, hi = field.split("-", 1)
-            return int(lo) <= value <= int(hi)
-        # 精确值
-        try:
-            return value == int(field)
-        except ValueError:
-            return False
-
-    def update_last_run(self, ts: Optional[str] = None) -> None:
-        self._last_run = datetime.fromisoformat(ts) if ts else datetime.now()
-
-    def describe(self) -> str:
-        return f"cron:{self.cron}"
-
-
-class EventTrigger(Trigger):
-    """事件触发器 — 由事件总线直接调用，不经调度器 tick"""
-
-    def __init__(self, event_type: str):
-        self.event_type = event_type
-
-    def is_due(self) -> bool:
-        return False  # 事件触发步骤不参与 tick 调度
-
-    def describe(self) -> str:
-        return f"event:{self.event_type}"
-
-
-class ConditionTrigger(Trigger):
-    """条件触发器 — 检查 predicate 是否满足"""
-
-    def __init__(self, predicate: Callable[[], bool], description: str = ""):
-        self.predicate = predicate
-        self._description = description
-
-    def is_due(self) -> bool:
-        try:
-            return self.predicate()
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at chronos.py", exc_info=True)
-            return False
-
-    def describe(self) -> str:
-        return f"condition:{self._description}"
-
-
-class PassiveTrigger(Trigger):
-    """被动触发器 — 永远不主动触发"""
-
-    def is_due(self) -> bool:
-        return False
-
-    def describe(self) -> str:
-        return "passive"
-
-
-# ============================================================
-# ScheduledStep
-# ============================================================
-
-@dataclass
-class ScheduledStep:
-    """KIA 调度步骤定义"""
-    name: str
-    func: Callable[[], Dict]
-    trigger: Trigger
-    deps: List[str] = field(default_factory=list)
-    timeout: int = 300
-    enabled: bool = True
-    consecutive_failures: int = 0
-
 
 # ============================================================
 # KnowledgeScheduler — KIA 步骤调度中心
 # ============================================================
 
-class KnowledgeScheduler:
+
+class KnowledgeScheduler(ChronosBuiltinStepMixin, SchedulerSupportMixin):
     """
     KIA 步骤调度中心。
 
@@ -211,491 +103,202 @@ class KnowledgeScheduler:
     """
 
     MAX_CONSECUTIVE_FAILURES = 3
+    # 停机追赶/启动补偿单次最多返回任务数，防止 backlog 拖垮调用方
+    MAX_STARTUP_COMPENSATION_TASKS = 100
+    # 每次 tick 最多执行步骤数，防止大量步骤同时到期导致资源 spike
+    MAX_STEPS_PER_TICK = 4
+    EVENT_TRIGGER_ROUTES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("page_created", "page.created"),
+        ("page_modified", "page.modified"),
+        ("session_start", "session.start"),
+        ("message_exchanged", "message.exchanged"),
+    )
+    _scheduled_step_type = ScheduledStep
+    _cron_trigger_type = CronTrigger
+    _condition_trigger_type = ConditionTrigger
+    _event_trigger_type = EventTrigger
 
-    def __init__(self, max_workers: int = 4, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        max_workers: int = 4,
+        db_path: Optional[str] = None,
+        *,
+        material_action_resolver: (
+            Callable[[Mapping[str, str]], MaterialActionAuthorization] | None
+        ) = None,
+        trusted_markdown_action_resolver: (
+            Callable[[Mapping[str, str]], MaterialActionAuthorization] | None
+        ) = None,
+    ):
         # 调度器
         self.steps: Dict[str, ScheduledStep] = {}
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self._results: Dict[str, Dict] = {}
         self._lock = threading.Lock()
+        self._event_handlers_registered = False
+        self._material_action_resolver = material_action_resolver
+        self._trusted_markdown_action_resolver = trusted_markdown_action_resolver
 
         # 任务调度/提醒（原有功能）
         if db_path:
             self.DB_PATH = Path(db_path).expanduser()
         else:
             from core.config import get_config
-            self.DB_PATH = get_config().data_dir / "live_sync.db"
+
+            self.DB_PATH = get_config().database_dir / "live_sync.db"
         self._init_task_db()
 
-    # ----------------------------------------------------------
-    # 任务调度/提醒数据库（原有功能）
-    # ----------------------------------------------------------
+    def _resolve_material_action(
+        self,
+        binding: Mapping[str, str],
+        command_ids: Mapping[str, str] | None,
+        *,
+        action_type: str,
+        source_facts: Mapping[str, Any],
+        task: str,
+        goal: str,
+        approved_candidate_key: str,
+        approved_candidate_summary: str,
+        rejected_candidate_key: str,
+        rejected_candidate_summary: str,
+        committed_metric: str,
+        rejected_metric: str,
+    ) -> MaterialActionAuthorization:
+        if self._material_action_resolver is not None:
+            return self._material_action_resolver(binding)
+        if isinstance(command_ids, Mapping):
+            command_id = str(command_ids.get(binding["target_ref"]) or "").strip()
+            if not command_id:
+                raise PermissionError("Chronos action lacks its exact material command")
+            return MaterialActionCoordinator(
+                CognitiveStateStore(self.DB_PATH.parent)
+            ).bind_for_recovery(
+                command_id,
+                executor_id=CHRONOS_EXECUTOR,
+            )
+        state_db_path = (self.DB_PATH.parent / "producer_consumer_ledger.db").resolve(strict=False)
+        request = MaterialActionRequest(
+            owner=CHRONOS_OWNER,
+            executor_id=CHRONOS_EXECUTOR,
+            action_type=action_type,
+            target_ref=str(binding["target_ref"]),
+            input_hash=str(binding["input_hash"]),
+            expected_state_db=str(state_db_path),
+        )
+        pending = find_pending_material_action_authorization(
+            state_db_path=state_db_path,
+            owner=request.owner,
+            executor_id=request.executor_id,
+            action_type=request.action_type,
+            target_ref=request.target_ref,
+            input_hash=request.input_hash,
+        )
+        if pending is not None:
+            return pending
+        decision_created_at = datetime.now().astimezone().isoformat()
+        return authorize_exact_project_contract_action(
+            expected_request=request,
+            state_db_path=state_db_path,
+            contract_id=CHRONOS_DECISION_CONTRACT_ID,
+            contract_revision_id=CHRONOS_DECISION_CONTRACT_REVISION,
+            contract_text=CHRONOS_DECISION_CONTRACT_TEXT,
+            source_namespace="chronos-material-action",
+            source_facts={
+                **dict(source_facts),
+                "decision_created_at": decision_created_at,
+            },
+            decision_checks={
+                "registered_chronos_action": action_type
+                in {CHRONOS_TASK_CREATE_ACTION, CHRONOS_STEP_EXECUTE_ACTION},
+                "material_binding_complete": bool(
+                    binding.get("target_ref") and binding.get("input_hash")
+                ),
+                "scheduler_preconditions_satisfied": (
+                    bool(source_facts.get("registered")) and bool(source_facts.get("enabled"))
+                    if action_type == CHRONOS_STEP_EXECUTE_ACTION
+                    else bool(str(source_facts.get("task_type") or "").strip())
+                    and bool(str(source_facts.get("due_date") or "").strip())
+                ),
+            },
+            evidence_refs=(
+                f"chronos-target:{binding['target_ref']}",
+                f"chronos-input:{binding['input_hash']}",
+            ),
+            task=task,
+            goal=goal,
+            constraints=(
+                "The target and input must match the current scheduler request.",
+                "A scheduled step must be registered and enabled before execution.",
+            ),
+            created_at=decision_created_at,
+            producer="chronos-knowledge-scheduler",
+            producer_version=CHRONOS_DECISION_CONTRACT_REVISION,
+            producer_code_hash=CHRONOS_DECISION_PRODUCER_HASH,
+            evaluator_id="chronos-material-action-evaluator",
+            approved_candidate_key=approved_candidate_key,
+            approved_candidate_summary=approved_candidate_summary,
+            rejected_candidate_key=rejected_candidate_key,
+            rejected_candidate_summary=rejected_candidate_summary,
+            approved_reason_code="chronos_exact_action_verified",
+            rejected_reason_code="chronos_exact_action_rejected",
+            committed_metric=committed_metric,
+            rejected_metric=rejected_metric,
+        )
 
-    def _init_task_db(self):
+    def _scheduled_task_effect_hash(self, task_id: str) -> str:
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS knowledge_scheduled_tasks (
-                    task_id TEXT PRIMARY KEY,
-                    task_type TEXT NOT NULL,
-                    subtype TEXT NOT NULL,
-                    due_date TEXT NOT NULL,
-                    reminder_date TEXT NOT NULL,
-                    is_periodic INTEGER DEFAULT 0,
-                    period TEXT,
-                    status TEXT DEFAULT 'pending',
-                    context TEXT,
-                    priority INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    reminded_at TIMESTAMP,
-                    completed_at TIMESTAMP
-                )
-            """)
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(knowledge_scheduled_tasks)")}
-            if "priority" not in columns:
-                conn.execute("ALTER TABLE knowledge_scheduled_tasks ADD COLUMN priority INTEGER DEFAULT 0")
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_kst_status
-                ON knowledge_scheduled_tasks(status)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_kst_reminder
-                ON knowledge_scheduled_tasks(reminder_date)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_kst_priority_reminder
-                ON knowledge_scheduled_tasks(status, priority, reminder_date)
-            """)
-            # 步骤执行日志
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS scheduler_step_log (
-                    step_name TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    duration_sec REAL,
-                    status TEXT NOT NULL,
-                    error TEXT,
-                    PRIMARY KEY (step_name, started_at)
-                )
-            """)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM knowledge_scheduled_tasks WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        return cast(
+            str,
+            sha256_json({"scheduled_task": dict(row) if row is not None else None}),
+        )
+
+    def _scheduled_step_effect_hash(self, step_name: str) -> str:
+        with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+            return self._scheduled_step_effect_hash_conn(conn, step_name)
+
+    @staticmethod
+    def _scheduled_step_effect_hash_conn(
+        conn: sqlite3.Connection,
+        step_name: str,
+    ) -> str:
+        """Hash the business target, excluding diagnostic/attempt journals."""
+
+        conn.row_factory = sqlite3.Row
+        state = conn.execute(
+            "SELECT * FROM scheduler_step_state WHERE step_name=?",
+            (step_name,),
+        ).fetchone()
+        return cast(
+            str,
+            sha256_json({"step_state": dict(state) if state is not None else None}),
+        )
+
+    def shutdown(self):
+        """关闭调度器，释放线程池资源。"""
+        if hasattr(self, "executor") and self.executor:
+            self.executor.shutdown(wait=True)
+
+    def __del__(self):
+        self.shutdown()
 
     # ----------------------------------------------------------
     # 步骤注册
     # ----------------------------------------------------------
 
-    def register(self, step: ScheduledStep) -> None:
-        self.steps[step.name] = step
-        logger.debug(f"注册步骤: {step.name} ({step.trigger.describe()})")
-
-    def register_all_default_steps(self, wiki_base: Optional[str] = None) -> None:
-        """注册 ADR-020 定义的 16 个默认步骤"""
-        if wiki_base is None:
-            from core.config import get_config
-            wiki_base = str(get_config().wiki_dir)
-
-        # --- 定时触发步骤 ---
-        self.register(ScheduledStep(
-            name="knowledge_immune",
-            func=lambda: self._run_kia_module("hygieia", "KnowledgeImmuneSystem", "full_scan", wiki_base=wiki_base),
-            trigger=CronTrigger("0 2 * * *"),
-            timeout=300,
-        ))
-        self.register(ScheduledStep(
-            name="knowledge_dna",
-            func=lambda: self._run_kia_module("genos", "DNAEngine", "scan_all_pages", wiki_base=wiki_base),
-            trigger=CronTrigger("0 3 * * *"),
-            timeout=300,
-        ))
-        self.register(ScheduledStep(
-            name="graph_build",
-            func=lambda: self._run_graph_build(wiki_base),
-            trigger=CronTrigger("30 3 * * *"),
-            timeout=300,
-        ))
-        self.register(ScheduledStep(
-            name="entropy_engine",
-            func=lambda: self._run_kia_module("eris", "EntropyEngine", "scan", wiki_base=wiki_base),
-            trigger=CronTrigger("0 4 * * *"),
-            timeout=300,
-        ))
-        # TODO: falsify_mark 已按蓝图弃用（aporia 模块合并到 ShadowPage/争议解决流程）。
-        # 如需恢复，请重新评估功能定位后再注册。
-        # self.register(ScheduledStep(
-        #     name="falsify_mark",
-        #     func=lambda: self._run_falsify_mark(wiki_base),
-        #     trigger=CronTrigger("30 4 * * *"),
-        #     timeout=300,
-        # ))
-        self.register(ScheduledStep(
-            name="heat_map",
-            func=lambda: self._run_heat_map(wiki_base),
-            trigger=CronTrigger("0 1 * * *"),
-            timeout=300,
-        ))
-        self.register(ScheduledStep(
-            name="knowledge_profile",
-            func=lambda: self._run_kia_module("metis", "ProfileGenerator", "generate_and_report", wiki_base=wiki_base),
-            trigger=CronTrigger("0 5 * * *"),
-            timeout=300,
-        ))
-        self.register(ScheduledStep(
-            name="time_capsule",
-            func=lambda: self._run_kia_module("aion", "TimeCapsule", "scan_for_auto_reminders", wiki_base=wiki_base),
-            trigger=CronTrigger("0 * * * *"),
-            timeout=60,
-        ))
-        # TODO: version_snapshot 已按蓝图弃用（ananke 模块建议合并或删除）。
-        # 如需恢复，请重新评估功能定位后再注册。
-        # self.register(ScheduledStep(
-        #     name="version_snapshot",
-        #     func=lambda: self._run_kia_module("ananke", "VersionTimeTravel", "scan_and_snapshot_all", wiki_base=wiki_base),
-        #     trigger=CronTrigger("0 6 * * *"),
-        #     timeout=300,
-        # ))
-        # TODO: dark_knowledge 原由 erebus 模块执行，该模块已按蓝图合并到知识图谱。
-        # 如需恢复周度盲区扫描，请注册 hygieia.detect_knowledge_gaps 或 knowledge_graph 关系发现。
-        # self.register(ScheduledStep(
-        #     name="dark_knowledge",
-        #     func=lambda: self._run_kia_module("erebus", "DarkKnowledgeMiner", "mine_all", wiki_base=wiki_base),
-        #     trigger=CronTrigger("0 6 * * 0"),
-        #     timeout=600,
-        # ))
-        self.register(ScheduledStep(
-            name="shadow_page",
-            func=lambda: self._run_kia_module("hecate", "ShadowPageManager", "batch_sync", wiki_base=wiki_base),
-            trigger=CronTrigger("0 7 * * 0"),
-            timeout=600,
-        ))
-        self.register(ScheduledStep(
-            name="stress_test",
-            func=lambda: self._run_kia_module("stress_test", "StressTestEngine", "batch_test", wiki_base=wiki_base),
-            trigger=CronTrigger("0 8 * * 0"),
-            timeout=600,
-        ))
-
-        # --- 条件触发步骤 ---
-        self.register(ScheduledStep(
-            name="skill_flywheel",
-            func=lambda: self._run_kia_module("ixion", "SkillWikiFlywheel", "run_cycle", wiki_base=wiki_base),
-            trigger=ConditionTrigger(
-                predicate=self._flywheel_predicate,
-                description="profile_signals>=50",
-            ),
-            deps=["knowledge_profile"],
-            timeout=300,
-        ))
-
-        # --- 定时构图步骤（MOC + 实体页面全量更新） ---
-        self.register(ScheduledStep(
-            name="connect_worker",
-            func=lambda: self._run_connect_worker(wiki_base),
-            trigger=CronTrigger("0 9 * * *"),
-            timeout=600,
-        ))
-        self.register(ScheduledStep(
-            name="knowledge_evolution",
-            func=lambda: self._run_knowledge_evolution(wiki_base),
-            trigger=CronTrigger("0 11 * * *"),
-            timeout=300,
-        ))
-
-        # --- 事件触发步骤（注册但不参与 tick） ---
-        self.register(ScheduledStep(
-            name="connect_worker_event",
-            func=lambda: {"status": "event_only"},
-            trigger=EventTrigger("page.created"),
-        ))
-        self.register(ScheduledStep(
-            name="iteration_tracker",
-            func=lambda: {"status": "event_only"},
-            trigger=EventTrigger("page.modified"),
-        ))
-        self.register(ScheduledStep(
-            name="task_classifier",
-            func=lambda: {"status": "event_only"},
-            trigger=EventTrigger("session.start"),
-        ))
-        self.register(ScheduledStep(
-            name="kia_guard",
-            func=lambda: {"status": "event_only"},
-            trigger=EventTrigger("message.exchanged"),
-        ))
-
-        # --- 被动调用步骤 ---
-        self.register(ScheduledStep(
-            name="time_parser",
-            func=lambda: {"status": "passive"},
-            trigger=PassiveTrigger(),
-        ))
-
-        # --- 调度中心自身 ---
-        self.register(ScheduledStep(
-            name="knowledge_sched",
-            func=self._run_sched_maintenance,
-            trigger=CronTrigger("*/5 * * * *"),
-            timeout=60,
-        ))
-
-        # --- 强制复盘检查 ---
-        self.register(ScheduledStep(
-            name="forced_retrospective",
-            func=self._run_forced_retrospective,
-            trigger=CronTrigger("*/5 * * * *"),
-            timeout=30,
-        ))
-
-        # --- ScorerV2 训练队列检查（每小时，数据积累阶段） ---
-        self.register(ScheduledStep(
-            name="scorer_training",
-            func=self._run_scorer_training,
-            trigger=CronTrigger("0 * * * *"),
-            timeout=60,
-        ))
-
-        # --- 问题处理流水线（每天扫描自动修复） ---
-        self.register(ScheduledStep(
-            name="issue_pipeline",
-            func=self._run_issue_pipeline,
-            trigger=CronTrigger("0 9 * * *"),
-            timeout=300,
-        ))
-
-        # --- 对话提醒清理（每天清理过期记录） ---
-        self.register(ScheduledStep(
-            name="dialog_reminder_cleanup",
-            func=self._run_dialog_reminder_cleanup,
-            trigger=CronTrigger("0 10 * * *"),
-            timeout=60,
-        ))
-
-        # --- 画像周报生成（每周一 9:00） ---
-        self.register(ScheduledStep(
-            name="weekly_report",
-            func=lambda: self._run_weekly_report(wiki_base=wiki_base),
-            trigger=CronTrigger("0 9 * * 1"),
-            timeout=300,
-        ))
-
-    def _flywheel_predicate(self) -> bool:
-        """skill_flywheel 条件：画像信号数 >= 50"""
-        try:
-            from core.persona.psyche import get_signal_store
-            stats = get_signal_store().get_signal_stats(days=90)
-            total = sum(v for v in stats.values() if v > 0)
-            return total >= 50
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at chronos.py", exc_info=True)
-            return False
-
-    def _run_kia_module(self, module_name: str, class_name: str,
-                        method_name: str, wiki_base: str = None) -> Dict:
-        """通用 KIA 模块执行器"""
-        try:
-            import importlib
-            mod = importlib.import_module(f"core.kia.{module_name}")
-            cls = getattr(mod, class_name)
-            instance = cls(wiki_base=wiki_base)
-            method = getattr(instance, method_name)
-            result = method()
-            if isinstance(result, dict):
-                return result
-            return {"status": "ok", "result": str(result)}
-        except Exception as e:
-            logger.error(f"KIA 模块执行失败 {module_name}.{class_name}.{method_name}: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_graph_build(self, wiki_base: str) -> Dict:
-        """知识图谱关系构建：遍历 wiki 页面发现新关系"""
-        try:
-            from core.kia.knowledge_graph import KnowledgeGraph
-            kg = KnowledgeGraph(wiki_base=wiki_base)
-            wiki_path = Path(wiki_base)
-            pages = []
-            for p in wiki_path.rglob("*.md"):
-                rel = p.relative_to(wiki_path)
-                if any(part.startswith(".") for part in rel.parts):
-                    continue
-                if p.name.endswith(".shadow.md"):
-                    continue
-                pages.append(p)
-            added = 0
-            for page in pages[:100]:
-                try:
-                    for rel in kg.discover_relations(page):
-                        if kg.add_relation(rel):
-                            added += 1
-                except Exception:
-                    continue
-            return {"status": "ok", "relations_added": added}
-        except Exception as e:
-            logger.error(f"图谱构建失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_falsify_mark(self, wiki_base: str) -> Dict:
-        """可证伪性标记：为 wiki 页面初始化 falsifiability mark"""
-        try:
-            from core.kia.aporia import FalsifiabilityMarker
-            marker = FalsifiabilityMarker(wiki_base=wiki_base)
-            wiki_path = Path(wiki_base)
-            pages = []
-            for p in wiki_path.rglob("*.md"):
-                rel = p.relative_to(wiki_path)
-                if any(part.startswith(".") for part in rel.parts):
-                    continue
-                if p.name.endswith(".shadow.md"):
-                    continue
-                pages.append(p)
-            created = 0
-            for page in pages[:100]:
-                try:
-                    if marker.get_mark(str(page)) is None:
-                        if marker.init_mark_for_page(page):
-                            created += 1
-                except Exception:
-                    continue
-            to_test = marker.scan_all_marks()
-            return {"status": "ok", "marks_created": created, "pending_tests": len(to_test)}
-        except Exception as e:
-            logger.error(f"可证伪性标记失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_heat_map(self, wiki_base: str) -> Dict:
-        """热力地图：衰减热力分数 + 反写 frontmatter + 生成报告"""
-        try:
-            from core.wiki_metrics import WikiMetrics
-            wm = WikiMetrics(wiki_dir=wiki_base)
-
-            # 1. 全局热力衰减
-            decayed = wm.decay_all()
-
-            # 2. 反写 frontmatter 到所有页面
-            wiki_path = Path(wiki_base)
-            synced = 0
-            for p in wiki_path.rglob("*.md"):
-                rel = p.relative_to(wiki_path)
-                if any(part.startswith(".") for part in rel.parts):
-                    continue
-                if p.name.endswith(".shadow.md"):
-                    continue
-                try:
-                    if wm.sync_heat_to_frontmatter(p):
-                        synced += 1
-                except Exception:
-                    continue
-
-            # 3. 生成热力地图报告
-            report = wm.generate_heat_report(write=True, wiki_dir=wiki_base)
-
-            return {
-                "status": "ok",
-                "decayed": decayed,
-                "frontmatter_synced": synced,
-                "report_length": len(report),
-            }
-        except Exception as e:
-            logger.error(f"热力地图失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_sched_maintenance(self) -> Dict:
-        """调度器自身维护：清理过期任务、检查步骤健康"""
-        self.cleanup_old_tasks()
-        return {"status": "ok", "steps_registered": len(self.steps)}
-
-    def _run_forced_retrospective(self) -> Dict:
-        """强制复盘检查：到期预约直接打开 Obsidian，系统提醒走权重"""
-        try:
-            from core.app.forced_retrospective import ForcedRetrospective
-            fr = ForcedRetrospective()
-            decisions = fr.check_due_reminders()
-            forced = sum(1 for d in decisions if d.should_force_open)
-            reminded = sum(1 for d in decisions if not d.should_force_open)
-            return {
-                "status": "ok",
-                "forced_open": forced,
-                "dialog_reminder": reminded,
-            }
-        except Exception as e:
-            logger.error(f"强制复盘检查失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_scorer_training(self) -> Dict:
-        """ScorerV2 训练队列检查：每小时检查是否有足够数据开始训练"""
-        try:
-            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-            scorer = AdaptiveScorerV2(domain="mnemos")
-            trained = scorer.process_training_queue()
-            status = scorer.get_status()
-            return {
-                "status": "ok",
-                "trained_samples": trained,
-                "ready_samples": status.get("ready_samples", 0),
-                "mode": status.get("mode", "unknown"),
-                "note": "数据积累阶段，算法实现待 ready_samples >= 20 后启动",
-            }
-        except Exception as e:
-            logger.error(f"ScorerV2 训练检查失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_issue_pipeline(self, registry=None) -> Dict:
-        """问题处理流水线：扫描并自动修复低风险问题"""
-        try:
-            from core.kia.issue_pipeline import IssueRegistry, AutoFixExecutor
-            if registry is None:
-                registry = IssueRegistry()
-            executor = AutoFixExecutor(registry=registry)
-            pending = registry.list_issues(status="detected", limit=100)
-            auto_fixable = [i for i in pending if executor.can_auto_fix(i)]
-            results = []
-            for issue in auto_fixable:
-                result = executor.execute(issue)
-                results.append({
-                    "issue_id": issue.issue_id,
-                    "type": issue.issue_type,
-                    "success": result.success,
-                    "skipped": result.skipped,
-                    "action": result.action,
-                })
-            return {
-                "status": "ok",
-                "scanned": len(pending),
-                "auto_fixable": len(auto_fixable),
-                "results": results,
-            }
-        except Exception as e:
-            logger.error(f"问题处理流水线失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_dialog_reminder_cleanup(self, queue=None) -> Dict:
-        """对话提醒清理：删除已解决/已忽略超过 30 天的旧记录"""
-        try:
-            from core.kia.dialog_reminder import DialogReminderQueue
-            if queue is None:
-                queue = DialogReminderQueue()
-            deleted = queue.cleanup_resolved(retention_days=30)
-            stats = queue.count_by_status()
-            return {
-                "status": "ok",
-                "deleted": deleted,
-                "current_stats": stats,
-            }
-        except Exception as e:
-            logger.error(f"对话提醒清理失败: {e}")
-            return {"status": "error", "error": str(e)}
-
-    def _run_weekly_report(self, wiki_base: str = None) -> Dict:
-        """画像周报生成"""
-        try:
-            from core.app.weekly_report import WeeklyReportGenerator
-            gen = WeeklyReportGenerator(wiki_base=wiki_base)
-            content = gen.generate_weekly_report()
-            return {"status": "ok", "content_length": len(content)}
-        except Exception as e:
-            logger.error(f"周报生成失败: {e}")
-            return {"status": "error", "error": str(e)}
-
     # ----------------------------------------------------------
     # tick — 调度器主循环
     # ----------------------------------------------------------
 
-    def tick(self) -> Dict[str, Dict]:
+    def tick(
+        self,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+    ) -> Dict[str, Dict]:
         """
         一次调度 tick。
 
@@ -709,18 +312,30 @@ class KnowledgeScheduler:
             {step_name: result_dict}
         """
         # 1. 筛选满足触发条件的步骤（排除事件触发和被动触发）
-        ready = [
-            s for s in self.steps.values()
-            if s.enabled and s.trigger.is_due()
-        ]
+        ready = [s for s in self.steps.values() if s.enabled and s.trigger.is_due()]
 
         if not ready:
             return {}
 
-        logger.info(f"调度 tick: {len(ready)} 个步骤待执行")
+        logger.info("调度 tick: %s 个步骤待执行", len(ready))
 
         # 2. 拓扑排序
         ordered = self._topological_sort(ready)
+
+        # [P108] 限制单次 tick 执行步骤数，防止停机后大量步骤同时到期拖垮系统
+        if len(ordered) > self.MAX_STEPS_PER_TICK:
+            ordered = ordered[: self.MAX_STEPS_PER_TICK]
+            logger.info(
+                "调度 tick 步骤数超过阈值 %s，本次仅执行前 %s 个",
+                self.MAX_STEPS_PER_TICK,
+                self.MAX_STEPS_PER_TICK,
+            )
+
+        resource_deferrals = self._resource_budget_deferrals(ordered)
+        if resource_deferrals is not None:
+            with self._lock:
+                self._results.update(resource_deferrals)
+            return resource_deferrals
 
         # 3. 分离无依赖和有依赖
         parallel = [s for s in ordered if not s.deps]
@@ -731,14 +346,18 @@ class KnowledgeScheduler:
         # 4. 并行执行无依赖步骤
         if parallel:
             futures = {
-                self.executor.submit(self._run_step, step): step
+                self.executor.submit(
+                    self._run_step,
+                    step,
+                    material_action_commands=material_action_commands,
+                ): step
                 for step in parallel
             }
             for future in as_completed(futures):
                 step = futures[future]
                 try:
                     results[step.name] = future.result(timeout=step.timeout)
-                except Exception as e:
+                except CHRONOS_OPERATION_ERRORS as e:
                     results[step.name] = {"status": "error", "error": str(e)}
                     self._handle_step_failure(step, e)
 
@@ -752,8 +371,11 @@ class KnowledgeScheduler:
                 }
                 continue
             try:
-                results[step.name] = self._run_step(step)
-            except Exception as e:
+                results[step.name] = self._run_step(
+                    step,
+                    material_action_commands=material_action_commands,
+                )
+            except CHRONOS_OPERATION_ERRORS as e:
                 results[step.name] = {"status": "error", "error": str(e)}
                 self._handle_step_failure(step, e)
 
@@ -763,29 +385,128 @@ class KnowledgeScheduler:
 
         return results
 
-    def _run_step(self, step: ScheduledStep) -> Dict:
+    def _resource_budget_deferrals(self, ordered: List[ScheduledStep]) -> Optional[Dict[str, Dict]]:
+        """Return deferred results when the KIA scheduler budget is unavailable."""
+        if not ordered:
+            return None
+        try:
+            from core.resource_budget import get_budget
+
+            budget = get_budget()
+            if budget.can_run("kia_sched"):
+                return None
+
+            delay = budget.throttle_delay("kia_sched")
+            status = budget.status()
+            timestamp = datetime.now().isoformat()
+            retry_after = max(1, int(delay or 60))
+            logger.info(
+                "调度 tick 因资源预算延后: state=%s retry_after=%ss steps=%s",
+                status.get("state", "unknown"),
+                retry_after,
+                len(ordered),
+            )
+            return {
+                step.name: {
+                    "status": "deferred",
+                    "reason": "resource_budget",
+                    "resource_state": status.get("state", "unknown"),
+                    "resource_status": status,
+                    "retry_after_seconds": retry_after,
+                    "_meta": {
+                        "duration_sec": 0.0,
+                        "timestamp": timestamp,
+                    },
+                }
+                for step in ordered
+            }
+        except CHRONOS_OPERATION_ERRORS:
+            logger.warning("资源预算检查失败，继续执行调度 tick", exc_info=True)
+            return None
+
+    def _run_step(
+        self,
+        step: ScheduledStep,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+    ) -> Dict:
         """执行单个步骤，包装日志和计时"""
         start = datetime.now()
+        binding = scheduled_step_material_action_binding(step)
+        registered_step = self.steps.get(step.name)
+        if (
+            self._material_action_resolver is None
+            and not isinstance(material_action_commands, Mapping)
+            and (registered_step is not step or not step.enabled)
+        ):
+            raise PermissionError("Chronos project contract requires an enabled registered step")
+        func = step.func
+        callable_ref = (
+            f"{getattr(func, '__module__', type(func).__module__)}:"
+            f"{getattr(func, '__qualname__', type(func).__qualname__)}"
+        )
+        authorization = self._resolve_material_action(
+            binding,
+            material_action_commands,
+            action_type=CHRONOS_STEP_EXECUTE_ACTION,
+            source_facts={
+                "schema_version": "mnemos.chronos_step_decision_facts.v1",
+                "step_name": step.name,
+                "callable_ref": callable_ref,
+                "trigger": step.trigger.describe(),
+                "dependencies": sorted(step.deps),
+                "timeout": int(step.timeout),
+                "registered": registered_step is step,
+                "enabled": bool(step.enabled),
+            },
+            task=f"Run registered Chronos step {step.name}",
+            goal="Execute only the exact enabled scheduler step selected for this tick.",
+            approved_candidate_key="run_registered_due_chronos_step",
+            approved_candidate_summary=(
+                "Run the exact enabled Chronos step registered for this scheduler."
+            ),
+            rejected_candidate_key="reject_unregistered_or_disabled_step",
+            rejected_candidate_summary=(
+                "Reject a callable that is not the current enabled registered step."
+            ),
+            committed_metric="chronos_step_terminal_receipt",
+            rejected_metric="unregistered_chronos_step_execution_count",
+        )
+        permit = authorization.permit
+        oracle = ScheduledStepEffectOracle(
+            self.DB_PATH,
+            step_name=step.name,
+            input_hash=binding["input_hash"],
+        )
+        recovered = authorization.recover(oracle)
+        if recovered is not None:
+            if oracle.last_result is None and oracle.observe(permit) is None:
+                raise RuntimeError("terminal scheduled-step receipt lacks target evidence")
+            return dict(oracle.last_result or {})
+
+        permit = require_material_action(
+            authorization,
+            owner=CHRONOS_OWNER,
+            executor_id=CHRONOS_EXECUTOR,
+            action_type=CHRONOS_STEP_EXECUTE_ACTION,
+            target_ref=binding["target_ref"],
+            input_hash=binding["input_hash"],
+            expected_state_db=self.DB_PATH.parent / "producer_consumer_ledger.db",
+        )
+        before_hash = self._scheduled_step_effect_hash(step.name)
+        self._begin_step_attempt(
+            permit=permit,
+            step=step,
+            input_hash=binding["input_hash"],
+            before_hash=before_hash,
+            started_at=start,
+        )
         try:
             result = step.func()
-            if not isinstance(result, dict):
-                result = {"status": "ok", "result": str(result)}
-            result["_meta"] = {
-                "duration_sec": (datetime.now() - start).total_seconds(),
-                "timestamp": start.isoformat(),
-            }
-            # 成功则重置失败计数
-            step.consecutive_failures = 0
-            step.trigger.update_last_run()
-            logger.info(f"步骤 {step.name} 完成 ({result.get('status')}), "
-                       f"耗时 {result['_meta']['duration_sec']:.1f}s")
-            # 记录到 SQLite
-            self._log_step_execution(step.name, start, result)
-            return result
-        except Exception as e:
+        except CHRONOS_OPERATION_ERRORS as e:
             duration = (datetime.now() - start).total_seconds()
             self._handle_step_failure(step, e)
-            return {
+            result = {
                 "status": "error",
                 "error": str(e),
                 "_meta": {
@@ -793,61 +514,148 @@ class KnowledgeScheduler:
                     "timestamp": start.isoformat(),
                 },
             }
+        else:
+            if not isinstance(result, dict):
+                result = {"status": "ok", "result": str(result)}
+            result["_meta"] = {
+                "duration_sec": (datetime.now() - start).total_seconds(),
+                "timestamp": start.isoformat(),
+            }
+            if result.get("status") in CHRONOS_STEP_SUCCESS_STATUSES:
+                step.consecutive_failures = 0
 
-    def _handle_step_failure(self, step: ScheduledStep, error: Exception) -> None:
-        """处理步骤失败：累计失败计数，3 次后自动禁用"""
-        step.consecutive_failures += 1
-        logger.warning(f"步骤 {step.name} 失败 ({step.consecutive_failures}/{self.MAX_CONSECUTIVE_FAILURES}): {error}")
-
-        if step.consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES:
-            step.enabled = False
-            logger.error(f"步骤 {step.name} 连续 {self.MAX_CONSECUTIVE_FAILURES} 次失败，已自动禁用")
-
-    def _log_step_execution(self, step_name: str, started_at: datetime, result: Dict) -> None:
-        """记录步骤执行日志到 SQLite"""
-        try:
-            with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO scheduler_step_log
-                    (step_name, started_at, duration_sec, status, error)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (
-                    step_name,
-                    started_at.isoformat(),
-                    result.get("_meta", {}).get("duration_sec", 0),
-                    result.get("status", "unknown"),
-                    result.get("error"),
-                ))
-        except Exception as e:
-            logger.debug(f"步骤日志写入失败: {e}")
-
-    def _topological_sort(self, steps: List[ScheduledStep]) -> List[ScheduledStep]:
-        """拓扑排序：确保依赖步骤先执行"""
-        step_map = {s.name: s for s in steps}
-        visited = set()
-        result = []
-
-        def visit(name: str):
-            if name in visited:
-                return
-            visited.add(name)
-            step = step_map.get(name)
-            if step and step.deps:
-                for dep in step.deps:
-                    visit(dep)
-            if step is not None:
-                result.append(step)
-
-        for s in steps:
-            visit(s.name)
-
+        if result.get("status") == "deferred":
+            logger.info(
+                "步骤 %s 延后执行 (%s), 耗时 %.1fs",
+                step.name,
+                result.get("reason", "deferred"),
+                result["_meta"]["duration_sec"],
+            )
+        else:
+            logger.info(
+                "步骤 %s 完成 (%s), 耗时 %.1fs",
+                step.name,
+                result.get("status"),
+                result["_meta"]["duration_sec"],
+            )
+        expected_status = self._finalize_step_attempt(
+            permit=permit,
+            step=step,
+            result=result,
+            started_at=start,
+        )
+        recovered = authorization.recover(oracle)
+        if recovered is None or recovered.status != expected_status:
+            raise RuntimeError("scheduled-step target journal did not close its material command")
         return result
+
+    def _begin_step_attempt(
+        self,
+        *,
+        permit: MaterialActionPermit,
+        step: ScheduledStep,
+        input_hash: str,
+        before_hash: str,
+        started_at: datetime,
+    ) -> None:
+        empty_result: Dict[str, Any] = {}
+        with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduler_step_effects(
+                    effect_id, command_id, step_name, input_hash,
+                    before_hash, after_hash, status, reason_code,
+                    result_json, result_hash, started_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'executing', '', ?, ?, ?, '')
+                """,
+                (
+                    permit.effect_id,
+                    permit.command_id,
+                    step.name,
+                    input_hash,
+                    before_hash,
+                    before_hash,
+                    json.dumps(empty_result, sort_keys=True, separators=(",", ":")),
+                    sha256_json(empty_result),
+                    started_at.astimezone().isoformat(),
+                ),
+            )
+
+    def _finalize_step_attempt(
+        self,
+        *,
+        permit: MaterialActionPermit,
+        step: ScheduledStep,
+        result: Mapping[str, Any],
+        started_at: datetime,
+    ) -> str:
+        success = str(result.get("status") or "") in CHRONOS_STEP_SUCCESS_STATUSES
+        terminal_status = "committed" if success else "failed_terminal"
+        reason_code = "" if success else f"chronos_step_{result.get('status', 'error')}"
+        completed_at = datetime.now().astimezone().isoformat()
+        result_payload = dict(result)
+        result_json = json.dumps(
+            result_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        result_hash = sha256_json(result_payload)
+        with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if success:
+                conn.execute(
+                    """
+                    INSERT INTO scheduler_step_state (step_name, last_run)
+                    VALUES (?, ?)
+                    ON CONFLICT(step_name) DO UPDATE SET last_run=excluded.last_run
+                    """,
+                    (step.name, completed_at),
+                )
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO scheduler_step_log
+                (step_name, started_at, duration_sec, status, error)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    step.name,
+                    started_at.isoformat(),
+                    result_payload.get("_meta", {}).get("duration_sec", 0),
+                    result_payload.get("status", "unknown"),
+                    result_payload.get("error"),
+                ),
+            )
+            after_hash = self._scheduled_step_effect_hash_conn(conn, step.name)
+            cursor = conn.execute(
+                """
+                UPDATE scheduler_step_effects
+                SET after_hash=?, status=?, reason_code=?, result_json=?,
+                    result_hash=?, completed_at=?
+                WHERE effect_id=? AND command_id=? AND status='executing'
+                """,
+                (
+                    after_hash,
+                    terminal_status,
+                    reason_code,
+                    result_json,
+                    result_hash,
+                    completed_at,
+                    permit.effect_id,
+                    permit.command_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("scheduled-step effect intent is missing or already finalized")
+        if success:
+            step.trigger.update_last_run(completed_at)
+        return terminal_status
 
     # ----------------------------------------------------------
     # 事件触发入口
     # ----------------------------------------------------------
 
-    def trigger_event(self, event_type: str, payload: Dict = None) -> Dict:
+    def trigger_event(self, event_type: str, payload: Dict | None = None) -> Dict:
         """
         事件触发入口 — 由事件总线调用。
 
@@ -856,23 +664,24 @@ class KnowledgeScheduler:
         payload = payload or {}
         try:
             if event_type == "page.created":
-                return self._trigger_page_created(payload)
+                return cast(Dict, self._trigger_page_created(payload))
             if event_type == "page.modified":
                 return self._trigger_page_modified(payload)
             if event_type == "session.start":
-                return self._trigger_session_start(payload)
+                return cast(Dict, self._trigger_session_start(payload))
             if event_type == "message.exchanged":
-                return self._trigger_message_exchanged(payload)
+                return cast(Dict, self._trigger_message_exchanged(payload))
             return {"status": "unknown_event", "event_type": event_type}
 
-        except Exception as e:
-            logger.error(f"事件触发执行失败 {event_type}: {e}")
+        except CHRONOS_OPERATION_ERRORS as e:
+            logger.error("事件触发执行失败 %s: %s", event_type, e)
             return {"status": "error", "error": str(e)}
 
     def _run_connect_worker(self, wiki_base: str) -> Dict:
         """连接Worker：全量构图，生成实体页面和MOC枢纽"""
         try:
             from core.kia.charon import run_connect_cycle
+
             result = run_connect_cycle(dry_run=False)
             return {
                 "status": "ok",
@@ -882,179 +691,278 @@ class KnowledgeScheduler:
                 "concepts": result.get("concepts", 0),
                 "mocs": result.get("mocs", 0),
             }
-        except Exception as e:
-            logger.error(f"连接Worker失败: {e}")
+        except CHRONOS_OPERATION_ERRORS as e:
+            logger.error("连接Worker失败: %s", e, exc_info=True)
             return {"status": "error", "error": str(e)}
 
     def _run_knowledge_evolution(self, wiki_base: str) -> Dict:
-        """知识演化：扫描 wiki 版本并生成演化报告 + 新鲜度检查"""
+        """知识演化：扫描 wiki 版本并生成演化报告 + 新鲜度检查 + stale 标记"""
         try:
             from core.kia.proteus import IterationTracker, KnowledgeFreshnessChecker
+            from core.hephaestus.evolution_tracker import TemporalEvolutionTracker
 
             # 1. 生成演化报告
             tracker = IterationTracker(wiki_base=wiki_base)
             report = tracker.scan_and_report(wiki_base)
 
-            # 2. 新鲜度全库扫描
+            # 2. 新鲜度全库扫描（L4 轻量检查）
             checker = KnowledgeFreshnessChecker()
-            alerts = checker.scan_all(wiki_base)
-            if alerts:
-                logger.info(f"[知识演化] 发现 {len(alerts)} 条过期知识")
+            freshness_alerts = checker.scan_all(wiki_base)
+            if freshness_alerts:
+                logger.info("[知识演化] 发现 %s 条过期知识", len(freshness_alerts))
+
+            # 3. [P2-16] TemporalEvolutionTracker 驱动闭环：
+            #    stale 标记 + 知识缺口提示 + EventBus 发射 + 每月限频主动蒸馏
+            evolution_tracker = TemporalEvolutionTracker()
+            evolution_alerts = evolution_tracker.scan_all_pages(Path(wiki_base))
+            stale_count = sum(
+                1
+                for a in evolution_alerts
+                if a.alert_type in ("version_outdated", "context_expired")
+            )
+            gap_count = sum(1 for a in evolution_alerts if a.alert_type == "rarely_accessed")
+            if evolution_alerts:
+                logger.info(
+                    "[知识演化] EvolutionTracker: %s 条 alert (stale=%s, gap=%s)",
+                    len(evolution_alerts),
+                    stale_count,
+                    gap_count,
+                )
 
             return {
                 "status": "ok",
                 "reports": report.get("reports", 0),
                 "topics": report.get("topics", []),
-                "freshness_alerts": len(alerts),
+                "freshness_alerts": len(freshness_alerts),
+                "evolution_alerts": len(evolution_alerts),
+                "stale_marked": stale_count,
+                "gaps_found": gap_count,
             }
-        except Exception as e:
-            logger.error(f"知识演化失败: {e}")
+        except CHRONOS_OPERATION_ERRORS as e:
+            logger.error("知识演化失败: %s", e)
             return {"status": "error", "error": str(e)}
 
-    def _trigger_page_created(self, payload: Dict) -> Dict:
-        """页面创建事件：当前 Charon 只暴露批量构图入口。"""
-        from core.kia.charon import run_connect_cycle
-
-        result = run_connect_cycle(dry_run=bool(payload.get("dry_run", False)))
-        return {"status": "ok", "event_type": "page.created", "result": result}
-
     def _trigger_page_modified(self, payload: Dict) -> Dict:
-        """页面修改事件：Proteus 需要复盘对象，单页事件契约尚未落地。"""
-        return {
-            "status": "skipped",
-            "event_type": "page.modified",
-            "reason": "iteration_tracker_requires_retrospective_result",
-            "page_path": payload.get("page_path", ""),
-        }
+        """[P1-7] 页面修改事件：触发新鲜度检查、演化追踪和自动刷新。"""
+        from core.config import get_config
 
-    def _trigger_session_start(self, payload: Dict) -> Dict:
-        """会话开始事件：按 Dike 当前契约传入 messages 列表。"""
-        from core.kia.dike import TaskClassifier
+        page_path = payload.get("page_path", "")
+        wiki_base = payload.get("wiki_base") or str(get_config().wiki_dir)
 
-        user_message = payload.get("user_message") or payload.get("message") or ""
-        messages = payload.get("messages")
-        if not isinstance(messages, list):
-            messages = [{"role": "user", "content": str(user_message)}]
+        alerts = []
+        refresh_result = None
+        try:
+            from core.kia.proteus import KnowledgeFreshnessChecker
+            from core.app.freshness_refresh_worker import FreshnessRefreshWorker
+            from core.frontmatter import parse_frontmatter
 
-        result = TaskClassifier().classify(messages)
-        data = self._normalize_event_result(result)
-        data.setdefault("status", "ok")
-        data["event_type"] = "session.start"
-        return data
+            full_path = Path(wiki_base).expanduser() / page_path
+            fm = {}
+            if full_path.exists():
+                content = full_path.read_text(encoding="utf-8")
+                parsed_fm, _ = parse_frontmatter(content)
+                if parsed_fm is not None:
+                    fm = parsed_fm
 
-    def _trigger_message_exchanged(self, payload: Dict) -> Dict:
-        """消息交换事件：按 Aegis 当前 InProcessGuard.check 契约执行。"""
-        from core.kia.aegis import InProcessGuard
+            checker = KnowledgeFreshnessChecker()
+            alert = checker.check({"frontmatter": fm, "path": str(full_path)})
+            if alert:
+                alerts.append(alert)
 
-        guard = payload.get("guard")
-        if guard is None:
-            guard = InProcessGuard(payload.get("knowledge"))
+            # 若配置启用且页面非 timeless，自动刷新日期
+            cfg = get_config()
+            if alert and cfg.get("daemon.services.freshness_refresh", True):
+                temporal_scope = (fm.get("temporal_scope") or fm.get("时效性") or "").strip()
+                if temporal_scope not in ("timeless", "永久"):
+                    worker = FreshnessRefreshWorker(
+                        wiki_base=wiki_base,
+                        material_action_resolver=self._trusted_markdown_action_resolver,
+                    )
+                    refresh_result = worker.refresh_page(
+                        str(full_path),
+                        material_action_commands=payload.get("material_action_commands"),
+                    ).__dict__
+        except CHRONOS_OPERATION_ERRORS as e:
+            logger.debug("[Chronos] 页面新鲜度检查/刷新失败 %s: %s", page_path, e)
 
-        alert = guard.check(
-            str(payload.get("message") or payload.get("user_message") or ""),
-            str(payload.get("ai_response") or payload.get("context") or ""),
-        )
-        return {
+        result = {
             "status": "ok",
-            "event_type": "message.exchanged",
-            "alert": self._normalize_event_result(alert) if alert else None,
+            "event_type": "page.modified",
+            "page_path": page_path,
+            "freshness_alerts": alerts,
         }
-
-    @staticmethod
-    def _normalize_event_result(result) -> Dict:
-        if result is None:
-            return {}
-        if isinstance(result, dict):
-            return result
-        if is_dataclass(result):
-            return asdict(result)
-        return {"result": str(result)}
-
-    # ----------------------------------------------------------
-    # 步骤管理
-    # ----------------------------------------------------------
-
-    def enable_step(self, name: str) -> bool:
-        step = self.steps.get(name)
-        if step:
-            step.enabled = True
-            step.consecutive_failures = 0
-            return True
-        return False
-
-    def disable_step(self, name: str) -> bool:
-        step = self.steps.get(name)
-        if step:
-            step.enabled = False
-            return True
-        return False
-
-    def get_step_status(self) -> Dict[str, Dict]:
-        """获取所有步骤状态"""
-        status = {}
-        for name, step in self.steps.items():
-            status[name] = {
-                "trigger": step.trigger.describe(),
-                "enabled": step.enabled,
-                "consecutive_failures": step.consecutive_failures,
-                "timeout": step.timeout,
-                "deps": step.deps,
-            }
-        return status
-
-    def get_last_results(self) -> Dict[str, Dict]:
-        with self._lock:
-            return dict(self._results)
+        if refresh_result:
+            result["freshness_refresh"] = refresh_result
+        return result
 
     # ----------------------------------------------------------
     # 原有任务调度/提醒功能（完整保留）
     # ----------------------------------------------------------
 
-    def schedule(self, task_type: str, subtype: str,
-                 due_date: datetime, context: str = "",
-                 is_periodic: bool = False, period: Optional[str] = None,
-                 priority: int = 0) -> str:
-        task_id = self._build_task_id(task_type, subtype, due_date, context)
+    def schedule(
+        self,
+        task_type: str,
+        subtype: str,
+        due_date: datetime,
+        context: str = "",
+        is_periodic: bool = False,
+        period: Optional[str] = None,
+        priority: int = 0,
+        *,
+        material_action_commands: Mapping[str, str] | None = None,
+    ) -> str:
+        binding = scheduled_task_material_action_binding(
+            task_type=task_type,
+            subtype=subtype,
+            due_date=due_date,
+            context=context,
+            is_periodic=is_periodic,
+            period=period,
+            priority=priority,
+        )
+        authorization = self._resolve_material_action(
+            binding,
+            material_action_commands,
+            action_type=CHRONOS_TASK_CREATE_ACTION,
+            source_facts={
+                "schema_version": "mnemos.chronos_task_decision_facts.v1",
+                "task_type": str(task_type),
+                "subtype": str(subtype),
+                "due_date": due_date.isoformat(),
+                "context": str(context),
+                "is_periodic": bool(is_periodic),
+                "period": str(period or ""),
+                "priority": int(priority),
+            },
+            task=f"Create scheduled task {task_type}/{subtype}",
+            goal="Persist only the exact reminder task requested through Chronos.",
+            approved_candidate_key="create_exact_requested_schedule",
+            approved_candidate_summary=(
+                "Create the exact non-executable reminder task requested by the caller."
+            ),
+            rejected_candidate_key="reject_drifted_schedule_request",
+            rejected_candidate_summary=(
+                "Reject a schedule whose type, due date, context, period, or priority drifted."
+            ),
+            committed_metric="chronos_task_create_receipt",
+            rejected_metric="drifted_chronos_task_count",
+        )
+        task_id = self._build_task_id(
+            task_type,
+            subtype,
+            due_date,
+            context,
+            identity_hash=binding["input_hash"],
+        )
+        reminder_date = self._reminder_date_for(due_date)
+        expected_task = {
+            "task_id": task_id,
+            "task_type": task_type,
+            "subtype": subtype,
+            "due_date": due_date.isoformat(),
+            "reminder_date": reminder_date.isoformat(),
+            "is_periodic": 1 if is_periodic else 0,
+            "period": period,
+            "status": "pending",
+            "context": context,
+            "priority": priority,
+        }
+        with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM knowledge_scheduled_tasks WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+        if existing is not None:
+            oracle = ScheduledTaskEffectOracle(
+                self.DB_PATH,
+                task_id=task_id,
+                expected=expected_task,
+            )
+            recovered = authorization.recover(oracle)
+            if recovered is None:
+                raise RuntimeError("scheduled-task replay could not observe its existing effect")
+            if oracle.observe(authorization.permit) is None:
+                raise RuntimeError("terminal scheduled-task receipt lacks exact target evidence")
+            return task_id
+        permit = require_material_action(
+            authorization,
+            owner=CHRONOS_OWNER,
+            executor_id=CHRONOS_EXECUTOR,
+            action_type=CHRONOS_TASK_CREATE_ACTION,
+            target_ref=binding["target_ref"],
+            input_hash=binding["input_hash"],
+            expected_state_db=self.DB_PATH.parent / "producer_consumer_ledger.db",
+        )
+        before_hash = self._scheduled_task_effect_hash(task_id)
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
             self._insert_task(
-                conn, task_id, task_type, subtype, due_date, context,
-                is_periodic, period, priority
+                conn, task_id, task_type, subtype, due_date, context, is_periodic, period, priority
             )
+        after_hash = self._scheduled_task_effect_hash(task_id)
+        authorization.record_terminal(
+            MaterialActionTerminal(
+                status="committed",
+                target_effect_id=permit.effect_id,
+                before_hash=before_hash,
+                after_hash=after_hash,
+                evidence_refs=(
+                    f"material-command:{permit.command_id}",
+                    f"decision-revision:{permit.decision_revision_id}",
+                    f"material-effect:{permit.effect_id}",
+                    f"target-after:{after_hash}",
+                    f"target-journal:chronos-task:{task_id}:{after_hash}",
+                ),
+                outcome="scheduled task created",
+                created_at=datetime.now().astimezone().isoformat(),
+            )
+        )
         return task_id
 
     def get_pending_reminders(self) -> List[ScheduledTask]:
         now = datetime.now().isoformat()
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
                        is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'pending'
                   AND reminder_date <= ?
                 ORDER BY priority DESC, reminder_date ASC
-            """, (now,))
+            """,
+                (now,),
+            )
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
     def mark_reminded(self, task_id: str):
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE knowledge_scheduled_tasks
                 SET status = 'reminded', reminded_at = ?
                 WHERE task_id = ?
-            """, (datetime.now().isoformat(), task_id))
+            """,
+                (datetime.now().isoformat(), task_id),
+            )
 
     def mark_completed(self, task_id: str):
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            row = conn.execute("""
+            row = conn.execute(
+                """
                 SELECT task_type, subtype, due_date, is_periodic, period, context, priority
                 FROM knowledge_scheduled_tasks
                 WHERE task_id = ?
-            """, (task_id,)).fetchone()
-            conn.execute("""
+            """,
+                (task_id,),
+            ).fetchone()
+            conn.execute(
+                """
                 UPDATE knowledge_scheduled_tasks
                 SET status = 'completed', completed_at = ?
                 WHERE task_id = ?
-            """, (datetime.now().isoformat(), task_id))
+            """,
+                (datetime.now().isoformat(), task_id),
+            )
             if row and row[3]:
                 next_due = self._next_periodic_due(datetime.fromisoformat(row[2]), row[4])
                 if next_due:
@@ -1073,46 +981,61 @@ class KnowledgeScheduler:
 
     def cancel(self, task_id: str):
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE knowledge_scheduled_tasks
                 SET status = 'cancelled'
                 WHERE task_id = ?
-            """, (task_id,))
+            """,
+                (task_id,),
+            )
 
-    def startup_compensation(self) -> List[ScheduledTask]:
+    def startup_compensation(self, max_tasks: Optional[int] = None) -> List[ScheduledTask]:
+        """返回停机期间错过的任务，数量受 *max_tasks* 限制。"""
+        max_tasks = max_tasks if max_tasks is not None else self.MAX_STARTUP_COMPENSATION_TASKS
         now = datetime.now().isoformat()
-        missed = []
+        missed = []  # type: ignore[var-annotated]
 
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
                        is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'pending'
                   AND reminder_date <= ?
                 ORDER BY priority DESC, reminder_date ASC
-            """, (now,))
+                LIMIT ?
+            """,
+                (now, max_tasks),
+            )
             missed.extend(self._row_to_task(row) for row in cursor.fetchall())
 
             three_days_ago = (datetime.now() - timedelta(days=3)).isoformat()
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT task_id, task_type, subtype, due_date, reminder_date,
                        is_periodic, period, status, context, created_at, reminded_at, priority
                 FROM knowledge_scheduled_tasks
                 WHERE status = 'reminded'
                   AND reminded_at <= ?
                 ORDER BY priority DESC, reminded_at ASC
-            """, (three_days_ago,))
+                LIMIT ?
+            """,
+                (three_days_ago, max_tasks),
+            )
             missed.extend(self._row_to_task(row) for row in cursor.fetchall())
 
-        return missed
+        # 合并后按优先级截断，确保总数量不超过限制
+        missed.sort(key=lambda t: (-t.priority, t.reminder_date or t.due_date or ""))
+        return missed[:max_tasks]
 
     def format_reminder(self, task: ScheduledTask) -> str:
-        due = datetime.fromisoformat(task.due_date.replace('Z', '+00:00'))
+        due = datetime.fromisoformat(task.due_date.replace("Z", "+00:00"))
         days_until = (due - datetime.now()).days
         lines = [
-            f"**任务提醒**",
-            f"",
+            "**任务提醒**",
+            "",
             f"类型：{task.task_type}/{task.subtype}",
             f"执行日期：{task.due_date[:10]}（还有 {days_until} 天）",
         ]
@@ -1127,13 +1050,16 @@ class KnowledgeScheduler:
     def list_all(self, status: Optional[str] = None) -> List[ScheduledTask]:
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
             if status:
-                cursor = conn.execute("""
+                cursor = conn.execute(
+                    """
                     SELECT task_id, task_type, subtype, due_date, reminder_date,
                            is_periodic, period, status, context, created_at, reminded_at, priority
                     FROM knowledge_scheduled_tasks
                     WHERE status = ?
                     ORDER BY priority DESC, due_date ASC
-                """, (status,))
+                """,
+                    (status,),
+                )
             else:
                 cursor = conn.execute("""
                     SELECT task_id, task_type, subtype, due_date, reminder_date,
@@ -1143,14 +1069,17 @@ class KnowledgeScheduler:
                 """)
             return [self._row_to_task(row) for row in cursor.fetchall()]
 
-    def cleanup_old_tasks(self, days: int = 30):
+    def cleanup_old_tasks(self, days: int = KNOWLEDGE_SCHEDULER_CLEANUP_OLD_TASKS_DAYS):
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
         with sqlite3.connect(str(self.DB_PATH), timeout=10) as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 DELETE FROM knowledge_scheduled_tasks
                 WHERE status IN ('completed', 'cancelled')
                   AND completed_at <= ?
-            """, (cutoff,))
+            """,
+                (cutoff,),
+            )
 
     def _row_to_task(self, row) -> ScheduledTask:
         return ScheduledTask(
@@ -1161,7 +1090,7 @@ class KnowledgeScheduler:
             reminder_date=row[4],
             is_periodic=bool(row[5]),
             period=row[6],
-            status=row[7],
+            status=row[KNOWLEDGE_SCHEDULER__ROW_TO_TASK_ROW],
             context=row[8],
             created_at=row[9],
             reminded_at=row[10],
@@ -1171,12 +1100,12 @@ class KnowledgeScheduler:
     @staticmethod
     def _reminder_date_for(due_date: datetime) -> datetime:
         days_until = (due_date - datetime.now()).days
-        if days_until <= 7:
+        if days_until <= KNOWLEDGE_SCHEDULER__REMINDER_DATE_FOR_DAYS_UNTIL_DAYS:
             reminder_days = 1
-        elif days_until <= 30:
+        elif days_until <= KNOWLEDGE_SCHEDULER__REMINDER_DATE_FOR_DAYS_UNTIL_DAYS_2:
             reminder_days = 3
         else:
-            reminder_days = 7
+            reminder_days = REMINDER_DAYS
         return due_date - timedelta(days=reminder_days)
 
     def _insert_task(
@@ -1192,23 +1121,45 @@ class KnowledgeScheduler:
         priority: int = 0,
     ):
         reminder_date = self._reminder_date_for(due_date)
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO knowledge_scheduled_tasks
             (task_id, task_type, subtype, due_date, reminder_date,
              is_periodic, period, status, context, priority, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-        """, (
-            task_id, task_type, subtype,
-            due_date.isoformat(), reminder_date.isoformat(),
-            1 if is_periodic else 0, period,
-            context, priority, datetime.now().isoformat()
-        ))
+        """,
+            (
+                task_id,
+                task_type,
+                subtype,
+                due_date.isoformat(),
+                reminder_date.isoformat(),
+                1 if is_periodic else 0,
+                period,
+                context,
+                priority,
+                datetime.now().isoformat(),
+            ),
+        )
 
     @staticmethod
-    def _build_task_id(task_type: str, subtype: str, due_date: datetime, context: str = "") -> str:
+    def _build_task_id(
+        task_type: str,
+        subtype: str,
+        due_date: datetime,
+        context: str = "",
+        *,
+        identity_hash: str = "",
+    ) -> str:
         base = f"{task_type}-{subtype}-{due_date.strftime('%Y%m%d')}"
-        suffix_seed = f"{base}-{context}-{datetime.now().isoformat()}"
-        suffix = hashlib.md5(suffix_seed.encode("utf-8")).hexdigest()[:8]
+        if identity_hash.startswith("sha256:"):
+            suffix = identity_hash.split(":", 1)[1][:8]
+        else:
+            suffix_seed = f"{base}-{context}-{datetime.now().isoformat()}"
+            suffix = hashlib.md5(
+                suffix_seed.encode("utf-8"),
+                usedforsecurity=False,
+            ).hexdigest()[:8]
         return f"{base}-{suffix}"
 
     @staticmethod
@@ -1216,15 +1167,15 @@ class KnowledgeScheduler:
         if period == "daily":
             return due_date + timedelta(days=1)
         if period == "weekly":
-            return due_date + timedelta(days=7)
+            return due_date + timedelta(days=KNOWLEDGE_SCHEDULER_DURATION_BUCKET_WEEK_DAYS)
         if period == "biweekly":
             return due_date + timedelta(days=14)
         if period == "monthly":
-            return due_date + timedelta(days=30)
+            return due_date + timedelta(days=KNOWLEDGE_SCHEDULER_DURATION_BUCKET_MONTH_DAYS)
         if period == "quarterly":
-            return due_date + timedelta(days=90)
+            return due_date + timedelta(days=KNOWLEDGE_SCHEDULER_DURATION_BUCKET_QUARTER_DAYS)
         if period == "yearly":
-            return due_date + timedelta(days=365)
+            return due_date + timedelta(days=KNOWLEDGE_SCHEDULER_DURATION_BUCKET_YEAR_DAYS)
         return None
 
 
@@ -1232,12 +1183,29 @@ class KnowledgeScheduler:
 # 便捷函数
 # ============================================================
 
-def schedule_task(task_type: str, subtype: str,
-                  due_date: datetime, context: str = "",
-                  is_periodic: bool = False, period: Optional[str] = None,
-                  priority: int = 0) -> str:
+
+def schedule_task(
+    task_type: str,
+    subtype: str,
+    due_date: datetime,
+    context: str = "",
+    is_periodic: bool = False,
+    period: Optional[str] = None,
+    priority: int = 0,
+    *,
+    material_action_commands: Mapping[str, str] | None = None,
+) -> str:
     scheduler = KnowledgeScheduler()
-    return scheduler.schedule(task_type, subtype, due_date, context, is_periodic, period, priority)
+    return scheduler.schedule(
+        task_type,
+        subtype,
+        due_date,
+        context,
+        is_periodic,
+        period,
+        priority,
+        material_action_commands=material_action_commands,
+    )
 
 
 def check_reminders() -> List[ScheduledTask]:

@@ -8,14 +8,19 @@
 
 import json
 import sqlite3
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# 确保能 import 到项目根目录下的 core/ 包
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def _get_db_path() -> Path:
     from core.config import get_config
-    return get_config().data_dir / "mnemos.db"
+
+    return get_config().database_dir / "mnemos.db"
 
 
 def _fetch_ground_truth(days: int = 30) -> List[Dict]:
@@ -26,8 +31,11 @@ def _fetch_ground_truth(days: int = 30) -> List[Dict]:
 
     since = (datetime.now() - timedelta(days=days)).isoformat()
     try:
-        with sqlite3.connect(str(db)) as conn:
-            conn.row_factory = sqlite3.Row
+        # [P1-FIX] 使用 sqlite_conn 上下文管理器，确保连接自动关闭
+        from core.db_utils import sqlite_conn
+
+        with sqlite_conn(str(db)) as conn:
+            conn.row_factory = sqlite3.Row  # noqa
             rows = conn.execute(
                 """
                 SELECT session_id, signal_type, signal_value, confidence,
@@ -40,17 +48,18 @@ def _fetch_ground_truth(days: int = 30) -> List[Dict]:
                 (since,),
             ).fetchall()
             return [dict(r) for r in rows]
-    except Exception:
+    except (ImportError, OSError, ValueError, TypeError, sqlite3.Error):
         return []
 
 
 def _fetch_scorer_status() -> Dict:
     """获取评分器状态"""
     try:
-        from core.scoring.scorers.distill_scorer import DistillScorer
-        scorer = DistillScorer()
-        return scorer._scorer.get_status()
-    except Exception as e:
+        from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
+
+        scorer = AdaptiveScorerV2(domain="distill")
+        return scorer.get_status()
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, sqlite3.Error) as e:
         return {"error": str(e)}
 
 
@@ -91,32 +100,19 @@ def _build_pie_data(records: List[Dict]) -> List[Dict]:
     return [{"name": k, "value": v} for k, v in sorted(counts.items(), key=lambda x: -x[1])]
 
 
-def _run_clustering(records: List[Dict]) -> Dict:
-    """对 ground_truth 信号进行聚类分析"""
-    if len(records) < 10:
-        return {"clusters": 0, "keywords": [], "outliers": []}
+def _fetch_policy_status() -> Dict:
+    """获取 EffectivePolicy 当前 shadow 与最近调整状态。"""
     try:
-        from core.scoring.clustering_engine import ClusteringEngine
-        # 用 signal_type + signal_value 拼接作为文本
-        texts = [
-            f"{r.get('signal_type', '')} {r.get('signal_value', '')}"
-            for r in records
-        ]
-        engine = ClusteringEngine(domain="distill")
-        labels = engine.fit(texts, algorithm="kmeans", n_clusters=min(4, len(texts) // 3))
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        keywords = []
-        for cid in range(n_clusters):
-            kw = engine.get_cluster_keywords(cid, top_k=5)
-            keywords.append({"cluster": cid, "keywords": kw})
-        outliers = engine.detect_outliers()
+        from core.kia.policy import get_effective_policy
+
+        policy = get_effective_policy()
+        shadows = policy.list_shadows()
         return {
-            "clusters": n_clusters,
-            "keywords": keywords,
-            "outliers": len(outliers),
+            "shadow_count": len(shadows),
+            "shadows": shadows,
         }
-    except Exception:
-        return {"clusters": 0, "keywords": [], "outliers": []}
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+        return {"error": str(e)}
 
 
 def _build_qa_summary(records: List[Dict]) -> str:
@@ -126,37 +122,40 @@ def _build_qa_summary(records: List[Dict]) -> str:
     try:
         from core.app.question_answer_search import QuestionAnswerSearch
         from core.config import get_config
+
         qa = QuestionAnswerSearch(wiki_dir=get_config().wiki_dir)
         # 取最常见的信号类型
         counts: Dict[str, int] = {}
         for r in records:
             st = r.get("signal_type", "unknown")
             counts[st] = counts.get(st, 0) + 1
-        top_type = max(counts, key=counts.get)
+        top_type = max(counts, key=lambda k: counts[k])
         question = f"什么是 {top_type} 信号？它代表什么含义？"
         answer = qa.answer(question)
         if answer:
             return (
-                f'<p><strong>Q: {question}</strong></p>'
+                f"<p><strong>Q: {question}</strong></p>"
                 f'<p style="color:#555;">A: {answer.get("answer", "")[:200]}...</p>'
             )
-    except Exception:
+    # [P2-FIX] Broad except acceptable for optional QA summary fallback
+    except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
         pass
     return '<p style="color:#888;">问答摘要生成失败。</p>'
 
 
-def _build_cluster_html(clustering: Dict) -> str:
-    """构建聚类分析 HTML"""
-    if clustering.get("clusters", 0) == 0:
-        return '<p style="color:#888;">数据不足（需 ≥10 条），暂无法聚类。</p>'
+def _build_policy_html(policy: Dict) -> str:
+    """构建自适应策略状态 HTML。"""
+    if policy.get("error"):
+        return f'<p style="color:#c00;">读取策略失败：{policy["error"]}</p>'
+    shadows = policy.get("shadows", {})
+    if not shadows:
+        return '<p style="color:#888;">当前无实验性 shadow 参数。</p>'
     lines = [
-        f'<p>发现 <strong>{clustering["clusters"]}</strong> 个聚类，'
-        f'异常值 <strong>{clustering.get("outliers", 0)}</strong> 个</p>',
-        '<table><tr><th>聚类</th><th>关键词</th></tr>',
+        f"<p>当前有 <strong>{len(shadows)}</strong> 个 shadow 参数：</p>",
+        "<table><tr><th>参数</th><th>值</th></tr>",
     ]
-    for item in clustering.get("keywords", []):
-        kw = ", ".join(item.get("keywords", []))
-        lines.append(f'<tr><td>Cluster {item["cluster"]}</td><td>{kw}</td></tr>')
+    for key, value in shadows.items():
+        lines.append(f"<tr><td>{key}</td><td>{value}</td></tr>")
     lines.append("</table>")
     return "\n".join(lines)
 
@@ -364,8 +363,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <div class="card">
-        <h2>🔬 聚类分析 (ClusteringEngine)</h2>
-        __CLUSTER_INFO__
+        <h2>🎛️ 自适应策略状态</h2>
+        __POLICY_INFO__
     </div>
 
     <div class="card">
@@ -441,15 +440,19 @@ window.addEventListener('resize', () => {{
 def generate_report(output_path: Optional[Path] = None) -> Path:
     """生成漂移检测报告 HTML"""
     if output_path is None:
-        output_path = Path.home() / ".mnemos" / "reports" / "drift_report.html"
+        # [P1-FIX] 使用 get_config() 获取路径，避免硬编码
+        from core.config import get_config
+
+        output_path = get_config().data_dir / "reports" / "drift_report.html"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    records = _fetch_ground_truth(days=30)
+    DEFAULT_DAYS = 30  # [P2-FIX] Named constant for default lookback period
+    records = _fetch_ground_truth(days=DEFAULT_DAYS)
     status = _fetch_scorer_status()
     time_series = _build_time_series(records)
     pie_data = _build_pie_data(records)
     gauge_data = _build_gauge_data(status)
-    clustering = _run_clustering(records)
+    policy_status = _fetch_policy_status()
 
     # 处理空状态默认值
     mode = status.get("mode", "cold")
@@ -457,14 +460,13 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
     recent_rows_html = _build_recent_rows(records)
 
     # 如果表格为空，补全闭合标签
-    if version_rows_html.endswith('>') and not version_rows_html.endswith('</tr>'):
-        version_rows_html += '暂无版本记录</td></tr>'
-    if recent_rows_html.endswith('>') and not recent_rows_html.endswith('</tr>'):
-        recent_rows_html += '暂无记录</td></tr>'
+    if version_rows_html.endswith(">") and not version_rows_html.endswith("</tr>"):
+        version_rows_html += "暂无版本记录</td></tr>"
+    if recent_rows_html.endswith(">") and not recent_rows_html.endswith("</tr>"):
+        recent_rows_html += "暂无记录</td></tr>"
 
     html = (
-        HTML_TEMPLATE
-        .replace("__NOW__", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        HTML_TEMPLATE.replace("__NOW__", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         .replace("__MODE__", mode)
         .replace("__MODE_UPPER__", mode.upper())
         .replace("__RECORD_COUNT__", str(len(records)))
@@ -482,7 +484,7 @@ def generate_report(output_path: Optional[Path] = None) -> Path:
         .replace("__TS_DAYS__", json.dumps(time_series["days"]))
         .replace("__TS_SERIES__", json.dumps(time_series["series"]))
         .replace("__PIE_DATA__", json.dumps(pie_data))
-        .replace("__CLUSTER_INFO__", _build_cluster_html(clustering))
+        .replace("__POLICY_INFO__", _build_policy_html(policy_status))
         .replace("__QA_SUMMARY__", _build_qa_summary(records))
     )
 
@@ -494,7 +496,9 @@ def main():
     path = generate_report()
     print(f"漂移检测报告已生成: {path}")
     import subprocess
-    subprocess.run(["open", str(path)], check=False)
+
+    # [P1-FIX] subprocess.run 添加 timeout，防止无限挂起
+    subprocess.run(["open", str(path)], check=False, timeout=30)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,330 @@
+{
+  "schema_version": "mnemos.document_asset_manifest.v1",
+  "prompt_version": {
+    "path": "core/hephaestus/distillation_prompts.py",
+    "symbol": "PROMPT_VERSION"
+  },
+  "exclusions": [],
+  "repo_markdown_assets": [
+    {
+      "asset_id": "repo:cognitive-successor-capability-atomicity-design-2026-08-01",
+      "path": "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md",
+      "classification": "non_governing_design",
+      "governance_role": "design_reference_only",
+      "owner": "cognitive_successor_architecture",
+      "gate_eligible": false,
+      "evidence": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-capability-atomicity-design.md#文档状态",
+        "docs/acceptance/cognitive_successor_d0/manifest.json#source_bindings[binding_id=successor_d0_design]"
+      ],
+      "hash_policy": {
+        "mode": "exact_bytes_bound_by_d0_manifest",
+        "hash_owner": "docs/acceptance/cognitive_successor_d0/manifest.json#source_bindings[binding_id=successor_d0_design]",
+        "on_change": "regenerate D0 bundle and invalidate detached verification and approval"
+      }
+    },
+    {
+      "asset_id": "repo:cognitive-successor-v2-d0-1-design-2026-08-01",
+      "path": "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md",
+      "classification": "non_governing_design",
+      "governance_role": "design_reference_only",
+      "owner": "cognitive_successor_architecture",
+      "gate_eligible": false,
+      "evidence": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md#文档状态",
+        "docs/acceptance/cognitive_successor_d0_1/constitution.candidate.json#source_design_refs"
+      ],
+      "hash_policy": {
+        "mode": "pending_future_d0_v2_exact_binding",
+        "hash_owner": "future:freeze-capable-d0-v2-manifest",
+        "on_change": "repeat self-review and invalidate any future verification or approval receipt"
+      }
+    },
+    {
+      "asset_id": "repo:cognitive-successor-design-adjudication-design-2026-08-01",
+      "path": "docs/superpowers/specs/2026-08-01-cognitive-successor-design-adjudication-design.md",
+      "classification": "non_governing_design",
+      "governance_role": "design_method_reference_only",
+      "owner": "cognitive_successor_architecture",
+      "gate_eligible": false,
+      "evidence": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-design-adjudication-design.md#0-文档状态与边界",
+        "docs/acceptance/cognitive_successor_d0_1/method_adjudication_record.candidate.json#/decision"
+      ],
+      "hash_policy": {
+        "mode": "pending_exact_method_activation_binding",
+        "hash_owner": "future:method-activation-authorization",
+        "on_change": "repeat method challenge and verification and invalidate any prior activation authorization"
+      }
+    },
+    {
+      "asset_id": "repo:cognitive-successor-v2-decision-map-2026-08-01",
+      "path": "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-decision-map.md",
+      "classification": "non_governing_design",
+      "governance_role": "planning_navigation_only",
+      "owner": "cognitive_successor_architecture",
+      "gate_eligible": false,
+      "evidence": [
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-decision-map.md#map-状态",
+        "docs/superpowers/specs/2026-08-01-cognitive-successor-v2-d0-1-design.md#九、d0.1-交付物与停止线"
+      ],
+      "hash_policy": {
+        "mode": "pending_future_d0_v2_exact_binding",
+        "hash_owner": "future:freeze-capable-d0-v2-manifest",
+        "on_change": "recompute planning frontier and invalidate any future verification or approval receipt"
+      }
+    }
+  ],
+  "prompt_contracts": [
+    {
+      "path": "prompts/agent_onboarding.md",
+      "sha256": "sha256:6aff9672d735a7242a81056cc4d679189dc45db60fa8942a01badcce9ce34a9d",
+      "consumers": [{"path": "core/application/persona.py", "symbol": "PersonaApplicationService.load_onboarding_prompt"}],
+      "output_contract": "runtime_text",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/_base.md",
+      "sha256": "sha256:30cc2227d0b9af17c64e5ccabe5fb6723c11d101b958a428ffce2a7042e1804e",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "runtime_text",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/_output_schemas/extract.json",
+      "sha256": "sha256:60a307d89e90cd760a19d9c4266ffc05cbeb3f971ce0404e43f0f0ec25257e79",
+      "consumers": [
+        {"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.render_schema"},
+        {"path": "core/hephaestus/distillation_contract.py", "symbol": "validate_extraction_output"},
+        {"path": "core/hephaestus/distill_execution_spec.py", "symbol": "_output_schema_hash"}
+      ],
+      "output_contract": "schema_definition",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/_output_schemas/skill_suggestion.json",
+      "sha256": "sha256:429bf341eab1ec54e8714a42c75d6dd4d12be9ec6360e18f312028313d59bdbd",
+      "consumers": [
+        {"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.render_schema"},
+        {"path": "core/hephaestus/cognition_asset_store.py", "symbol": "CognitiveDecisionAssetProposal.from_mapping"}
+      ],
+      "output_contract": "schema_definition",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/_output_schemas/value_judge.json",
+      "sha256": "sha256:91b112e1514c9dd095b72525f1eca466b1b560573902899b7af8fd9f5a717de7",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.render_schema"}],
+      "output_contract": "schema_definition",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/backlink/base.md",
+      "sha256": "sha256:c751c593ea1ba3fab56ae70d112c7addb48e2e4ac6f187e958ef0f753a5110e6",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "markdown",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/book_methodology.md",
+      "sha256": "sha256:044b316c871a8d1a218ab88328ab6a18792cbecefbc78ca1786d362498775853",
+      "consumers": [{"path": "core/hephaestus/document_pipeline.py", "symbol": "DocumentKnowledgeExtractor._extract_book"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/data_insight.md",
+      "sha256": "sha256:90ad63d0ffd04e182394a2f7cee9d26154a2d34583de6b6827fdd6556e43bc5d",
+      "consumers": [{"path": "core/hephaestus/document_pipeline.py", "symbol": "DocumentKnowledgeExtractor._extract_data"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/generic_extract.md",
+      "sha256": "sha256:889264c955f78f8a16ed95bb67d5c1df281e41b413ca4ca8d43a2c0205ca79ab",
+      "consumers": [{"path": "core/hephaestus/document_pipeline.py", "symbol": "DocumentKnowledgeExtractor._extract_generic"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/judge.md",
+      "sha256": "sha256:b894349e6ef9c887097e3d41dd5d97cd9f878a41b458d75096fd3c2fc1dcba4d",
+      "consumers": [{"path": "core/hephaestus/document_judge.py", "symbol": "DocumentLLMJudge.judge"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/report_summary.md",
+      "sha256": "sha256:9b040c6b39afdbb222b670de6dc9de222e740bb95dadb674ca0a524c7de88083",
+      "consumers": [{"path": "core/hephaestus/document_pipeline.py", "symbol": "DocumentKnowledgeExtractor._extract_report"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/document/strategy_extract.md",
+      "sha256": "sha256:b23419a6cfc5e3a26279707042bd503510f1881051f39178b376e3584b3cbf86",
+      "consumers": [{"path": "core/hephaestus/document_pipeline.py", "symbol": "DocumentKnowledgeExtractor._extract_strategy"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/extract/analysis.md",
+      "sha256": "sha256:a263c3776195133f18a9a8a6641068fe88d0c1c2daaaa3c95f3eeefaf50ebaee",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/base.md",
+      "sha256": "sha256:22f89b07363e1da690882aef3cafce28e0e6c535671fb1879fe6863480e4ad2d",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/coding.md",
+      "sha256": "sha256:718f993a3931a25125837eed7bb2924d6d3e2ff475cf87839b5d15a5269f0b06",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/marketing.md",
+      "sha256": "sha256:8bf5cfd0ae1fda2e62529a122213c83dfc555952314148465c6a993554dacbfd",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/review.md",
+      "sha256": "sha256:6e8ae9610e8a59d54112a97a72b9bedd5d50309cda786d0cfefe3dbf3d38cf04",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/strategy.md",
+      "sha256": "sha256:f38f63e38e60de6ccff4f472c820db096b07881280df829570dcab767fee9575",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/extract/writing.md",
+      "sha256": "sha256:0823f24363d78032a4b6894b923e4dcac4c9cab34b040eeb4196278984c36624",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/extract.json"
+    },
+    {
+      "path": "prompts/distill/incremental/base.md",
+      "sha256": "sha256:f149797b9931d611b41b36001909cee62f9e706041f1dc24894c578faf9c0f92",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/merge/base.md",
+      "sha256": "sha256:60fb673e1840ee5fc1ec2cab82eb303b672bb4bf2e5cad24184539da48b4bc93",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "inline_json",
+      "output_schema": null
+    },
+    {
+      "path": "prompts/distill/skill_suggestion/base.md",
+      "sha256": "sha256:b7ba0cca43530303c7fcc7a5e48db793c618b10de2369ded3957b20359bafb7e",
+      "consumers": [
+        {"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"},
+        {"path": "core/hephaestus/distillation_engine.py", "symbol": "DistillationEngine._extract_skill_suggestion"}
+      ],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/skill_suggestion.json"
+    },
+    {
+      "path": "prompts/distill/value_judge/base.md",
+      "sha256": "sha256:158260035eb3bebcb01ce0f2d6bc9ad94844a9d9246da0558f35a37f21b2653b",
+      "consumers": [{"path": "core/hephaestus/prompt_builder.py", "symbol": "TemplateRegistry.select"}],
+      "output_contract": "json_schema",
+      "output_schema": "prompts/distill/_output_schemas/value_judge.json"
+    }
+  ],
+  "external_governing_assets": [
+    {
+      "asset_id": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+      "path": "Mnemos-Phase0-7全局工程修复合同-2026-07-24.md",
+      "profile": "phase0_required",
+      "classification": "governing_contract",
+      "governance_role": "current_active",
+      "supersedes": [
+        "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+        "desktop:mnemos-phase0-7-global-handoff-2026-07-24"
+      ],
+      "renamed_from": {
+        "asset_id": "desktop:mnemos-phase0-7-global-handoff-2026-07-24",
+        "path": "Mnemos-Phase0-7全局深度审核与修复交接-2026-07-24.md",
+        "sha256": "sha256:c630cb1571c5b1d13bbe12582629075a9b17fcedba2371b97fda6935be5e50be"
+      },
+      "required_anchors": [
+        "status: ACTIVE",
+        "authority: SOLE_GOVERNING_CONTRACT",
+        "14.7 50 个 canonical Root 主账",
+        "14.8 38 finding 反向追踪账",
+        "WP-COG-046-P0-DENOMINATOR-LOCK",
+        "21. 迁入的 Canonical Root 定义、公共合同与状态历史",
+        "24.10 COG-003",
+        "24.11 COG-009",
+        "24.12 COG-026"
+      ],
+      "required_current_root_generations": [
+        "COG-045"
+      ],
+      "final_byte_hash_owner": "detached_closure_bundle_only"
+    }
+  ],
+  "external_historical_assets": [
+    {
+      "asset_id": "desktop:mnemos-cognitive-remediation-governing-2026-07-12",
+      "path": "Mnemos认知链路审计与全量修复方案-2026-07-12.md",
+      "profile": "historical_reference",
+      "classification": "historical_source",
+      "governance_role": "historical_provenance",
+      "gate_eligible": false,
+      "superseded_by": "desktop:mnemos-phase0-7-global-contract-2026-07-24",
+      "required_anchors": [
+        "status: SUPERSEDED_HISTORICAL_EVIDENCE",
+        "Contract status: SUPERSEDED",
+        "COG-025",
+        "COG-040",
+        "COG-046"
+      ],
+      "frozen_sha256": "sha256:ba8b60a688bfae22910e7ab3e9b258b715f8c57ed97c17e5d3d9421167fdb5e6"
+    }
+  ],
+  "desktop_assets": [
+    {"path": "00-阅读入口.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "AGENTS.md"]},
+    {"path": "01-系统全景-运行模型.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "mnemos_daemon.py"]},
+    {"path": "02-功能版图-按能力域.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "core/application/facade.py"]},
+    {"path": "03-链路图谱-端到端.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "core/hephaestus/distillation_engine.py"]},
+    {"path": "04-模块责任地图.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "core/kia/module_registry.py"]},
+    {"path": "05-数据库与持久化地图.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "core/db_init.py"]},
+    {"path": "06-Obsidian-Vault地图.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "core/vaults/obsidian_registry.py"]},
+    {"path": "07-入口与调度地图.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "mnemos_cli.py"]},
+    {"path": "08-风险-旧入口-职责冲突.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "docs/technical-debt.md"]},
+    {"path": "09-QualityGate工程执行规范.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "scripts/run_local_gates.py"]},
+    {"path": "10-蒸馏结构化输出契约.md", "classification": "current_contract", "evidence": ["99-代码扫描-facts.json#current_state", "prompts/distill/_output_schemas/extract.json"]},
+    {"path": "86-代码扫描-按子系统模块摘要.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "87-代码扫描-事件类型与发布订阅线索.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "88-代码扫描-旧入口兼容与风险线索.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "89-代码扫描-依赖关系索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "90-代码扫描-模块索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "91-代码扫描-测试资产索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "92-代码扫描-CLI命令索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "93-代码扫描-daemon服务索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "94-代码扫描-MCP工具索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "95-代码扫描-配置键索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "96-代码扫描-数据库定义与引用.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "97-本机运行态快照-数据库与Vault.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "98-代码扫描-Prompt与模板索引.md", "classification": "generated_index", "evidence": "repo_git_commit"},
+    {"path": "99-代码扫描-facts.json", "classification": "current_state_evidence", "evidence": "current_state"}
+  ]
+}

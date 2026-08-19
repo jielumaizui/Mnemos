@@ -1,0 +1,41 @@
+{
+  "generated_at": "2026-07-11T20:37:46.214218+00:00",
+  "arch_dependency_graph": {
+    "module_count": 432,
+    "edge_count": 1358,
+    "cycles": [
+      [
+        "core.config",
+        "core.utils"
+      ],
+      [
+        "core.hephaestus.distillation_engine",
+        "core.hephaestus.fragment_merger"
+      ],
+      [
+        "integrations.active",
+        "integrations.apollon"
+      ],
+      [
+        "core.kia.kg_event_handler",
+        "core.kia.kg_exporter",
+        "core.kia.knowledge_graph"
+      ]
+    ],
+    "forbidden_edges": []
+  },
+  "audit_config_reads": {
+    "category_counts": {
+      "external_credentials": 76,
+      "host_agent_protocol": 17,
+      "known_internal": 8,
+      "platform_discovery": 17,
+      "runtime_data_io": 294
+    },
+    "unclassified_findings": []
+  },
+  "vulture_whitelist": {
+    "entry_count": 0,
+    "entries": []
+  }
+}

@@ -1,0 +1,1247 @@
+{
+  "schema_version": "mnemos.ops_resilience_matrix.v1",
+  "updated": "2026-07-12",
+  "controls": [
+    {
+      "id": "auto_healing_orchestrator",
+      "category": "reliability",
+      "risk": "Health warnings, daemon recovery, queue retry and KIA auto-fix paths expose scattered repair hints without one auditable user-intervention budget.",
+      "contract": "AutoHealingOrchestrator must turn every non-ok health finding into a decision card with risk_level, status, repair action, rollback plan, verification command, ActionLedger contract and user_intervention_budget; when active user_cognitive_profile_v2 assertions exist, auto-healing must record profile usage and whether the repair plan changed behavior.",
+      "observable_entrypoints": [
+        "cli:health",
+        "cli:doctor repair --dry-run",
+        "script:scripts/audit_ops_resilience_matrix.py"
+      ],
+      "code_refs": [
+        "core/ops/auto_healing.py",
+        "core/persona/psyche.py",
+        "core/ops/health_check.py",
+        "core/cli/commands/doctor.py",
+        "core/system_contracts.py",
+        "docs/acceptance/ops_resilience_matrix.json"
+      ],
+      "tests": [
+        "tests/unit/test_auto_healing_orchestrator.py",
+        "tests/integration/test_auto_healing_closed_loop.py",
+        "tests/unit/test_health_check_heartbeat.py",
+        "tests/unit/test_action_ledger_contract.py"
+      ],
+      "degradation_or_recovery": "Health output annotates non-ok checks with auto_heal_state; dry-run repair output lists auto_fixed, auto_fix_failed, needs_user, ignored_with_reason or blocked; applied handlers must write auto_heal ActionLedger rows with rollback_ref and verification evidence; profile_usage_log records auto_healing consumption when profile assertions influence repair planning.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_auto_healing_orchestrator.py tests/integration/test_auto_healing_closed_loop.py tests/unit/test_health_check_heartbeat.py tests/unit/test_action_ledger_contract.py -q",
+        "python3 scripts/audit_ops_resilience_matrix.py"
+      ]
+    },
+    {
+      "id": "daemon_restart_health",
+      "category": "reliability",
+      "risk": "PID reuse, stale build/config, or a fresh but unrelated heartbeat can silently misidentify the daemon or signal an unrelated process.",
+      "contract": "PID file, heartbeat, status, stop and strict health must share one OS-bound daemon instance identity; startup succeeds only after the current heartbeat is durable, and every termination signal is preceded by identity revalidation.",
+      "observable_entrypoints": [
+        "cli:status",
+        "cli:health",
+        "script:scripts/health_check.py"
+      ],
+      "code_refs": [
+        "mnemos_daemon.py",
+        "daemon/instance_identity.py",
+        "daemon/instance_control.py",
+        "daemon/process_control.py",
+        "daemon/heartbeat.py",
+        "daemon/service_registry.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_daemon_service_registry.py",
+        "tests/unit/test_daemon_service_state.py",
+        "tests/unit/test_health_check.py",
+        "tests/unit/test_health_check_heartbeat.py",
+        "tests/unit/test_daemon_instance_identity.py",
+        "tests/unit/test_daemon_instance_control.py",
+        "tests/integration/test_daemon_instance_identity.py"
+      ],
+      "degradation_or_recovery": "PID reuse, PID/heartbeat mismatch, incomplete service manifest, context drift, or temporarily unverifiable live PID fails closed. Stop preserves the record and sends no follow-up SIGKILL when identity cannot be re-proven; a proven legacy integer PID may be migrated ephemerally for one controlled stop.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_daemon_service_registry.py tests/unit/test_daemon_service_state.py tests/unit/test_health_check.py -q",
+        "python3 -m pytest tests/unit/test_daemon_service_registry.py tests/unit/test_daemon_service_state.py tests/unit/test_health_check_heartbeat.py tests/unit/test_db_init.py -q",
+        "python3 -m pytest tests/unit/test_daemon_instance_identity.py tests/unit/test_daemon_instance_control.py tests/unit/test_daemon_process_control.py tests/integration/test_daemon_instance_identity.py -q"
+      ]
+    },
+    {
+      "id": "queue_retry_backlog",
+      "category": "reliability",
+      "risk": "Capture/sync/distill/recap/reminder queues accumulate, retry failures are lost, cross-stage work is marked done before durable downstream acknowledgement, or reminder rows grow without lifecycle closure.",
+      "contract": "Capture/sync/distill queues must track pending/failed state and revision-aware typed receipts; capture done requires matching Amphora acknowledgement, distill done requires durable page or intentional-skip receipt, recap completion requires page/proposal/consumer receipt. Recap/reminder queues must track pending/closed lifecycle state, expose retry/status/close/reconciliation commands, and feed strict health when failures or backlog budgets are unresolved.",
+      "observable_entrypoints": [
+        "cli:sync status",
+        "cli:sync retry-failed",
+        "cli:distill status",
+        "cli:distill retry-failed",
+        "cli:distill archive-failed",
+        "cli:recap list",
+        "cli:recap dismiss",
+        "cli:reminder status",
+        "cli:reminder expire-stale",
+        "script:scripts/reconcile_pipeline_receipts.py"
+      ],
+      "code_refs": [
+        "core/sync_framework/capture_queue.py",
+        "core/sync_framework/capture_worker.py",
+        "core/sync_framework/capture_handoff.py",
+        "core/pipeline_receipts.py",
+        "core/cli/commands/sync.py",
+        "core/cli/commands/distill.py",
+        "core/cli/commands/recap.py",
+        "core/cli/commands/reminder.py",
+        "core/kia/amphora.py",
+        "core/kia/dialog_reminder.py",
+        "core/app/forced_retrospective.py",
+        "core/app/retrospective_completion.py",
+        "core/hephaestus/distillation_write_receipt.py",
+        "scripts/reconcile_pipeline_receipts.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_capture_queue.py",
+        "tests/unit/test_sync_engine.py",
+        "tests/unit/test_mnemos_cli.py",
+        "tests/unit/test_amphora.py",
+        "tests/unit/test_cli_recap.py",
+        "tests/unit/test_cli_reminder.py",
+        "tests/unit/test_dialog_reminder.py",
+        "tests/unit/test_retrospective_workflow.py",
+        "tests/unit/test_health_check_heartbeat.py",
+        "tests/integration/test_capture_distill_receipts.py",
+        "tests/integration/test_distill_terminal_states.py",
+        "tests/integration/test_pipeline_receipt_reconciliation.py",
+        "tests/integration/test_recap_trusted_completion.py"
+      ],
+      "degradation_or_recovery": "Failed sync rows and receipt mismatches remain retryable; proposal/partial/retry/write failure remain nonterminal; Amphora failed tasks have failed_task_budget=0 and degrade strict health until resolved, archived, or retried. Historical no-output done or missing handoff rows are discovered by the dry-run reconciler and repaired only with explicit --apply after backup. High/critical recap pending has budget 0 and must be resolved/dismissed with recap_task_events; dialog reminders have pending/active budgets plus dismissed/expired lifecycle and expire-stale recovery.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_capture_queue.py tests/unit/test_sync_engine.py tests/unit/test_mnemos_cli.py::TestCmdSync -q",
+        "python3 -m pytest tests/unit/test_amphora.py tests/unit/test_cli_recap.py tests/unit/test_cli_reminder.py tests/unit/test_dialog_reminder.py tests/unit/test_retrospective_workflow.py tests/unit/test_health_check_heartbeat.py -q",
+        "python3 -m pytest tests/integration/test_capture_distill_receipts.py tests/integration/test_distill_terminal_states.py tests/integration/test_pipeline_receipt_reconciliation.py tests/integration/test_recap_trusted_completion.py -q",
+        "python3 scripts/reconcile_pipeline_receipts.py"
+      ]
+    },
+    {
+      "id": "raw_revision_provenance_reconciliation",
+      "category": "reliability",
+      "risk": "A logical raw turn is overwritten in place, projections become evidence authorities, or historical Wiki pages receive invented provenance during migration.",
+      "contract": "Raw bytes are append-only revisions behind a logical current pointer; durable consumers use revision/span edges; authorization precedes canonical body fetch; migration is dry-run by default, creates a SQLite backup before apply, and records unprovable pages as pending_rebuild gaps.",
+      "observable_entrypoints": [
+        "mcp:session_search",
+        "script:scripts/reconcile_raw_revision_provenance.py",
+        "daemon:raw_projection"
+      ],
+      "code_refs": [
+        "core/sync_framework/raw_event_store.py",
+        "core/sync_framework/capture_handoff.py",
+        "core/sync_framework/capture_worker.py",
+        "core/application/storage.py",
+        "core/hephaestus/raw_provenance.py",
+        "scripts/reconcile_raw_revision_provenance.py"
+      ],
+      "tests": [
+        "tests/integration/test_raw_revision_provenance_e2e.py",
+        "tests/integration/test_raw_search_canonical_fetch.py",
+        "tests/integration/test_reconcile_raw_revision_provenance.py",
+        "tests/unit/test_raw_event_store.py",
+        "tests/unit/test_project_raw_vault.py"
+      ],
+      "degradation_or_recovery": "Projection loss falls back to canonical revision search; canonical DB loss is explicit failure; invalid spans fail before LLM/write; referenced revisions cannot be purged; migration gaps remain pending_rebuild until a real edge is produced.",
+      "validation_commands": [
+        "python3 -m pytest tests/integration/test_raw_revision_provenance_e2e.py tests/integration/test_raw_search_canonical_fetch.py tests/integration/test_reconcile_raw_revision_provenance.py -q",
+        "python3 scripts/reconcile_raw_revision_provenance.py --json"
+      ]
+    },
+    {
+      "id": "lossless_distillation_input",
+      "category": "reliability",
+      "risk": "Complete distillation silently removes middle code, later shell commands, visible formatting, or the tail of WikiBuilder plain-text records before extraction.",
+      "contract": "Canonical extract input may exclude only explicit private-thinking blocks; all other visible bytes, including attachment placeholders, remain present. Standard and chunked builders run lossless under tiny total and per-message budgets, exclusions expose no private body, and checkpoint identity plus chunk_info declare lossless-visible-v1.",
+      "observable_entrypoints": [
+        "daemon:distill_and_merge",
+        "cli:distill drain",
+        "mcp:knowledge_distill",
+        "daemon:wiki_builder"
+      ],
+      "code_refs": [
+        "core/hephaestus/chunk_checkpoint.py",
+        "core/hephaestus/distillation_text.py",
+        "core/hephaestus/distillation_engine.py",
+        "core/hephaestus/tokenizer.py",
+        "core/hephaestus/wiki_builder.py"
+      ],
+      "tests": [
+        "tests/integration/test_lossless_distill_e2e.py",
+        "tests/unit/test_distillation_engine.py",
+        "tests/unit/test_distillation_chunked.py",
+        "tests/unit/test_wiki_builder_reconstruct.py"
+      ],
+      "degradation_or_recovery": "Budget pressure creates additional chunks rather than omission markers; canonical builder overflow is observable but never truncates. Explicit private-thinking exclusion is allowed and records only type/span/count; code/shell/attachment/formatting loss, fixed-character fallback, or a truncated extractor input is a contract failure and must not be marked complete. Legacy unversioned checkpoints must miss and be re-extracted; their version must not be forged in place.",
+      "validation_commands": [
+        "python3 -m pytest tests/integration/test_lossless_distill_e2e.py tests/unit/test_distillation_engine.py tests/unit/test_distillation_chunked.py tests/unit/test_wiki_builder_reconstruct.py -q"
+      ]
+    },
+    {
+      "id": "distill_execution_spec_checkpoint",
+      "category": "reliability",
+      "risk": "A chunk retry reuses fragments produced by a different prompt, schema, model, backend, parser, quality rule, merge contract, or effective setting and reports the stale result as current execution.",
+      "contract": "Every chunk checkpoint is bound to immutable mnemos.distill_execution_spec.v2, the exact lossless chunk input, immutable DistillInputSpec/CognitionExtractionContext hash, and distill_output_v4 root admission. The schema owns the skip/non-skip union, complete 19-field cognition_episode, and conditional artifact, behavior, relation, and cognitive-action requirements; known cognition must use current-chunk exact Raw evidence while unknown/not_applicable cannot assert values. The same typed runtime validator runs before/after correction, before checkpoint save, after checkpoint load, and before formal write. Completed rows persist CheckpointAdmission(input_spec_hash, output_contract_version, canonical_output_hash, judgment). Production backends and mergers expose explicit credential-free checkpoint_identity; cache decisions expose hashes, hit/miss reason, and field-level spec differences. Before any formal sink, the canonical episode revision/event/projection outbox must commit atomically and the router must verify that committed revision.",
+      "observable_entrypoints": [
+        "daemon:distill_and_merge",
+        "cli:distill drain",
+        "script:scripts/reconcile_distill_execution_checkpoints.py"
+      ],
+      "code_refs": [
+        "core/hephaestus/distill_execution_spec.py",
+        "core/hephaestus/distill_input_spec.py",
+        "core/hephaestus/distillation_contract.py",
+        "core/hephaestus/chunk_checkpoint.py",
+        "core/hephaestus/distillation_engine.py",
+        "core/hephaestus/distillation_extractor.py",
+        "core/hephaestus/distill_backend.py",
+        "core/hephaestus/fragment_merger.py",
+        "scripts/reconcile_distill_execution_checkpoints.py"
+      ],
+      "tests": [
+        "tests/unit/test_distill_execution_spec.py",
+        "tests/unit/test_distillation_contract.py",
+        "tests/unit/test_chunk_checkpoint.py",
+        "tests/integration/test_checkpoint_execution_spec.py",
+        "tests/integration/test_reconcile_distill_execution_checkpoints.py"
+      ],
+      "degradation_or_recovery": "Old schemas, missing root/admission metadata, contract or input-spec drift, malformed root output (including an illegally empty non-skip root at save or lookup), and corrupt spec/payload metadata fail closed. Checkpoint save and reuse both re-run the canonical union against the complete immutable input spec. A changed spec creates a separate generation; failure cannot overwrite an older completed generation. Migration is read-only by default and requires a verified SQLite backup before apply; old rows remain non-reusable and recompute only on a real retry.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_distill_execution_spec.py tests/unit/test_distillation_contract.py tests/unit/test_chunk_checkpoint.py tests/integration/test_checkpoint_execution_spec.py tests/integration/test_reconcile_distill_execution_checkpoints.py -q",
+        "python3 scripts/audit_distill_output_contract.py --strict --json",
+        "python3 scripts/reconcile_distill_execution_checkpoints.py --json"
+      ]
+    },
+    {
+      "id": "chunked_session_cognition_aggregate",
+      "category": "reliability",
+      "risk": "A later chunk or cache hit overwrites earlier structured cognition, fragment synthesis drops relations or visible bytes, or a routed page claims evidence from raw events it never consumed.",
+      "contract": "Each chunk is admitted as immutable ChunkExtractionResult bound to its exact role-local Raw spans, input spec, canonical root and execution spec. ChunkEpisodeMerger deterministically recomputes one session root from every admitted local root, conserves the ordered input/output revision catalog, preserves claims, relations, goals, decisions, actions, outcomes, repeated temporal events and competing hypotheses, and uses conservative confidence. Fragment synthesis preserves complete ordered visible blocks. Every chunked page write proves exact fragment or claim-origin spans before physical mutation.",
+      "observable_entrypoints": [
+        "daemon:distill_and_merge",
+        "cli:distill drain",
+        "mcp:knowledge_distill"
+      ],
+      "code_refs": [
+        "core/hephaestus/chunked_extraction.py",
+        "core/hephaestus/chunk_aggregate.py",
+        "core/hephaestus/distillation_engine.py",
+        "core/hephaestus/fragment_merger.py",
+        "core/hephaestus/raw_provenance.py",
+        "core/hephaestus/distill_action_router.py"
+      ],
+      "tests": [
+        "tests/unit/test_chunked_session_aggregate.py",
+        "tests/unit/test_distillation_chunked.py",
+        "tests/unit/test_fragment_merger.py",
+        "tests/unit/test_distill_action_router.py",
+        "tests/integration/test_checkpoint_execution_spec.py",
+        "tests/integration/test_raw_revision_provenance_e2e.py"
+      ],
+      "degradation_or_recovery": "A missing, forged, catalog-mismatched or non-exact source span fails before an LLM or page mutation. Invalid checkpoint roots miss and re-extract only the affected chunk. A self-consistent but non-deterministic aggregate is rejected by write-time recomputation. Missing page-level chunk proof remains retryable and never falls back to full-session evidence.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_chunked_session_aggregate.py tests/unit/test_distillation_chunked.py tests/unit/test_fragment_merger.py tests/unit/test_distill_action_router.py tests/integration/test_checkpoint_execution_spec.py tests/integration/test_raw_revision_provenance_e2e.py -q",
+        "python3 scripts/audit_distill_output_contract.py --strict --json",
+        "python3 scripts/run_tests.py quick"
+      ]
+    },
+    {
+      "id": "backfill_idempotency",
+      "category": "reliability",
+      "risk": "Historical backfill duplicates data or cannot resume after partial failure.",
+      "contract": "Backfill must use canonical session ids, idempotent raw upserts, and task close/reopen semantics.",
+      "observable_entrypoints": [
+        "cli:sync audit",
+        "cli:sync backfill",
+        "script:scripts/backfill_raw_event_store.py"
+      ],
+      "code_refs": [
+        "scripts/backfill_raw_event_store.py",
+        "core/sync_framework/sync_engine.py",
+        "core/sync_framework/raw_event_store.py"
+      ],
+      "tests": [
+        "tests/unit/test_backfill_raw_event_store.py",
+        "tests/unit/test_sync_backfill.py",
+        "tests/unit/test_sync_framework.py"
+      ],
+      "degradation_or_recovery": "Failed backfill tasks remain inspectable and can be retried without duplicate canonical events.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_backfill_raw_event_store.py tests/unit/test_sync_backfill.py tests/unit/test_sync_framework.py -q"
+      ]
+    },
+    {
+      "id": "cognitive_data_interface_reconciliation",
+      "category": "reliability",
+      "risk": "Capture, sync, persona, scorer, reflection and distill can duplicate or consume the same user signal without a shared event contract.",
+      "contract": "CognitiveDataEvent must record source_id, asset_id, dedupe_key, producer, intended consumers, privacy class, evidence refs and retention; ProducerConsumerLedger must record event consumption and reconcile duplicate, derived and reinforcement relations.",
+      "observable_entrypoints": [
+        "script:scripts/audit_data_interface_registry.py",
+        "script:scripts/audit_runtime_producer_consumer_closure.py",
+        "cli:health"
+      ],
+      "code_refs": [
+        "core/ops/cognitive_data_contract.py",
+        "core/ops/producer_consumer_ledger.py",
+        "core/ops/health_check.py",
+        "scripts/audit_data_interface_registry.py",
+        "docs/acceptance/adaptive_data_flows.json"
+      ],
+      "tests": [
+        "tests/unit/test_cognitive_data_event_contract.py",
+        "tests/integration/test_cognitive_data_ledger_capture_to_distill.py",
+        "tests/integration/test_duplicate_capture_consume_reconciliation.py"
+      ],
+      "degradation_or_recovery": "Strict audit fails on unregistered producers or consumers, consumed-without-event rows, duplicate/derived/reinforcement relations without reconciliation, or unexplained divergence between sibling events.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_cognitive_data_event_contract.py tests/integration/test_cognitive_data_ledger_capture_to_distill.py tests/integration/test_duplicate_capture_consume_reconciliation.py -q",
+        "python3 scripts/audit_data_interface_registry.py --strict",
+        "python3 scripts/audit_runtime_producer_consumer_closure.py --strict"
+      ]
+    },
+    {
+      "id": "db_schema_recovery",
+      "category": "reliability",
+      "risk": "Database schema drift or corruption prevents startup/maintenance.",
+      "contract": "Schema bootstrap and DB maintenance must be idempotent and expose recovery status.",
+      "observable_entrypoints": [
+        "cli:db maintenance",
+        "cli:doctor",
+        "script:scripts/migrate_db.py"
+      ],
+      "code_refs": [
+        "core/db_init.py",
+        "core/db_utils.py",
+        "core/cli/commands/db.py",
+        "scripts/migrate_db.py"
+      ],
+      "tests": [
+        "tests/unit/test_db_init.py",
+        "tests/unit/test_db_utils.py",
+        "tests/unit/test_db_maintenance.py",
+        "tests/unit/test_daemon_maintenance.py"
+      ],
+      "degradation_or_recovery": "Maintenance should checkpoint/optimize safely and report failures without deleting user data.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_db_init.py tests/unit/test_db_utils.py tests/unit/test_db_maintenance.py tests/unit/test_daemon_maintenance.py -q"
+      ]
+    },
+    {
+      "id": "api_timeout_rate_limit",
+      "category": "performance",
+      "risk": "LLM/embedding/reranker calls hang, exceed rate limits, or burn through quota.",
+      "contract": "API calls must use explicit timeouts, rate limit accounting, and key-pool degradation.",
+      "observable_entrypoints": [
+        "cli:doctor",
+        "cli:perf"
+      ],
+      "code_refs": [
+        "core/embeddings/rate_limiter.py",
+        "core/llm_key_pool.py",
+        "core/hephaestus/distillation_llm.py"
+      ],
+      "tests": [
+        "tests/unit/test_rate_limiter.py",
+        "tests/unit/test_llm_key_pool.py",
+        "tests/unit/test_distillation_llm.py"
+      ],
+      "degradation_or_recovery": "Unavailable or rate-limited models should degrade to fallback keys or non-reranked search, not block foreground commands indefinitely.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_rate_limiter.py tests/unit/test_llm_key_pool.py tests/unit/test_distillation_llm.py -q"
+      ]
+    },
+    {
+      "id": "distill_json_quality_observability",
+      "category": "reliability",
+      "risk": "LLM JSON fallback succeeds but warning logs look like distillation failures, while direct/fallback/fixed/final failure rates remain invisible.",
+      "contract": "Distillation JSON extraction must report direct_json, markdown_json, balanced_json, fixed_json and failed paths as structured metadata; fallback success must not emit misleading warnings; health must expose redacted parse quality metrics and final failures must carry structured error metadata.",
+      "observable_entrypoints": [
+        "cli:health --json",
+        "metric:distill_json_parse_events",
+        "state:distill_failed"
+      ],
+      "code_refs": [
+        "core/hephaestus/distillation_json.py",
+        "core/hephaestus/distillation_metrics.py",
+        "core/hephaestus/distillation_llm.py",
+        "core/hephaestus/distillation_failure.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_distillation_json_metrics.py",
+        "tests/unit/test_distillation_llm.py",
+        "tests/unit/test_health_check_heartbeat.py"
+      ],
+      "degradation_or_recovery": "Fallback parse success records debug/metrics only; all-path parse failure records failed path, correction_attempts and error summary; repeated validation failures merge into a recap cluster by error_fingerprint instead of creating per-session high-priority reminders.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_distillation_json_metrics.py tests/unit/test_distillation_llm.py tests/unit/test_health_check_heartbeat.py -q"
+      ]
+    },
+    {
+      "id": "maintainability_budget_ratchet",
+      "category": "reliability",
+      "risk": "Development ratchets can be mistaken for release closure, while same-count handler replacement, stale baselines or expired acceptances preserve hidden engineering debt.",
+      "contract": "Local gates must separate ratchet_status from closure status and use one canonical document-asset denominator. Every residual needs exact identity, owner, expiry, telemetry and removal condition; every tracked Markdown, prompt/schema and Desktop asset needs classification and current evidence; strict full-score requires zero maintainability/zombie/vulture residual plus the required Desktop manifest gate.",
+      "observable_entrypoints": [
+        "script:scripts/check_maintainability_budget.py",
+        "script:scripts/check_zombie_code_policy.py",
+        "script:scripts/ci_ratchet.py",
+        "script:scripts/run_local_gates.py",
+        "script:scripts/check_bare_except.py",
+        "script:scripts/audit_hardcoded_paths.py",
+        "script:scripts/audit_document_asset_manifest.py",
+        "script:scripts/audit_desktop_system_map_facts.py",
+        "script:scripts/audit_repo_sensitive_literals.py"
+      ],
+      "code_refs": [
+        "scripts/check_maintainability_budget.py",
+        "scripts/maintainability_budget.json",
+        "scripts/check_zombie_code_policy.py",
+        "scripts/zombie_code_baseline.json",
+        "scripts/ci_ratchet.py",
+        "scripts/ci_ratchet_baseline.json",
+        "scripts/run_local_gates.py",
+        "scripts/check_bare_except.py",
+        "scripts/audit_hardcoded_paths.py",
+        "scripts/audit_document_asset_manifest.py",
+        "scripts/audit_model_call_ledger.py",
+        "docs/acceptance/document_asset_manifest.json",
+        "scripts/audit_desktop_system_map_facts.py",
+        "scripts/audit_repo_sensitive_literals.py",
+        ".pre-commit-config.yaml",
+        ".github/workflows/ci.yml"
+      ],
+      "tests": [
+        "tests/unit/test_maintainability_budget.py",
+        "tests/unit/test_check_zombie_code_policy.py",
+        "tests/unit/test_ci_ratchet.py",
+        "tests/unit/test_audit_hardcoded_paths.py",
+        "tests/unit/test_document_asset_manifest_audit.py",
+        "tests/unit/test_model_call_ledger_provider_boundaries.py",
+        "tests/unit/test_desktop_system_map_facts_audit.py",
+        "tests/unit/test_repo_sensitive_literals_audit.py"
+      ],
+      "degradation_or_recovery": "Parse errors, same-count catch replacement, growth, stale improvement baselines, expired or incomplete acceptance metadata, ordinary update attempts to absorb risk, missing tracked docs, prompt hash/consumer/schema drift, unclassified Desktop assets and stale generated/current evidence all fail closed. Development may continue with exact accepted residual but reports release_eligible=false; strict full-score remains blocked until residual=0 and the complete document asset gate passes. Vulture non-zero is never rebaselined.",
+      "validation_commands": [
+        "python3 scripts/check_maintainability_budget.py --closure",
+        "python3 scripts/check_zombie_code_policy.py --closure",
+        "python3 scripts/ci_ratchet.py --closure --strict",
+        "python3 scripts/check_maintainability_budget.py --closure --strict --json",
+        "python3 scripts/check_zombie_code_policy.py --closure --strict --json",
+        "python3 scripts/audit_hardcoded_paths.py --strict",
+        "python3 scripts/audit_document_asset_manifest.py --strict --desktop-mode required --json",
+        "python3 scripts/audit_desktop_system_map_facts.py",
+        "python3 scripts/audit_repo_sensitive_literals.py --strict",
+        "python3 -m pytest tests/unit/test_maintainability_budget.py -q",
+        "python3 -m pytest tests/unit/test_document_asset_manifest_audit.py -q",
+        "python3 -m pytest tests/unit/test_desktop_system_map_facts_audit.py -q",
+        "python3 -m pytest tests/unit/test_repo_sensitive_literals_audit.py -q",
+        "python3 scripts/run_local_gates.py"
+      ]
+    },
+    {
+      "id": "read_only_audit_report_policy",
+      "category": "reliability",
+      "risk": "Audit scripts that write repository reports by default pollute read-only scoring workspaces and can be accidentally committed with unrelated fixes.",
+      "contract": "Audit report scripts must default to read-only output; check mode must compare without writing; repository-internal report writes must require explicit --output plus --apply and write an ActionLedger entry.",
+      "observable_entrypoints": [
+        "script:scripts/audit_orphan_modules.py"
+      ],
+      "code_refs": [
+        "scripts/audit_orphan_modules.py",
+        "docs/orphan-modules-report.md",
+        "tests/unit/test_audit_orphan_modules.py",
+        "core/system_contracts.py"
+      ],
+      "tests": [
+        "tests/unit/test_audit_orphan_modules.py"
+      ],
+      "degradation_or_recovery": "Default audit and --check leave the worktree unchanged; stale reports fail --check without writes; explicit repo report refresh records ActionLedger and can be committed intentionally.",
+      "validation_commands": [
+        "python3 scripts/audit_orphan_modules.py --check",
+        "python3 -m pytest tests/unit/test_audit_orphan_modules.py -q"
+      ]
+    },
+    {
+      "id": "key_redaction_config_contract",
+      "category": "security",
+      "risk": "API keys, tokens, bearer credentials, or other secret-like fields are written to config files, logs, health, or doctor output in plaintext.",
+      "contract": "Config examples and runtime config must prefer keyring/keyref references with env as an explicit fallback, and mask resolved keys in display paths; health must expose mnemos.secret_inventory.v1 findings without values plus mnemos.keyring_doctor.v1 keyring/env fallback state when keyring is unavailable.",
+      "observable_entrypoints": [
+        "cli:init",
+        "cli:doctor",
+        "cli:health --json",
+        "cli:secrets doctor --json",
+        "cli:distill status",
+        "script:scripts/verify_installation.py",
+        "script:scripts/e2e_probe.py",
+        "script:scripts/verify_config_examples.py",
+        "script:scripts/security_audit.py",
+        "script:scripts/audit_release_privacy_security.py"
+      ],
+      "code_refs": [
+        "core/config.py",
+        "core/llm_config.py",
+        "core/privacy/secret_inventory.py",
+        "core/ops/keyring_doctor.py",
+        "core/cli/commands/secrets.py",
+        "core/cli/commands/distill.py",
+        "scripts/auto_setup.py",
+        "scripts/setup_model_endpoints.py",
+        "scripts/health_check.py",
+        "core/ops/health_check.py",
+        "scripts/verify_installation.py",
+        "scripts/e2e_probe.py",
+        "scripts/verify_config_examples.py",
+        "scripts/security_audit.py",
+        "scripts/audit_release_privacy_security.py"
+      ],
+      "tests": [
+        "tests/unit/test_config_contract.py",
+        "tests/unit/test_llm_config.py",
+        "tests/unit/test_auto_setup.py",
+        "tests/unit/test_multimodal_config_optional.py",
+        "tests/unit/test_config_examples.py",
+        "tests/unit/test_security_audit.py",
+        "tests/unit/test_release_privacy_security_audit.py",
+        "tests/unit/test_e2e_probe.py",
+        "tests/unit/test_health_check.py",
+        "tests/unit/test_health_check_heartbeat.py",
+        "tests/unit/test_keyring_doctor.py",
+        "tests/unit/test_mnemos_cli.py"
+      ],
+      "degradation_or_recovery": "Plaintext key/token/secret-like fields are rejected, marked invalid, or reported only as redacted secret_inventory paths and lengths; missing env keys report unconfigured without exposing secrets; optional multimodal keys use MNEMOS_MULTIMODAL_* references and skipped status when absent; config examples must regenerate from DEFAULT_CONFIG/env groups and pass strict 100% coverage; security_audit.py must use the same selected interpreter for bandit, pip-audit, and health security, auto-detect repo .venv by default, emit mnemos.security_audit.v2 typed findings, derive counts/status/ok/exit with ok == (blocking_count == 0), fail on Bandit medium or blocking health findings, and print install commands when strict current-interpreter dependencies are missing; audit_release_privacy_security.py must validate schema/counts/findings/status/ok/return-code consistency before aggregating strict config, health security/privacy, docs, repo, and diagnostic redaction into mnemos.release_privacy_security.v1 blocking_findings; dynamic SQL identifier interpolation must use validate_sql_identifier plus fixed allowlists or carry precise nosec B608 proof; keyring unavailable is a non-strict health warning with keyring_error, keyring_status, keyring_risk_level, safe_but_not_best, env_fallback_accepted, and keyring/keyref/env migration guidance; env fallback is considered accepted only when secret_inventory_plaintext_count=0 and security.accept_env_secret_fallback=true.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_config_contract.py tests/unit/test_llm_config.py tests/unit/test_auto_setup.py tests/unit/test_multimodal_config_optional.py tests/unit/test_config_examples.py tests/unit/test_security_audit.py tests/unit/test_health_check.py tests/unit/test_health_check_heartbeat.py tests/unit/test_keyring_doctor.py tests/unit/test_mnemos_cli.py::TestCmdSecrets -q",
+        "python3 scripts/generate_config_examples.py",
+        "python3 scripts/verify_config_examples.py --strict",
+        "python3 mnemos_cli.py secrets doctor --json",
+        "python3 scripts/security_audit.py",
+        "python3 scripts/security_audit.py --strict --json",
+        "python3 -m pytest tests/unit/test_mnemos_cli.py::TestCmdDistill tests/unit/test_e2e_probe.py tests/unit/test_release_privacy_security_audit.py -q",
+        "python3 scripts/audit_release_privacy_security.py --strict --json",
+        "python3 -m pytest tests/unit/test_release_privacy_security_audit.py -q"
+      ]
+    },
+    {
+      "id": "install_upgrade_lifecycle_recovery",
+      "category": "migration",
+      "risk": "New users or upgrades rely on multiple scripts and can miss backup, migration, verification, or data preservation steps.",
+      "contract": "Product setup/upgrade/uninstall must expose a single lifecycle state with machine-readable failure_reason, repair_action, migration plan, backup reference, data preservation policy, and ActionLedger record for applied operations.",
+      "observable_entrypoints": [
+        "cli:setup --dry-run --json",
+        "cli:upgrade plan --json",
+        "cli:uninstall --preserve-data --json",
+        "cli:doctor repair-all --json",
+        "script:scripts/audit_install_upgrade_contract.py"
+      ],
+      "code_refs": [
+        "core/setup/install_lifecycle.py",
+        "core/cli/commands/setup.py",
+        "mnemos_cli.py",
+        "core/migrations/registry.py",
+        "core/backup/snapshot_manager.py",
+        "core/privacy/data_ownership.py"
+      ],
+      "tests": [
+        "tests/unit/test_install_state_machine.py",
+        "tests/integration/test_setup_upgrade_roundtrip.py"
+      ],
+      "degradation_or_recovery": "Setup dry-run can return installed_partial with repair actions; upgrade apply creates a snapshot before migration and returns rollback_available when wrapped migrations need authorization; purge uninstall is blocked until data ownership freeze/snapshot/confirm are satisfied.",
+      "validation_commands": [
+        "python3 scripts/audit_install_upgrade_contract.py --strict",
+        "python3 scripts/e2e_install_probe.py --tmp-home",
+        "python3 scripts/e2e_upgrade_probe.py --tmp-home --preserve-existing",
+        "python3 -m pytest tests/unit/test_install_state_machine.py tests/integration/test_setup_upgrade_roundtrip.py -q"
+      ]
+    },
+    {
+      "id": "local_storage_permissions_scope",
+      "category": "security",
+      "risk": "Private raw/persona/project memory is readable across agents or stored with loose permissions.",
+      "contract": "Sensitive files and directories must use restrictive permissions and read paths must apply access policy filters; runtime logs/config/database directories are created or repaired to directory 700 and file 600.",
+      "observable_entrypoints": [
+        "mcp:memory_search",
+        "mcp:session_search",
+        "mcp:context_aware_search",
+        "cli:health --json"
+      ],
+      "code_refs": [
+        "core/access_policy.py",
+        "core/application/storage.py",
+        "core/utils.py",
+        "core/config.py",
+        "scripts/health_check.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_access_policy.py",
+        "tests/unit/test_file_permissions.py",
+        "tests/unit/test_agora_facade.py",
+        "tests/unit/test_config.py",
+        "tests/unit/test_health_check.py",
+        "tests/unit/test_health_check_heartbeat.py"
+      ],
+      "degradation_or_recovery": "Missing identity or unauthorized cross-agent access is denied; missing sensitive paths fail closed; loose permissions appear in checks.security.permission_violations with chmod repair_actions.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_access_policy.py tests/unit/test_file_permissions.py tests/unit/test_agora_facade.py tests/unit/test_config.py tests/unit/test_health_check.py tests/unit/test_health_check_heartbeat.py -q"
+      ]
+    },
+    {
+      "id": "sensitive_content_exclusion",
+      "category": "security",
+      "risk": "Generated wiki context or sensitive review material leaks back into raw/wiki outputs.",
+      "contract": "Generated context blocks and private document tags must be masked or scoped before ingestion/search reuse; document import must have one canonical raw writer and one durable distillation outbox.",
+      "observable_entrypoints": [
+        "cli:wiki rebuild",
+        "cli:import",
+        "mcp:document_process"
+      ],
+      "code_refs": [
+        "core/hephaestus/wiki_builder.py",
+        "core/document_import.py",
+        "core/application/document_import_service.py",
+        "core/kia/knowledge_inbox.py",
+        "core/hephaestus/document_processor.py",
+        "core/app/context_search.py"
+      ],
+      "tests": [
+        "tests/unit/test_wiki_builder.py",
+        "tests/integration/test_document_ingest_unified.py",
+        "tests/unit/test_document_processor.py",
+        "tests/unit/test_context_search.py"
+      ],
+      "degradation_or_recovery": "Masked generated blocks must be replaced with placeholders; trusted document imports run path/privacy/size gates before one canonical revision. Projection or Amphora failure remains retryable pending, never triggers a second backend/raw write; reconciliation removes only committed, unreferenced duplicate worker rows.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_wiki_builder.py tests/integration/test_document_ingest_unified.py tests/unit/test_document_processor.py tests/unit/test_context_search.py -q"
+      ]
+    },
+    {
+      "id": "raw_index_large_vault_observability",
+      "category": "performance",
+      "risk": "Large raw or wiki vaults make search/index maintenance slow or invisible.",
+      "contract": "RawIndex and perf/doctor commands must expose stale state, last sync, counts, and dry-run rebuild behavior; legacy ObsidianBackend indexes must use a vault-scoped database to avoid cross-vault locks and relative path collisions.",
+      "observable_entrypoints": [
+        "cli:raw-index status",
+        "cli:raw-index rebuild",
+        "cli:perf",
+        "cli:doctor"
+      ],
+      "code_refs": [
+        "core/app/raw_search.py",
+        "core/cli/commands/raw_index.py",
+        "core/cli/commands/perf.py",
+        "core/cli/commands/doctor.py",
+        "integrations/backends/obsidian_backend.py"
+      ],
+      "tests": [
+        "tests/unit/test_raw_search.py",
+        "tests/unit/test_mnemos_cli.py",
+        "tests/unit/test_cli_doctor_helpers.py",
+        "tests/unit/test_obsidian_backend_index.py"
+      ],
+      "degradation_or_recovery": "Read paths should report stale indexes and maintenance commands should default to dry-run.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_raw_search.py tests/unit/test_obsidian_backend_index.py tests/unit/test_mnemos_cli.py::TestCmdRawIndex tests/unit/test_mnemos_cli.py::TestCmdPerf tests/unit/test_cli_doctor_helpers.py -q"
+      ]
+    },
+    {
+      "id": "background_resource_budget",
+      "category": "performance",
+      "risk": "Background work consumes resources during battery, high CPU, memory pressure, or thermal pressure.",
+      "contract": "Resource budget must gate low-priority background work and expose status/history.",
+      "observable_entrypoints": [
+        "cli:status",
+        "cli:perf"
+      ],
+      "code_refs": [
+        "core/resource_budget.py",
+        "core/kia/chronos.py",
+        "core/cli/helpers.py"
+      ],
+      "tests": [
+        "tests/unit/test_resource_budget.py",
+        "tests/unit/test_chronos.py",
+        "tests/unit/test_mnemos_cli.py"
+      ],
+      "degradation_or_recovery": "KIA scheduler steps defer with resource_budget reason and do not advance last_run while constrained.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_resource_budget.py tests/unit/test_chronos.py tests/unit/test_mnemos_cli.py::TestCmdStatus -q"
+      ]
+    },
+    {
+      "id": "legacy_config_directory_migration",
+      "category": "migration",
+      "risk": "Old YAML config, legacy vault layout, or moved paths leave users stuck on older installs.",
+      "contract": "Old config aliases, stale keys, database schema scripts, and vault layout migration must be registered in MigrationRegistry with plan/apply/rollback ledger records; removed SQLite encryption config is cleaned as stale config, not retained as a migration capability.",
+      "observable_entrypoints": [
+        "cli:migrate status",
+        "cli:migrate plan",
+        "cli:migrate apply",
+        "script:scripts/audit_migration_registry.py"
+      ],
+      "code_refs": [
+        "core/migrations/registry.py",
+        "core/config.py",
+        "scripts/migrate_db.py",
+        "scripts/migrate_vault_layout.py"
+      ],
+      "tests": [
+        "tests/unit/test_migration_registry.py",
+        "tests/unit/test_config_stale_key_migration.py",
+        "tests/integration/test_migrate_plan_apply_rollback.py"
+      ],
+      "degradation_or_recovery": "Config stale key migration creates a backup before apply; database/vault migrations stay blocked unless explicitly executed with backup review; removed SQLite encryption config is deleted by config.stale_keys.v1.",
+      "validation_commands": [
+        "python3 scripts/audit_migration_registry.py --strict"
+      ]
+    },
+    {
+      "id": "config_strict_doctor_redaction",
+      "category": "security",
+      "risk": "Model endpoints, optional multimodal configuration, secret sources, stale Memos tokens, retention, daemon switches, and file permissions drift across setup, health, and runtime code.",
+      "contract": "A single strict config doctor must reuse runtime model resolvers, optional multimodal resolver, mnemos.secret_inventory.v1, mnemos.keyring_doctor.v1, and storage.disk_budget config, write a redacted machine artifact, point stale keys to MigrationLedger cleanup, and keep runtime config permissions private.",
+      "observable_entrypoints": [
+        "cli:doctor config --strict --json",
+        "cli:migrate apply config.stale_keys.v1 --json",
+        "script:scripts/verify_installation.py",
+        "script:scripts/audit_release_privacy_security.py",
+        "script:scripts/auto_setup.py"
+      ],
+      "code_refs": [
+        "core/ops/config_audit.py",
+        "core/privacy/secret_inventory.py",
+        "core/ops/keyring_doctor.py",
+        "core/cli/commands/doctor.py",
+        "mnemos_cli.py",
+        "core/migrations/registry.py",
+        "scripts/health_check.py",
+        "scripts/security_audit.py",
+        "scripts/audit_release_privacy_security.py",
+        "scripts/auto_setup.py",
+        "scripts/setup_model_endpoints.py",
+        "scripts/verify_installation.py",
+        "core/ops/sqlite_disk_budget.py",
+        "scripts/repair_sqlite_disk_budget.py"
+      ],
+      "tests": [
+        "tests/unit/test_config_audit.py",
+        "tests/unit/test_health_check.py",
+        "tests/unit/test_security_audit.py",
+        "tests/unit/test_release_privacy_security_audit.py",
+        "tests/unit/test_auto_setup.py",
+        "tests/unit/test_multimodal_config_optional.py",
+        "tests/unit/test_keyring_doctor.py",
+        "tests/unit/test_mnemos_cli.py::TestCmdSecrets",
+        "tests/unit/test_migration_registry.py",
+        "tests/unit/test_config_stale_key_migration.py",
+        "tests/unit/test_sqlite_disk_budget.py"
+      ],
+      "degradation_or_recovery": "Strict doctor returns nonzero with repair_action for missing required endpoints, mnemos.secret_inventory.v1 plaintext secret-like values, missing storage.disk_budget config, stale top-level memos config, invalid retention, required daemon gaps, or permission violations; mnemos.security_audit.v2 converts security risks to typed findings and derives counts/status/ok/exit with ok == (blocking_count == 0); release privacy/security audit validates that invariant and returns nonzero if strict config/security/docs/repo or diagnostic redaction is not release-clean; security.keyring remains non-strict but must expose mnemos.keyring_doctor.v1 evidence including env_fallback_accepted, safe_but_not_best, secret reference counts, and plaintext_count; checks.sqlite_disk_budget reports over-budget WAL/temp/snapshot/raw_events as health degradation; absent multimodal remains optional and reports optional/skipped without strict failure; stale config cleanup writes backup and migration ledger rows.",
+      "validation_commands": [
+        "python3 scripts/verify_installation.py --json",
+        "python3 mnemos_cli.py secrets doctor --json",
+        "python3 scripts/security_audit.py --strict --json",
+        "python3 scripts/audit_release_privacy_security.py --strict --json",
+        "python3 scripts/auto_setup.py --yes --preserve-config",
+        "python3 scripts/repair_sqlite_disk_budget.py --dry-run"
+      ]
+    },
+    {
+      "id": "global_snapshot_restore",
+      "category": "reliability",
+      "risk": "Local backups restore one subsystem while config, SQLite, vault pages, action logs, and migration ledger drift apart.",
+      "contract": "SnapshotManifest must cover config, SQLite, mnemos vault, raw vault, Action Ledger, migration ledger, and module state; restore must plan before apply and verify checksums.",
+      "observable_entrypoints": [
+        "cli:backup create",
+        "cli:backup list",
+        "cli:restore plan",
+        "cli:restore apply",
+        "cli:restore verify",
+        "script:scripts/audit_backup_recovery_contract.py"
+      ],
+      "code_refs": [
+        "core/backup/snapshot_manager.py",
+        "core/cli/commands/backup.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_snapshot_manager.py",
+        "tests/integration/test_backup_restore_roundtrip.py",
+        "tests/integration/test_disaster_recovery_drill.py"
+      ],
+      "degradation_or_recovery": "Missing snapshots return blocked restore plans; changed destinations are conflicts until explicitly allowed.",
+      "validation_commands": [
+        "python3 scripts/audit_backup_recovery_contract.py --strict",
+        "python3 -m pytest tests/unit/test_snapshot_manager.py tests/integration/test_backup_restore_roundtrip.py tests/integration/test_disaster_recovery_drill.py -q"
+      ]
+    },
+    {
+      "id": "data_ownership_freeze_delete",
+      "category": "security",
+      "risk": "Users cannot enumerate, export, freeze, or delete Mnemos raw and derived personal data through one governed flow.",
+      "contract": "DataOwnershipContract must inventory raw, wiki, metadata, evidence refs, persona, reflection, scoring, action ledger, model-call ledger, consumer access log, and agent source metadata; delete apply requires freeze, snapshot ref, confirmation, and deletion proof. Model-call deletion is exact entry attribution only: it must not persist raw prompt/response/caller-error text, and its SQLite cleanup evidence is local to the active DB/WAL/free-page path rather than a claim about backups, snapshots, copies, or provider records.",
+      "observable_entrypoints": [
+        "cli:data inventory",
+        "cli:data export",
+        "cli:data freeze",
+        "cli:data delete",
+        "script:scripts/audit_data_ownership_contract.py"
+      ],
+      "code_refs": [
+        "core/privacy/data_ownership.py",
+        "core/telemetry/prompt_call_log.py",
+        "core/runtime_paths.py",
+        "core/cli/commands/data.py",
+        "core/sync_framework/raw_event_store.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_data_ownership_contract.py",
+        "tests/integration/test_data_export_bundle.py",
+        "tests/integration/test_data_delete_freeze_flow.py"
+      ],
+      "degradation_or_recovery": "Delete dry-run reports derived impacts; apply is blocked without freeze, snapshot ref, and confirmation, and proof never stores subject plaintext. A retired prompt-call owner or invalid entry attribution remains visible as degraded/blocked rather than being hidden by generic delete success; normal local recovery backups remain retained under their own policy.",
+      "validation_commands": [
+        "python3 scripts/audit_data_ownership_contract.py --strict",
+        "python3 -m pytest tests/unit/test_data_ownership_contract.py tests/integration/test_data_export_bundle.py tests/integration/test_data_delete_freeze_flow.py -q"
+      ]
+    },
+    {
+      "id": "model_call_ledger_provider_boundary_and_local_recovery",
+      "category": "security",
+      "risk": "A direct provider request can be sent without a durable reservation, raw sensitive request/error content can enter a local accounting store, or a legacy prompt-call owner can be migrated or restored without a reviewed plan and recoverable local evidence.",
+      "contract": "Every direct billable provider path must reserve the complete canonical request using the conservative UTF-8 byte upper bound, mark dispatch immediately before send, then settle from provider usage or preserve post-dispatch incurred cost. The durable ledger only redacts or avoids persisting personal information, API keys, payment-card data, passwords, raw prompt/response content, caller error text, and previews; it stores local redacted/opaque references and bounded operational metadata. `core.telemetry.prompt_call_log` is a static compatibility seam over `core.telemetry.model_call_ledger`, not a second storage path. A non-clean reconciliation requires daemon stop, a reviewed execution_plan_hash, a normal local SQLite backup with integrity evidence, source-drift recheck, explicit legacy-discard choices, and a sealed v3 recovery manifest. The manifest, backup, hash, and lock are local recovery-correctness records. A clean state is zero-write noop; rollback is preview-first, validates migration binding plus append-only journal completion/interruption and postimage state, and requires explicit apply. This local self-use contract does not claim forensic erasure of backups, snapshots, copies, or provider-side records.",
+      "observable_entrypoints": [
+        "script:scripts/audit_model_call_ledger.py",
+        "script:scripts/reconcile_model_call_ledger.py",
+        "cli:migrate plan",
+        "cli:migrate apply database.model_call_ledger.v1",
+        "cli:migrate rollback database.model_call_ledger.v1",
+        "cli:health",
+        "cli:data delete"
+      ],
+      "code_refs": [
+        "core/telemetry/provider_request.py",
+        "core/telemetry/model_call_ledger/",
+        "core/telemetry/prompt_call_log.py",
+        "core/runtime_paths.py",
+        "core/migrations/registry.py",
+        "core/migrations/model_call_ledger_migration.py",
+        "core/migrations/model_call_ledger_reconcile/",
+        "core/migrations/model_call_ledger_recovery.py",
+        "core/cli/commands/migrate.py",
+        "core/privacy/data_ownership.py",
+        "core/ops/model_call_ledger_health.py",
+        "scripts/reconcile_model_call_ledger.py",
+        "scripts/audit_model_call_ledger.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_call_ledger_provider_boundaries.py",
+        "tests/unit/test_reconcile_model_call_ledger.py",
+        "tests/unit/test_model_call_ledger_migration_recovery.py",
+        "tests/unit/test_migration_registry.py",
+        "tests/unit/test_audit_model_call_ledger.py",
+        "tests/integration/test_data_delete_freeze_flow.py"
+      ],
+      "degradation_or_recovery": "Unknown/partial provider usage, a direct sink without reservation/settlement proof, raw sensitive preview/error content, an active daemon, missing/mismatched expected plan hash, source drift, invalid legacy disposition, backup-integrity failure, an orphan/missing/drifted/tampered in-scope target or SQLite sidecar, or a legacy/tampered recovery manifest fails closed. `scripts/reconcile_model_call_ledger.py` direct --apply lacks the registry-issued capability and is zero-write blocked. No-op produces no migration state. A successful restore drill is separate evidence from static audit and from a successful migration apply.",
+      "validation_commands": [
+        "python3 scripts/audit_model_call_ledger.py --json",
+        "python3 mnemos_cli.py migrate plan --json",
+        "python3 mnemos_cli.py health --json",
+        "python3 -m pytest tests/unit/test_model_call_ledger_provider_boundaries.py tests/unit/test_reconcile_model_call_ledger.py tests/unit/test_model_call_ledger_migration_recovery.py tests/unit/test_migration_registry.py tests/unit/test_audit_model_call_ledger.py -q"
+      ]
+    },
+    {
+      "id": "golden_benchmark_regression_gate",
+      "category": "reliability",
+      "risk": "Prompt, schema, quality gate, search, preflight, or scorer changes make Mnemos appear healthy while cognitive quality regresses.",
+      "contract": "Golden benchmark must run offline with deterministic providers, fixed synthetic inputs, expected cognitive assets, consumer proof, and committed scorecard baseline.",
+      "observable_entrypoints": [
+        "script:scripts/audit_golden_benchmark_contract.py",
+        "script:scripts/run_golden_benchmark.py",
+        "cli:health"
+      ],
+      "code_refs": [
+        "core/benchmarks/golden.py",
+        "core/system_contracts.py",
+        "core/ops/health_check.py",
+        "benchmarks/golden/manifest.json"
+      ],
+      "tests": [
+        "tests/unit/test_golden_benchmark_contract.py",
+        "tests/integration/test_golden_benchmark_pipeline.py"
+      ],
+      "degradation_or_recovery": "Strict mode fails on missing manifest/baseline/mock provider or score regression; runtime artifacts stay in benchmark output directories instead of real user vaults.",
+      "validation_commands": [
+        "python3 scripts/audit_golden_benchmark_contract.py --strict",
+        "python3 scripts/run_golden_benchmark.py --strict --mock-llm",
+        "python3 -m pytest tests/unit/test_golden_benchmark_contract.py tests/integration/test_golden_benchmark_pipeline.py -q"
+      ]
+    },
+    {
+      "id": "legacy_wrapper_command_compatibility",
+      "category": "migration",
+      "risk": "Old wrappers or documented commands drift from real CLI behavior.",
+      "contract": "Compatibility wrappers must call current services safely, and command promises must be ratcheted by executable audits.",
+      "observable_entrypoints": [
+        "script:predictive_push.py",
+        "script:scripts/wrapper_weekly_report.py",
+        "script:scripts/audit_function_matrix.py"
+      ],
+      "code_refs": [
+        "predictive_push.py",
+        "scripts/wrapper_weekly_report.py",
+        "scripts/audit_function_matrix.py",
+        "docs/acceptance/function_matrix.json"
+      ],
+      "tests": [
+        "tests/unit/test_compat_wrappers.py",
+        "tests/unit/test_function_matrix.py",
+        "tests/unit/test_mnemos_cli.py"
+      ],
+      "degradation_or_recovery": "Help/no-arg wrapper paths are side-effect free; current CLI promises must be represented in function_matrix.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_compat_wrappers.py tests/unit/test_function_matrix.py tests/unit/test_mnemos_cli.py::TestCmdVaults -q",
+        "python3 scripts/audit_function_matrix.py"
+      ]
+    },
+    {
+      "id": "wiki_quality_budget_gate",
+      "category": "migration",
+      "risk": "Rebuilt or migrated Wiki vaults can look usable while still containing broken links, orphan pages, missing metadata or stubs.",
+      "contract": "Wiki lint output must use mnemos.wiki_quality.v1 with issue counts, lifecycle state mappings, scorecard metrics, owner-tagged budgets, manual review queues and ActionLedger evidence for automatic metadata fixes.",
+      "observable_entrypoints": [
+        "script:scripts/wiki_lint.py",
+        "script:scripts/audit_wiki_quality_contract.py",
+        "cli:vaults audit-content"
+      ],
+      "code_refs": [
+        "scripts/wiki_lint.py",
+        "scripts/audit_wiki_quality_contract.py",
+        "core/system_contracts.py",
+        "core/vaults/content_audit.py"
+      ],
+      "tests": [
+        "tests/unit/test_wiki_lint.py",
+        "tests/unit/vaults/test_content_audit.py"
+      ],
+      "degradation_or_recovery": "Budget mode fails nonzero when rebuilt vault quality exceeds limits; broken_link/orphan/stub remain manual queues, and missing_meta --fix records wiki_quality_fix in ActionLedger.",
+      "validation_commands": [
+        "python3 scripts/audit_wiki_quality_contract.py --strict",
+        "python3 -m pytest tests/unit/test_wiki_lint.py tests/unit/vaults/test_content_audit.py -q"
+      ]
+    },
+    {
+      "id": "cognitive_search_acl_first_gate",
+      "category": "security",
+      "risk": "A denied high-scoring item can consume top-N before ACL filtering, historical ACL gaps can silently become public, or a read path can rebuild ANN/provider state and return untraceable cognition.",
+      "contract": "Wiki, canonical cognition, CognitiveGraph and EvidenceGraph recall independently; header-only ACL/purpose authorization precedes body hydration and final top-k, denied candidates are refilled, and every typed hit carries channel/object/current revision, matched field, source revision/span and ACL decision. Historical unknown assets require exact append-only exclusion identities, never a default-public fallback.",
+      "observable_entrypoints": [
+        "mcp:context_aware_search",
+        "script:scripts/audit_cognitive_search.py",
+        "script:scripts/reconcile_access_metadata.py",
+        "script:scripts/reconcile_cognitive_search_exclusions.py",
+        "script:scripts/reconcile_wiki_search_index.py"
+      ],
+      "code_refs": [
+        "core/app/context_search.py",
+        "core/app/context_search_authorization.py",
+        "core/application/intelligence.py",
+        "core/cognitive/search.py",
+        "core/cognitive/search_state_headers.py",
+        "core/cognitive/search_exclusion_ledger.py",
+        "core/embeddings/index_manager.py",
+        "core/embeddings/index_persistence.py"
+      ],
+      "tests": [
+        "tests/unit/cognitive/test_cognitive_search.py",
+        "tests/unit/cognitive/test_search_state_headers.py",
+        "tests/unit/cognitive/test_search_exclusion_ledger.py",
+        "tests/unit/test_audit_cognitive_search.py",
+        "tests/unit/test_context_search.py",
+        "tests/unit/test_reconcile_wiki_search_index.py"
+      ],
+      "degradation_or_recovery": "Missing/malformed ACL, unavailable lifecycle state, stale cognition revision, uncovered historical source or ANN denominator drift fails closed. Reconciliation is dry-run first, writer-stopped, reviewed-hash and backup bound. ACL/entropy Markdown migration commits exact lifecycle mutations and durable pending events in the same batch; a failure restores Markdown plus wiki_projection.db/events.db. Label-only ANN compaction reuses local vectors and proves retained cosine=1 without a provider call; semantic additions require an explicit real-api path.",
+      "validation_commands": [
+        "python3 scripts/audit_cognitive_search.py --strict --json",
+        "python3 scripts/audit_cognitive_search.py --production --strict --json",
+        "python3 scripts/reconcile_wiki_search_index.py --json",
+        "python3 -m pytest tests/unit/cognitive/test_cognitive_search.py tests/unit/test_audit_cognitive_search.py tests/unit/test_reconcile_access_metadata.py tests/unit/test_reconcile_wiki_search_index.py -q"
+      ]
+    },
+    {
+      "id": "cognitive_readiness_budget_gate",
+      "category": "reliability",
+      "risk": "Mnemos can generate pages and reminders while source refs, evidence refs, search outcomes or reminder closures are missing, making cognitive quality look healthier than it is.",
+      "contract": "Cognitive readiness output must use mnemos.cognitive_readiness.v2 with source/evidence/consumer/behavior sections plus mnemos.learning_signal.v2, source-required/source-exempt Wiki page-role accounting, owner-tagged budgets, lifecycle failure classes, ActionLedger gap evidence and cognitive_assets scorecard metrics.",
+      "observable_entrypoints": [
+        "script:scripts/audit_cognitive_readiness.py",
+        "cli:doctor --cognitive-readiness"
+      ],
+      "code_refs": [
+        "core/ops/cognitive_readiness.py",
+        "core/wiki_metrics.py",
+        "core/wiki_page_roles.py",
+        "scripts/audit_cognitive_readiness.py",
+        "core/app/context_search.py",
+        "daemon/scoring_signals.py",
+        "core/kia/dialog_reminder.py",
+        "core/scoring/adaptive_scorer_v2.py",
+        "core/system_contracts.py",
+        "core/cognitive/observation_engine.py",
+        "core/reflection/consumers.py",
+        "core/cognitive/consolidator.py",
+        "core/ops/health_check.py"
+      ],
+      "tests": [
+        "tests/unit/test_cognitive_readiness_audit.py",
+        "tests/unit/test_wiki_metrics.py",
+        "tests/unit/test_evidence_backfill.py",
+        "tests/unit/test_daemon_scoring_signals.py",
+        "tests/unit/test_context_search.py",
+        "tests/unit/test_dialog_reminder.py",
+        "tests/unit/test_action_ledger_contract.py",
+        "tests/unit/test_mnemos_scorecard_contract.py",
+        "tests/unit/test_daemon_observation_service.py",
+        "tests/unit/reflection/test_reflection_policy_patch_consumer.py",
+        "tests/unit/test_cognitive_consolidator.py"
+      ],
+      "degradation_or_recovery": "Default audit is read-only; --budget fails nonzero when readiness or learning_signal gaps exceed budget. Required missing/corrupt/old schema is blocked; initialized-empty and 0/0 lineage is unobserved; stale/invalid evidence, unlinked outcomes, partial 1/N coverage and dry-run consolidation cannot clear gaps. Source coverage counts only source-required knowledge pages with nonempty source_refs while source-exempt page roles and stale metric rows remain visible; --record-gaps writes cognitive_readiness_gap, and old search_sessions tables are migrated by AdaptiveScorerV2.ensure_tables().",
+      "validation_commands": [
+        "python3 scripts/audit_cognitive_readiness.py --json --budget",
+        "python3 -m pytest tests/unit/test_cognitive_readiness_audit.py tests/unit/test_health_check_heartbeat.py tests/unit/test_daemon_observation_service.py tests/unit/reflection/test_reflection_policy_patch_consumer.py tests/unit/test_cognitive_consolidator.py tests/unit/test_action_ledger_contract.py tests/unit/test_mnemos_scorecard_contract.py -q"
+      ]
+    },
+    {
+      "id": "observation_calibration_lineage_gate",
+      "category": "reliability",
+      "risk": "Observation calibration can double-count a Raw revision and its derived Wiki page, overwrite the base measurement without a canonical record, or drift between full and incremental projection.",
+      "contract": "Calibration must cluster evidence by immutable Raw revision and content hash, treat multi-root derived pages as non-voting overlays, bind current/peer Observation plus validator/combiner implementation and spec identity, persist a replayable mnemos.calibration_record.v1 revision/event/outbox before binding posterior to a verified base, and project only the committed current record with observation/calibration/span/omission identities. Unrecoverable historical priors remain historical_unverified. Only personal identifiers, API credentials, payment cards, passwords and private keys are redacted; no encryption is required.",
+      "observable_entrypoints": [
+        "script:scripts/audit_cognitive_calibration_lineage.py",
+        "script:scripts/reconcile_observation_calibration_state.py",
+        "cli:observe run"
+      ],
+      "code_refs": [
+        "core/cognitive/calibration_lineage.py",
+        "core/cognitive/calibration_math.py",
+        "core/cognitive/calibration_record.py",
+        "core/cognitive/observation_calibration_schema.py",
+        "core/cognitive/auto_calibration.py",
+        "core/cognitive/observation_engine.py",
+        "core/cognitive/observation_store.py",
+        "core/cognitive/wiki_exporter.py",
+        "scripts/audit_cognitive_calibration_lineage.py",
+        "scripts/reconcile_observation_calibration_state.py"
+      ],
+      "tests": [
+        "tests/unit/cognitive/test_calibration_record.py",
+        "tests/unit/cognitive/test_calibration_lineage_audit.py",
+        "tests/unit/cognitive/test_auto_calibration.py",
+        "tests/unit/cognitive/test_observation_engine.py",
+        "tests/unit/cognitive/test_wiki_exporter.py",
+        "tests/unit/evidence/test_evidence_graph.py"
+      ],
+      "degradation_or_recovery": "Missing canonical state leaves a verified Observation at base confidence. Existing non-canonical binding schema fails closed; recovery is a read-only preview followed by daemon-stopped, SQLite-backup-first explicit apply. Partial or unproven pointers are cleared; when the old overwritten confidence cannot prove its prior, the row becomes historical_unverified and cannot receive a posterior until canonical re-extraction. Strict audit exposes that remeasurement denominator and requires every blocking lineage, record, replay, binding, calibrated-unverified-base, staleness, projection and orphan metric to remain zero.",
+      "validation_commands": [
+        "python3 scripts/reconcile_observation_calibration_state.py --json",
+        "python3 scripts/audit_cognitive_calibration_lineage.py --strict --json",
+        "python3 -m pytest tests/unit/cognitive/test_calibration_record.py tests/unit/cognitive/test_calibration_lineage_audit.py tests/unit/cognitive/test_auto_calibration.py tests/unit/cognitive/test_observation_engine.py tests/unit/cognitive/test_wiki_exporter.py tests/unit/evidence/test_evidence_graph.py -q"
+      ]
+    },
+    {
+      "id": "adaptive_policy_shadow_rollback_gate",
+      "category": "reliability",
+      "risk": "AdaptiveConfig can appear global while only one runtime knob is consumed, or active policy shadows can age past the rollback window without operator visibility.",
+      "contract": "Adaptive policy coverage must be declared in mnemos.adaptive_policy_coverage.v1, every default rule must map metric/input/consumer/rollback/acceptance fields, consumers must read active shadow overrides through EffectivePolicy semantics, and health/status must expose active_shadow plus overdue rollback windows.",
+      "observable_entrypoints": [
+        "script:scripts/audit_adaptive_policy_matrix.py",
+        "cli:status",
+        "cli:health"
+      ],
+      "code_refs": [
+        "core/kia/adaptive_policy_matrix.py",
+        "core/kia/adaptive_config.py",
+        "core/kia/policy.py",
+        "daemon/adaptive_service.py",
+        "core/ops/health_check.py",
+        "core/cli/commands/status.py",
+        "docs/acceptance/adaptive_policy_matrix.json"
+      ],
+      "tests": [
+        "tests/unit/kia/test_adaptive_policy_matrix.py",
+        "tests/unit/kia/test_adaptive_config_effective.py",
+        "tests/unit/test_daemon_adaptive_service.py",
+        "tests/unit/test_mnemos_cli.py::TestCmdStatus"
+      ],
+      "degradation_or_recovery": "Strict audit fails on missing domains or stale docs; EffectivePolicy consumers fall back to caller config when no active shadow exists; status/health expose coverage_errors, active shadows, metric_before, age_hours and overdue count so operators can commit or roll back.",
+      "validation_commands": [
+        "python3 scripts/audit_adaptive_policy_matrix.py --strict",
+        "python3 -m pytest tests/unit/kia/test_adaptive_policy_matrix.py tests/unit/kia/test_adaptive_config_effective.py tests/unit/test_daemon_adaptive_service.py tests/unit/test_mnemos_cli.py::TestCmdStatus -q"
+      ]
+    },
+    {
+      "id": "raw_projection_lock_recovery",
+      "category": "reliability",
+      "risk": "raw_projection SQLite lock errors remain in daemon heartbeat as if they were current after a later successful run.",
+      "contract": "Daemon heartbeat must distinguish current service errors from historical recovered errors; raw_projection recovery clears stale error state and records raw_projection_recovered in ActionLedger.",
+      "observable_entrypoints": [
+        "cli:health",
+        "cli:daemon status"
+      ],
+      "code_refs": [
+        "mnemos_daemon.py",
+        "daemon/heartbeat.py",
+        "daemon/service_state.py",
+        "core/ops/health_check.py",
+        "core/system_contracts.py"
+      ],
+      "tests": [
+        "tests/unit/test_mnemos_daemon.py::TestRawProjectionService",
+        "tests/unit/test_daemon_heartbeat.py",
+        "tests/unit/test_daemon_service_state.py",
+        "tests/unit/test_health_check_heartbeat.py",
+        "tests/unit/test_action_ledger_contract.py"
+      ],
+      "degradation_or_recovery": "Current service errors degrade heartbeat health; historical errors are exposed under historical_service_errors and are non-blocking after last_ok succeeds later than last_error_at.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_daemon_heartbeat.py tests/unit/test_daemon_service_state.py tests/unit/test_health_check_heartbeat.py tests/unit/test_mnemos_daemon.py::TestRawProjectionService tests/unit/test_action_ledger_contract.py -q",
+        "python3 scripts/audit_action_ledger.py --strict"
+      ]
+    },
+    {
+      "id": "hermetic_validation_state_boundary",
+      "category": "reliability",
+      "risk": "Tests, full-score gates, health/verify/status diagnostics, or golden benchmarks can mutate formal user state, inherit real credentials, reuse fixed probes, or delete shared output while still reporting green.",
+      "contract": "Every validation run owns one absent/empty isolated sandbox root and immutable environment manifest. Default runs inherit no API credentials; all mutable standard paths and artifacts stay under the root; read-only diagnostics do not provision storage; direct formal writes and final formal/repo diffs fail the run.",
+      "observable_entrypoints": [
+        "script:scripts/run_tests.py",
+        "script:scripts/audit_gate_hermeticity.py",
+        "script:scripts/run_full_score_gates.py",
+        "cli:health",
+        "cli:status",
+        "cli:distill status",
+        "script:scripts/verify_installation.py"
+      ],
+      "code_refs": [
+        "core/ops/hermetic_run.py",
+        "core/runtime_environment.py",
+        "core/ops/config_scope.py",
+        "core/ops/health_check.py",
+        "core/benchmarks/golden.py",
+        "scripts/audit_gate_hermeticity.py",
+        "scripts/run_tests.py",
+        "scripts/run_full_score_gates.py",
+        "tests/conftest.py"
+      ],
+      "tests": [
+        "tests/unit/test_hermetic_run_environment.py",
+        "tests/unit/test_gate_hermeticity_audit.py",
+        "tests/unit/test_config_scope.py",
+        "tests/unit/test_read_only_cli_boundaries.py",
+        "tests/unit/test_golden_runtime_boundary.py",
+        "tests/unit/test_distillation_pause_readonly.py"
+      ],
+      "degradation_or_recovery": "Missing/escaped paths, reused nonempty roots, hidden credentials, command failures, formal_state_diff, repo_state_diff, or direct production write attempts fail closed. Explicit verify --write-probes uses a unique O_EXCL file and removes only that file. Runtime receipt backlog is reported separately and is never cleared or re-budgeted for test success.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_hermetic_run_environment.py tests/unit/test_gate_hermeticity_audit.py tests/unit/test_config_scope.py tests/unit/test_read_only_cli_boundaries.py tests/unit/test_golden_runtime_boundary.py tests/unit/test_distillation_pause_readonly.py -q",
+        "python3 scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json --output-dir /tmp/mnemos-diagnostics-hermetic",
+        "python3 scripts/run_tests.py quick",
+        "python3 scripts/audit_ops_resilience_matrix.py"
+      ]
+    },
+    {
+      "id": "relation_evidence_schema_registry",
+      "category": "migration",
+      "risk": "KnowledgeGraph and RelationManager can race two relation_evidence DDL variants so the first initializer silently determines NOT NULL/default behavior.",
+      "contract": "One code-owned schema authority must define and hash relation_evidence columns/defaults/FK/index; constructors validate existing state before any DDL, while recognized prior schemas move only through an explicit backed-up transaction and unknown or ambiguous data fails closed.",
+      "observable_entrypoints": [
+        "script:scripts/reconcile_relation_evidence_schema.py",
+        "script:scripts/audit_schema_registry.py"
+      ],
+      "code_refs": [
+        "core/kia/relation_evidence_schema.py",
+        "core/kia/knowledge_graph.py",
+        "core/kia/relation_manager.py",
+        "scripts/reconcile_relation_evidence_schema.py",
+        "scripts/audit_schema_registry.py",
+        "scripts/run_local_gates.py",
+        "scripts/run_full_score_gates.py"
+      ],
+      "tests": [
+        "tests/unit/test_relation_evidence_schema_migration.py",
+        "tests/unit/test_relation_manager.py",
+        "tests/unit/test_knowledge_graph.py"
+      ],
+      "degradation_or_recovery": "Fresh databases create the canonical registered schema. Existing unregistered KG schema or old RM defaults schema reports migration_required; NULL/blank evidence_type, missing index, corrupt/stale registry, unknown structure, copy failure or row-count/hash mismatch blocks writers and strict gates. Apply requires a caller-selected backup directory, verifies SQLite backup integrity, migrates in one transaction, verifies row count plus actual semantic hash, and rolls back on failure; operators restore the complete verified backup for manual rollback.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_relation_evidence_schema_migration.py tests/unit/test_relation_manager.py tests/unit/test_knowledge_graph.py -q",
+        "python3 scripts/reconcile_relation_evidence_schema.py --json",
+        "python3 scripts/audit_schema_registry.py --strict --json",
+        "python3 scripts/audit_ops_resilience_matrix.py"
+      ]
+    },
+    {
+      "id": "full_score_strict_gate_bundle",
+      "category": "reliability",
+      "risk": "Full-score assessment can drift or become falsely green when callers shrink the gate set, select an unknown/empty set, reuse a self-reported manifest, run from dirty code, omit behavior tests, or tamper with persisted receipts/artifacts.",
+      "contract": "The code-owned strict-real-api manifest fixes the release denominator. A certificate is eligible only when expected=selected=executed, omitted is empty, all required receipts pass, the full Git commit is clean, and the independent verifier revalidates the authoritative manifest plus stdout/stderr hashes.",
+      "observable_entrypoints": [
+        "script:scripts/run_full_score_gates.py",
+        "script:scripts/verify_full_score_certificate.py",
+        "script:scripts/audit_test_suite_denominator.py",
+        "script:scripts/run_cognitive_behavior_scenarios.py"
+      ],
+      "code_refs": [
+        "scripts/run_full_score_gates.py",
+        "scripts/verify_full_score_certificate.py",
+        "scripts/audit_test_suite_denominator.py",
+        "scripts/audit_document_asset_manifest.py",
+        "docs/acceptance/document_asset_manifest.json",
+        "scripts/audit_schema_registry.py",
+        "scripts/run_cognitive_behavior_scenarios.py",
+        "core/ops/hermetic_run.py",
+        "scripts/audit_gate_hermeticity.py",
+        "scripts/run_tests.py",
+        "scripts/run_local_gates.py",
+        "scripts/audit_release_privacy_security.py",
+        "scripts/e2e_probe.py",
+        "scripts/e2e_wow_probe.py",
+        "scripts/audit_cognitive_readiness.py",
+        "scripts/wiki_lint.py",
+        "tests/unit/test_run_full_score_gates.py",
+        "tests/unit/test_release_privacy_security_audit.py",
+        "tests/unit/test_verify_full_score_certificate.py",
+        "tests/unit/test_test_suite_denominator.py",
+        "tests/unit/test_document_asset_manifest_audit.py",
+        "tests/unit/test_relation_evidence_schema_migration.py",
+        "tests/unit/test_run_cognitive_behavior_scenarios.py"
+      ],
+      "tests": [
+        "tests/unit/test_run_full_score_gates.py",
+        "tests/unit/test_verify_full_score_certificate.py",
+        "tests/unit/test_test_suite_denominator.py",
+        "tests/unit/test_run_cognitive_behavior_scenarios.py"
+      ],
+      "degradation_or_recovery": "mnemos.full_score_gates.v2 records the current canonical 62-gate expected/selected/executed/omitted sets, full Git/clean state, receipts and artifact hashes. Its independent Phase 5 required manifest requires contracts.persona_runtime_effectiveness, contracts.blindspot_asset_boundaries and contracts.phase5_failure_contracts to appear with exact contracts; the frozen failure-contract gate binds baseline failure evidence and the PH5-031 1/0/0/0 acceptance counts. Its three quality closure gates require maintainability/zombie/vulture residual=0, docs.asset_manifest.strict requires all repo Markdown, Prompt/schema and Desktop assets verified, contracts.cognitive_action_effects requires real target effects with reciprocal receipts and zero lineage/hash gaps, contracts.cognitive_calibration_lineage requires zero lineage/record/replay/projection gaps, contracts.cognitive_event_dispatch and contracts.evidence_graph_direction require durable episode fan-out and canonical evidence direction, contracts.cognitive_search requires the frozen ACL-first retrieval benchmark to pass, and model_call_ledger.static rejects a direct provider boundary without reservation/settlement evidence. Those hermetic/static gates do not prove a local legacy migration, model-call health clean/noop result, production Wiki ACL reconciliation, or sealed-v3 restore drill; those are separate runtime evidence when legacy owners exist. Security and relation-evidence gates retain their strict invariants. Strict real-api rejects only/all skip selectors; unknown/empty selectors exit 2. Partial/mock/dirty/legacy/tampered/timeout/omitted, accepted-debt or Desktop-skip reports are non-certifying.",
+      "validation_commands": [
+        "python3 -m pytest tests/unit/test_run_full_score_gates.py tests/unit/test_verify_full_score_certificate.py tests/unit/test_test_suite_denominator.py tests/unit/test_run_cognitive_behavior_scenarios.py -q",
+        "python3 scripts/audit_test_suite_denominator.py --strict --json",
+        "python3 scripts/audit_document_asset_manifest.py --strict --desktop-mode required --json",
+        "python3 scripts/audit_model_call_ledger.py --json",
+        "python3 scripts/run_cognitive_behavior_scenarios.py --json",
+        "python3 scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json --output-dir /tmp/mnemos-diagnostics-hermetic",
+        "python3 scripts/run_full_score_gates.py --strict --output-dir /tmp/mnemos-full-score-gates-issue14-smoke --only health.strict,security.release_privacy,config.examples.strict",
+        "python3 scripts/audit_ops_resilience_matrix.py"
+      ]
+    }
+  ]
+}

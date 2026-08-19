@@ -32,15 +32,152 @@ jobs:
 
       - name: Lint with flake8
         run: |
-          flake8 core/ integrations/ scripts/ mnemos_cli.py mnemos_daemon.py --count --select=E9,F63,F7,F82,F821 --show-source --statistics
+          flake8 core/ integrations/ daemon/ scripts/ mnemos_cli.py mnemos_daemon.py --count --show-source --statistics
+
+      - name: Type check with mypy (budget gate)
+        run: |
+          python scripts/mypy_budget.py
 
       - name: Check compileall
         run: |
           python -m compileall -q .
 
-      - name: Run tests
+      - name: Check tech debt annotations
         run: |
-          python -m pytest tests/ -v --ignore=tests/test_system.py
+          python scripts/check_tech_debt.py
+
+      - name: Check bare except handling
+        run: |
+          python scripts/check_bare_except.py
+
+      - name: Check maintainability budget
+        run: |
+          python scripts/check_maintainability_budget.py --closure
+
+      - name: Check config examples
+        run: |
+          python scripts/verify_config_examples.py --strict
+
+      - name: Check canonical config registry closure
+        run: |
+          python scripts/audit_config_registry_closure.py --strict
+
+      - name: Check relation evidence schema registry
+        run: |
+          python scripts/audit_schema_registry.py --strict --json
+
+      - name: Check cognitive state store contract
+        run: |
+          python scripts/audit_cognitive_state_store.py --strict --json
+      - name: Check cognitive search contract
+        run: |
+          python scripts/audit_cognitive_search.py --strict --json
+      - name: Check cognitive projection lifecycle
+        run: |
+          python scripts/audit_cognitive_projection_lifecycle.py --strict --json
+      - name: Check belief revision lineage
+        run: |
+          python scripts/audit_belief_revision_lineage.py --strict --json
+      - name: Check decision trace effects
+        run: |
+          python scripts/audit_decision_trace_effects.py --strict --json
+      - name: Check prediction outcome lineage
+        run: |
+          python scripts/audit_prediction_outcome_lineage.py --strict --json
+      - name: Check feedback attribution closure
+        run: |
+          python scripts/audit_feedback_attribution.py --strict --json
+      - name: Check training governance static contract
+        run: |
+          python scripts/audit_training_governance.py --static-only --strict --json
+      - name: Check Phase 3 cognitive chain
+        run: |
+          python scripts/audit_phase3_cognitive_chain.py --static-only --strict --json
+      - name: Check cognitive calibration lineage
+        run: |
+          python scripts/audit_cognitive_calibration_lineage.py --static-only --strict --json
+      - name: Check portable Phase 0 governance
+        run: |
+          python scripts/generate_phase0_governance_contracts.py --desktop-mode skip --json
+
+      - name: Check cognition episode event dispatch
+        run: |
+          python scripts/audit_cognitive_event_dispatch.py --strict --json
+
+      - name: Check evidence graph direction
+        run: |
+          python scripts/audit_evidence_graph_direction.py --strict --json
+
+      - name: Check docs freshness
+        run: |
+          python scripts/audit_docs_freshness.py --strict
+
+      - name: Check document asset manifest
+        run: |
+          python scripts/audit_document_asset_manifest.py --strict --desktop-mode skip
+
+      - name: Check docs sensitive info
+        run: |
+          python scripts/audit_docs_sensitive_info.py --strict
+
+      - name: Check repo sensitive literals
+        run: |
+          python scripts/audit_repo_sensitive_literals.py --strict
+
+      - name: Check distill response budget
+        run: |
+          python scripts/audit_distill_response_budget.py
+
+      - name: Check distill output contract
+        run: |
+          python scripts/audit_distill_output_contract.py --strict
+
+      - name: Check cognitive source authority
+        run: |
+          python scripts/audit_cognitive_source_authority.py --strict --json
+
+      - name: Check cognitive action effect closure
+        run: |
+          python scripts/audit_cognitive_action_effects.py --strict --json
+
+      - name: Check runtime producer/consumer closure
+        run: |
+          python scripts/audit_runtime_producer_consumer_closure.py --strict
+
+      - name: Check release test denominator and certificate verifier
+        run: |
+          python scripts/audit_test_suite_denominator.py --strict --json
+          python -m pytest tests/unit/test_run_full_score_gates.py tests/unit/test_verify_full_score_certificate.py -q
+
+      - name: Check No Zombie Code Policy
+        run: |
+          python scripts/check_zombie_code_policy.py --closure
+
+      - name: Check dead code (vulture)
+        run: |
+          python -m vulture --min-confidence 80
+
+      - name: Check architecture governance ratchet
+        run: |
+          python scripts/arch_dependency_graph.py --check
+          python scripts/ci_ratchet.py --closure --strict
+
+      - name: Run unit/integration/e2e tests with coverage
+        run: |
+          python -m pytest tests/ --cov=core --cov=integrations --cov=mnemos_cli --cov=mnemos_daemon --cov-fail-under=70
+
+      - name: Run system tests
+        run: |
+          python scripts/run_tests.py system
+
+      - name: Security audit (bandit + pip-audit)
+        run: |
+          python -m bandit -r core integrations daemon scripts mnemos_cli.py mnemos_daemon.py -ll -ii
+          python -m pip_audit --desc --format=markdown
+
+      - name: Local security health check
+        run: |
+          python scripts/security_audit.py
 
       - name: Test CLI help
         run: |

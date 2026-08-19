@@ -1,0 +1,50 @@
+{
+  "schema_version": "mnemos.phase5_required_full_score_gates.v1",
+  "required_gate_contracts": [
+    {
+      "gate_id": "contracts.persona_runtime_effectiveness",
+      "category": "contracts",
+      "command": [
+        "python",
+        "scripts/audit_persona_runtime_effectiveness.py",
+        "--strict",
+        "--json"
+      ],
+      "required": true,
+      "strict_only": true,
+      "slow": false,
+      "real_api": false,
+      "timeout_seconds": 240
+    },
+    {
+      "gate_id": "contracts.blindspot_asset_boundaries",
+      "category": "contracts",
+      "command": [
+        "python",
+        "scripts/audit_blindspot_asset_boundaries.py",
+        "--strict",
+        "--json"
+      ],
+      "required": true,
+      "strict_only": true,
+      "slow": false,
+      "real_api": false,
+      "timeout_seconds": 240
+    },
+    {
+      "gate_id": "contracts.phase5_failure_contracts",
+      "category": "contracts",
+      "command": [
+        "python",
+        "scripts/audit_phase5_failure_contracts.py",
+        "--strict",
+        "--json"
+      ],
+      "required": true,
+      "strict_only": true,
+      "slow": false,
+      "real_api": false,
+      "timeout_seconds": 240
+    }
+  ]
+}

@@ -8,42 +8,169 @@ MCP Server - Model Context Protocol 服务器
 
 协议：MCP (Model Context Protocol) over JSON-RPC 2.0
 传输：stdio
+
+Note: 本模块只将已声明的协议、I/O、配置和持久化失败转换为 JSON-RPC
+错误；AssertionError 等未知程序错误保持可见，避免协议层掩盖实现缺陷。
 """
+
+from __future__ import annotations
+
 # Agora — 古希腊广场 — MCP 协议中心，公共交流场所
 # 原模块: mcp_server.py
 
 
-
 import json
-import os
-import re
 import sys
 import logging
-from typing import Dict, List, Optional, Any
-from pathlib import Path
+import sqlite3
+from typing import Dict, List, Optional, Any, Tuple
+
+from core.access_policy import (
+    AccessNarrowing,
+    MCP_TOOL_POLICIES,
+    PrincipalEnvelope,
+    authorize_tool_call,
+)
+from core.agent_kit.authorization import (
+    AgentAuthorizationStore,
+    MCPLaunchCredentialStore,
+)
+from core.application.facade import DefaultMnemosServiceFacade, MnemosServiceFacade
+from core.runtime_environment import environment_get
+from datetime import datetime, timedelta
+from integrations.agora_tools import schema as _schema_tools
+from integrations.agora_contract import (  # noqa: F401
+    JSONRPC_INTERNAL_ERROR,
+    JSONRPC_INVALID_PARAMS,
+    JSONRPC_INVALID_REQUEST,
+    JSONRPC_METHOD_NOT_FOUND,
+    JSONRPC_PARSE_ERROR,
+    MCP_LAUNCH_CAPABILITY_REF_ENV,
+    MCP_RECOVERABLE_ERRORS,
+    MCP_TOOL_EXECUTION_ERROR,
+    _compact_mcp_health_report,
+)
 
 # 配置日志到 stderr，避免污染 stdout（MCP 协议通道）
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stderr,
-    format="%(asctime)s [mcp] %(levelname)s: %(message)s"
+    level=logging.INFO, stream=sys.stderr, format="%(asctime)s [mcp] %(levelname)s: %(message)s"
 )
-
-# JSON-RPC 2.0 标准错误码
-JSONRPC_PARSE_ERROR = -32700
-JSONRPC_INVALID_REQUEST = -32600
-JSONRPC_METHOD_NOT_FOUND = -32601
-JSONRPC_INVALID_PARAMS = -32602
-JSONRPC_INTERNAL_ERROR = -32603
-MCP_TOOL_EXECUTION_ERROR = -32000
 
 
 class MCPServer:
     """MCP 服务器 - stdio 模式，JSON-RPC 2.0"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        facade: MnemosServiceFacade | None = None,
+        *,
+        launch_credential: str = "",
+        authorization_store: AgentAuthorizationStore | None = None,
+    ):
+        self._facade = facade or DefaultMnemosServiceFacade(logger)
+        store = authorization_store
+        if store is None and launch_credential:
+            store = AgentAuthorizationStore(initialize=False)
+        self._authorization_store = store
+        self._launch_credential = launch_credential
+        self._principal: PrincipalEnvelope | None = None
+        try:
+            self._principal = (
+                store.resolve_mcp_principal(launch_credential)
+                if store is not None and launch_credential
+                else None
+            )
+        except (OSError, ValueError, sqlite3.Error):
+            logger.warning("MCP launch capability store unavailable", exc_info=True)
+            self._principal = None
         self.tools = self._register_tools()
+        if set(self.tools) != set(MCP_TOOL_POLICIES):
+            missing = sorted(set(self.tools) - set(MCP_TOOL_POLICIES))
+            stale = sorted(set(MCP_TOOL_POLICIES) - set(self.tools))
+            raise RuntimeError(
+                "tool policy registry mismatch: "
+                f"unregistered_handlers={missing}, stale_policies={stale}"
+            )
+        advertised_tools = _schema_tools.list_tools(self._get_tool_category)["tools"]
+        advertised_names = {str(tool.get("name", "")) for tool in advertised_tools}
+        if advertised_names != set(self.tools):
+            missing = sorted(set(self.tools) - advertised_names)
+            stale = sorted(advertised_names - set(self.tools))
+            raise RuntimeError(
+                "tool schema registry mismatch: "
+                f"missing_schemas={missing}, stale_schemas={stale}"
+            )
+        self._tool_input_properties = {
+            str(tool["name"]): frozenset(
+                str(key) for key in tool.get("inputSchema", {}).get("properties", {})
+            )
+            for tool in advertised_tools
+        }
+        kia_service = getattr(self._facade, "_kia", None)
+        # guard_check 会话缓存：guard_key -> (InProcessGuard, created_at)
+        self._guard_sessions: Dict[str, Tuple[Any, datetime]] = getattr(
+            kia_service,
+            "_guard_sessions",
+            {},
+        )
+        self._guard_session_ttl_seconds: int = getattr(
+            kia_service,
+            "_guard_session_ttl_seconds",
+            86400,
+        )
+        self._guard_sessions_max: int = getattr(kia_service, "_guard_sessions_max", 1000)
+        # guard_check 知识缓存：(task_type, subtype) -> (knowledge, loaded_at)
+        self._guard_knowledge_cache: Dict[str, Tuple[Any, datetime]] = getattr(
+            kia_service,
+            "_guard_knowledge_cache",
+            {},
+        )
+        self._guard_cache_ttl_seconds: int = getattr(
+            kia_service,
+            "_guard_cache_ttl_seconds",
+            300,
+        )
+        self._guard_knowledge_cache_max: int = getattr(
+            kia_service,
+            "_guard_knowledge_cache_max",
+            256,
+        )
+
+    def _prune_guard_knowledge_cache(self):
+        """清理过期的 guard_check 知识缓存，并限制最大容量。"""
+        now = datetime.now()
+        ttl = timedelta(seconds=self._guard_cache_ttl_seconds)
+        expired = [
+            k for k, (_, loaded_at) in self._guard_knowledge_cache.items() if now - loaded_at >= ttl
+        ]
+        for k in expired:
+            del self._guard_knowledge_cache[k]
+        while len(self._guard_knowledge_cache) > self._guard_knowledge_cache_max:
+            self._guard_knowledge_cache.popitem(last=False)
+
+    def _prune_guard_sessions(self):
+        """清理过期的 guard_check 会话缓存，并限制最大容量。"""
+        now = datetime.now()
+        ttl = timedelta(seconds=self._guard_session_ttl_seconds)
+        expired = []
+        for k, (guard, created_at) in self._guard_sessions.items():
+            if now - created_at >= ttl:
+                expired.append(k)
+                try:
+                    if hasattr(guard, "close"):
+                        guard.close()
+                except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                    logger.debug("关闭过期 guard session 失败", exc_info=True)
+        for k in expired:
+            del self._guard_sessions[k]
+        while len(self._guard_sessions) > self._guard_sessions_max:
+            _, (guard, _) = self._guard_sessions.popitem(last=False)
+            try:
+                if hasattr(guard, "close"):
+                    guard.close()
+            except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError):
+                logger.debug("关闭超限 guard session 失败", exc_info=True)
 
     def _register_tools(self) -> Dict[str, Any]:
         """注册可用 tools"""
@@ -56,591 +183,470 @@ class MCPServer:
             "capture_session": self._tool_capture_session,
             "end_session": self._tool_end_session,
             "capture_status": self._tool_capture_status,
+            "session_save": self._tool_session_save,
             "knowledge_ingest": self._tool_knowledge_ingest,
-            "knowledge_import": self._tool_knowledge_import,
             "knowledge_distill": self._tool_knowledge_distill,
             "document_process": self._tool_document_process,
             "wiki_build": self._tool_wiki_build,
+            "memory_write_project": self._tool_memory_write_project,
+            "memory_write_framework": self._tool_memory_write_framework,
+            "memory_write_global": self._tool_memory_write_global,
+            "memory_search": self._tool_memory_search,
             "preflight_inject": self._tool_preflight_inject,
             "guard_check": self._tool_guard_check,
             "persona_summary": self._tool_persona_summary,
             "persona_behavior_prompt": self._tool_persona_behavior_prompt,
+            "persona_behavior_metrics": self._tool_persona_behavior_metrics,
+            "persona_record_explicit_evidence": self._tool_persona_record_explicit_evidence,
             "persona_update": self._tool_persona_update,
             "signal_collect": self._tool_signal_collect,
             "retrospective_list": self._tool_retrospective_list,
             "check_pending_recaps": self._tool_check_pending_recaps,
+            "recap_start": self._tool_recap_start,
+            "recap_submit": self._tool_recap_submit,
+            "recap_finalize": self._tool_recap_finalize,
+            "recap_skip": self._tool_recap_skip,
+            "recap_feedback": self._tool_recap_feedback,
+            "recap_status": self._tool_recap_status,
+            "recap_claim_owner": self._tool_recap_claim_owner,
             "knowledge_source_list": self._tool_knowledge_source_list,
             "health_check": self._tool_health_check,
+            "agent_runtime_probe": self._tool_agent_runtime_probe,
             "self_diagnose": self._tool_self_diagnose,
-            "configure_memos": self._tool_configure_memos,
             "configure_wiki": self._tool_configure_wiki,
             "detect_sources": self._tool_detect_sources,
             "context_aware_search": self._tool_context_aware_search,
+            "build_cognitive_state": self._tool_build_cognitive_state,
+            "record_decision": self._tool_record_decision,
+            "apply_outcome": self._tool_apply_outcome,
             "intent_route": self._tool_intent_route,
+            "intent_correct": self._tool_intent_correct,
             "blindspot_check": self._tool_blindspot_check,
             "predictive_push": self._tool_predictive_push,
+            "delivery_display_ack": self._tool_delivery_display_ack,
+            "push_feedback": self._tool_push_feedback,
             "freshness_check": self._tool_freshness_check,
+            # L3/L4/L5 Reflection 运行时工具
+            "observation_run": self._tool_observation_run,
+            "observation_search": self._tool_observation_search,
+            "reflect_on_input": self._tool_reflect_on_input,
+            "reflect_manually": self._tool_reflect_manually,
+            "reflection_feedback": self._tool_reflection_feedback,
+            "reflection_pending": self._tool_reflection_pending,
         }
+
+    # 工具分类：帮助 Agent 优先选择核心工具，降低上下文负担
+    _TOOL_CATEGORIES: Dict[str, List[str]] = {
+        "core": [
+            "preflight_inject",  # 会话开始时装载知识
+            "guard_check",  # 执行中守护
+            "wiki_search",  # 搜索知识库
+            "wiki_read",  # 读取知识页面
+            "document_process",  # 文件蒸馏唯一入口
+        ],
+        "extended": [
+            "knowledge_ingest",  # 知识摄入
+            "knowledge_distill",  # 触发蒸馏
+            "wiki_build",  # 构建 Wiki
+            "memory_write_project",  # 写入项目级记忆
+            "memory_write_framework",  # 写入框架级记忆
+            "memory_write_global",  # 写入全局级记忆
+            "memory_search",  # 按记忆范围搜索
+            "session_search",  # 搜索历史会话
+            "persona_summary",  # 获取画像
+            "persona_update",  # 更新画像
+            "persona_behavior_prompt",  # 画像行为提示
+            "persona_behavior_metrics",  # 画像行为提示指标
+            "persona_record_explicit_evidence",  # 精确用户原话写入画像
+            "check_pending_recaps",  # 检查待复盘
+            "retrospective_list",  # 列出复盘经验
+            "recap_start",  # 开始结构化复盘
+            "recap_submit",  # 提交三问答案
+            "recap_finalize",  # 确认入库
+            "recap_skip",  # 记录跳过原因
+            "recap_feedback",  # 记录复盘反馈
+            "recap_status",  # 查询复盘状态
+            "recap_claim_owner",  # 领取 owner 锁
+        ],
+        "auxiliary": [
+            "health_check",  # 健康检查
+            "agent_runtime_probe",  # Agent Kit 运行能力验收
+            "self_diagnose",  # 自诊断
+            "detect_sources",  # 数据源检测
+            "configure_wiki",  # 配置 Wiki 路径
+            "knowledge_source_list",  # 知识来源统计
+            "signal_collect",  # 信号采集
+            "context_aware_search",  # 上下文感知搜索（wiki_search 的增强版）
+            "build_cognitive_state",  # 认知状态只读视图
+        ],
+        "lifecycle": [
+            "capture_turn",  # 单轮上报（通常由 hooks 自动触发）
+            "capture_session",  # 批量上报（通常由 hooks 自动触发）
+            "end_session",  # 标记 session 结束（通常由 hooks 自动触发）
+            "capture_status",  # 查询捕获状态
+        ],
+        "advanced": [
+            "intent_route",  # 意图路由
+            "intent_correct",  # 意图纠正
+            "blindspot_check",  # 盲区检查
+            "predictive_push",  # 预测推送
+            "delivery_display_ack",  # 宿主实际展示后的回执
+            "push_feedback",  # 推送反馈
+            "record_decision",  # 认知决策记录
+            "apply_outcome",  # 认知结果记录
+            "freshness_check",  # 新鲜度检查
+            "wiki_write",  # 直接写 Wiki（建议优先使用 document_process/knowledge_distill）
+            "reflect_on_input",  # 对输入触发 Reflection
+            "reflect_manually",  # 手动触发 Reflection
+            "reflection_feedback",  # 提交 Reflection 反馈
+            "reflection_pending",  # 查看待反馈 Reflection
+            "observation_run",  # 运行 Observation Engine
+            "observation_search",  # 搜索 Observation Index
+        ],
+    }
+
+    @classmethod
+    def _get_tool_category(cls, tool_name: str) -> str:
+        """根据工具名返回分类，未匹配返回 advanced。"""
+        for category, names in cls._TOOL_CATEGORIES.items():
+            if tool_name in names:
+                return category
+        return "advanced"
+
+    def _server_principal(self) -> PrincipalEnvelope:
+        """Return the startup-bound principal after request authorization."""
+        if self._principal is None:
+            raise RuntimeError("principal_required")
+        return self._principal
+
+    # ---- 辅助方法 ----
 
     # ---- Tool 实现 ----
 
-    def _tool_wiki_search(self, query: str, limit: int = 5) -> Dict:
+    def _tool_wiki_search(
+        self,
+        query: str,
+        limit: int = 5,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """搜索知识库
 
         统一搜索入口：优先 ContextAwareSearch（KG 召回 + 正文搜索 + 画像加权），
         无结果时回退到 WikiReader（标题/实体/概念/路径索引）。
         """
-        from core.config import get_config
-        from core.app.context_search import ContextAwareSearch
-        from integrations.oracle import WikiReader
-
-        wiki_dir = get_config().wiki_dir
-        results = []
-
-        # 1. 优先使用 ContextAwareSearch（更完善的搜索：正文 + frontmatter + KG + 画像加权）
-        try:
-            searcher = ContextAwareSearch(wiki_base=str(wiki_dir))
-            ca_results = searcher.search(query, limit=limit)
-            for r in ca_results:
-                results.append({
-                    "page_id": r.page_path.replace(".md", ""),
-                    "title": r.title,
-                    "type": self._infer_type_from_path(r.page_path),
-                    "heat_level": "warm",
-                    "heat_score": round(r.score * 100, 1),
-                    "relevance_score": round(r.relevance, 2),
-                    "reasons": [r.match_reason or "context_search"],
-                    "verification": getattr(r, "verification", ""),
-                    "confidence": getattr(r, "confidence", 0.5),
-                })
-        except Exception:
-            logger.debug("ContextAwareSearch 失败，回退到 WikiReader", exc_info=True)
-
-        # 2. 回退到 WikiReader（如果 ContextAwareSearch 无结果）
-        if not results:
-            reader = WikiReader(wiki_dir)
-            results = reader.search(query, limit=limit)
-
-        # 记录训练样本
-        try:
-            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-            AdaptiveScorerV2.enqueue_training_sample(
-                session_id=f"search-{hash(query) & 0xFFFFFFFF}",
-                dimension="kg",
-                features={"query_length": len(query), "result_count": len(results), "tool": "wiki_search"},
-                expected_score=0.7 if results else 0.4,
-                source="wiki_search",
-            )
-        except Exception:
-            pass
+        results, access_summary = self._facade.wiki_search(
+            query,
+            limit=limit,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(
+                session_id=session_id,
+                project=project,
+            ),
+        )
 
         return {
             "success": True,
             "results": results,
             "query": query,
+            "access_filter": access_summary,
         }
 
     def _infer_type_from_path(self, page_path: str) -> str:
         """从路径推断知识类型"""
-        if "/" in page_path:
-            return page_path.split("/")[0]
-        return "00-Inbox"
+        return self._facade.infer_type_from_path(page_path)
 
-    def _tool_wiki_read(self, page_path: str) -> Dict:
+    def _scope_slug(self, value: str) -> str:
+        """Return a filesystem-friendly ASCII slug for scope pages."""
+        return self._facade.scope_slug(value)
+
+    def _scope_page_path(
+        self,
+        scope: str,
+        title: str,
+        page_path: str = "",
+        scope_name: str = "",
+    ) -> str:
+        return self._facade.scope_page_path(scope, title, page_path, scope_name)
+
+    def _tool_memory_write_project(
+        self,
+        title: str,
+        content: str,
+        project: str = "",
+        page_path: str = "",
+        frontmatter: Dict | None = None,
+    ) -> Dict:
+        """写入项目级记忆。"""
+        return self._facade.memory_write_project(
+            title,
+            content,
+            project=project,
+            page_path=page_path,
+            frontmatter=frontmatter,
+            principal=self._server_principal(),
+        )
+
+    def _tool_memory_write_framework(
+        self,
+        title: str,
+        content: str,
+        framework: str = "",
+        page_path: str = "",
+        frontmatter: Dict | None = None,
+    ) -> Dict:
+        """写入框架级记忆。"""
+        return self._facade.memory_write_framework(
+            title,
+            content,
+            framework=framework,
+            page_path=page_path,
+            frontmatter=frontmatter,
+            principal=self._server_principal(),
+        )
+
+    def _tool_memory_write_global(
+        self,
+        title: str,
+        content: str,
+        page_path: str = "",
+        frontmatter: Dict | None = None,
+    ) -> Dict:
+        """写入全局级记忆。"""
+        return self._facade.memory_write_global(
+            title,
+            content,
+            page_path=page_path,
+            frontmatter=frontmatter,
+            principal=self._server_principal(),
+        )
+
+    def _tool_memory_search(
+        self,
+        query: str,
+        scope: str = "all",
+        limit: int = 5,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """按三层记忆范围搜索 Wiki。"""
+        return self._facade.memory_search(
+            query,
+            scope=scope,
+            limit=limit,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
+
+    def _tool_wiki_read(
+        self,
+        page_path: str,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """读取指定 wiki 页面"""
-        from core.config import get_config
-        from integrations.oracle import WikiReader
-        wiki_dir = get_config().wiki_dir
-        reader = WikiReader(wiki_dir)
-        content = reader.read_page(page_path)
-        # 记录训练样本：用户阅读页面 → 正样本（distill 维度）
-        try:
-            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-            AdaptiveScorerV2.enqueue_training_sample(
-                session_id=f"read-{hash(page_path) & 0xFFFFFFFF}",
-                dimension="distill",
-                features={"page_path": page_path, "content_length": len(content) if content else 0, "tool": "wiki_read"},
-                expected_score=0.6,
-                source="wiki_read",
-            )
-        except Exception:
-            pass
-        return {
-            "success": True,
-            "content": content,
-            "path": page_path,
-        }
+        return self._facade.wiki_read(
+            page_path,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-    def _tool_session_search(self, query: str = "", session_id: str = "",
-                             memos_uid: str = "", limit: int = 10) -> Dict:
+    def _tool_session_search(
+        self,
+        query: str = "",
+        session_id: str = "",
+        uid: str = "",
+        limit: int = 10,
+        days: Optional[int] = None,
+        source: Optional[str] = None,
+        project: str = "",
+    ) -> Dict:
         """
-        搜索历史会话记录，自动合并分片内容
+        搜索历史会话记录
 
         使用场景：
         - 用户说"我们之前聊过什么"
         - 需要查找某次 session 的完整对话
-        - 通过 memos_uid 反查原始对话
+        - 通过 uid 反查原始对话
+        - 按时间范围过滤（如最近 7 天）
+        - 按 Agent 来源过滤（如只搜 Hermes 的对话）
 
-        特性：
-        - 自动检测分段记录（segment=xxx, type=chunk）
-        - 按 hash/session 标识合并所有分段为完整对话
-        - 支持 memos_uid 反查
+        返回结构化片段（匹配行前后上下文），而非整文件内容。
         """
-        from core.config import get_config
-        from integrations.styx import MemosClient
+        return self._facade.session_search(
+            query=query,
+            session_id=session_id,
+            uid=uid,
+            limit=limit,
+            days=days,
+            source=source,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        config = get_config()
-        if not config.memos_enabled or not config.memos_token:
-            return {
-                "success": False,
-                "message": "Memos 未配置，无法搜索会话记录",
-            }
-
-        try:
-            client = MemosClient(
-                base_url=config.memos_api_url,
-                token=config.memos_token,
-            )
-
-            # 如果提供了 memos_uid，反查 session_id
-            if memos_uid and not session_id:
-                session_id = client.get_session_by_uid(memos_uid)
-
-            # 如果提供了 session_id，构造精确查询
-            if session_id:
-                search_query = f"session:{session_id}"
-            else:
-                search_query = query
-
-            results = client.search_and_merge_segments(
-                query=search_query,
-                limit=limit,
-            )
-
-            # 序列化 Memory 对象
-            serialized = []
-            for mem in results:
-                serialized.append({
-                    "id": mem.id,
-                    "uid": mem.uid,
-                    "content": mem.content,
-                    "tags": mem.tags,
-                    "visibility": mem.visibility,
-                    "created_at": mem.created_at,
-                    "updated_at": mem.updated_at,
-                    "agent": mem.agent,
-                })
-
-            return {
-                "success": True,
-                "query": search_query,
-                "results": serialized,
-                "count": len(serialized),
-                "merged": True,
-            }
-        except Exception as e:
-            logger.error(f"会话搜索失败: {type(e).__name__}", exc_info=True)
-            return {
-                "success": False,
-                "message": "搜索失败",
-            }
-
-    def _tool_knowledge_ingest(self, content: str, tags: List[str] = None,
-                               source: str = "human") -> Dict:
+    def _tool_knowledge_ingest(
+        self,
+        content: str,
+        tags: List[str] | None = None,
+    ) -> Dict:
         """
-        知识摄入 — 将用户主动提供的人工知识写入 Memos，进入知识库处理链路。
+        知识摄入 — 将用户主动提供的人工知识写入 StorageBackend，进入知识库处理链路。
 
         完整流程：
-        1. Agent 调用此工具，把用户口头/输入的知识存入 Memos
-        2. Memos 同步机制将内容同步到 Wiki 的 00-Inbox/
+        1. Agent 调用此工具，把用户口头/输入的知识存入 StorageBackend
+        2. 同步机制将内容同步到 Wiki 的 00-Inbox/
         3. Charon（Connect Worker）对内容进行语义索引、实体提取、标签构建、热度评分
         4. 知识正式纳入图谱，可被 wiki_search / wiki_read 检索
 
-        这是除 Memos 自动同步、Agent 对话蒸馏、Git 历史提取之外，
+        这是除自动同步、Agent 对话蒸馏、Git 历史提取之外，
         另一个重要的知识入口：用户主动投喂。
         """
-        from core.config import get_config
-        from integrations.styx import MemosClient
+        return self._facade.knowledge_ingest(
+            content,
+            tags=tags,
+            principal=self._server_principal(),
+        )
 
-        config = get_config()
-        if not config.memos_enabled or not config.memos_token:
-            return {
-                "success": False,
-                "message": "Memos 未配置，无法摄入知识。请在 ~/.mnemos/configs/main.json 中配置 memos.token 和 memos.api_url",
-            }
-
-        try:
-            client = MemosClient(
-                base_url=config.memos_api_url,
-                token=config.memos_token,
-            )
-            # 自动添加 source 标签，便于后续溯源
-            ingest_tags = list(tags or [])
-            if source not in ingest_tags:
-                ingest_tags.append(source)
-            if "mnemos-ingest" not in ingest_tags:
-                ingest_tags.append("mnemos-ingest")
-
-            memory = client.save(content, tags=ingest_tags)
-            return {
-                "success": True,
-                "message": "知识已成功摄入 Memos，将自动同步到 Wiki 并经过解析器处理",
-                "memo_id": memory.id,
-                "tags": memory.tags,
-                "ingested_length": len(content),
-                "pipeline": "Memos → Wiki 00-Inbox → Charon(语义索引/标签/热度) → 知识图谱",
-            }
-        except Exception as e:
-            logger.error(f"知识摄入失败: {type(e).__name__}", exc_info=True)
-            return {
-                "success": False,
-                "message": "摄入失败",
-            }
-
-    def _tool_knowledge_import(self, file_path: str, title: str = "",
-                                tags: List[str] = None,
-                                trigger_parse: bool = True) -> Dict:
-        """
-        知识导入 — 将用户指定的本地文件解析并存入知识库
-
-        使用场景：
-        - 用户说"把这个文件加入知识库：~/notes/architecture.md"
-        - 用户说"解析这个代码文件，提取设计模式"
-        - 用户说"把这份文档存进去，以后好查"
-
-        处理流程：
-        1. 读取指定路径的文件内容
-        2. 根据文件类型处理（.md 保留原格式，代码文件加代码块包装）
-        3. 添加 frontmatter（来源标记 file_import，原始路径，导入时间）
-        4. 写入 Wiki 00-Inbox/
-        5. 立即触发 Charon 解析（语义索引、实体提取、标签、热度评分）
-        """
-        from core.config import get_config
-        from core.kia.charon import run_connect_cycle
-        from pathlib import Path
-        from datetime import datetime
-        import mimetypes
-
-        src_path = Path(file_path).expanduser().resolve()
-        if not src_path.exists():
-            return {
-                "success": False,
-                "message": f"文件不存在: {file_path}",
-            }
-
-        if not src_path.is_file():
-            return {
-                "success": False,
-                "message": f"路径不是文件: {file_path}",
-            }
-
-        # 读取内容
-        try:
-            raw_bytes = src_path.read_bytes()
-            # 尝试 UTF-8，失败则用 latin-1（保证不丢数据）
-            try:
-                content = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                content = raw_bytes.decode("latin-1")
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"读取文件失败: {e}",
-            }
-
-        # 文件类型处理
-        suffix = src_path.suffix.lower()
-        code_exts = {
-            ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".c", ".cpp",
-            ".h", ".hpp", ".cs", ".rb", ".php", ".swift", ".kt", ".scala", ".sh",
-            ".bash", ".zsh", ".fish", ".ps1", ".pl", ".lua", ".r", ".m", ".mm",
-            ".sql", ".dockerfile", ".makefile", ".cmake", ".gradle", ".svelte",
-            ".vue", ".html", ".css", ".scss", ".sass", ".less", ".xml", ".json",
-        }
-        text_exts = {".txt", ".log", ".csv", ".tsv", ".ini", ".cfg", ".conf", ".toml"}
-
-        # 生成标题
-        doc_title = title or src_path.stem
-        safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', doc_title).strip()[:60]
-
-        # 构建 markdown 内容
-        if suffix == ".md":
-            # Markdown 文件：保留内容，在开头添加/合并 frontmatter
-            if content.startswith("---"):
-                # 已有 frontmatter，追加我们的标记
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    existing_fm = parts[1]
-                    body = parts[2].lstrip("\n")
-                    new_fm = f"""---
-{existing_fm.rstrip()}
-imported_from: {src_path}
-imported_at: {datetime.now().isoformat()}
-source: file_import
-tags: [{', '.join(tags or ['file_import'])}]
----
-
-"""
-                    md_content = new_fm + body
-                else:
-                    md_content = content
-            else:
-                md_content = f"""---
-title: {safe_title}
-imported_from: {src_path}
-imported_at: {datetime.now().isoformat()}
-source: file_import
-tags: [{', '.join(tags or ['file_import'])}]
----
-
-{content}
-"""
-        elif suffix in code_exts:
-            # 代码文件：包装为 markdown 代码块
-            lang = suffix.lstrip(".")
-            if lang == "js":
-                lang = "javascript"
-            elif lang == "ts":
-                lang = "typescript"
-            elif lang == "py":
-                lang = "python"
-            elif lang == "sh" or lang == "bash" or lang == "zsh":
-                lang = "bash"
-            elif lang == "dockerfile":
-                lang = "dockerfile"
-            elif lang == "makefile":
-                lang = "makefile"
-            elif lang == "html":
-                lang = "html"
-            elif lang == "css" or lang == "scss" or lang == "sass" or lang == "less":
-                lang = "css"
-            elif lang == "json":
-                lang = "json"
-            elif lang == "xml":
-                lang = "xml"
-            elif lang == "sql":
-                lang = "sql"
-            elif lang == "yaml" or lang == "yml":
-                lang = "yaml"
-
-            md_content = f"""---
-title: {safe_title}
-imported_from: {src_path}
-imported_at: {datetime.now().isoformat()}
-source: file_import
-file_type: code
-language: {lang}
-tags: [{', '.join(tags or ['file_import', 'code'])}]
----
-
-# {safe_title}
-
-原始路径：`{src_path}`
-
-```{lang}
-{content}
-```
-"""
-        elif suffix in text_exts or suffix in {".yaml", ".yml"}:
-            # 纯文本文件
-            md_content = f"""---
-title: {safe_title}
-imported_from: {src_path}
-imported_at: {datetime.now().isoformat()}
-source: file_import
-file_type: text
-tags: [{', '.join(tags or ['file_import', 'text'])}]
----
-
-# {safe_title}
-
-原始路径：`{src_path}`
-
-```text
-{content}
-```
-"""
-        else:
-            # 其他类型：尝试文本展示
-            md_content = f"""---
-title: {safe_title}
-imported_from: {src_path}
-imported_at: {datetime.now().isoformat()}
-source: file_import
-file_type: {suffix.lstrip('.') or 'unknown'}
-tags: [{', '.join(tags or ['file_import'])}]
----
-
-# {safe_title}
-
-原始路径：`{src_path}`
-文件类型：{suffix or 'unknown'}
-
-```text
-{content}
-```
-"""
-
-        # 写入 Inbox
-        try:
-            config = get_config()
-            inbox_dir = config.wiki_dir / "00-Inbox"
-            inbox_dir.mkdir(parents=True, exist_ok=True)
-
-            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            inbox_name = f"{ts}-import-{safe_title[:30]}.md"
-            inbox_path = inbox_dir / inbox_name
-            inbox_path.write_text(md_content, encoding="utf-8")
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"写入 Inbox 失败: {e}",
-            }
-
-        # 触发 Charon 解析
-        parse_result = None
-        if trigger_parse:
-            try:
-                parse_result = run_connect_cycle(dry_run=False)
-            except Exception as e:
-                logger.warning(f"Charon 解析触发失败: {type(e).__name__}", exc_info=True)
-                parse_result = {"error": "parse_failed"}
-
-        return {
-            "success": True,
-            "message": f"文件已导入知识库: {inbox_path.name}",
-            "original_path": str(src_path),
-            "inbox_path": str(inbox_path),
-            "title": safe_title,
-            "file_size": len(raw_bytes),
-            "content_length": len(content),
-            "pipeline": "文件 → 00-Inbox → Charon(语义索引/实体提取/标签/热度) → 知识图谱",
-            "parse_result": parse_result,
-        }
-
-    def _tool_preflight_inject(self, task_type: str, subtype: str = "",
-                               context_text: str = "") -> Dict:
+    def _tool_preflight_inject(
+        self, task_type: str, subtype: str = "", context_text: str = ""
+    ) -> Dict:
         """
         KIA 闭环 - 任务前知识装载
 
         根据任务类型从 retrospective 经验库装载历史教训和检查清单。
         这是 KIA（Knowledge-in-Action）闭环的第一步。
         """
-        from core.kia.prophasis import PreFlightInjector
-        from core.kia.kairos import TimeWindow, TimeWindowType
-
-        injector = PreFlightInjector()
-        # MCP 调用通常是即时任务
-        time_window = TimeWindow(
-            window=TimeWindowType.IMMEDIATE,
-            days_until=0,
+        return self._facade.preflight_inject(
+            task_type,
+            subtype,
+            context_text,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(),
         )
-        knowledge = injector.inject(task_type, subtype, time_window, context_text)
 
-        if not knowledge:
-            fallback_query = " ".join(part for part in [task_type, subtype, context_text] if part).strip()
-            fallback_results = []
-            if fallback_query:
-                try:
-                    from core.config import get_config
-                    from core.app.context_search import ContextAwareSearch
-                    searcher = ContextAwareSearch(wiki_base=str(get_config().wiki_dir))
-                    fallback_results = searcher.search(fallback_query, limit=3)
-                except Exception as e:
-                    logger.debug(f"preflight fallback search failed: {e}", exc_info=True)
-
-            if fallback_results:
-                return {
-                    "success": True,
-                    "loaded": True,
-                    "source": "general_wiki_fallback",
-                    "message": f"未找到 {task_type}/{subtype} 的 retrospective，已回退装载通用知识",
-                    "task_type": task_type,
-                    "subtype": subtype,
-                    "checklist_count": 0,
-                    "checklist": [],
-                    "lessons_summary": "未命中专用复盘经验，以下为相关 Wiki 知识。",
-                    "knowledge_results": [
-                        {
-                            "page_path": r.page_path,
-                            "title": r.title,
-                            "snippet": r.snippet,
-                            "score": round(r.score, 3),
-                        }
-                        for r in fallback_results
-                    ],
-                }
-
-            return {
-                "success": True,
-                "loaded": False,
-                "message": f"未找到 {task_type}/{subtype} 的历史经验",
-            }
-
-        return {
-            "success": True,
-            "loaded": True,
-            "task_type": knowledge.task_type,
-            "subtype": knowledge.subtype,
-            "version": knowledge.version,
-            "checklist_count": len(knowledge.checklist),
-            "checklist": [
-                {
-                    "item": c.item,
-                    "source": c.source,
-                    "severity": c.severity,
-                    "freshness_score": round(c.freshness_score, 2),
-                    "hit_count": c.hit_count,
-                    **({"detail": c.detail} if c.detail else {}),
-                }
-                for c in knowledge.checklist
-            ],
-            "lessons_summary": knowledge.lessons_summary,
-        }
-
-    def _tool_check_pending_recaps(self, user_context: Dict = None, limit: int = 5) -> Dict:
+    def _tool_check_pending_recaps(self, user_context: Dict | None = None, limit: int = 5) -> Dict:
         """检查待复盘事项，供宿主 Agent 在回复前进行轻提醒或强提醒。"""
-        from core.app.forced_retrospective import ForcedRetrospective
+        return self._facade.check_pending_recaps(user_context=user_context, limit=limit)
 
-        user_context = user_context or {}
-        forced = ForcedRetrospective()
-        items = []
+    def _tool_recap_start(
+        self,
+        task_id: str = "",
+        topic: str = "",
+        mode: str = "minimal",
+        session_id: str = "",
+        context: Dict | None = None,
+        project: str = "",
+        task_type: str = "",
+        subtype: str = "",
+    ) -> Dict:
+        """开始结构化复盘，返回三问契约和状态。"""
+        return self._facade.recap_start(
+            task_id=task_id,
+            topic=topic,
+            mode=mode,
+            source_agent=self._server_principal().agent,
+            owner_agent=self._server_principal().agent,
+            source_agents=[self._server_principal().agent],
+            session_id=session_id,
+            context=context,
+            project=project,
+            task_type=task_type,
+            subtype=subtype,
+        )
 
-        recaps = forced.get_pending_system_recaps()
-        try:
-            recaps.extend(forced.list_user_reminders())
-        except Exception:
-            logger.debug("读取用户复盘提醒失败", exc_info=True)
+    def _tool_recap_submit(
+        self,
+        recap_id: str,
+        answers: Dict,
+        confirm_level: str = "draft",
+    ) -> Dict:
+        """提交三问答案并生成结构化草稿。"""
+        return self._facade.recap_submit(
+            recap_id=recap_id,
+            answers=answers,
+            confirm_level=confirm_level,
+            source_agent=self._server_principal().agent,
+        )
 
-        for recap in recaps[: max(1, int(limit or 5))]:
-            decision = forced.should_force_open(recap, user_context)
-            items.append({
-                "task_id": recap.task_id,
-                "topic": recap.topic,
-                "source": recap.source,
-                "severity": recap.severity,
-                "status": recap.status,
-                "target_page": recap.target_page,
-                "age_days": recap.age_days,
-                "same_type_count": recap.same_type_count,
-                "should_force_open": decision.get("force_open", False),
-                "score": decision.get("score", 0),
-                "reasons": decision.get("reasons", []),
-            })
+    def _tool_recap_finalize(
+        self,
+        recap_id: str,
+        write_policy: str = "save_and_index",
+        follow_up_at: str = "",
+        confirmed_by_user: bool = True,
+    ) -> Dict:
+        """确认复盘草稿并正式写入 Wiki。"""
+        return self._facade.recap_finalize(
+            recap_id=recap_id,
+            write_policy=write_policy,
+            follow_up_at=follow_up_at,
+            confirmed_by_user=confirmed_by_user,
+            source_agent=self._server_principal().agent,
+        )
 
-        return {
-            "success": True,
-            "pending_count": len(recaps),
-            "items": items,
-            "instruction": (
-                "宿主 Agent 应在会话开始或任务收尾前调用本工具；"
-                "should_force_open=true 时优先提醒用户处理复盘。"
-            ),
-        }
+    def _tool_recap_skip(
+        self,
+        recap_id: str = "",
+        task_id: str = "",
+        skip_reason: str = "",
+        user_note: str = "",
+    ) -> Dict:
+        """记录用户跳过、延后或纠偏复盘的结构化事件。"""
+        return self._facade.recap_skip(
+            recap_id=recap_id,
+            task_id=task_id,
+            skip_reason=skip_reason,
+            user_note=user_note,
+            owner_agent=self._server_principal().agent,
+            source_agent=self._server_principal().agent,
+        )
 
-    def _tool_guard_check(self, user_message: str, ai_response: str = "",
-                          task_type: str = "", subtype: str = "",
-                          context: Dict = None) -> Dict:
+    def _tool_recap_feedback(
+        self,
+        recap_id: str,
+        feedback_type: str,
+        comment: str = "",
+        supersedes_event_id: str = "",
+    ) -> Dict:
+        """记录用户对复盘结论的反馈。"""
+        return self._facade.recap_feedback(
+            recap_id=recap_id,
+            feedback_type=feedback_type,
+            comment=comment,
+            source_agent=self._server_principal().agent,
+            supersedes_event_id=supersedes_event_id,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(),
+        )
+
+    def _tool_recap_status(self, recap_id: str = "", task_id: str = "") -> Dict:
+        """查询复盘状态。"""
+        return self._facade.recap_status(
+            recap_id=recap_id,
+            task_id=task_id,
+            source_agent=self._server_principal().agent,
+        )
+
+    def _tool_recap_claim_owner(
+        self,
+        recap_id: str,
+        current_session_id: str = "",
+    ) -> Dict:
+        """领取结构化复盘 owner 锁。"""
+        return self._facade.recap_claim_owner(
+            recap_id=recap_id,
+            owner_agent=self._server_principal().agent,
+            current_session_id=current_session_id,
+        )
+
+    def _tool_guard_check(
+        self,
+        user_message: str,
+        ai_response: str = "",
+        task_type: str = "",
+        subtype: str = "",
+        context: Dict | None = None,
+    ) -> Dict:
         """
         KIA 闭环 - 执行中守护检查
 
@@ -648,308 +654,102 @@ tags: [{', '.join(tags or ['file_import'])}]
         需要先调用 preflight_inject 装载知识（会自动复用）。
         这是 KIA 闭环的第二步。
         """
-        from core.kia.prophasis import PreFlightInjector
-        from core.kia.aegis import InProcessGuard
-        from core.kia.kairos import TimeWindow, TimeWindowType
+        return self._facade.guard_check(
+            user_message=user_message,
+            ai_response=ai_response,
+            task_type=task_type,
+            subtype=subtype,
+            context=context,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(),
+        )
 
-        # 1. 装载知识（如果未装载）
-        injector = PreFlightInjector()
-        time_window = TimeWindow(window=TimeWindowType.IMMEDIATE, days_until=0)
-        knowledge = injector.inject(task_type, subtype, time_window, "")
-
-        # 无清单时回退到高风险默认规则
-        if not knowledge or not knowledge.checklist:
-            from core.kia.prophasis import LoadedKnowledge, ChecklistItem
-            knowledge = LoadedKnowledge(
-                task_type=task_type or "general",
-                subtype=subtype or "",
-                version=1,
-                checklist=[
-                    ChecklistItem(
-                        item="涉及删除/覆盖/生产环境/密钥/不可逆迁移的操作，请二次确认",
-                        source="default_guard",
-                        severity="critical",
-                        trigger_keywords=["删除", "清空", "覆盖", "drop", "truncate", "rm", "生产", "prod", "密钥", "key", "迁移", "migrate"],
-                        risk_patterns=[r"删除.*?(文件|数据|表|目录)", r"覆盖.*?配置", r"生产.*?部署", r"(api[_-]?key|token|密码|secret)"],
-                    ),
-                    ChecklistItem(
-                        item="未测试的代码提交可能导致回滚风险",
-                        source="default_guard",
-                        severity="high",
-                        trigger_keywords=["提交", "commit", "push", "合并", "merge"],
-                        risk_patterns=[r"提交.*?(未测试|没测试|无测试)"],
-                    ),
-                ],
-                lessons_summary="",
-            )
-
-        # 2. 初始化 Guard 并检查
-        guard = InProcessGuard(knowledge)
-        alert = guard.check(user_message, ai_response, context=context)
-
-        if not alert:
-            return {
-                "success": True,
-                "alert": False,
-                "message": "无风险触发",
-            }
-
-        # 记录训练样本：guard 触发警报 → 负样本（ops 维度，规则可能过度敏感）
-        try:
-            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-            AdaptiveScorerV2.enqueue_training_sample(
-                session_id=f"guard-{hash(user_message) & 0xFFFFFFFF}",
-                dimension="ops",
-                features={"triggered_by": alert.triggered_by, "level": alert.level.value, "tool": "guard_check"},
-                expected_score=0.2,
-                source="guard_check",
-            )
-        except Exception:
-            pass
-
-        level_val = alert.level.value
-        risk_level = "alert" if level_val == "interrupt" else "warn" if level_val == "hint" else "info"
-        return {
-            "success": True,
-            "alert": True,
-            "risk_level": risk_level,
-            "level": level_val,
-            "triggered_by": alert.triggered_by,
-            "trigger_text": alert.trigger_text,
-            "suggestion": alert.suggestion,
-            "checklist_item": alert.checklist_item.item if alert.checklist_item else "",
-            "severity": alert.checklist_item.severity if alert.checklist_item else "medium",
-        }
-
-    def _tool_persona_summary(self) -> Dict:
+    def _tool_persona_summary(self, session_id: str = "", project: str = "") -> Dict:
         """获取用户画像摘要"""
-        from core.persona.pythia import PreferenceAnalyzer
-        analyzer = PreferenceAnalyzer()
-        profile = analyzer.analyze(days=30)
-        return {
-            "success": True,
-            "profile": {
-                "energy": profile.energy.__dict__ if profile.energy else {},
-                "cognitive": profile.cognitive.__dict__ if profile.cognitive else {},
-                "value": profile.value.__dict__ if profile.value else {},
-                "insufficient_dimensions": list(profile.insufficient_dimensions) if hasattr(profile, 'insufficient_dimensions') else [],
-            },
-        }
+        return self._facade.persona_summary(
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-    def _tool_persona_behavior_prompt(self) -> Dict:
+    def _tool_persona_behavior_prompt(
+        self,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """获取画像驱动的 AI 行为提示词（含 Mnemos 连接指南）"""
-        from core.persona.pythia import PreferenceAnalyzer
+        return self._facade.persona_behavior_prompt(
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        # 1. 画像分析
-        analyzer = PreferenceAnalyzer()
-        profile = analyzer.analyze(days=30)
-        prompts = []
-        if profile.energy:
-            e = profile.energy
-            if e.focus_depth and e.focus_depth > 0.7:
-                prompts.append("用户偏好深度专注模式，避免频繁打断。")
-            if e.endurance_mode and e.endurance_mode > 0.6:
-                prompts.append("用户耐力较好，可接受长周期任务。")
-        if profile.cognitive:
-            c = profile.cognitive
-            if c.abstraction and c.abstraction > 0.7:
-                prompts.append("用户抽象能力强，可直接给高层设计。")
-            if c.skepticism and c.skepticism > 0.6:
-                prompts.append("用户有质疑习惯，主动暴露假设和局限。")
-        if profile.value:
-            v = profile.value
-            if v.correctness_vs_efficiency and v.correctness_vs_efficiency > 0.6:
-                prompts.append("用户重正确性轻效率，宁可慢也要对。")
-            if v.perfection_vs_completion and v.perfection_vs_completion > 0.6:
-                prompts.append("用户追求完美，注意细节和边界条件。")
+    def _tool_persona_behavior_metrics(
+        self,
+        days: int = 30,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """获取画像行为提示最近 N 天的使用指标。"""
+        return self._facade.persona_behavior_metrics(
+            days=days,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        # 2. Mnemos 宿主 Agent 连接指南（提示词注入）
-        onboarding = self._load_onboarding_prompt()
+    def _tool_persona_record_explicit_evidence(
+        self,
+        request: Dict,
+        source_messages: List[Dict] | None = None,
+    ) -> Dict:
+        """Record one Profile v2 fact from an exact canonical user Raw span."""
 
-        return {
-            "success": True,
-            "behavior_prompts": prompts,
-            "onboarding_prompt": onboarding,
-            "raw_profile": {
-                "energy": profile.energy.__dict__ if profile.energy else {},
-                "cognitive": profile.cognitive.__dict__ if profile.cognitive else {},
-                "value": profile.value.__dict__ if profile.value else {},
-            },
-        }
+        try:
+            catalog = self._cognitive_source_authority_catalog(request, source_messages)
+        except ValueError as exc:
+            return self._cognitive_contract_failure("source_authority_invalid", exc)
+        session_id = str(request.get("session_id") or "")
+        project = str(request.get("project") or "")
+        return self._facade.record_explicit_profile_evidence(
+            request,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+            source_authority_catalog=catalog,
+        )
 
     def _load_onboarding_prompt(self) -> str:
         """加载宿主 Agent 连接指南（根据当前系统状态动态裁剪）"""
-        from core.diagnostics import ConnectionDiagnostics
+        return self._facade.load_onboarding_prompt()
 
-        onboarding_path = Path(__file__).parent.parent / "prompts" / "agent_onboarding.md"
-        if onboarding_path.exists():
-            base = onboarding_path.read_text(encoding="utf-8")
-        else:
-            base = (
-                "\n[Mnemos Onboarding]\n"
-                "你是 Mnemos 的宿主 Agent。请帮用户完成以下连接任务：\n"
-                "1. 调用 self_diagnose() 查看系统状态\n"
-                "2. 如有 Memos，调用 configure_memos(api_url=..., token=...)\n"
-                "3. 确认 Wiki 路径，调用 configure_wiki(vault_path=...)\n"
-                "4. 调用 detect_sources() 检查 Agent 数据源\n"
-            )
-
-        # 获取当前状态，动态标注任务完成度
-        try:
-            report = ConnectionDiagnostics.full_report()
-            tasks = report.get("tasks", [])
-
-            # 构建状态摘要
-            lines = ["\n[Mnemos 连接状态快照]"]
-            pending_high = [t for t in tasks if t.get("priority") == "high" and not t.get("completed")]
-            pending_medium = [t for t in tasks if t.get("priority") == "medium" and not t.get("completed")]
-
-            if not pending_high and not pending_medium:
-                lines.append("✓ 所有核心连接已就绪，Mnemos 完全在线。")
-            else:
-                if pending_high:
-                    lines.append("🔴 高优先级待办:")
-                    for t in pending_high:
-                        lines.append(f"  • {t['task']}: {t['action']}")
-                if pending_medium:
-                    lines.append("🟡 中优先级待办:")
-                    for t in pending_medium:
-                        lines.append(f"  • {t['task']}: {t['action']}")
-
-            # 合并到 onboarding 末尾
-            return base + "\n" + "\n".join(lines) + "\n"
-        except Exception:
-            # 诊断失败时返回原始模板
-            return base
-
-    def _tool_signal_collect(self, sources: List[str] = None) -> Dict:
+    def _tool_signal_collect(self, sources: List[str] | None = None) -> Dict:
         """触发信号采集"""
-        from core.persona.daimon import SignalCollector
-        collector = SignalCollector()
-        results = collector.collect_all(sources=sources)
-        return {
-            "success": True,
-            "results": results,
-        }
+        return self._facade.signal_collect(sources=sources)
 
-    def _tool_retrospective_list(self, task_type: str = None, limit: int = 10) -> Dict:
+    def _tool_retrospective_list(
+        self,
+        task_type: str | None = None,
+        limit: int = 10,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """列出可用的 retrospective 经验"""
-        from core.config import get_config
-        wiki_dir = get_config().wiki_dir
-        # 优先 06-Retrospectives，兼容 retrospectives
-        retro_dir = None
-        for d in [wiki_dir / "06-Retrospectives", wiki_dir / "retrospectives"]:
-            if d.exists():
-                retro_dir = d
-                break
-        if not retro_dir:
-            return {"success": True, "retrospectives": []}
-
-        items = []
-        _MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
-        for md_file in sorted(retro_dir.rglob("*.md"), reverse=True):
-            try:
-                if md_file.stat().st_size > _MAX_FILE_SIZE:
-                    logger.warning(f"Retrospective 文件过大跳过: {md_file.name}")
-                    continue
-                content = md_file.read_text(encoding="utf-8", errors="ignore")
-                title = md_file.stem
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        try:
-                            import yaml
-                            fm = yaml.safe_load(parts[1]) or {}
-                            title = fm.get("title", title)
-                            task_types = fm.get("applies_when", {}).get("task_type", [])
-                            if task_type and task_type not in task_types:
-                                continue
-                        except Exception as e:
-                            logger.warning(f"YAML 解析失败: {e}")
-                items.append({
-                    "path": str(md_file.relative_to(retro_dir)),
-                    "title": title,
-                })
-                if len(items) >= limit:
-                    break
-            except Exception as e:
-                logger.warning(f"遍历文件失败: {e}")
-                continue
-
-        return {"success": True, "retrospectives": items}
+        return self._facade.retrospective_list(
+            task_type,
+            limit,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
     def _tool_knowledge_source_list(self) -> Dict:
         """列出知识库的来源分布统计"""
-        from core.config import get_config
-        wiki_dir = get_config().wiki_dir
+        return self._facade.knowledge_source_list()
 
-        sources = {
-            "human_written": 0,      # 人工直接写入（无 source 标记）
-            "memos_sync": 0,         # Memos 同步
-            "distilled": 0,          # Agent 对话蒸馏
-            "retrospective": 0,      # 自动复盘
-            "git_knowledge": 0,      # Git 历史提取
-            "other": 0,              # 其他/未知
-        }
-
-        if not wiki_dir.exists():
-            return {"success": True, "sources": sources, "total": 0}
-
-        import yaml
-        _MAX_FILE_SIZE = 1 * 1024 * 1024  # 1MB
-        for md_file in wiki_dir.rglob("*.md"):
-            try:
-                if md_file.stat().st_size > _MAX_FILE_SIZE:
-                    logger.warning(f"Wiki 文件过大跳过: {md_file.name}")
-                    continue
-                content = md_file.read_text(encoding="utf-8", errors="ignore")
-                src = "human_written"
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        try:
-                            fm = yaml.safe_load(parts[1]) or {}
-                            from core.frontmatter import fm_get
-                            tags = fm.get("tags", [])
-                            # 根据标签判断来源
-                            if "memos" in tags or "memos-sync" in tags:
-                                src = "memos_sync"
-                            elif "distilled" in tags:
-                                src = "distilled"
-                            elif "retrospective" in tags:
-                                src = "retrospective"
-                            elif "git" in tags:
-                                src = "git_knowledge"
-                            # 根据 frontmatter 中的 source / 来源 字段
-                            explicit = fm_get(fm, "source", "")
-                            if explicit in ("memos", "memos-sync"):
-                                src = "memos_sync"
-                            elif explicit in ("distill", "distilled"):
-                                src = "distilled"
-                            elif explicit == "retrospective":
-                                src = "retrospective"
-                            elif explicit == "git":
-                                src = "git_knowledge"
-                            elif explicit in ("claude", "kimi", "codex", "openclaw", "hermes"):
-                                src = "distilled"
-                        except Exception:
-                            logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-                            pass
-                sources[src] = sources.get(src, 0) + 1
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error at agora.py", exc_info=True)
-                continue
-
-        total = sum(sources.values())
-        return {
-            "success": True,
-            "sources": sources,
-            "total": total,
-            "wiki_dir": str(wiki_dir),
-        }
-
-    def _tool_wiki_write(self, page_path: str, content: str,
-                         frontmatter: Dict = None) -> Dict:
+    def _tool_wiki_write(
+        self,
+        page_path: str,
+        content: str,
+        frontmatter: Dict | None = None,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """
         写入 Wiki 页面
 
@@ -958,118 +758,36 @@ tags: [{', '.join(tags or ['file_import'])}]
         - Agent 生成新的知识页面
         - 更新已有页面的内容
         """
-        from core.config import get_config
-        from datetime import datetime
+        return self._facade.wiki_write(
+            page_path,
+            content,
+            frontmatter,
+            principal=self._server_principal(),
+            session_id=session_id,
+            project=project,
+        )
 
-        config = get_config()
-        wiki_dir = config.wiki_dir
-
-        # 安全路径处理
-        safe_path = page_path.lstrip("/")
-        target = (wiki_dir / safe_path).resolve()
-
-        # 确保在 wiki 目录内
-        try:
-            target.relative_to(wiki_dir.resolve())
-        except ValueError:
-            return {
-                "success": False,
-                "message": f"路径超出 Wiki 目录范围: {page_path}",
-            }
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        # 构建完整内容（frontmatter + body）
-        fm = dict(frontmatter or {})
-        fm.setdefault("updated_at", datetime.now().isoformat())
-
-        fm_lines = ["---"]
-        for k, v in fm.items():
-            if isinstance(v, list):
-                fm_lines.append(f"{k}: [{', '.join(str(x) for x in v)}]")
-            else:
-                fm_lines.append(f"{k}: {v}")
-        fm_lines.append("---")
-
-        full_content = "\n".join(fm_lines) + "\n\n" + content
-
-        try:
-            target.write_text(full_content, encoding="utf-8")
-            return {
-                "success": True,
-                "message": f"Wiki 页面已写入: {safe_path}",
-                "path": safe_path,
-                "size": len(full_content),
-            }
-        except Exception as e:
-            logger.error(f"Wiki 写入失败: {e}")
-            return {
-                "success": False,
-                "message": f"写入失败: {e}",
-            }
-
-    def _tool_session_save(self, session_id: str, messages: List[Dict],
-                           tags: List[str] = None,
-                           source_agent: str = "unknown") -> Dict:
+    def _tool_session_save(
+        self,
+        session_id: str,
+        messages: List[Dict],
+        tags: List[str] | None = None,
+    ) -> Dict:
         """
-        保存完整聊天记录到 Memos（L1 原始池）
+        保存完整聊天记录到 L1 storage（原始池）
 
         ⚠️ Deprecated: 请使用 capture_turn / capture_session。
-        此工具现已统一走 CaptureService，不再直接调用 MemosClient。
+        此工具现已统一走 CaptureService，不再直接调用后端客户端。
         """
-        from core.sync_framework.capture_service import CaptureService
-
-        try:
-            service = CaptureService()
-            # 将 messages 转为 turns 格式
-            turns = []
-            user_content = ""
-            assistant_content = ""
-            turn_number = 0
-            for msg in messages:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    if assistant_content:
-                        turns.append({
-                            "turn_number": turn_number,
-                            "user_content": user_content,
-                            "assistant_content": assistant_content,
-                        })
-                        turn_number += 1
-                    user_content = content
-                    assistant_content = ""
-                elif role == "assistant":
-                    assistant_content = content
-
-            if user_content or assistant_content:
-                turns.append({
-                    "turn_number": turn_number,
-                    "user_content": user_content,
-                    "assistant_content": assistant_content,
-                })
-
-            result = service.capture_session(
-                source_agent=source_agent,
-                session_id=session_id,
-                turns=turns,
-            )
-            return {
-                "success": result.get("status") in ("queued", "duplicate", "done"),
-                "message": f"Session 已入队: {result.get('queued_count', 0)} 轮次 queued, {result.get('duplicate_count', 0)} 重复",
-                "session_id": session_id,
-                "capture_result": result,
-            }
-        except Exception as e:
-            logger.error(f"会话保存失败: {e}")
-            return {
-                "success": False,
-                "message": f"保存失败: {e}",
-            }
+        return self._facade.session_save(
+            session_id,
+            messages,
+            tags,
+            self._server_principal().agent,
+        )
 
     def _tool_capture_turn(
         self,
-        source_agent: str,
         session_id: str,
         turn_id: str = "",
         turn_number: int = 0,
@@ -1078,356 +796,150 @@ tags: [{', '.join(tags or ['file_import'])}]
         timestamp: str = "",
         model: str = "",
         cwd: str = "",
-        metadata: Dict = None,
-        tool_calls: list = None,
-        tool_results: list = None,
+        metadata: Dict | None = None,
+        tool_calls: list | None = None,
+        tool_results: list | None = None,
         reasoning: str = "",
-        attachments: list = None,
-        raw_event_refs: list = None,
-        source_files: list = None,
-        completeness: Dict = None,
+        attachments: list | None = None,
+        raw_event_refs: list | None = None,
+        source_files: list | None = None,
+        completeness: Dict | None = None,
     ) -> Dict:
         """
         MCP 主动上报单轮对话。
 
-        只做校验和入队，不直接写 Memos。
+        只做校验和入队，不直接写 L1 storage。
         返回 < 200ms。
         """
-        from core.sync_framework.capture_service import CaptureService
-
-        try:
-            service = CaptureService()
-            result = service.capture_turn(
-                source_agent=source_agent,
-                session_id=session_id,
-                turn_id=turn_id or None,
-                turn_number=turn_number,
-                user_content=user_content,
-                assistant_content=assistant_content,
-                timestamp=timestamp or None,
-                model=model or None,
-                cwd=cwd or None,
-                metadata=metadata or {},
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-                reasoning=reasoning,
-                attachments=attachments,
-                raw_event_refs=raw_event_refs,
-                source_files=source_files,
-                completeness=completeness,
-            )
-            return {
-                "success": result["status"] in ("queued", "duplicate"),
-                "status": result["status"],
-                "duplicate": result.get("duplicate", False),
-                "source_agent": source_agent,
-                "session_id": session_id,
-                "turn_number": turn_number,
-            }
-        except Exception as e:
-            logger.error(f"capture_turn 失败: {e}")
-            return {
-                "success": False,
-                "status": "error",
-                "message": str(e),
-            }
+        return self._facade.capture_turn(
+            source_agent=self._server_principal().agent,
+            session_id=session_id,
+            turn_id=turn_id,
+            turn_number=turn_number,
+            user_content=user_content,
+            assistant_content=assistant_content,
+            timestamp=timestamp,
+            model=model,
+            cwd=cwd,
+            metadata=metadata,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+            reasoning=reasoning,
+            attachments=attachments,
+            raw_event_refs=raw_event_refs,
+            source_files=source_files,
+            completeness=completeness,
+        )
 
     def _tool_capture_session(
         self,
-        source_agent: str,
         session_id: str,
         turns: List[Dict],
     ) -> Dict:
         """
         MCP 批量上报整个 session。
         """
-        from core.sync_framework.capture_service import CaptureService
-
-        try:
-            service = CaptureService()
-            result = service.capture_session(
-                source_agent=source_agent,
-                session_id=session_id,
-                turns=turns,
-            )
-            return {
-                "success": result.get("status") in ("queued", "duplicate"),
-                "status": result["status"],
-                "queued_count": result.get("queued_count", 0),
-                "duplicate_count": result.get("duplicate_count", 0),
-                "backpressure_count": result.get("backpressure_count", 0),
-                "session_id": session_id,
-            }
-        except Exception as e:
-            logger.error(f"capture_session 失败: {e}")
-            return {
-                "success": False,
-                "status": "error",
-                "message": str(e),
-            }
+        return self._facade.capture_session(
+            self._server_principal().agent,
+            session_id,
+            turns,
+        )
 
     def _tool_end_session(
         self,
-        source_agent: str,
         session_id: str,
     ) -> Dict:
         """
         标记 session 结束。
         """
-        from core.sync_framework.capture_service import CaptureService
-
-        try:
-            service = CaptureService()
-            result = service.end_session(
-                source_agent=source_agent,
-                session_id=session_id,
-            )
-            return {
-                "success": True,
-                "status": result["status"],
-                "session_id": session_id,
-            }
-        except Exception as e:
-            logger.error(f"end_session 失败: {e}")
-            return {
-                "success": False,
-                "status": "error",
-                "message": str(e),
-            }
+        return self._facade.end_session(self._server_principal().agent, session_id)
 
     def _tool_capture_status(
         self,
-        source_agent: str,
         session_id: str,
         turn_number: int = -1,
     ) -> Dict:
         """
         查询指定 session/turn 的队列状态。
         """
-        from core.sync_framework.capture_service import CaptureService
+        return self._facade.capture_status(
+            self._server_principal().agent,
+            session_id,
+            turn_number,
+        )
 
-        try:
-            service = CaptureService()
-            result = service.get_status(
-                source_agent=source_agent,
-                session_id=session_id,
-                turn_number=turn_number if turn_number >= 0 else None,
-            )
-            return {
-                "success": True,
-                "status": result.get("status"),
-                "source_agent": source_agent,
-                "session_id": session_id,
-                "turn_number": result.get("turn_number"),
-                "retry_count": result.get("retry_count", 0),
-                "error": result.get("error"),
-            }
-        except Exception as e:
-            logger.error(f"capture_status 失败: {e}")
-            return {
-                "success": False,
-                "status": "error",
-                "message": str(e),
-            }
-
-    def _tool_knowledge_distill(self, session_id: str,
-                                messages: List[Dict],
-                                write_to_wiki: bool = True) -> Dict:
+    def _tool_knowledge_distill(
+        self, session_id: str, messages: List[Dict], write_to_wiki: bool = True
+    ) -> Dict:
         """
-        触发知识蒸馏（同源复用 — 入队而非直接调 LLM）
+        触发知识蒸馏（入队 → HephaestusWorker → 直接调用 LLM API）
 
-        将原始聊天记录入蒸馏队列，由宿主 Agent 异步处理。
-        遵循同源复用原则：Mnemos 不直接调用 LLM API。
+        将原始聊天记录入蒸馏队列，由后台 HephaestusWorker 消费，并通过配置的
+        OpenAI-compatible API 执行蒸馏。宿主 Agent 只负责上报/触发，不替代
+        Mnemos 执行蒸馏思考。
 
         使用场景：
         - Agent 完成一次有价值的对话后，主动触发蒸馏
         - 将技术讨论、调试过程、设计决策转为 Wiki 知识
         """
-        try:
-            from core.kia.amphora import enqueue
-            enqueue(
-                session_id=session_id,
-                messages=messages,
-                meta={"source": "mcp", "write_to_wiki": write_to_wiki}
-            )
-            return {
-                "success": True,
-                "message": "蒸馏任务已入队，由宿主 Agent 异步处理",
-                "session_id": session_id,
-                "note": "任务进入 HephaestusWorker 队列，daemon 会委托给可用 Agent 执行",
-            }
-        except Exception as e:
-            logger.error(f"蒸馏入队失败: {e}")
-            return {
-                "success": False,
-                "message": f"蒸馏入队失败: {e}",
-            }
+        return self._facade.knowledge_distill(
+            session_id,
+            messages,
+            write_to_wiki,
+            principal=self._server_principal(),
+        )
 
-    def _tool_document_process(self, file_path: str,
-                               title: str = "",
-                               write_to_wiki: bool = False,
-                               save_to_memos: bool = False) -> Dict:
+    def _tool_document_process(
+        self,
+        file_path: str,
+        title: str = "",
+        mode: str = "distill",
+    ) -> Dict:
         """
         处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。
 
-        - write_to_wiki=True: 调用 API 蒸馏并写入 Wiki（需要配置 API key）
-        - write_to_wiki=False: 仅解析文档，返回结构、摘要和预览，不写入 Wiki
+        【Agent 强制规范】当用户给出文件路径并要求"蒸馏/导入知识库"时，
+        Agent 必须调用本 tool。此场景下禁止自行读取文件并蒸馏、禁止自行调用 API、
+        禁止直接展示未经管道的处理结果。只有 Mnemos 管道能保证品质闭环
+        （硬校验 → 入库/失败分流 → 知识图谱构建）。正常的代码编辑/审查/调试，Agent 可自行读取文件。
+
+        - mode=distill（默认）: 写 canonical raw，capture outbox 异步进入质量门与 Wiki
+        - mode=capture: 仅写 canonical raw，由 raw projection 生成可读投影
+        - mode=parse: 仅解析文档，返回结构、摘要和预览
 
         使用场景：
         - 用户说"解析这个 PDF"
         - 用户说"把这份 PPT 的内容存到知识库"
         - 提取文档结构、大纲、关键内容
         """
-        from core.hephaestus.document_processor import DocumentProcessor
-        from pathlib import Path
-
-        # 兼容旧参数名 save_to_memos（已废弃，效果等同于 write_to_wiki）
-        if save_to_memos and not write_to_wiki:
-            write_to_wiki = True
-
-        src_path = Path(file_path).expanduser().resolve()
-        if not src_path.exists():
-            return {
-                "success": False,
-                "message": f"文件不存在: {file_path}",
-            }
-
-        try:
-            processor = DocumentProcessor()
-            doc = processor.process_document(src_path)
-
-            if not doc:
-                return {
-                    "success": False,
-                    "message": "文档解析失败，无法提取内容",
-                }
-
-            # 从 metadata 读取页数/章节等结构信息
-            meta = doc.metadata or {}
-            page_count = meta.get("pages", meta.get("slides", meta.get("chapters", 0)))
-
-            # 从 Markdown 内容提取 TOC
-            toc = []
-            if doc.content:
-                for line in doc.content.split("\n"):
-                    if line.strip().startswith("#"):
-                        toc.append(line.strip().lstrip("# "))
-
-            result = {
-                "success": True,
-                "title": doc.title,
-                "doc_type": doc.doc_type.value if hasattr(doc.doc_type, "value") else str(doc.doc_type),
-                "pages": page_count,
-                "word_count": len(doc.content.split()) if doc.content else 0,
-                "has_toc": len(toc) > 0,
-                "toc": toc[:20],
-                "content_preview": doc.content[:2000] if doc.content else "",
-                "metadata": meta,
-                "summary": doc.summary,
-                "validation_status": doc.validation_status,
-                "requires_api_key": write_to_wiki,
-                "api_mode": "api_distillation" if write_to_wiki else "parse_only",
-            }
-
-            if write_to_wiki:
-                from core.llm_config import resolve_llm_api_config
-
-                llm_cfg = resolve_llm_api_config()
-                if not llm_cfg.configured:
-                    result["success"] = False
-                    result["message"] = (
-                        "API 蒸馏未配置：请设置环境变量 OPENAI_API_KEY 或 SILICONFLOW_API_KEY，"
-                        "或在 ~/.mnemos/configs/main.json 中配置 llm.api_key，"
-                        "然后重启 daemon。"
-                    )
-                    result["wiki_paths"] = []
-                    return result
-
-                # 直接走文档蒸馏管道 → Wiki，不走 Memos 中转
-                from core.hephaestus.document_pipeline import DocumentDistillationPipeline
-                from core.hephaestus.distillation_engine import HostAgentCaller
-                import hashlib
-                import time
-
-                start = time.time()
-                session_id = f"doc-mcp-{hashlib.md5(str(src_path).encode()).hexdigest()[:8]}"
-                caller = HostAgentCaller(force_provider="api")
-                pipeline = DocumentDistillationPipeline(caller=caller)
-
-                messages = [{"role": "system", "content": doc.content}]
-                meta_pipe = {
-                    "source": "mcp",
-                    "filename": doc.filename,
-                    "file_path": str(src_path),
-                    "doc_type": doc.doc_type.value,
-                    "pages": page_count,
-                }
-                distill_result = pipeline.process(session_id, messages, meta_pipe)
-                wiki_paths = pipeline.write_to_wiki(distill_result, source="mcp")
-                duration = round(time.time() - start, 2)
-
-                result["wiki_paths"] = [str(p) for p in wiki_paths]
-                result["pipeline"] = "文档 → API 蒸馏 → Wiki"
-                result["session_id"] = session_id
-                result["provider"] = llm_cfg.provider
-                result["model"] = llm_cfg.model
-                result["api_config_source"] = llm_cfg.source
-                result["duration"] = duration
-                result["fragment_count"] = len(distill_result.fragments) if distill_result else 0
-
-            return result
-        except Exception as e:
-            logger.error(f"文档处理失败: {e}")
-            return {
-                "success": False,
-                "message": f"处理失败: {e}",
-            }
+        return self._facade.document_process(
+            file_path,
+            title,
+            mode=mode,
+            principal=self._server_principal(),
+        )
 
     def _tool_wiki_build(self, dry_run: bool = False) -> Dict:
         """
-        触发 Wiki 构建（L1 → L2）
+        触发 Wiki 回追构建（L1 → L2，catch-up 模式）
 
-        扫描 Memos 中的 L1 原始记录，对已完成 session 执行：
+        扫描 L1 storage 中未进入 distill_queue 的已完成 session，批量蒸馏。
+        这是**回追工具**，用于处理因 daemon 未运行等原因遗漏的 L1 记录；
+        正常生产路径应通过 HephaestusWorker 消费 distill_queue。
+
+        执行步骤：
         1. 质量评分
         2. 内容去重
-        3. 知识蒸馏
+        3. 知识蒸馏（七层流水线）
         4. Wiki 页面生成
         5. 索引更新
         6. Git 自动提交
 
         使用场景：
-        - 定期构建任务（daemon 定时触发）
-        - Agent 主动请求"把最近的对话整理成 Wiki"
+        - 手动补漏："把最近没处理的对话整理成 Wiki"
+        - 定时回追任务（非主路径）
         """
-        from core.config import get_config
-        from integrations.styx import MemosClient
-        from core.hephaestus.wiki_builder import run_build_cycle
-
-        config = get_config()
-        if not config.memos_enabled or not config.memos_token:
-            return {
-                "success": False,
-                "message": "Memos 未配置，无法构建 Wiki",
-            }
-
-        try:
-            client = MemosClient(
-                token=config.memos_token,
-                base_url=config.memos_api_url,
-            )
-            result = run_build_cycle(client, dry_run=dry_run)
-            return {
-                "success": True,
-                "message": "Wiki 构建完成",
-                "dry_run": dry_run,
-                "result": result,
-            }
-        except Exception as e:
-            logger.error(f"Wiki 构建失败: {e}")
-            return {
-                "success": False,
-                "message": f"构建失败: {e}",
-            }
+        return self._facade.wiki_build(dry_run=dry_run)
 
     def _tool_persona_update(self) -> Dict:
         """
@@ -1438,229 +950,348 @@ tags: [{', '.join(tags or ['file_import'])}]
         - 用户说"更新我的画像"
         - 定期画像刷新（daemon 每小时触发）
         """
-        from core.persona.daimon import SignalCollector
-        from core.persona.pythia import PreferenceAnalyzer
+        return self._facade.persona_update(principal=self._server_principal())
 
-        try:
-            # 1. 采集信号
-            collector = SignalCollector()
-            collect_result = collector.collect_all()
-
-            # 2. 分析画像
-            analyzer = PreferenceAnalyzer()
-            profile = analyzer.analyze(days=30)
-
-            return {
-                "success": True,
-                "message": "画像更新完成",
-                "signals_collected": collect_result,
-                "profile": {
-                    "energy": profile.energy.__dict__ if profile.energy else {},
-                    "cognitive": profile.cognitive.__dict__ if profile.cognitive else {},
-                    "value": profile.value.__dict__ if profile.value else {},
-                },
-            }
-        except Exception as e:
-            logger.error(f"画像更新失败: {e}")
-            return {
-                "success": False,
-                "message": f"更新失败: {e}",
-            }
-
-    def _tool_context_aware_search(self, query: str, limit: int = 10,
-                                     working_dir: str = "") -> Dict:
+    def _tool_context_aware_search(
+        self,
+        query: str,
+        limit: int = 10,
+        working_dir: str = "",
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """
         上下文感知搜索 — 知识图谱召回 + 画像加权评分
 
         相比 wiki_search，增加了用户画像加权（领域偏好、形态偏好、技术栈、时间模式），
         返回更精准的排序结果。
         """
-        from core.app.context_search import ContextAwareSearch
+        return self._facade.context_aware_search(
+            query,
+            limit=limit,
+            working_dir=working_dir,
+            session_id=session_id,
+            project=project,
+            principal=self._server_principal(),
+        )
 
-        context = {}
-        if working_dir:
-            context["working_dir"] = working_dir
-
-        search = ContextAwareSearch()
-        results = search.search(query, context=context, limit=limit)
-        # 记录训练样本：用户执行上下文搜索 → 正样本（kg + profile 维度）
-        try:
-            from core.scoring.adaptive_scorer_v2 import AdaptiveScorerV2
-            for dim in ("kg", "profile"):
-                AdaptiveScorerV2.enqueue_training_sample(
-                    session_id=f"ctx-search-{hash(query) & 0xFFFFFFFF}",
-                    dimension=dim,
-                    features={"query_length": len(query), "result_count": len(results), "has_working_dir": bool(working_dir), "tool": "context_aware_search"},
-                    expected_score=0.7 if results else 0.4,
-                    source="context_aware_search",
-                )
-        except Exception:
-            pass
-
-        return {
-            "success": True,
-            "query": query,
-            "results": [
-                {
-                    "page_path": r.page_path,
-                    "title": r.title,
-                    "snippet": r.snippet,
-                    "score": round(r.score, 3),
-                }
-                for r in results
-            ],
-            "count": len(results),
-        }
-
-    def _tool_intent_route(self, user_input: str) -> Dict:
+    def _tool_intent_route(self, user_input: str, working_dir: str = "") -> Dict:
         """
-        意图路由 — 规则匹配（不调 LLM），4 种意图分类
+        意图路由 — 规则匹配优先，低置信/歧义时 LLM 兜底
 
         返回意图类型和数据源建议：
-        - recall: 回忆上下文 → 查 Memos
-        - knowledge: 知识查询 → 查 Wiki
+        - recall: 原话/证据/历史会话 → session_search
+        - mixed_recall: 上次如何解决 → session_search + context_aware_search
+        - system_status: 系统状态 → health_check / doctor / status
+        - persona: 用户画像 → persona 工具
+        - recap: 复盘/提醒 → check_pending_recaps
+        - ignore_push: 忽略/拒绝推送 → 不推送
+        - knowledge: 知识查询 → context_aware_search / wiki_search
         - task: 任务执行 → 直接执行
         - chat: 闲聊/其他 → 直接回复
+
+        当 needs_correction 为 True 时，建议宿主 Agent 向用户确认真实意图，
+        并调用 intent_correct 写入纠正记录。
+        当 llm_fallback 为 True 时，表示规则置信度较低，已由 LLM 兜底分类。
         """
-        from core.app.intent_router import IntentRouter
+        return self._facade.intent_route(user_input, working_dir)
 
-        router = IntentRouter()
-        decision = router.route(user_input)
+    def _tool_intent_correct(
+        self, user_input: str, original_intent: str, corrected_intent: str
+    ) -> Dict:
+        """
+        意图纠正 — 记录用户/宿主 Agent 确认后的真实意图。
 
-        return {
-            "success": True,
-            "intent": decision.intent,
-            "confidence": round(decision.confidence, 2),
-            "data_source": decision.data_source,
-            "matched_keywords": decision.matched_keywords,
-            "needs_correction": decision.needs_correction,
-        }
+        后续对相同或相似输入调用 intent_route 时，将优先返回纠正后的意图。
+        """
+        return self._facade.intent_correct(user_input, original_intent, corrected_intent)
 
-    def _tool_blindspot_check(self, query: str) -> Dict:
+    def _tool_blindspot_check(self, query: str, session_id: str = "") -> Dict:
         """
         盲点检查 — 搜索时检测知识空白
 
         当用户搜索某个主题但知识库中缺少相关记录时，返回盲点提醒。
-        24 小时冷却期，每天最多 1 条即时提醒。
+        同一 topic 在同一 session 内只提醒一次；用户忽略后 7 天冷却。
         """
-        from core.app.blindspot_discovery import BlindspotDiscovery
+        return self._facade.blindspot_check(
+            query,
+            session_id=session_id,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id),
+        )
 
-        bd = BlindspotDiscovery()
-        result = bd.check_blind_spot(query)
-
-        base = {
-            "success": True,
-            "degraded": result.degraded,
-        }
-        if result.degraded:
-            base["degraded_reasons"] = result.degraded_reasons
-
-        if not result.reminder:
-            base.update({
-                "blindspot_found": False,
-                "message": "未发现盲点",
-            })
-            return base
-
-        base.update({
-            "blindspot_found": True,
-            "topic": result.reminder.topic,
-            "description": result.reminder.description,
-            "confidence": round(result.reminder.confidence, 2),
-            "status": result.reminder.status,
-        })
-        return base
-
-    def _tool_predictive_push(self, user_input: str,
-                               working_dir: str = "") -> Dict:
+    def _tool_predictive_push(
+        self,
+        user_input: str,
+        working_dir: str = "",
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """
-        预测性知识推送 — 两层信号检测
+        预测性知识推送 — 基于统一提醒引擎的上下文推送。
 
-        Layer 1: 正则关键词检测（<1ms）
-        Layer 2: LLM 确认（仅中低置信度，~500ms）
-        冷启动：COLD 不推送，WARM 每天1条标注beta
+        当检测到用户可能需要某知识时主动推送。返回结果包含 topic，
+        宿主 Agent 应在展示后调用 push_feedback 记录用户接受/忽略/取消。
+
+        通过 ACL 的推送会记录到 push_history。
         """
-        from core.app.predictive_push import PredictivePush
+        return self._facade.predictive_push(
+            user_input,
+            working_dir=working_dir,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        push = PredictivePush()
-        context = {"working_dir": working_dir} if working_dir else {}
-        decisions = push.detect_and_decide(user_input, context=context)
+    def _tool_delivery_display_ack(
+        self,
+        delivery_event_id: str,
+        rendered_content_hash: str,
+    ) -> Dict:
+        """Record a presentation receipt after this host has rendered a delivery."""
+        return self._facade.record_delivery_display(
+            delivery_event_id,
+            rendered_content_hash,
+            principal=self._server_principal(),
+        )
 
-        if not decisions:
-            return {
-                "success": True,
-                "push_available": False,
-                "message": "无推送信号",
-            }
+    def _tool_build_cognitive_state(
+        self,
+        context: Dict | None = None,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        return self._facade.build_cognitive_state(
+            context or {},
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
+    @staticmethod
+    def _cognitive_source_authority_catalog(
+        request: Dict,
+        source_messages: List[Dict] | None,
+    ):
+        from core.evidence.source_authority import SourceAuthorityCatalog
+
+        source = request.get("source") if isinstance(request, dict) else None
+        if not isinstance(source, dict):
+            raise ValueError("cognitive request source must be an object")
+        source_revision_id = str(source.get("source_revision_id") or "").strip()
+        if not source_revision_id:
+            raise ValueError("cognitive request source_revision_id is required")
+        catalog = SourceAuthorityCatalog.from_messages(
+            source_messages or (),
+            allowed_source_event_ids=(source_revision_id,),
+        )
+        catalog.require_admissible()
+        if any(entry.span_status != "exact" for entry in catalog.entries):
+            raise ValueError(
+                "cognitive contract requires exact role-local Raw source spans"
+            )
+        return catalog
+
+    @staticmethod
+    def _cognitive_contract_failure(error_code: str, error: Exception) -> Dict:
         return {
-            "success": True,
-            "push_available": True,
-            "pushes": [
-                {
-                    "title": d.title,
-                    "page_path": d.page_path,
-                    "reason": d.reason,
-                    "confidence": round(d.confidence, 2),
-                }
-                for d in decisions
-            ],
-            "count": len(decisions),
+            "success": False,
+            "schema_version": "mnemos.cognitive_operation_failure.v1",
+            "status": "rejected",
+            "error_code": error_code,
+            "message": str(error),
         }
 
-    def _tool_freshness_check(self, entity_name: str) -> Dict:
+    def _tool_record_decision(
+        self,
+        trace: Dict,
+        source_messages: List[Dict] | None = None,
+    ) -> Dict:
+        try:
+            catalog = self._cognitive_source_authority_catalog(trace, source_messages)
+        except ValueError as exc:
+            return self._cognitive_contract_failure("source_authority_invalid", exc)
+        return self._facade.record_decision(
+            trace,
+            principal=self._server_principal(),
+            source_authority_catalog=catalog,
+        )
+
+    def _tool_apply_outcome(
+        self,
+        feedback: Dict,
+        source_messages: List[Dict] | None = None,
+    ) -> Dict:
+        try:
+            catalog = self._cognitive_source_authority_catalog(feedback, source_messages)
+        except ValueError as exc:
+            return self._cognitive_contract_failure("source_authority_invalid", exc)
+        return self._facade.apply_outcome(
+            feedback,
+            principal=self._server_principal(),
+            source_authority_catalog=catalog,
+        )
+
+    def _tool_push_feedback(
+        self,
+        topic: str,
+        action: str,
+        delivery_event_id: str,
+        session_id: str = "",
+        project: str = "",
+        supersedes_event_id: str = "",
+        correction_target_ref: str = "",
+        correction_reason: str = "",
+    ) -> Dict:
+        """
+        推送反馈 — 记录 canonical reaction/attribution，不直接更新下游状态。
+
+        action 可选：
+        accept / ignore / dismiss 单次只记录；不等于有用、成功或持久偏好。
+        inaccurate / outdated 还必须传入最新 supersedes_event_id、精确
+        correction_target_ref 与 correction_reason，随后只生成 gated proposal。
+        """
+        return self._facade.push_feedback(
+            topic,
+            action,
+            delivery_event_id,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+            supersedes_event_id=supersedes_event_id,
+            correction_target_ref=correction_target_ref,
+            correction_reason=correction_reason,
+        )
+
+    def _tool_freshness_check(
+        self,
+        entity_name: str,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
         """
         知识新鲜度检查 — 版本绑定 + 上下文过期
 
         检查特定实体的知识是否过时：
         - 版本绑定知识：与最新版本对比
         - 上下文知识：90 天未更新则标记过期
-        - 罕见访问：60 天未被查询
 
-        搜索附加型：只在搜索时展示，不主动弹出。
+        搜索附加型：只在搜索时展示，不主动弹出。MCP 入口固定为纯读；
+        自动刷新必须通过单独的写权限工作流触发。
         """
-        from core.app.freshness_alert import FreshnessAlertChecker
+        return self._facade.freshness_check(
+            entity_name,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        checker = FreshnessAlertChecker()
-        result = checker.check_knowledge_freshness(entity_name)
+    # ---- L3/L4/L5 Reflection 运行时工具 ----
 
-        if not result:
-            return {
-                "success": True,
-                "status": "fresh",
-                "fresh": True,
-                "message": f"「{entity_name}」知识新鲜",
-            }
+    def _tool_observation_run(self, full: bool = False, since: str = "") -> Dict:
+        """
+        运行 Observation Engine（L3）
 
-        # not_found / error 时 fresh=False，明确告知用户原因
-        if result.status in ("not_found", "error"):
-            return {
-                "success": True,
-                "status": result.status,
-                "fresh": False,
-                "message": result.message,
-            }
+        - full=True: 全量重新提取 L1 + L2
+        - full=False 且 since 有效: 增量提取 since 之后的新内容
+        - 默认: 全量提取
+        """
+        return self._facade.observation_run(full=full, since=since)
 
-        if result.status == "fresh":
-            return {
-                "success": True,
-                "status": "fresh",
-                "fresh": True,
-                "message": result.message,
-            }
+    def _tool_observation_search(
+        self,
+        dimension: str = "",
+        source_type: str = "",
+        limit: int = 20,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """搜索 Observation Index（L3）。"""
+        return self._facade.observation_search(
+            dimension=dimension,
+            source_type=source_type,
+            limit=limit,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
-        # stale
-        return {
-            "success": True,
-            "status": "stale",
-            "fresh": False,
-            "entity_name": result.entity_name,
-            "alert_type": result.alert_type,
-            "message": result.message,
-            "confidence": round(result.confidence, 2),
-            "current_version": result.current_version,
-            "latest_version": result.latest_version,
-        }
+    def _get_reflection_engine(self, use_llm: bool = True) -> Any:
+        """构造已注册 Layer 5 消费者的 ReflectionEngine，确保 MCP 入口闭环。"""
+        return self._facade.get_reflection_engine(use_llm=use_llm)
+
+    def _tool_reflect_on_input(
+        self,
+        text: str,
+        auto_llm: bool = True,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """
+        基于用户输入自动触发 Reflection（L4）
+
+        默认自动调用 LLM 生成洞察摘要与关键发现，返回完整结果与 LLM 调用状态。
+        将 auto_llm 设为 false 时只返回 prompt_used，由宿主 Agent 自行调用 LLM。
+        """
+        return self._facade.reflect_on_input(
+            text,
+            auto_llm=auto_llm,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
+
+    def _tool_reflect_manually(
+        self,
+        query: str = "",
+        auto_llm: bool = True,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """
+        手动触发一次通用 Reflection（L4）
+
+        默认自动调用 LLM 生成洞察摘要与关键发现，返回完整结果与 LLM 调用状态。
+        将 auto_llm 设为 false 时只返回 prompt_used，由宿主 Agent 自行调用 LLM。
+        """
+        return self._facade.reflect_manually(
+            query,
+            auto_llm=auto_llm,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
+
+    def _tool_reflection_feedback(
+        self,
+        reflection_id: str,
+        feedback_type: str,
+        comment: str = "",
+        session_id: str = "",
+        project: str = "",
+        supersedes_event_id: str = "",
+        correction_target_ref: str = "",
+        correction_reason: str = "",
+    ) -> Dict:
+        """对指定 Reflection 提交用户反馈（L5）。"""
+        return self._facade.reflection_feedback(
+            reflection_id,
+            feedback_type,
+            comment,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+            supersedes_event_id=supersedes_event_id,
+            correction_target_ref=correction_target_ref,
+            correction_reason=correction_reason,
+        )
+
+    def _tool_reflection_pending(
+        self,
+        hours_since: float = 24,
+        limit: int = 20,
+        session_id: str = "",
+        project: str = "",
+    ) -> Dict:
+        """获取等待用户反馈的 Reflection 列表（L5）。"""
+        return self._facade.reflection_pending(
+            hours_since=hours_since,
+            limit=limit,
+            principal=self._server_principal(),
+            narrowing=AccessNarrowing(session_id=session_id, project=project),
+        )
 
     def _tool_health_check(self) -> Dict:
         """
@@ -1668,186 +1299,40 @@ tags: [{', '.join(tags or ['file_import'])}]
 
         检查 Mnemos 各组件状态：
         - 配置完整性
-        - Memos API 连通性
+        - StorageBackend 连通性
         - Wiki 目录可写性
         - 各模块可导入性
         - 最近构建/蒸馏状态
         """
-        from core.config import get_config
-        from pathlib import Path
+        report = self._facade.health_check()
+        health_hash = str(report.get("health_check_ids_hash") or "")
+        if self._principal is not None and health_hash:
+            self._facade.agent_health_observed(self._principal.agent, health_hash)
+        return _compact_mcp_health_report(report)
 
-        config = get_config()
-        checks = {}
-        healthy = True
-
-        # 1. 配置检查
-        checks["config_loaded"] = True
-        checks["memos_configured"] = bool(config.memos_enabled and config.memos_token)
-        checks["wiki_dir"] = str(config.wiki_dir)
-        checks["wiki_dir_exists"] = config.wiki_dir.exists()
-        checks["wiki_dir_writable"] = (
-            config.wiki_dir.exists() and os.access(config.wiki_dir, os.W_OK)
+    def _tool_agent_runtime_probe(
+        self,
+        health_check_ids_hash: str,
+        sample: Dict,
+    ) -> Dict:
+        """Record a content-free receipt for an authorized host MCP roundtrip."""
+        return self._facade.agent_runtime_probe(
+            self._server_principal().agent,
+            health_check_ids_hash,
+            sample,
         )
-
-        # 2. Memos 连通性
-        if checks["memos_configured"]:
-            try:
-                from integrations.styx import MemosClient
-                client = MemosClient(
-                    token=config.memos_token,
-                    base_url=config.memos_api_url,
-                )
-                # 使用 list_all_memos 做健康探测（兼容 REST 和 Connect API）
-                client.list_all_memos(max_records=1)
-                checks["memos_reachable"] = True
-            except Exception as e:
-                checks["memos_reachable"] = False
-                checks["memos_error"] = str(e)
-                healthy = False
-        else:
-            checks["memos_reachable"] = False
-
-        # 3. 模块可导入性
-        modules = [
-            "core.config",
-            "core.kia.charon",
-            "core.hephaestus.wiki_builder",
-            "core.hephaestus.distillation_engine",
-            "core.persona.pythia",
-            "integrations.styx",
-            "integrations.oracle",
-        ]
-        for mod in modules:
-            try:
-                __import__(mod)
-                checks[f"module_{mod.replace('.', '_')}"] = True
-            except Exception as e:
-                checks[f"module_{mod.replace('.', '_')}"] = False
-                checks[f"module_{mod.replace('.', '_')}_error"] = str(e)
-                healthy = False
-
-        # 4. 最近文件统计
-        try:
-            wiki_md_count = len(list(config.wiki_dir.rglob("*.md")))
-            checks["wiki_pages"] = wiki_md_count
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at agora.py", exc_info=True)
-            checks["wiki_pages"] = 0
-
-        return {
-            "success": True,
-            "healthy": healthy,
-            "checks": checks,
-        }
 
     def _tool_self_diagnose(self) -> Dict:
         """Mnemos 自诊断 — 返回完整系统状态报告"""
-        from core.diagnostics import ConnectionDiagnostics
-
-        report = ConnectionDiagnostics.full_report()
-        report["success"] = True
-        return report
-
-    def _tool_configure_memos(self, api_url: str, token: str) -> Dict:
-        """配置 Memos 连接"""
-        from core.config import get_config
-
-        config = get_config()
-        try:
-            config._data.setdefault("memos", {})
-            config._data["memos"]["enabled"] = True
-            config._data["memos"]["api_url"] = api_url.rstrip("/")
-            config._data["memos"]["token"] = token
-            config.save()
-
-            # 验证连通性
-            from integrations.styx import MemosClient
-            client = MemosClient(token=token, base_url=api_url)
-            try:
-                client.list_all_memos(max_records=1)
-                reachable = True
-            except Exception:
-                reachable = False
-
-            return {
-                "success": True,
-                "memos_connected": reachable,
-                "api_url": api_url,
-                "message": "Memos 配置已保存" + (" 且连通性验证通过" if reachable else " 但连通性验证失败"),
-            }
-        except Exception as e:
-            logger.error(f"配置 Memos 失败: {e}")
-            return {"success": False, "message": f"配置失败: {e}"}
+        return self._facade.self_diagnose()
 
     def _tool_configure_wiki(self, vault_path: str) -> Dict:
         """配置 Wiki/Obsidian 路径"""
-        from core.config import get_config
-        from pathlib import Path
-
-        config = get_config()
-        try:
-            path = Path(vault_path).expanduser().resolve()
-            path.mkdir(parents=True, exist_ok=True)
-
-            config._data.setdefault("wiki", {})
-            config._data["wiki"]["vault_path"] = str(path)
-            config.save()
-
-            return {
-                "success": True,
-                "vault_path": str(path),
-                "exists": path.exists(),
-                "writable": os.access(path, os.W_OK),
-                "message": f"Wiki 路径已配置: {path}",
-            }
-        except Exception as e:
-            logger.error(f"配置 Wiki 失败: {e}")
-            return {"success": False, "message": f"配置失败: {e}"}
+        return self._facade.configure_wiki(vault_path)
 
     def _tool_detect_sources(self) -> Dict:
         """检测所有数据源状态"""
-        from core.diagnostics import ConnectionDiagnostics
-
-        agents = ConnectionDiagnostics.check_agents()
-        memos = ConnectionDiagnostics.check_memos()
-        wiki = ConnectionDiagnostics.check_wiki()
-
-        sources = {
-            "memos": {
-                "enabled": memos.enabled,
-                "configured": memos.configured,
-                "reachable": memos.reachable,
-            },
-            "wiki": {
-                "path": wiki.path,
-                "exists": wiki.exists,
-                "writable": wiki.writable,
-            },
-        }
-
-        # Agent 数据源（带 hooks 状态）
-        for agent in agents:
-            sources[agent.name] = {
-                "detected": agent.available,
-                "path": agent.data_dir,
-                "hooks_installed": agent.hooks_installed,
-            }
-
-        # 补充 PathDiscover 发现的额外 Agent（无 adapter 的）
-        from core.sync_framework.registry import PathDiscover
-        for name in ["aider", "gemini", "cursor", "windsurf"]:
-            if name not in sources:
-                data_dir = PathDiscover.find(name)
-                sources[name] = {
-                    "detected": data_dir is not None,
-                    "path": str(data_dir) if data_dir else None,
-                    "hooks_installed": False,
-                }
-
-        return {
-            "success": True,
-            "sources": sources,
-        }
+        return self._facade.detect_sources()
 
     # ---- JSON-RPC 2.0 / MCP 协议处理 ----
 
@@ -1859,8 +1344,9 @@ tags: [{', '.join(tags or ['file_import'])}]
             "result": result,
         }
 
-    def _make_jsonrpc_error(self, request_id: Any, code: int, message: str,
-                            data: Any = None) -> Dict:
+    def _make_jsonrpc_error(
+        self, request_id: Any, code: int, message: str, data: Any | None = None
+    ) -> Dict:
         """构建标准 JSON-RPC 2.0 错误响应"""
         error = {"code": code, "message": message}
         if data is not None:
@@ -1871,13 +1357,30 @@ tags: [{', '.join(tags or ['file_import'])}]
             "error": error,
         }
 
+    def _make_tool_result(self, result: Any, *, is_error: bool = False) -> Dict:
+        """构建 MCP CallToolResult。
+
+        MCP 的 tools/call result 不能直接返回业务 dict；宿主客户端期望
+        {"content": [{"type": "text", "text": "..."}]}。业务结构化数据以
+        JSON 文本承载，兼容 2024-11-05 及更老客户端。
+        """
+        if isinstance(result, str):
+            text = result
+        else:
+            text = json.dumps(result, ensure_ascii=False, default=str)
+        payload = {
+            "content": [{"type": "text", "text": text}],
+        }
+        if is_error:
+            payload["isError"] = True  # type: ignore[assignment]
+        return payload
+
     def handle_request(self, request: Dict) -> Optional[Dict]:
         """处理单个 JSON-RPC 请求/通知"""
         # 验证 JSON-RPC 版本
         if request.get("jsonrpc") != "2.0":
             return self._make_jsonrpc_error(
-                request.get("id"), JSONRPC_INVALID_REQUEST,
-                "Invalid JSON-RPC version, expected 2.0"
+                request.get("id"), JSONRPC_INVALID_REQUEST, "Invalid JSON-RPC version, expected 2.0"
             )
 
         req_id = request.get("id")
@@ -1899,18 +1402,29 @@ tags: [{', '.join(tags or ['file_import'])}]
             return self._make_jsonrpc_response(req_id, self._list_tools())
 
         if method == "tools/call":
+            if not isinstance(params, dict):
+                return self._make_jsonrpc_error(
+                    req_id,
+                    JSONRPC_INVALID_PARAMS,
+                    "Invalid params: tools/call params must be an object",
+                )
             tool_name = params.get("name", "")
             tool_params = params.get("arguments", {})
+            if not isinstance(tool_params, dict):
+                return self._make_jsonrpc_error(
+                    req_id,
+                    JSONRPC_INVALID_PARAMS,
+                    "Invalid params: tools/call arguments must be an object",
+                )
             return self._call_tool(req_id, tool_name, tool_params)
 
         # 对于未知方法，如果是通知也不返回错误
         if is_notification:
-            logger.warning(f"Unknown notification: {method}")
+            logger.warning("Unknown notification: %s", method)
             return None
 
         return self._make_jsonrpc_error(
-            req_id, JSONRPC_METHOD_NOT_FOUND,
-            f"Unknown method: {method}"
+            req_id, JSONRPC_METHOD_NOT_FOUND, f"Unknown method: {method}"
         )
 
     def _handle_initialize(self, params: Dict) -> Dict:
@@ -1919,6 +1433,7 @@ tags: [{', '.join(tags or ['file_import'])}]
             "protocolVersion": params.get("protocolVersion", "2024-11-05"),
             "capabilities": {
                 "tools": {},
+                "toolCategories": list(self._TOOL_CATEGORIES.keys()),
             },
             "serverInfo": {
                 "name": "mnemos-mcp-server",
@@ -1928,403 +1443,103 @@ tags: [{', '.join(tags or ['file_import'])}]
 
     def _list_tools(self) -> Dict:
         """列出所有可用 tools（带完整 inputSchema）"""
-        tools = [
-            {
-                "name": "wiki_search",
-                "description": "搜索知识库。知识来源包括：1) 用户主动投喂（通过knowledge_ingest存入）2) Memos同步 3) Agent对话蒸馏 4) Retrospective复盘 5) Git历史。所有知识均经过语义索引、标签构建、热度评分(L0-L9)处理。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索关键词"},
-                        "limit": {"type": "integer", "description": "返回数量上限", "default": 5},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "wiki_read",
-                "description": "读取指定 wiki 页面。页面内容经过完整解析器处理：语义索引提取实体/概念/技术栈、自动标签分类、热度评分L0-L9、知识图谱关联。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "page_path": {"type": "string", "description": "wiki 页面相对路径"},
-                    },
-                    "required": ["page_path"],
-                },
-            },
-            {
-                "name": "wiki_write",
-                "description": "写入 Wiki 页面。Agent 执行蒸馏或生成新知识后，将结果写入 Wiki 知识库。支持 frontmatter 元数据写入。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "page_path": {"type": "string", "description": "wiki 页面相对路径（如 'concepts/my-idea.md'）"},
-                        "content": {"type": "string", "description": "页面 Markdown 内容（不含 frontmatter）"},
-                        "frontmatter": {"type": "object", "description": "Frontmatter 元数据（可选）", "default": {}},
-                    },
-                    "required": ["page_path", "content"],
-                },
-            },
-            {
-                "name": "session_search",
-                "description": "搜索历史会话记录，自动合并分片内容。支持按关键词或 session_id 查找按 hash/range/segment 分片存储的完整聊天记录。当用户问'我们之前聊过什么'、'上次那个session'、'找回之前的对话'时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索关键词（支持内容关键词、session_id 片段、hash 前缀等）", "default": ""},
-                        "session_id": {"type": "string", "description": "精确 session ID（可选，提供时优先按 session_id 查找）", "default": ""},
-                        "limit": {"type": "integer", "description": "返回结果数量上限", "default": 10},
-                    },
-                    "required": [],
-                },
-            },
-            {
-                "name": "capture_turn",
-                "description": "MCP 主动上报单轮对话。只做校验和入队，不直接写 Memos，返回 < 200ms。当 Agent 正在与用户对话时，每轮对话结束后调用此工具上报。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_agent": {"type": "string", "description": "Agent 来源标识（如 claude, kimi, codex）"},
-                        "session_id": {"type": "string", "description": "会话唯一标识"},
-                        "turn_id": {"type": "string", "description": "轮次 ID（可选）", "default": ""},
-                        "turn_number": {"type": "integer", "description": "轮次序号（可选）", "default": 0},
-                        "user_content": {"type": "string", "description": "用户消息内容（可选）", "default": ""},
-                        "assistant_content": {"type": "string", "description": "AI 回复内容（可选）", "default": ""},
-                        "timestamp": {"type": "string", "description": "时间戳 ISO 格式（可选）", "default": ""},
-                        "model": {"type": "string", "description": "使用的模型名称（可选）", "default": ""},
-                        "cwd": {"type": "string", "description": "当前工作目录（可选）", "default": ""},
-                        "metadata": {"type": "object", "description": "额外元数据（可选）", "default": {}},
-                    },
-                    "required": ["source_agent", "session_id"],
-                },
-            },
-            {
-                "name": "capture_session",
-                "description": "MCP 批量上报整个 session 的多轮对话。适用于一次性上报完整对话记录的场景。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
-                        "session_id": {"type": "string", "description": "会话唯一标识"},
-                        "turns": {"type": "array", "items": {"type": "object"}, "description": "轮次列表 [{turn_number, user_content, assistant_content}]"},
-                    },
-                    "required": ["source_agent", "session_id", "turns"],
-                },
-            },
-            {
-                "name": "end_session",
-                "description": "标记 session 结束。通知 Mnemos 该会话已完成，触发后续处理（如队列排空、会话完整性校验）。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
-                        "session_id": {"type": "string", "description": "会话唯一标识"},
-                    },
-                    "required": ["source_agent", "session_id"],
-                },
-            },
-            {
-                "name": "capture_status",
-                "description": "查询指定 session/turn 在捕获队列中的状态。用于检查对话是否已成功入队或处理完成。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_agent": {"type": "string", "description": "Agent 来源标识"},
-                        "session_id": {"type": "string", "description": "会话唯一标识"},
-                        "turn_number": {"type": "integer", "description": "轮次序号（可选，-1 表示查询整个 session）", "default": -1},
-                    },
-                    "required": ["source_agent", "session_id"],
-                },
-            },
-            {
-                "name": "knowledge_ingest",
-                "description": "知识摄入 — 将用户主动提供的人工知识写入Memos，自动进入Wiki处理链路（Memos→00-Inbox→语义索引/标签/热度评分→知识图谱）。当用户说'记住这个'、'帮我记下'、'这很重要'时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "用户提供的知识内容"},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选，如 ['coding', 'important']）"},
-                        "source": {"type": "string", "description": "来源标记", "default": "human"},
-                    },
-                    "required": ["content"],
-                },
-            },
-            {
-                "name": "knowledge_import",
-                "description": "知识导入 — 将用户指定的本地文件解析并存入知识库。支持 .md（保留格式）、代码文件（自动识别语言并加代码块）、文本文件等。文件写入 Wiki 00-Inbox/ 后立即触发 Charon 解析器（语义索引、实体提取、标签、热度评分 L0-L9）。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件绝对路径（如 ~/notes/architecture.md 或 /home/user/project/main.py）"},
-                        "title": {"type": "string", "description": "文档标题（可选，默认使用文件名）", "default": ""},
-                        "tags": {"type": "array", "items": {"type": "string"}, "description": "标签列表（可选）"},
-                        "trigger_parse": {"type": "boolean", "description": "是否立即触发解析", "default": True},
-                    },
-                    "required": ["file_path"],
-                },
-            },
-            {
-                "name": "knowledge_distill",
-                "description": "触发知识蒸馏 — 将原始聊天记录转为结构化 Wiki 知识（问题-解决/决策记录/经验法则/反模式/方法论/洞察关联 6种形态）。Agent 完成一次有价值的对话后，应主动调用此工具将对话转为 Wiki 知识。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "session_id": {"type": "string", "description": "会话标识（用于追溯）"},
-                        "messages": {"type": "array", "items": {"type": "object"}, "description": "消息列表 [{role, content}]"},
-                        "write_to_wiki": {"type": "boolean", "description": "是否直接写入 Wiki", "default": True},
-                    },
-                    "required": ["session_id", "messages"],
-                },
-            },
-            {
-                "name": "document_process",
-                "description": "处理文档文件（PDF/PPT/Excel/Word/HTML/EBOOK）。默认仅解析并返回结构、摘要、预览；write_to_wiki=true 时通过 LLM API 蒸馏并写入 Obsidian Wiki。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "file_path": {"type": "string", "description": "文件绝对路径"},
-                        "title": {"type": "string", "description": "文档标题（可选）", "default": ""},
-                        "write_to_wiki": {"type": "boolean", "description": "是否通过 LLM API 蒸馏并写入 Wiki", "default": False},
-                    },
-                    "required": ["file_path"],
-                },
-            },
-            {
-                "name": "wiki_build",
-                "description": "触发 Wiki 构建（L1→L2）。扫描 Memos 中的 L1 原始记录，对高质量、已完成 session 执行：质量评分→去重→蒸馏→Wiki页面生成→索引更新→Git提交。当用户说'整理最近的对话'、'构建Wiki'时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "dry_run": {"type": "boolean", "description": "仅预览不实际写入", "default": False},
-                    },
-                },
-            },
-            {
-                "name": "knowledge_source_list",
-                "description": "列出知识库的来源分布统计（各来源的知识条目数）",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "preflight_inject",
-                "description": "KIA闭环-任务前知识装载：优先根据任务类型装载retrospective经验；未命中时自动回退到通用Wiki知识搜索。宿主Agent应在任务开始时调用。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "task_type": {"type": "string", "description": "任务类型，如 coding、debugging、design"},
-                        "subtype": {"type": "string", "description": "子类型", "default": ""},
-                        "context_text": {"type": "string", "description": "当前会话上下文，用于场景适配", "default": ""},
-                    },
-                    "required": ["task_type"],
-                },
-            },
-            {
-                "name": "check_pending_recaps",
-                "description": "检查待复盘事项。宿主Agent应在会话开始、任务收尾或回复前调用，用于推动用户复盘。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "user_context": {"type": "object", "description": "当前用户上下文，如 current_file/task_type，可选", "default": {}},
-                        "limit": {"type": "integer", "description": "返回数量上限", "default": 5},
-                    },
-                },
-            },
-            {
-                "name": "guard_check",
-                "description": "KIA闭环-执行中守护检查：检测当前对话是否触及历史经验中的风险点",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "user_message": {"type": "string", "description": "用户发送的消息内容"},
-                        "ai_response": {"type": "string", "description": "AI 的回复内容（可选）", "default": ""},
-                        "task_type": {"type": "string", "description": "任务类型，用于装载对应守护清单", "default": ""},
-                        "subtype": {"type": "string", "description": "子类型", "default": ""},
-                    },
-                    "required": ["user_message"],
-                },
-            },
-            {
-                "name": "persona_summary",
-                "description": "获取用户画像摘要（能量/认知/价值三层雷达）",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "persona_behavior_prompt",
-                "description": "获取画像驱动的 AI 行为提示词",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "persona_update",
-                "description": "触发用户画像更新。采集最新信号并重新计算三层画像（能量/认知/价值）。当用户说'更新我的画像'、'重新分析我的偏好'时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "signal_collect",
-                "description": "触发信号采集（从各数据源收集用户行为信号）",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sources": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "指定采集哪些源（如 session, git, memos），默认按配置",
-                        },
-                    },
-                },
-            },
-            {
-                "name": "retrospective_list",
-                "description": "列出可用的 retrospective 经验",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "task_type": {"type": "string", "description": "按任务类型过滤", "default": None},
-                        "limit": {"type": "integer", "description": "返回数量上限", "default": 10},
-                    },
-                },
-            },
-            {
-                "name": "health_check",
-                "description": "系统健康检查。检查 Mnemos 各组件状态：配置完整性、Memos API 连通性、Wiki 目录可写性、模块可导入性、最近文件统计。当用户说'检查系统状态'、'doctor'时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "self_diagnose",
-                "description": "Mnemos 自诊断 — 返回完整的系统状态报告，包括：已连接的 Agent、数据源状态、Memos/Wiki 连接状态、缺失的配置项。宿主 Agent 应在每次会话开始时调用此工具，了解当前连接状态并决定下一步操作。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "configure_memos",
-                "description": "配置 Memos 连接 — 设置 Memos API URL 和 Token。当用户说'我有 Memos'、'连上 Memos'时使用此工具。配置后会持久化到 ~/.mnemos/configs/main.json，并立即生效。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "api_url": {"type": "string", "description": "Memos API 地址，如 https://memos.example.com"},
-                        "token": {"type": "string", "description": "Memos API Token"},
-                    },
-                    "required": ["api_url", "token"],
-                },
-            },
-            {
-                "name": "configure_wiki",
-                "description": "配置 Wiki/Obsidian 路径 — 设置知识库根目录。当用户的 Obsidian Vault 路径与当前配置不一致时使用此工具。配置后会持久化到 ~/.mnemos/configs/main.json。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "vault_path": {"type": "string", "description": "Wiki 知识库根目录绝对路径，如 ~/Documents/Obsidian Vault/wiki"},
-                    },
-                    "required": ["vault_path"],
-                },
-            },
-            {
-                "name": "detect_sources",
-                "description": "数据源状态检测 — 返回所有 Agent 数据源和外部系统的连接状态。包括：各 Agent 数据目录是否存在、hooks 是否生效、Memos 是否连通、Wiki 目录是否可写。宿主 Agent 应在启动时调用此工具自检。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {},
-                },
-            },
-            {
-                "name": "context_aware_search",
-                "description": "上下文感知搜索 — 知识图谱召回 + 画像加权评分。相比 wiki_search，增加了用户画像加权（领域偏好、形态偏好、技术栈、时间模式），返回更精准的排序结果。当需要更精准的知识检索时使用此工具。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索查询"},
-                        "limit": {"type": "integer", "description": "最大结果数", "default": 10},
-                        "working_dir": {"type": "string", "description": "当前工作目录（用于上下文感知）", "default": ""},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "intent_route",
-                "description": "意图路由 — 规则匹配（不调 LLM），4 种意图分类：recall(回忆上下文→Memos)、knowledge(知识查询→Wiki)、task(任务执行→直接执行)、chat(闲聊→直接回复)。优先级：时间词>疑问词>动作词>默认。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "user_input": {"type": "string", "description": "用户输入文本"},
-                    },
-                    "required": ["user_input"],
-                },
-            },
-            {
-                "name": "blindspot_check",
-                "description": "盲点检查 — 搜索时检测知识空白。当用户搜索某个主题但知识库中缺少相关记录时返回盲点提醒。24小时冷却，每天最多1条即时提醒。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "搜索查询（检测是否为知识空白）"},
-                    },
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "predictive_push",
-                "description": "预测性知识推送 — 两层信号检测（正则关键词<1ms + LLM确认~500ms）。当检测到用户可能需要某知识时主动推送。冷启动：COLD不推送，WARM每天1条标注beta。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "user_input": {"type": "string", "description": "用户输入文本（用于信号检测）"},
-                        "working_dir": {"type": "string", "description": "当前工作目录", "default": ""},
-                    },
-                    "required": ["user_input"],
-                },
-            },
-            {
-                "name": "freshness_check",
-                "description": "知识新鲜度检查 — 检查特定实体的知识是否过时。版本绑定知识与最新版本对比，上下文知识90天未更新标记过期。搜索附加型，不主动弹出。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "entity_name": {"type": "string", "description": "实体名称"},
-                    },
-                    "required": ["entity_name"],
-                },
-            },
-        ]
-        return {"tools": tools}
+        return _schema_tools.list_tools(self._get_tool_category)
 
     def _call_tool(self, req_id: Any, name: str, params: Dict) -> Dict:
         """调用指定 tool，返回 JSON-RPC 包装响应"""
         if name not in self.tools:
-            return self._make_jsonrpc_error(
-                req_id, JSONRPC_METHOD_NOT_FOUND,
-                f"Unknown tool: {name}"
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(f"Unknown tool: {name}", is_error=True),
+            )
+
+        if self._principal is None:
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(
+                    {
+                        "success": False,
+                        "code": "principal_required",
+                        "tool": name,
+                    },
+                    is_error=True,
+                ),
+            )
+
+        if self._authorization_store is not None and self._launch_credential:
+            try:
+                current_principal = self._authorization_store.resolve_mcp_principal(
+                    self._launch_credential
+                )
+            except (OSError, ValueError, sqlite3.Error):
+                current_principal = None
+            if current_principal is None:
+                return self._make_jsonrpc_response(
+                    req_id,
+                    self._make_tool_result(
+                        {
+                            "success": False,
+                            "code": "principal_revoked_or_expired",
+                            "tool": name,
+                        },
+                        is_error=True,
+                    ),
+                )
+            self._principal = current_principal
+
+        authorization = authorize_tool_call(self._principal, name, params)
+        if not authorization.allowed:
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(
+                    {
+                        "success": False,
+                        "code": authorization.reason,
+                        "tool": name,
+                    },
+                    is_error=True,
+                ),
+            )
+
+        unknown_arguments = sorted(set(authorization.arguments) - self._tool_input_properties[name])
+        if unknown_arguments:
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(
+                    {
+                        "success": False,
+                        "code": "unknown_arguments",
+                        "tool": name,
+                        "arguments": unknown_arguments,
+                    },
+                    is_error=True,
+                ),
             )
 
         try:
-            result = self.tools[name](**params)
-            return self._make_jsonrpc_response(req_id, result)
+            result = self.tools[name](**authorization.arguments)
+            return self._make_jsonrpc_response(req_id, self._make_tool_result(result))
         except TypeError as e:
-            logger.warning(f"Tool parameter error: {e}")
-            return self._make_jsonrpc_error(
-                req_id, JSONRPC_INVALID_PARAMS,
-                f"Invalid parameters for tool '{name}': {e}"
+            logger.warning("Tool parameter error: %s", e, exc_info=True)
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(
+                    f"Invalid parameters for tool '{name}': {e}",
+                    is_error=True,
+                ),
             )
-        except Exception as e:
-            logger.error(f"Tool execution error ({name}): {e}")
-            return self._make_jsonrpc_error(
-                req_id, MCP_TOOL_EXECUTION_ERROR,
-                f"Tool '{name}' execution failed: {e}",
-                data={"tool": name, "params": params}
+        except MCP_RECOVERABLE_ERRORS as e:
+            logger.error("Tool execution error (%s): %s", name, e, exc_info=True)
+            return self._make_jsonrpc_response(
+                req_id,
+                self._make_tool_result(
+                    {
+                        "code": MCP_TOOL_EXECUTION_ERROR,
+                        "error": f"Tool '{name}' execution failed: {e}",
+                        "tool": name,
+                    },
+                    is_error=True,
+                ),
             )
 
     def run(self):
@@ -2349,12 +1564,10 @@ tags: [{', '.join(tags or ['file_import'])}]
                     print(json.dumps(response, ensure_ascii=False), flush=True)
 
             except json.JSONDecodeError as e:
-                resp = self._make_jsonrpc_error(
-                    None, JSONRPC_PARSE_ERROR, f"Parse error: {e}"
-                )
+                resp = self._make_jsonrpc_error(None, JSONRPC_PARSE_ERROR, f"Parse error: {e}")
                 print(json.dumps(resp, ensure_ascii=False), flush=True)
-            except Exception as e:
-                logger.error(f"Unexpected error: {e}")
+            except MCP_RECOVERABLE_ERRORS as e:
+                logger.error("Unexpected error: %s", e, exc_info=True)
                 resp = self._make_jsonrpc_error(
                     None, JSONRPC_INTERNAL_ERROR, f"Internal error: {e}"
                 )
@@ -2363,10 +1576,47 @@ tags: [{', '.join(tags or ['file_import'])}]
         logger.info("MCP server stopped")
 
 
+def build_mcp_server_from_environment(
+    facade: MnemosServiceFacade | None = None,
+    *,
+    authorization_store: AgentAuthorizationStore | None = None,
+    credential_store: MCPLaunchCredentialStore | None = None,
+) -> MCPServer:
+    """Build a stdio server from a keyring reference captured at startup."""
+    from core.config import get_config
+
+    # The host puts the non-secret reference in the child process environment.
+    # Read that boundary directly: a long-lived embedded process may have
+    # instantiated Config before a host refreshes its MCP environment, while a
+    # new stdio server must still resolve the reference at its own cold start.
+    # Keep the Config lookup as a compatibility fallback for embedded callers.
+    reference = str(environment_get(MCP_LAUNCH_CAPABILITY_REF_ENV, "")).strip()
+    if not reference:
+        config = get_config()
+        reference = str(
+            config.get_runtime_environment(MCP_LAUNCH_CAPABILITY_REF_ENV)
+        ).strip()
+    launch_credential = ""
+    if reference:
+        try:
+            launch_credential = (credential_store or MCPLaunchCredentialStore()).resolve(reference)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            logger.warning("MCP launch credential reference unavailable", exc_info=True)
+    return MCPServer(
+        facade,
+        launch_credential=launch_credential,
+        authorization_store=authorization_store,
+    )
+
+
 def run_mcp_server():
-    """外部调用入口"""
-    server = MCPServer()
-    server.run()
+    """Run the MCP writer while excluding offline migrations for its lifetime."""
+    from core.config import get_config
+    from core.ops.offline_migration_lock import runtime_writer_lock
+
+    with runtime_writer_lock(get_config().database_dir):
+        server = build_mcp_server_from_environment()
+        server.run()
 
 
 if __name__ == "__main__":

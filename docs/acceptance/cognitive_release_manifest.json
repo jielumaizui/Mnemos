@@ -1,0 +1,110 @@
+{
+  "certificates": [
+    {
+      "certificate_id": "OfflineReleaseCertificate",
+      "required": true,
+      "status": "MISSING"
+    },
+    {
+      "certificate_id": "ProductionCognitiveCertificate",
+      "required": true,
+      "status": "MISSING"
+    },
+    {
+      "certificate_id": "MigrationCertificate",
+      "required": true,
+      "status": "MISSING"
+    },
+    {
+      "certificate_id": "PerformanceCertificate",
+      "required": true,
+      "status": "MISSING"
+    },
+    {
+      "certificate_id": "DocumentationCertificate",
+      "required": true,
+      "status": "MISSING"
+    },
+    {
+      "certificate_id": "SecurityCertificate",
+      "required": true,
+      "status": "MISSING"
+    }
+  ],
+  "parent_root_id": "COG-046",
+  "release_eligible": false,
+  "required_gate_denominator": {
+    "gate_count": 63,
+    "gate_ids": [
+      "tests.quick",
+      "tests.integration",
+      "tests.heavy",
+      "local_gates",
+      "docs.asset_manifest.strict",
+      "quality.maintainability_zero_closure",
+      "quality.zombie_zero_closure",
+      "quality.vulture_zero_closure",
+      "security.strict",
+      "security.release_privacy",
+      "config.examples.strict",
+      "config.registry.closure",
+      "schema.relation_evidence.strict",
+      "model_call_ledger.static",
+      "health.strict",
+      "e2e.wow_real_api",
+      "cognitive_readiness.budget",
+      "cognitive_readiness.reference",
+      "wiki_lint.budget",
+      "golden_benchmark.strict",
+      "install_probe",
+      "upgrade_probe",
+      "contracts.cognitive_asset_schema",
+      "contracts.cognitive_action_effects",
+      "contracts.quality_decision",
+      "contracts.capability_registry",
+      "contracts.privacy_retention",
+      "contracts.lifecycle_status",
+      "contracts.action_ledger",
+      "contracts.cognitive_state_store",
+      "contracts.cognitive_search",
+      "contracts.cognitive_projection_lifecycle",
+      "contracts.belief_revision_lineage",
+      "contracts.decision_trace_effects",
+      "contracts.prediction_outcome_lineage",
+      "contracts.feedback_attribution",
+      "contracts.training_governance",
+      "contracts.phase3_cognitive_chain",
+      "contracts.cognitive_calibration_lineage",
+      "contracts.cognitive_event_dispatch",
+      "contracts.evidence_graph_direction",
+      "contracts.domain_glossary",
+      "contracts.scorecard",
+      "contracts.persona_profile",
+      "contracts.persona_runtime_effectiveness",
+      "contracts.blindspot_asset_boundaries",
+      "contracts.phase5_failure_contracts",
+      "contracts.operational_incident_pipeline",
+      "contracts.data_interface_registry",
+      "contracts.test_suite_denominator",
+      "behavior.cognitive_scenarios",
+      "contracts.module_toggle",
+      "contracts.cold_start_toggle",
+      "contracts.toggle_auto_disable",
+      "contracts.toggle_output_consumers",
+      "contracts.runtime_producer_consumer",
+      "contracts.golden_benchmark",
+      "contracts.install_upgrade",
+      "contracts.function_matrix",
+      "contracts.adaptive_data_flows",
+      "contracts.ops_resilience",
+      "contracts.cognitive_behavior",
+      "contracts.orphan_report"
+    ],
+    "gate_ids_sha256": "042bcc618b7d93b4040fcc8a9d6b6027222346a9d9ecb5ea5ab23c9b4984e403",
+    "manifest_id": "mnemos.full-score.strict-real-api.v1",
+    "runner": "scripts/run_full_score_gates.py",
+    "status": "DENOMINATOR_FROZEN_NOT_EXECUTED",
+    "verifier": "scripts/verify_full_score_certificate.py"
+  },
+  "schema_version": "mnemos.cognitive_release_manifest.v1"
+}

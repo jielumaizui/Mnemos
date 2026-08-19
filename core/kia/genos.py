@@ -13,9 +13,9 @@ Knowledge DNA - 知识 DNA 指纹系统
 - 多维度指纹组合，降低误判率
 - 轻量高效，适合本地运行
 """
+
 # Genos — 起源/DNA — 知识 DNA 编码，知识的遗传结构
 # 原模块: knowledge_dna.py
-
 
 
 import json
@@ -23,13 +23,12 @@ import hashlib
 import re
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Set, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from core.config import get_config
 from core.pluggable import PluggableModule
 import logging
-
 
 logger = logging.getLogger(__name__)
 try:
@@ -40,37 +39,39 @@ except ImportError:  # pragma: no cover
 
 # ========== DNA 数据模型 ==========
 
+
 @dataclass
 class KnowledgeDNA:
     """知识 DNA 指纹"""
+
     page_path: str
 
     # 维度1：内容指纹（精确去重）
-    content_md5: str = ""           # 全文 MD5
-    content_simhash: str = ""       # SimHash（局部敏感哈希）
+    content_md5: str = ""  # 全文 MD5
+    content_simhash: str = ""  # SimHash（局部敏感哈希）
 
     # 维度2：结构指纹（主题相似）
-    semantic_signature: str = ""    # 领域+类型+复杂度+情感的组合签名
-    domain_type_hash: str = ""      # 领域和类型的哈希
-    domain: str = ""                # 领域（结构化属性，避免调用方解析 signature）
-    knowledge_type: str = ""        # 知识类型
-    complexity: str = ""            # 复杂度
-    emotion: str = ""               # 情感倾向
+    semantic_signature: str = ""  # 领域+类型+复杂度+情感的组合签名
+    domain_type_hash: str = ""  # 领域和类型的哈希
+    domain: str = ""  # 领域（结构化属性，避免调用方解析 signature）
+    knowledge_type: str = ""  # 知识类型
+    complexity: str = ""  # 复杂度
+    emotion: str = ""  # 情感倾向
 
     # 维度3：关键词指纹（标签相似）
-    keyword_set: Set[str] = field(default_factory=set)      # 所有关键词集合
-    core_concepts: Set[str] = field(default_factory=set)    # 核心概念
-    tool_entities: Set[str] = field(default_factory=set)    # 工具实体
-    scenario_tags: Set[str] = field(default_factory=set)    # 场景标签
+    keyword_set: Set[str] = field(default_factory=set)  # 所有关键词集合
+    core_concepts: Set[str] = field(default_factory=set)  # 核心概念
+    tool_entities: Set[str] = field(default_factory=set)  # 工具实体
+    scenario_tags: Set[str] = field(default_factory=set)  # 场景标签
 
     # 维度4：标题指纹（语义方向）
-    title_keywords: Set[str] = field(default_factory=set)   # 标题关键词
-    title_pattern: str = ""         # 标题模式（问题/结论/指南）
+    title_keywords: Set[str] = field(default_factory=set)  # 标题关键词
+    title_pattern: str = ""  # 标题模式（问题/结论/指南）
 
     # 维度5：质量指纹（可信度评估）
-    confidence: float = 0.0         # 原始置信度
-    evidence_level: str = ""        # 证据级别
-    temporal: str = ""              # 时效性
+    confidence: float = 0.0  # 原始置信度
+    evidence_level: str = ""  # 证据级别
+    temporal: str = ""  # 时效性
 
     # 元信息
     created_at: str = ""
@@ -131,14 +132,16 @@ class KnowledgeDNA:
 @dataclass
 class SimilarityResult:
     """相似度分析结果"""
+
     target_page: str
-    overall_score: float           # 综合相似度 0-1
+    overall_score: float  # 综合相似度 0-1
     dimension_scores: Dict[str, float]  # 各维度得分
-    verdict: str                   # duplicate / related / distinct
-    reason: str                    # 判断理由
+    verdict: str  # duplicate / related / distinct
+    reason: str  # 判断理由
 
 
 # ========== SimHash 实现（轻量版）==========
+
 
 class SimHash:
     """简化版 SimHash，用于文本近似去重"""
@@ -171,7 +174,7 @@ class SimHash:
         fingerprint = 0
         for i in range(cls.HASH_BITS):
             if vector[i] > 0:
-                fingerprint |= (1 << i)
+                fingerprint |= 1 << i
 
         return format(fingerprint, f"0{cls.HASH_BITS // 4}x")
 
@@ -207,7 +210,7 @@ class SimHash:
         tokens = []
         # 2-gram
         for i in range(len(text) - 1):
-            tokens.append(text[i:i + 2])
+            tokens.append(text[i : i + 2])
         return tokens
 
     @staticmethod
@@ -218,39 +221,41 @@ class SimHash:
     @staticmethod
     def _hash_token(token: str) -> int:
         """词的哈希值"""
-        return int(hashlib.md5(token.encode("utf-8")).hexdigest(), 16)
+        return int(hashlib.md5(token.encode("utf-8"), usedforsecurity=False).hexdigest(), 16)
 
 
 # ========== DNA 计算引擎 ==========
+
 
 class DNAEngine(PluggableModule):
     """知识 DNA 计算引擎 — 实现 PluggableModule 热插拔接口"""
 
     # 相似度阈值
-    DUPLICATE_THRESHOLD = 0.90     # 疑似重复
-    RELATED_THRESHOLD = 0.65       # 相关但不同
-    CLUSTER_THRESHOLD = 0.50       # 同一知识簇
+    DUPLICATE_THRESHOLD = 0.90  # 疑似重复
+    RELATED_THRESHOLD = 0.65  # 相关但不同
+    CLUSTER_THRESHOLD = 0.50  # 同一知识簇
 
     # 维度权重
     WEIGHTS = {
-        "content": 0.30,           # 内容相似度
-        "semantic": 0.25,          # 语义签名匹配
-        "keyword": 0.25,           # 关键词重叠
-        "title": 0.15,             # 标题相似度
-        "structure": 0.05,         # 结构匹配（置信度/证据级别）
+        "content": 0.30,  # 内容相似度
+        "semantic": 0.25,  # 语义签名匹配
+        "keyword": 0.25,  # 关键词重叠
+        "title": 0.15,  # 标题相似度
+        "structure": 0.05,  # 结构匹配（置信度/证据级别）
     }
 
-    EXCLUDED_DIRS = {".git", ".obsidian", ".kg", "99-Reports", "07-Shadow", "__pycache__"}
+    EXCLUDED_DIRS = {".git", ".obsidian", ".kg", "__pycache__"}
 
-    def __init__(self, db_path: str = None, wiki_base: str = None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
-        self.db_path = Path(db_path) if db_path else (
-            self.wiki_base / ".kg" / "dna.db"
-        )
+    def __init__(self, db_path: str | None = None, wiki_base: str | None = None):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
+        self.db_path = Path(db_path) if db_path else (self.wiki_base / ".kg" / "dna.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self._vector_index: Any | None = None
+        self._vector_index_pages: List[str] = []
+        self._vector_index_vocab: List[str] = []
+        self._vector_nn: Any | None = None
+        self._clear_vector_index()
         self._enabled = True
 
     # ---- PluggableModule 接口 ----
@@ -275,12 +280,12 @@ class DNAEngine(PluggableModule):
             if page_path:
                 try:
                     self.compute_dna(Path(page_path))
-                except Exception:
+                except (OSError, IOError):
                     logging.getLogger(__name__).warning("DNA 计算失败", exc_info=True)
         elif event_type == "knowledge.deleted":
             page_path = data.get("page_path")
             if page_path:
-                self.delete_dna(Path(page_path))
+                self.delete_dna(Path(page_path))  # type: ignore[attr-defined]
 
     def _init_db(self):
         """初始化数据库"""
@@ -323,7 +328,9 @@ class DNAEngine(PluggableModule):
             for column, ddl in migrations.items():
                 if column not in columns:
                     conn.execute(ddl)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_dna_domain_type ON knowledge_dna(domain, knowledge_type)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dna_domain_type ON knowledge_dna(domain, knowledge_type)"  # noqa: E501
+            )
 
     def compute_dna(self, page_path: Path) -> Optional[KnowledgeDNA]:
         """
@@ -340,8 +347,10 @@ class DNAEngine(PluggableModule):
 
         try:
             content = page_path.read_text(encoding="utf-8")
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at genos.py", exc_info=True)
+        except (OSError, IOError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at genos.py", exc_info=True
+            )
             return None
 
         frontmatter = self._extract_frontmatter(content)
@@ -351,7 +360,7 @@ class DNAEngine(PluggableModule):
         dna = KnowledgeDNA(page_path=str(page_path))
 
         # 维度1：内容指纹
-        dna.content_md5 = hashlib.md5(content.encode("utf-8")).hexdigest()
+        dna.content_md5 = hashlib.md5(content.encode("utf-8"), usedforsecurity=False).hexdigest()
         dna.content_simhash = SimHash.compute(body)
 
         # 维度2：结构指纹
@@ -365,7 +374,7 @@ class DNAEngine(PluggableModule):
         dna.emotion = emotion
         dna.semantic_signature = f"{domain}:{knowledge_type}:{complexity}:{emotion}"
         dna.domain_type_hash = hashlib.md5(
-            f"{domain}:{knowledge_type}".encode("utf-8")
+            f"{domain}:{knowledge_type}".encode("utf-8"), usedforsecurity=False
         ).hexdigest()[:16]
 
         # 维度3：关键词指纹
@@ -376,7 +385,12 @@ class DNAEngine(PluggableModule):
             dna.tool_entities = set(keywords.get("工具实体", []))
             action_tags = set(keywords.get("动作标签", []))
         else:
-            dna.core_concepts, dna.scenario_tags, dna.tool_entities, action_tags = set(), set(), set(), set()
+            dna.core_concepts, dna.scenario_tags, dna.tool_entities, action_tags = (
+                set(),
+                set(),
+                set(),
+                set(),
+            )
 
         dna.keyword_set = dna.core_concepts | dna.scenario_tags | dna.tool_entities | action_tags
 
@@ -386,18 +400,40 @@ class DNAEngine(PluggableModule):
 
         # 维度5：质量指纹
         dna.confidence = float(self._fm_get(frontmatter, "confidence", "置信度", default=0.5))
-        dna.evidence_level = self._fm_get(frontmatter, "evidence_level", "证据级别", default="single-source")
+        dna.evidence_level = self._fm_get(
+            frontmatter, "evidence_level", "证据级别", default="single-source"
+        )
         dna.temporal = self._fm_get(frontmatter, "temporal_scope", "时效性", default="contextual")
 
         dna.created_at = datetime.now().isoformat()[:19]
         dna.updated_at = dna.created_at
 
-        # 发布 DNA 计算完成事件
-        self._emit_event("dna.computed", {
-            "page_path": str(page_path),
-            "domain": dna.domain,
-            "knowledge_type": dna.knowledge_type,
-        })
+        # 发布 DNA 计算完成事件（携带完整 DNA，避免消费者重复计算导致事件循环）
+        self._emit_event(
+            "dna.computed",
+            {
+                "page_path": str(page_path),
+                "content_md5": dna.content_md5,
+                "content_simhash": dna.content_simhash,
+                "semantic_signature": dna.semantic_signature,
+                "domain_type_hash": dna.domain_type_hash,
+                "domain": dna.domain,
+                "knowledge_type": dna.knowledge_type,
+                "complexity": dna.complexity,
+                "emotion": dna.emotion,
+                "keyword_set": sorted(dna.keyword_set),
+                "core_concepts": sorted(dna.core_concepts),
+                "scenario_tags": sorted(dna.scenario_tags),
+                "tool_entities": sorted(dna.tool_entities),
+                "title_keywords": sorted(dna.title_keywords),
+                "title_pattern": dna.title_pattern,
+                "confidence": dna.confidence,
+                "evidence_level": dna.evidence_level,
+                "temporal": dna.temporal,
+                "created_at": dna.created_at,
+                "updated_at": dna.updated_at,
+            },
+        )
 
         return dna
 
@@ -434,9 +470,10 @@ class DNAEngine(PluggableModule):
                         dna.temporal,
                         dna.created_at,
                         dna.updated_at,
-                    )
+                    ),
                 )
                 conn.commit()
+                self._clear_vector_index()
                 return True
         except sqlite3.Error:
             return False
@@ -445,10 +482,9 @@ class DNAEngine(PluggableModule):
         """从数据库加载 DNA"""
         try:
             with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
+                conn.row_factory = sqlite3.Row  # noqa
                 row = conn.execute(
-                    "SELECT * FROM knowledge_dna WHERE page_path = ?",
-                    (page_path,)
+                    "SELECT * FROM knowledge_dna WHERE page_path = ?", (page_path,)
                 ).fetchone()
 
             if not row:
@@ -476,8 +512,10 @@ class DNAEngine(PluggableModule):
                 created_at=row["created_at"],
                 updated_at=row["updated_at"],
             )
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at genos.py", exc_info=True)
+        except (OSError, ValueError, TypeError, KeyError, ImportError, AttributeError, RuntimeError, sqlite3.Error):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at genos.py", exc_info=True
+            )
             return None
 
     def compare(self, dna1: KnowledgeDNA, dna2: KnowledgeDNA) -> SimilarityResult:
@@ -517,11 +555,11 @@ class DNAEngine(PluggableModule):
 
         # 综合加权
         overall = (
-            content_sim * self.WEIGHTS["content"] +
-            semantic_sim * self.WEIGHTS["semantic"] +
-            keyword_sim * self.WEIGHTS["keyword"] +
-            title_sim * self.WEIGHTS["title"] +
-            structure_sim * self.WEIGHTS["structure"]
+            content_sim * self.WEIGHTS["content"]
+            + semantic_sim * self.WEIGHTS["semantic"]
+            + keyword_sim * self.WEIGHTS["keyword"]
+            + title_sim * self.WEIGHTS["title"]
+            + structure_sim * self.WEIGHTS["structure"]
         )
 
         # 判断结论
@@ -552,9 +590,9 @@ class DNAEngine(PluggableModule):
             reason=reason,
         )
 
-    def find_similar(self, dna: KnowledgeDNA,
-                     threshold: float = None,
-                     exclude_self: bool = True) -> List[SimilarityResult]:
+    def find_similar(
+        self, dna: KnowledgeDNA, threshold: float | None = None, exclude_self: bool = True
+    ) -> List[SimilarityResult]:
         """
         查找与给定 DNA 相似的页面
 
@@ -566,25 +604,42 @@ class DNAEngine(PluggableModule):
         Returns:
             相似度结果列表（按得分降序）
         """
-        threshold = threshold or self.RELATED_THRESHOLD
+        threshold = self.RELATED_THRESHOLD if threshold is None else threshold
+        candidate_dnas = []
+        seen_pages = set()
 
-        results = []
+        def add_candidate(candidate: KnowledgeDNA) -> None:
+            if exclude_self and candidate.page_path == dna.page_path:
+                return
+            if candidate.page_path in seen_pages:
+                return
+            seen_pages.add(candidate.page_path)
+            candidate_dnas.append(candidate)
+
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             rows = conn.execute(
                 """SELECT * FROM knowledge_dna
                    WHERE domain_type_hash = ?
                       OR semantic_signature = ?
                       OR content_md5 = ?""",
-                (dna.domain_type_hash, dna.semantic_signature, dna.content_md5)
+                (dna.domain_type_hash, dna.semantic_signature, dna.content_md5),
             ).fetchall()
 
         for row in rows:
-            other_path = row["page_path"]
-            if exclude_self and other_path == dna.page_path:
-                continue
+            add_candidate(self._row_to_dna(row))
 
-            other = self._row_to_dna(row)
+        if not candidate_dnas:
+            for candidate in self.vector_search(dna, top_k=20):
+                page_path = candidate.get("page_path")
+                if not page_path:
+                    continue
+                other = self.load_dna(page_path)
+                if other:
+                    add_candidate(other)
+
+        results = []
+        for other in candidate_dnas:
             result = self.compare(dna, other)
             if result.overall_score >= threshold:
                 results.append(result)
@@ -596,8 +651,7 @@ class DNAEngine(PluggableModule):
         """查找疑似重复的页面"""
         return self.find_similar(dna, threshold=self.DUPLICATE_THRESHOLD)
 
-    def find_cluster(self, dna: KnowledgeDNA,
-                     depth: int = 2) -> Set[str]:
+    def find_cluster(self, dna: KnowledgeDNA, depth: int = 2) -> Set[str]:
         """
         查找 DNA 所属的知识簇（连通分量）
 
@@ -615,8 +669,9 @@ class DNAEngine(PluggableModule):
                 similar = self.find_similar(page_dna, threshold=self.CLUSTER_THRESHOLD)
                 for result in similar:
                     next_layer.add(result.target_page)
-            cluster.update(next_layer)
-            current_layer = next_layer - cluster
+            unseen = next_layer - cluster
+            cluster.update(unseen)
+            current_layer = unseen
             if not current_layer:
                 break
 
@@ -679,6 +734,25 @@ class DNAEngine(PluggableModule):
 
     # ========== 向量索引（轻量 ANN） ==========
 
+    def _clear_vector_index(self) -> None:
+        self._vector_index = None
+        self._vector_index_pages = []
+        self._vector_index_vocab = []
+        self._vector_nn = None
+
+    @staticmethod
+    def _signature_vector(signature: str, vocab: List[str]):
+        import numpy as np
+
+        char_to_idx = {c: i for i, c in enumerate(vocab)}
+        vec = np.zeros(len(vocab), dtype=np.float32)
+        for c in signature:
+            if c in char_to_idx:
+                vec[char_to_idx[c]] += 1
+        if vec.sum() > 0:
+            vec = vec / np.linalg.norm(vec)
+        return vec
+
     def build_vector_index(self) -> Dict:
         """构建基于语义签名的轻量向量索引"""
         try:
@@ -687,28 +761,26 @@ class DNAEngine(PluggableModule):
             return {"status": "error", "reason": "numpy 未安装"}
 
         with sqlite3.connect(str(self.db_path), timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             rows = conn.execute("SELECT * FROM knowledge_dna").fetchall()
 
         if len(rows) < 2:
+            self._clear_vector_index()
             return {"status": "ok", "indexed": 0, "reason": "数据不足"}
 
         # 将 semantic_signature 转为 TF 向量（字符 n-gram）
         signatures = [r["semantic_signature"] or "" for r in rows]
         vocab = sorted(set("".join(signatures)))
-        char_to_idx = {c: i for i, c in enumerate(vocab)}
+        if not vocab:
+            self._clear_vector_index()
+            return {"status": "ok", "indexed": 0, "reason": "签名为空"}
 
         vectors = []
         self._vector_index_pages = []
+        self._vector_index_vocab = vocab
         for row in rows:
             sig = row["semantic_signature"] or ""
-            vec = np.zeros(len(vocab), dtype=np.float32)
-            for c in sig:
-                if c in char_to_idx:
-                    vec[char_to_idx[c]] += 1
-            if vec.sum() > 0:
-                vec = vec / np.linalg.norm(vec)
-            vectors.append(vec)
+            vectors.append(self._signature_vector(sig, vocab))
             self._vector_index_pages.append(row["page_path"])
 
         self._vector_index = np.array(vectors)
@@ -716,6 +788,7 @@ class DNAEngine(PluggableModule):
         # 尝试使用 sklearn NearestNeighbors
         try:
             from sklearn.neighbors import NearestNeighbors
+
             self._vector_nn = NearestNeighbors(n_neighbors=min(10, len(vectors)), metric="cosine")
             self._vector_nn.fit(self._vector_index)
         except ImportError:
@@ -736,33 +809,46 @@ class DNAEngine(PluggableModule):
         except ImportError:
             return []
 
+        vocab = getattr(self, "_vector_index_vocab", [])
+        if not vocab:
+            return []
+
         sig = query_dna.semantic_signature or ""
-        vocab = sorted(set("".join(self._vector_index_pages)))
-        char_to_idx = {c: i for i, c in enumerate(vocab)}
-        vec = np.zeros(len(vocab), dtype=np.float32)
-        for c in sig:
-            if c in char_to_idx:
-                vec[char_to_idx[c]] += 1
-        if vec.sum() > 0:
-            vec = vec / np.linalg.norm(vec)
+        vec = self._signature_vector(sig, vocab)
 
         if hasattr(self, "_vector_nn") and self._vector_nn is not None:
-            distances, indices = self._vector_nn.kneighbors([vec], n_neighbors=min(top_k + 1, len(self._vector_index)))
+            distances, indices = self._vector_nn.kneighbors(
+                [vec], n_neighbors=min(top_k + 1, len(self._vector_index))
+            )
             results = []
             for dist, idx in zip(distances[0], indices[0]):
                 page = self._vector_index_pages[idx]
                 if page != query_dna.page_path:
-                    results.append({"page_path": page, "distance": float(dist)})
+                    distance = float(dist)
+                    results.append(
+                        {
+                            "page_path": page,
+                            "distance": distance,
+                            "similarity": 1.0 - distance,
+                        }
+                    )
             return results[:top_k]
         else:
             # 暴力搜索回退
             similarities = np.dot(self._vector_index, vec)
-            top_indices = np.argsort(similarities)[-top_k - 1:][::-1]
+            top_indices = np.argsort(similarities)[-top_k - 1 :][::-1]
             results = []
             for idx in top_indices:
                 page = self._vector_index_pages[idx]
                 if page != query_dna.page_path:
-                    results.append({"page_path": page, "similarity": float(similarities[idx])})
+                    similarity = float(similarities[idx])
+                    results.append(
+                        {
+                            "page_path": page,
+                            "distance": 1.0 - similarity,
+                            "similarity": similarity,
+                        }
+                    )
             return results[:top_k]
 
     # ========== 辅助方法 ==========
@@ -777,8 +863,8 @@ class DNAEngine(PluggableModule):
             if len(parts) >= 3:
                 try:
                     return yaml.safe_load(parts[1]) or {}
-                except Exception as e:
-                    logger.warning(f"忽略异常: {e}")
+                except (yaml.YAMLError, ValueError) as e:
+                    logger.warning("忽略异常: %s", e, exc_info=True)
         return {}
 
     @staticmethod
@@ -807,13 +893,68 @@ class DNAEngine(PluggableModule):
     def _extract_title_keywords(title: str) -> List[str]:
         """提取标题关键词"""
         # 去掉常见虚词
-        stopwords = {"的", "了", "在", "是", "我", "有", "和", "就", "不", "人",
-                     "都", "一", "一个", "上", "也", "很", "到", "说", "要", "去",
-                     "你", "会", "着", "没有", "看", "好", "自己", "这", "那",
-                     "如何", "为什么", "怎么", "什么", "哪些", "怎么", "怎样",
-                     "the", "a", "an", "is", "are", "was", "were", "be", "been",
-                     "to", "of", "and", "in", "on", "at", "for", "with", "by",
-                     "how", "what", "why", "when", "where", "which"}
+        stopwords = {
+            "的",
+            "了",
+            "在",
+            "是",
+            "我",
+            "有",
+            "和",
+            "就",
+            "不",
+            "人",
+            "都",
+            "一",
+            "一个",
+            "上",
+            "也",
+            "很",
+            "到",
+            "说",
+            "要",
+            "去",
+            "你",
+            "会",
+            "着",
+            "没有",
+            "看",
+            "好",
+            "自己",
+            "这",
+            "那",
+            "如何",
+            "为什么",
+            "怎么",
+            "什么",
+            "哪些",
+            "怎么",
+            "怎样",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "to",
+            "of",
+            "and",
+            "in",
+            "on",
+            "at",
+            "for",
+            "with",
+            "by",
+            "how",
+            "what",
+            "why",
+            "when",
+            "where",
+            "which",
+        }
 
         # 保留中英文词、技术术语
         words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_.]*|[一-鿿]{2,}", title)
@@ -830,13 +971,17 @@ class DNAEngine(PluggableModule):
             return "question_how"
         if any(w in title_lower for w in ["什么", "which", "what is", "什么是"]):
             return "question_what"
-        if any(w in title_lower for w in ["选", "还是", "vs", "versus", "对比", "区别", "difference"]):
+        if any(
+            w in title_lower for w in ["选", "还是", "vs", "versus", "对比", "区别", "difference"]
+        ):
             return "comparison"
         if any(w in title_lower for w in ["避免", "不要", "切忌", "anti", "避免"]):
             return "anti_pattern"
         if any(w in title_lower for w in ["步骤", "流程", "指南", "guide", "步骤", " tutorial"]):
             return "methodology"
-        if any(w in title_lower for w in ["原则", "法则", "经验", "rule", "principle", "heuristic"]):
+        if any(
+            w in title_lower for w in ["原则", "法则", "经验", "rule", "principle", "heuristic"]
+        ):
             return "heuristic"
         if any(w in title_lower for w in ["解决", "修复", "排查", "fix", "solve", "debug"]):
             return "problem_solution"
@@ -880,7 +1025,8 @@ class DNAEngine(PluggableModule):
 
 # ========== 便捷函数 ==========
 
-def compute_and_save(page_path: str, engine: DNAEngine = None) -> Optional[KnowledgeDNA]:
+
+def compute_and_save(page_path: str, engine: DNAEngine | None = None) -> Optional[KnowledgeDNA]:
     """便捷函数：计算并保存 DNA"""
     engine = engine or DNAEngine()
     dna = engine.compute_dna(Path(page_path))
@@ -889,7 +1035,7 @@ def compute_and_save(page_path: str, engine: DNAEngine = None) -> Optional[Knowl
     return dna
 
 
-def check_duplicate(page_path: str, engine: DNAEngine = None) -> List[SimilarityResult]:
+def check_duplicate(page_path: str, engine: DNAEngine | None = None) -> List[SimilarityResult]:
     """便捷函数：检查页面是否重复"""
     engine = engine or DNAEngine()
     dna = engine.compute_dna(Path(page_path))

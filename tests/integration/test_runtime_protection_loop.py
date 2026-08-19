@@ -23,7 +23,7 @@ def test_hephaestus_process_all_respects_batch_limit(tmp_path, monkeypatch):
     amphora._DB_PATH = tmp_path / "amphora.db"
     try:
         for i in range(5):
-            amphora.enqueue(
+            amphora.enqueue_with_receipt(
                 f"sess-{i}",
                 "Redis 连接池排障",
                 meta={"source": "test"},
@@ -36,10 +36,17 @@ def test_hephaestus_process_all_respects_batch_limit(tmp_path, monkeypatch):
         calls = {"sync": 0}
         monkeypatch.setattr(
             "core.hephaestus_worker.HephaestusWorker._sync_distill_and_complete",
-            lambda self, session_id, distill_task: calls.__setitem__("sync", calls["sync"] + 1) or True,
+            lambda self, session_id, distill_task, **_kwargs: calls.__setitem__(
+                "sync", calls["sync"] + 1
+            )
+            or True,
         )
 
-        worker = HephaestusWorker(queue, output, inbox, archive)
+        worker = HephaestusWorker(
+            queue_dir=queue,
+            inbox_dir=inbox,
+            archive_dir=archive,
+        )
         worker.config.set("distill.min_task_interval_seconds", 0)
 
         processed = worker.process_all(max_tasks=2)
@@ -56,6 +63,7 @@ def test_hephaestus_process_all_respects_batch_limit(tmp_path, monkeypatch):
 def test_eventbus_recover_pending_is_capped(tmp_path, monkeypatch):
     import importlib
     import core.mnemos_bus
+
     importlib.reload(core.mnemos_bus)
     from core.mnemos_bus import EventBus
 
@@ -71,7 +79,10 @@ def test_eventbus_recover_pending_is_capped(tmp_path, monkeypatch):
         for i in range(5):
             conn.execute(
                 """INSERT INTO events
-                   (timestamp, trace_id, event_type, source, payload_json, status, retry_count, created_at)
+                   (
+                       timestamp, trace_id, event_type, source, payload_json,
+                       status, retry_count, created_at
+                   )
                    VALUES (?, ?, ?, ?, ?, 'pending', 0, ?)""",
                 (f"t{i}", f"trace-{i}", "test", "test", "{}", f"t{i}"),
             )

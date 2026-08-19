@@ -1,0 +1,285 @@
+{
+  "schema_version": "mnemos.wiki_knowledge_form_review.v1",
+  "reviewed_at": "2026-07-23",
+  "reviewer": "codex",
+  "source_plan_hash": "sha256:3ce5432d8dbbe5ebbea9b8a052abaaf801ab3c0acc1e2538e9ad927ed50176aa",
+  "taxonomy_contract": "prompts/distill/extract/base.md:141-146",
+  "entries": [
+    {
+      "relative_path": "00-Inbox/codex-20_obsidian-raw和mnemos仓库审计遗留问题总结.md",
+      "before_sha256": "sha256:fc09804c7d975be97627c64bb747631945d8f1f575b9973e0bd5a3807946e30e",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 审计清单逐项给出可复用的经验法则和反例。"
+    },
+    {
+      "relative_path": "00-Inbox/mnemos-认知系统中-agent-的认知满血标准.md",
+      "before_sha256": "sha256:8a90b17918be69145edea31ff4cbfddfe37533a69d2bb420b25d07f78453a1df",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 五维满血标准用于重复验收和判定 Agent 状态。"
+    },
+    {
+      "relative_path": "00-Inbox/mnemos-认知能力矩阵与验收要点.md",
+      "before_sha256": "sha256:0fa89f0b00df9e393d71eb9a77c64eeadc2780ec9424b51f2bfbeb0d877a18f9",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 能力矩阵逐项定义可复用的验收判断标准。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/2天1v1宣发创造的gmv相当于平时一个月的产出.md",
+      "before_sha256": "sha256:17b00a736275cdcba5f07b07c3445f95807ec72b7be67c52a40afb9a5c1af230",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 由两天与月度 GMV 对比推导宣发效果的深层关系。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__2天1v1宣发创造的gmv相当于平时一个月的产出.md",
+      "before_sha256": "sha256:17b00a736275cdcba5f07b07c3445f95807ec72b7be67c52a40afb9a5c1af230",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 由两天与月度 GMV 对比推导宣发效果的深层关系。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__为什么无锡常州到家业务推不动-三个核心问题的因果链.md",
+      "before_sha256": "sha256:766cb5cc864c384016336a17f93d94fe2fbbc23b19c5d68117dafe6e287c52c3",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 列出三个因果根因并给出对应破局方向。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__到家业务增量与存量定义及增长来源梳理框架.md",
+      "before_sha256": "sha256:8f4706172e541ea6628958d401aa2e5117ef361bb593b5a6b7510afc554fa429",
+      "form": "方法论",
+      "evidence": "COG-016 manual review: 定义增量与存量并给出可复用的五步梳理流程。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__到家业务增长受组织机制和信任赤字共同影响.md",
+      "before_sha256": "sha256:1f37a26fad8d5f49389e82ebbdf391f51dfc6ff71c82ea3dc329a2fbf0e64e37",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 建立组织机制、历史售后与信任赤字的因果关联。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__到家业务增长失效的根因是管家kpi错位而非工具不足.md",
+      "before_sha256": "sha256:8ff0ad689b39e8f3bdde3b4f774867f752042dd387f0198030235c0d080d9e6d",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是现象到 KPI 错位原因的可复用判断标准。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__物业费kpi与到家业务激励脱钩-业务推广的核心矛盾与破解思路.md",
+      "before_sha256": "sha256:b8636869fb95358f3d765d59799173de6c68998e4626c8b62addcc6c6b4c582f",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 明确 KPI 与激励矛盾并给出三项破解动作。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/session__系统导出的-1v1-宣发数据只统计通过系统工具转发的-不统计管家手动复制粘贴的.md",
+      "before_sha256": "sha256:3c648d29a837427c697e5e6703adf17899b2cd0983a5e6713cdb3f527521036f",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是按 1v1 与 GMV 组合解读数据的判断规则。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/为什么无锡常州到家业务推不动-三个核心问题的因果链.md",
+      "before_sha256": "sha256:766cb5cc864c384016336a17f93d94fe2fbbc23b19c5d68117dafe6e287c52c3",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 列出三个因果根因并给出对应破局方向。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/到家业务增量与存量定义及增长来源梳理框架.md",
+      "before_sha256": "sha256:8f4706172e541ea6628958d401aa2e5117ef361bb593b5a6b7510afc554fa429",
+      "form": "方法论",
+      "evidence": "COG-016 manual review: 定义增量与存量并给出可复用的五步梳理流程。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/到家业务增长受组织机制和信任赤字共同影响.md",
+      "before_sha256": "sha256:1f37a26fad8d5f49389e82ebbdf391f51dfc6ff71c82ea3dc329a2fbf0e64e37",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 建立组织机制、历史售后与信任赤字的因果关联。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/到家业务增长失效的根因是管家kpi错位而非工具不足.md",
+      "before_sha256": "sha256:8ff0ad689b39e8f3bdde3b4f774867f752042dd387f0198030235c0d080d9e6d",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是现象到 KPI 错位原因的可复用判断标准。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/物业费kpi与到家业务激励脱钩-业务推广的核心矛盾与破解思路.md",
+      "before_sha256": "sha256:353c2f78ec126ec7ce2a0d226dbd3ffaa1993976c083286122f8022139b1b6ef",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 明确 KPI 与激励矛盾并给出三项破解动作。"
+    },
+    {
+      "relative_path": "02-Projects/到家业务/系统导出的-1v1-宣发数据只统计通过系统工具转发的-不统计管家手动复制粘贴的.md",
+      "before_sha256": "sha256:692bd15cd7df6b89dbf3d6472dc4c1400686160567f9b757dba5e9cad7e8b685",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是按 1v1 与 GMV 组合解读数据的判断规则。"
+    },
+    {
+      "relative_path": "03-Tech/c49fb3d5_为什么-被看见-比-被总结-更能让用户惊喜.md",
+      "before_sha256": "sha256:ae4c3ee869e3ff6a5f3a6824d71269250a07543d6d536ce4c135f88940c8bd3d",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 揭示被看见和被总结与用户价值的深层差异。"
+    },
+    {
+      "relative_path": "03-Tech/hermes/hermes-与-mnemos-日志应如何区分来源.md",
+      "before_sha256": "sha256:e646f90042b2b6941e2079236e11faeb98d24863baed27d647c326c5f81309be",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是依据进程和日志线索归因来源的判断规则。"
+    },
+    {
+      "relative_path": "03-Tech/hermes/为什么一个微信账号只能接入一个hermes-profile.md",
+      "before_sha256": "sha256:1da2f9fb4a66f6b6a6e28356b82b81cf76a86dc558f213ea1f61582cb99e673c",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 说明单回调限制并按接入场景给出解决方案。"
+    },
+    {
+      "relative_path": "03-Tech/hermes/迷你主机本地化部署能同时解决在线-隐私和模型成本问题.md",
+      "before_sha256": "sha256:5daa7965cee92fc87bc95b5a730c40da1a6f1e2b947bbadd7023e1fa398ae089",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录本地部署相对云端的取舍与选型理由。"
+    },
+    {
+      "relative_path": "03-Tech/hermes-与-mnemos-日志应如何区分来源.md",
+      "before_sha256": "sha256:0485803ee222ac269703113e2952012555d3e2a955dff3245dfc4c1eeb06c822",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是依据进程和日志线索归因来源的判断规则。"
+    },
+    {
+      "relative_path": "03-Tech/macos/macos-apfs-写时复制与磁盘空间排查.md",
+      "before_sha256": "sha256:4ea3898ad2e27221f6abcb4ff9d1c6ba8c8a0c88c5e223a239eeb7f800e3ee8d",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 从删除大文件未释放空间定位 APFS 写时复制根因并给出排查方法。"
+    },
+    {
+      "relative_path": "03-Tech/memos/memos-client-项目架构特征-14阶段管道与模块散落问题.md",
+      "before_sha256": "sha256:a8ad48da778e4cd358f3ffe557a4812aa4024c3b416736a7185d27f9ecce8942",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 由代码分析归纳管道、数据库、LLM 层和模块散落之间的架构关系。"
+    },
+    {
+      "relative_path": "03-Tech/mnemos/mnemos-架构定性-local-first-多-agent-长期记忆与认知控制面.md",
+      "before_sha256": "sha256:2e96dd4337f8804067c36ca6e88a8eecaa4757a4db15f6c881f79b9af1b39238",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 基于实现证据形成 Mnemos 架构定性与成熟度关联判断。"
+    },
+    {
+      "relative_path": "03-Tech/mnemos/mnemos-能力分层-底层能力-vs-workflow-adapter-层.md",
+      "before_sha256": "sha256:02b561aa8ef58295ef47506e170026286378d61684d329b887435563009a3f58",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 明确选择构建薄 Adapter 而非重写底层，并记录理由。"
+    },
+    {
+      "relative_path": "03-Tech/mnemos/mnemos认知系统与可信推送闭环审计结论-部分通过及关键阻断项.md",
+      "before_sha256": "sha256:3a96234ed7f9c72436897c6d873a058bdce5868c2f597f1702cd2d9632790991",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是可复用的闭环评估项目和判定标准。"
+    },
+    {
+      "relative_path": "03-Tech/ragflow/ragflow-服务未运行时本地备份目录不能代表可连接知识库.md",
+      "before_sha256": "sha256:7ac81f617fb33c56f7c0592e33c95b8cfe4aba6ec899dad912cfb6b2edc13979",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是备份目录、容器、端口与可连接性的判断规则。"
+    },
+    {
+      "relative_path": "03-Tech/session__memos-client-项目架构特征-14阶段管道与模块散落问题.md",
+      "before_sha256": "sha256:a6f90ed48862705e0c83672daf9895c28b3bc16397296557567c2e2fc73b7a45",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 由代码分析归纳管道、数据库、LLM 层和模块散落之间的架构关系。"
+    },
+    {
+      "relative_path": "03-Tech/session__memos-内容留存系统与知识沉淀系统必须分离设计-避免-l5-概念混淆.md",
+      "before_sha256": "sha256:96f696d498fc1a373dc42a7a7aacb3baf3dd334aa160ccd1b3d873a15ea56631",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录内容留存与知识沉淀双轨分离的架构选择及理由。"
+    },
+    {
+      "relative_path": "03-Tech/session__ragflow-服务未运行时本地备份目录不能代表可连接知识库.md",
+      "before_sha256": "sha256:a1c8e93ea99f4eb596267c75ecf8e12f422b88bec81ddb27321e2109d15d5bba",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 核心产物是备份目录、容器、端口与可连接性的判断规则。"
+    },
+    {
+      "relative_path": "03-Tech/session__wsl-vs-原生windows-核心能力无差异-特定场景有取舍.md",
+      "before_sha256": "sha256:f5c0483e5641503681c30f4e285b830c2ee4542e86116e66e32ab5bbc0300a92",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 对比 WSL 与原生 Windows 后给出按用户场景选型结论。"
+    },
+    {
+      "relative_path": "03-Tech/session__为什么-l-序列和-p-序列需要被设计成两套独立标签.md",
+      "before_sha256": "sha256:c4400faa4d401d7ef52bea5af73c455a0f1614bf1c46a3f88c7259721db725d6",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录 L 序列与 P 序列正交分离的标签设计选择及理由。"
+    },
+    {
+      "relative_path": "03-Tech/session__为什么一个微信账号只能接入一个hermes-profile.md",
+      "before_sha256": "sha256:1da2f9fb4a66f6b6a6e28356b82b81cf76a86dc558f213ea1f61582cb99e673c",
+      "form": "问题-解决",
+      "evidence": "COG-016 manual review: 说明单回调限制并按接入场景给出解决方案。"
+    },
+    {
+      "relative_path": "03-Tech/session__迷你主机本地化部署能同时解决在线-隐私和模型成本问题.md",
+      "before_sha256": "sha256:1bf40d8e81b13d2dd4b83dae2101ffcbe3837e2360c86436e673a4d34c7543ee",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录本地部署相对云端的取舍与选型理由。"
+    },
+    {
+      "relative_path": "03-Tech/skill-evolver-技能自我进化引擎与传统技能创建方式的对比.md",
+      "before_sha256": "sha256:60eebdc836592ecc8901804cb4769c75c42f664a265859012a11124a18e287c6",
+      "form": "方法论",
+      "evidence": "COG-016 manual review: 给出 Skill-Evolver 可复用的八阶段优化循环。"
+    },
+    {
+      "relative_path": "03-Tech/全自动自适应系统的核心理念-贝叶斯调整而非静态规则.md",
+      "before_sha256": "sha256:3bfb9b32a633ca1492e5a3de3608757d9da3cfd6e950dca3b3020e5fade21a80",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 揭示动态贝叶斯更新与静态规则在自适应系统中的本质差异。"
+    },
+    {
+      "relative_path": "04-Concepts/c49fb3d5_为什么-被看见-比-被总结-更能让用户惊喜.md",
+      "before_sha256": "sha256:0559f46f9b893d10e680a655000ab7ee38e83ed7194c53beea4578e7b2479d57",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 揭示被看见和被总结与用户价值的深层差异。"
+    },
+    {
+      "relative_path": "04-Concepts/memos-内容留存系统与知识沉淀系统必须分离设计-避免-l5-概念混淆.md",
+      "before_sha256": "sha256:39c9abce7eb63f03d2403164631e3511bf9c84f6afb30f7a27b1bf8d0884ae41",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录内容留存与知识沉淀双轨分离的架构选择及理由。"
+    },
+    {
+      "relative_path": "04-Concepts/mnemos-认知系统中-agent-的认知满血标准.md",
+      "before_sha256": "sha256:d9e8cfe1ce9bc7aea2fb09bb582762c638e6e775289fbfc8c95630be3b24c5c1",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 五维满血标准用于重复验收和判定 Agent 状态。"
+    },
+    {
+      "relative_path": "04-Concepts/mnemos-认知能力矩阵.md",
+      "before_sha256": "sha256:8c543dc118d5e63792fd5570850ff31f8485c449c50ebd5269670202b8d45b6f",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 能力矩阵逐项定义可复用的验收判断标准。"
+    },
+    {
+      "relative_path": "04-Concepts/skill-evolver-技能自我进化引擎与传统技能创建方式的对比.md",
+      "before_sha256": "sha256:f8ad3001bd75884278e641476240bea20987f053549335f5a2ee0d9d7924ae69",
+      "form": "方法论",
+      "evidence": "COG-016 manual review: 给出 Skill-Evolver 可复用的八阶段优化循环。"
+    },
+    {
+      "relative_path": "04-Concepts/wsl-vs-原生windows-核心能力无差异-特定场景有取舍.md",
+      "before_sha256": "sha256:f5c0483e5641503681c30f4e285b830c2ee4542e86116e66e32ab5bbc0300a92",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 对比 WSL 与原生 Windows 后给出按用户场景选型结论。"
+    },
+    {
+      "relative_path": "04-Concepts/为什么-l-序列和-p-序列需要被设计成两套独立标签.md",
+      "before_sha256": "sha256:2a9b8eddca99d1d4b8a54b8e1d8a1dace87c88cc1e110cedde71b3c2254c16e6",
+      "form": "决策记录",
+      "evidence": "COG-016 manual review: 记录 L 序列与 P 序列正交分离的标签设计选择及理由。"
+    },
+    {
+      "relative_path": "04-Concepts/全自动自适应系统的核心理念-贝叶斯调整而非静态规则.md",
+      "before_sha256": "sha256:3bfb9b32a633ca1492e5a3de3608757d9da3cfd6e950dca3b3020e5fade21a80",
+      "form": "洞察关联",
+      "evidence": "COG-016 manual review: 揭示动态贝叶斯更新与静态规则在自适应系统中的本质差异。"
+    },
+    {
+      "relative_path": "06-Retrospectives/复盘/obsidian-raw和mnemos仓库审计遗留问题总结.md",
+      "before_sha256": "sha256:144a0e196ebe4977615c5d93124f098bd3c16035c137996b68415035d6dd657e",
+      "form": "经验法则",
+      "evidence": "COG-016 manual review: 审计清单逐项给出可复用的经验法则和反例。"
+    }
+  ]
+}

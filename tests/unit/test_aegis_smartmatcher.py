@@ -6,11 +6,6 @@ aegis SmartMatcher + DuplicateWorkDetector 单元测试
 - DuplicateWorkDetector 指纹+语义+关键词重叠检测
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 import unittest
 from core.kia.aegis import SmartMatcher, DuplicateWorkDetector
 
@@ -33,7 +28,10 @@ class TestSmartMatcher(unittest.TestCase):
     def test_match_semantic(self):
         result = self.matcher.match_semantic(
             "Python asyncio event loop implementation",
-            ["Python asyncio event loop implementation guide", "Java servlet container configuration"]
+            [
+                "Python asyncio event loop implementation guide",
+                "Java servlet container configuration",
+            ],
         )
         self.assertIsNotNone(result)
         self.assertIn("guide", result[0].lower())
@@ -43,7 +41,7 @@ class TestSmartMatcher(unittest.TestCase):
             "exact match",
             exact_candidates=["exact match"],
             keywords=["match"],
-            semantic_refs=["something else"]
+            semantic_refs=["something else"],
         )
         self.assertEqual(result["layer"], 1)
         self.assertEqual(result["type"], "exact")
@@ -53,17 +51,14 @@ class TestSmartMatcher(unittest.TestCase):
             "keyword here",
             exact_candidates=["no match"],
             keywords=["here"],
-            semantic_refs=["other"]
+            semantic_refs=["other"],
         )
         self.assertEqual(result["layer"], 2)
         self.assertEqual(result["type"], "keyword")
 
     def test_match_three_tier_no_match(self):
         result = self.matcher.match_three_tier(
-            "completely unrelated",
-            exact_candidates=["a"],
-            keywords=["b"],
-            semantic_refs=["c"]
+            "completely unrelated", exact_candidates=["a"], keywords=["b"], semantic_refs=["c"]
         )
         self.assertIsNone(result)
 
@@ -77,7 +72,9 @@ class TestDuplicateWorkDetector(unittest.TestCase):
     def test_exact_fingerprint_duplicate(self):
         detector = DuplicateWorkDetector()
         detector.add_message("Implement user authentication with JWT tokens")
-        is_dup, score, reason = detector.is_duplicate("Implement user authentication with JWT tokens")
+        is_dup, score, reason = detector.is_duplicate(
+            "Implement user authentication with JWT tokens"
+        )
         self.assertTrue(is_dup)
         self.assertEqual(score, 1.0)
 

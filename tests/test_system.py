@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memos-Wiki v6.0 系统测试脚本
+Mnemos v2.0.0 系统测试脚本
 
 覆盖 14+ 子系统的导入、初始化和基本功能验证。
 
@@ -18,13 +18,22 @@ from datetime import datetime
 
 # 相对项目根目录的路径
 PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.config import get_config
+from core.config import get_config  # noqa: E402
 
 _config = get_config()
-WIKI_DIR = _config.wiki_dir
-CLAUDE_DIR = _config.claude_data_dir
+
+# 测试隔离：当 MNEMOS_DIR 被显式设置时（CI/本地隔离运行），
+# 强制将 wiki 与 claude 数据目录指向该临时目录，避免触碰真实 ~/.claude。
+if os.environ.get("MNEMOS_DIR"):
+    _test_base = Path(os.environ["MNEMOS_DIR"]).expanduser().resolve()
+    WIKI_DIR = _test_base / "wiki"
+    CLAUDE_DIR = _test_base / "claude"
+    WIKI_DIR.mkdir(parents=True, exist_ok=True)
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    WIKI_DIR = _config.wiki_dir
+    CLAUDE_DIR = _config.claude_data_dir
 
 
 class Colors:
@@ -35,10 +44,20 @@ class Colors:
     RESET = "\033[0m"
 
 
-def ok(msg): print(f"  {Colors.OK}[OK]{Colors.RESET} {msg}")
-def warn(msg): print(f"  {Colors.WARN}[WARN]{Colors.RESET} {msg}")
-def fail(msg): print(f"  {Colors.FAIL}[FAIL]{Colors.RESET} {msg}")
-def info(msg): print(f"  {Colors.INFO}[INFO]{Colors.RESET} {msg}")
+def ok(msg):
+    print(f"  {Colors.OK}[OK]{Colors.RESET} {msg}")
+
+
+def warn(msg):
+    print(f"  {Colors.WARN}[WARN]{Colors.RESET} {msg}")
+
+
+def fail(msg):
+    print(f"  {Colors.FAIL}[FAIL]{Colors.RESET} {msg}")
+
+
+def info(msg):
+    print(f"  {Colors.INFO}[INFO]{Colors.RESET} {msg}")
 
 
 def section(title):
@@ -50,15 +69,14 @@ def section(title):
 
 # ========== 测试 1: 模块导入 ==========
 
+
 def test_imports():
-    """测试所有 v6.0 模块是否能正常导入"""
+    """测试所有 v2.0.0 模块是否能正常导入"""
     section("测试 1/6: 模块导入")
 
     modules = [
         # 核心 SDK 与集成
-        ("integrations.styx", "MemosClient"),
         ("integrations.sources.claude_source", "ClaudeSource"),
-
         # KIA 闭环系统
         ("core.kia.dike", "TaskClassifier"),
         ("core.kia.kairos", "TimeParser"),
@@ -67,24 +85,19 @@ def test_imports():
         ("core.kia.epimetheus", "AutoRetrospective"),
         ("core.kia.proteus", "IterationTracker"),
         ("core.kia.chronos", "KnowledgeScheduler"),
-
         # 子 Agent 蒸馏
-        ("core.kia.amphora", "enqueue"),
+        ("core.kia.amphora", "enqueue_with_receipt"),
         ("core.kia.amphora", "list_pending"),
         ("core.hephaestus.distillation_engine", "DistillationEngine"),
-
         # 14+ 子系统
         ("core.kia.charon", "run_connect_cycle"),
         ("core.kia.hygieia", "KnowledgeImmuneSystem"),
         ("core.kia.genos", "DNAEngine"),
-        # ("core.dark_knowledge", "DarkKnowledgeMiner"),  # 暂未实现
         ("core.kia.knowledge_graph", "KnowledgeGraph"),
-        # ("core.quantum_entanglement", "QuantumEntanglement"),  # 暂未实现
-        ("core.kia.ixion", "SkillWikiFlywheel"),
+        ("core.kia.ixion", "CognitiveDecisionFlywheel"),
         ("core.kia.teiresias", "PredictivePushEngine"),
         ("core.kia.aion", "TimeCapsule"),
         ("core.kia.eris", "EntropyEngine"),
-        # ("core.falsifiability_marker", "FalsifiabilityMarker"),  # 暂未实现
         ("core.kia.metis", "ProfileGenerator"),
         ("core.kia.ananke", "VersionTimeTravel"),
         ("core.kia.hecate", "ShadowPageManager"),
@@ -110,6 +123,7 @@ def test_imports():
 
 
 # ========== 测试 2: Wiki 目录结构 ==========
+
 
 def test_wiki_structure():
     """测试 Wiki 目录结构是否符合 v6.0"""
@@ -139,6 +153,7 @@ def test_wiki_structure():
 
 # ========== 测试 3: 数据库完整性 ==========
 
+
 def test_databases():
     """测试 SQLite 数据库和关键表"""
     section("测试 3/6: 数据库完整性")
@@ -148,7 +163,6 @@ def test_databases():
         "wiki/.kg/graph.db": ["entities", "relations"],
         "wiki/.kg/dna.db": ["knowledge_dna"],
         "wiki/.kg/trail.db": ["trail_events"],
-        "wiki/.kg/falsifiability.db": ["falsifiability_marks"],
         "live_sync.db": ["knowledge_scheduled_tasks"],
     }
 
@@ -161,9 +175,7 @@ def test_databases():
 
         try:
             with sqlite3.connect(str(db_path), timeout=10) as conn:
-                cursor = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = {row[0] for row in cursor.fetchall()}
 
                 missing = [t for t in required_tables if t not in tables]
@@ -176,18 +188,20 @@ def test_databases():
             fail(f"{db_name}: 读取失败 ({e})")
             all_passed = False
 
-    # 检查 distill_queue 目录
-    queue_dir = CLAUDE_DIR / "distill_queue"
-    if queue_dir.exists():
-        pending = len(list(queue_dir.glob("*.json")))
-        info(f"distill_queue: {pending} 个任务文件")
-    else:
-        info("distill_queue: 目录不存在(首次运行时会创建)")
+    # 检查 amphora 蒸馏队列
+    try:
+        from core.kia import amphora
+
+        pending = len(amphora.list_pending(include_future_retry=False))
+        info(f"amphora distill queue: {pending} 个待处理任务")
+    except Exception as e:
+        info(f"amphora distill queue: 读取失败 ({e})")
 
     assert all_passed, "数据库完整性测试失败"
 
 
 # ========== 测试 4: KIA 闭环系统 ==========
+
 
 def test_kia_system():
     """测试 KIA 闭环核心组件"""
@@ -196,28 +210,34 @@ def test_kia_system():
     try:
         # 1. TaskClassifier
         from core.kia.dike import TaskClassifier
+
         tc = TaskClassifier()
         result = tc.classify([{"role": "user", "content": "帮我写一个 Python 脚本处理数据"}])
         if result.confidence > 0.5:
-            ok(f"TaskClassifier: {result.task_type}/{result.subtype} (置信度 {result.confidence:.2f})")
+            ok(
+                f"TaskClassifier: {result.task_type}/{result.subtype} (置信度 {result.confidence:.2f})"
+            )
         else:
             warn(f"TaskClassifier: 置信度较低 ({result.confidence:.2f})")
 
         # 2. TimeParser
         from core.kia.kairos import TimeParser
+
         tp = TimeParser()
         tw = tp.parse("帮我写个脚本，明天要用")
         ok(f"TimeParser: {tw.window.value} (周期性={tw.is_periodic})")
 
         # 3. PreFlightInjector
         from core.kia.prophasis import PreFlightInjector
+
         pfi = PreFlightInjector()
         ok(f"PreFlightInjector: Wiki 路径 {pfi.WIKI_BASE}")
 
         # 4. InProcessGuard
-        from core.kia.aegis import InProcessGuard, GuardLevel
+        from core.kia.aegis import InProcessGuard
         from core.kia.prophasis import LoadedKnowledge
         from datetime import datetime
+
         lk = LoadedKnowledge(
             task_type="coding/python",
             subtype="script",
@@ -226,28 +246,32 @@ def test_kia_system():
             lessons_summary="测试",
             loaded_at=datetime.now().isoformat(),
         )
-        guard = InProcessGuard(lk)
-        ok(f"InProcessGuard: 已初始化")
+        InProcessGuard(lk)
+        ok("InProcessGuard: 已初始化")
 
         # 5. IterationTracker
         from core.kia.proteus import IterationTracker
+
         it = IterationTracker()
         stats = it.get_stats()
         ok(f"IterationTracker: 总知识 {stats.get('total', 0)}")
 
         # 6. KnowledgeScheduler
         from core.kia.chronos import KnowledgeScheduler
-        ks = KnowledgeScheduler()
-        ok(f"KnowledgeScheduler: 已初始化")
+
+        KnowledgeScheduler()
+        ok("KnowledgeScheduler: 已初始化")
 
     except Exception as e:
         fail(f"KIA 系统测试失败: {e}")
         import traceback
+
         traceback.print_exc()
         assert False, f"KIA 系统测试失败: {e}"
 
 
 # ========== 测试 5: 子系统初始化 ==========
+
 
 def test_subsystems():
     """测试 14+ 子系统初始化"""
@@ -257,77 +281,83 @@ def test_subsystems():
 
     try:
         from core.kia.hygieia import KnowledgeImmuneSystem
-        immune = KnowledgeImmuneSystem()
+
+        KnowledgeImmuneSystem()
         tests.append(("免疫系统", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("免疫系统", False, str(e)))
 
     try:
         from core.kia.genos import DNAEngine
-        dna = DNAEngine()
+
+        DNAEngine()
         tests.append(("DNA 指纹", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("DNA 指纹", False, str(e)))
 
     try:
         from core.kia.knowledge_graph import KnowledgeGraph
-        kg = KnowledgeGraph()
-        tests.append(("知识图谱", True, ""))
-    except Exception as e:
-        tests.append(("知识图谱", False, str(e)))
 
-    # QuantumEntanglement 暂未实现，跳过
+        KnowledgeGraph()
+        tests.append(("知识图谱", True, ""))
+    except ImportError as e:
+        tests.append(("知识图谱", False, str(e)))
 
     try:
         from core.kia.teiresias import PredictivePushEngine
-        ppe = PredictivePushEngine()
+
+        PredictivePushEngine()
         tests.append(("预测推送", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("预测推送", False, str(e)))
 
     try:
         from core.kia.aion import TimeCapsule
-        tc = TimeCapsule()
+
+        TimeCapsule()
         tests.append(("时间胶囊", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("时间胶囊", False, str(e)))
 
     try:
         from core.kia.eris import EntropyEngine
-        ee = EntropyEngine()
-        tests.append(("熵引擎", True, ""))
-    except Exception as e:
-        tests.append(("熵引擎", False, str(e)))
 
-    # FalsifiabilityMarker 暂未实现，跳过
+        EntropyEngine()
+        tests.append(("熵引擎", True, ""))
+    except ImportError as e:
+        tests.append(("熵引擎", False, str(e)))
 
     try:
         from core.kia.metis import ProfileGenerator
-        pg = ProfileGenerator()
+
+        ProfileGenerator()
         tests.append(("知识画像", True, ""))
     except Exception as e:
         tests.append(("知识画像", False, str(e)))
 
     try:
         from core.kia.ananke import VersionTimeTravel
-        vtt = VersionTimeTravel()
+
+        VersionTimeTravel()
         tests.append(("版本时间旅行", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("版本时间旅行", False, str(e)))
 
     try:
         from core.kia.hecate import ShadowPageManager
-        spm = ShadowPageManager()
+
+        ShadowPageManager()
         tests.append(("影子页面", True, ""))
-    except Exception as e:
+    except ImportError as e:
         tests.append(("影子页面", False, str(e)))
 
     try:
-        from core.kia.ixion import SkillWikiFlywheel
-        swf = SkillWikiFlywheel()
-        tests.append(("Skill-Wiki 飞轮", True, ""))
-    except Exception as e:
-        tests.append(("Skill-Wiki 飞轮", False, str(e)))
+        from core.kia.ixion import CognitiveDecisionFlywheel
+
+        CognitiveDecisionFlywheel()
+        tests.append(("认知决策飞轮", True, ""))
+    except ImportError as e:
+        tests.append(("认知决策飞轮", False, str(e)))
 
     passed = sum(1 for _, ok_flag, _ in tests if ok_flag)
     for name, ok_flag, err in tests:
@@ -342,25 +372,29 @@ def test_subsystems():
 
 # ========== 测试 6: 端到端流程 ==========
 
+
 def test_end_to_end():
     """测试端到端关键流程"""
     section("测试 6/6: 端到端流程")
 
     # 1. 测试 distill_queue
     try:
-        from core.kia.amphora import enqueue, list_pending, mark_done
+        from core.kia.amphora import enqueue, list_pending
         import hashlib
+
         test_sid = f"test:{hashlib.md5(b'test').hexdigest()[:8]}"
         enqueue(
             session_id=test_sid,
             messages=[{"role": "user", "content": "测试消息"}],
-            meta={"source": "test"}
+            meta={"source": "test"},
         )
         pending = list_pending()
         test_tasks = [t for t in pending if t["session_id"].startswith("test:")]
         if test_tasks:
             ok(f"distill_queue: 入队成功 ({len(test_tasks)} 个测试任务)")
-            mark_done(test_sid)
+            from core.kia.amphora import mark_intentional_skip
+
+            mark_intentional_skip(test_sid, "system test explicit skip")
             ok("distill_queue: 标记完成成功")
         else:
             warn("distill_queue: 入队后未找到任务")
@@ -408,10 +442,11 @@ def test_end_to_end():
 
 # ========== 主函数 ==========
 
+
 def main():
     print()
     print("+" + "-" * 58 + "+")
-    print("|" + " " * 12 + "Memos-Wiki v6.0 系统测试" + " " * 22 + "|")
+    print("|" + " " * 11 + "Mnemos v2.0.0 系统测试" + " " * 19 + "|")
     print("+" + "-" * 58 + "+")
     print(f"  测试时间: {datetime.now().isoformat()[:19]}")
     print(f"  Wiki 路径: {WIKI_DIR}")
@@ -429,24 +464,26 @@ def main():
     section("测试汇总")
     all_passed = True
     for name, passed in results:
-        status = f"{Colors.OK}[PASS]{Colors.RESET}" if passed else f"{Colors.FAIL}[FAIL]{Colors.RESET}"
+        status = (
+            f"{Colors.OK}[PASS]{Colors.RESET}" if passed else f"{Colors.FAIL}[FAIL]{Colors.RESET}"
+        )
         print(f"  {status}: {name}")
         if not passed:
             all_passed = False
 
     print()
     if all_passed:
-        print(f"{Colors.OK}所有测试通过! Memos-Wiki v6.0 系统已就绪。{Colors.RESET}")
+        print(f"{Colors.OK}所有测试通过! Mnemos v2.0.0 系统已就绪。{Colors.RESET}")
     else:
         print(f"{Colors.WARN}部分测试失败，请检查错误信息。{Colors.RESET}")
 
     print()
     info("常用命令:")
-    print(f"  {sys.executable} mnemos_cli.py --session-start --user-message '...'")
-    print(f"  {sys.executable} mnemos_cli.py --session-end --session-messages '...'")
-    print(f"  {sys.executable} mnemos_cli.py --stats")
-    print(f"  {sys.executable} mnemos_cli.py --kia-check")
-    print(f"  {sys.executable} core/hephaestus/distillation_queue.py --list")
+    print(f"  {sys.executable} mnemos_cli.py doctor")
+    print(f"  {sys.executable} mnemos_cli.py status")
+    print(f"  {sys.executable} mnemos_cli.py reflect on '...'")
+    print(f"  {sys.executable} mnemos_cli.py ingest <path>")
+    print(f"  {sys.executable} mnemos_cli.py daemon status")
     print()
 
     return 0 if all_passed else 1

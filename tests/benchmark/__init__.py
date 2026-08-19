@@ -1,7 +1,7 @@
 """
 性能基准测试框架
 
-运行: python -m pytest tests/benchmark/ --benchmark-only
+运行: python3 -m pytest tests/benchmark/ --benchmark-only
 依赖: pip install pytest-benchmark
 
 目标 P95:

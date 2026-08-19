@@ -13,17 +13,16 @@ Version Time Travel - 知识版本时间旅行
 - diff 输出 Markdown 格式，便于阅读
 - 与 frontmatter 的 "演化历史" 章节联动
 """
+
 # Ananke — 必然性 — 版本时间旅行，不可逆转的知识回溯
 # 原模块: version_time_travel.py
-
 
 
 import hashlib
 import json
 import difflib
-import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 from core.config import get_config
@@ -35,7 +34,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class VersionSnapshot:
     """版本快照"""
-    snapshot_id: str           # hash of content
+
+    snapshot_id: str  # hash of content
     timestamp: str
     content_hash: str
     change_summary: str = ""
@@ -45,6 +45,7 @@ class VersionSnapshot:
 @dataclass
 class VersionDiff:
     """版本差异"""
+
     from_version: str
     to_version: str
     added_lines: List[str] = field(default_factory=list)
@@ -56,10 +57,8 @@ class VersionDiff:
 class VersionTimeTravel:
     """版本时间旅行器"""
 
-    def __init__(self, wiki_base: str = None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+    def __init__(self, wiki_base: str | None = None):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
         self.inbox = self.wiki_base / "00-Inbox"
         self.snapshot_dir = self.wiki_base / ".kg" / "snapshots"
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -70,23 +69,22 @@ class VersionTimeTravel:
         """加载快照索引"""
         if self.index_file.exists():
             try:
-                return json.loads(self.index_file.read_text(encoding="utf-8"))
+                # type: ignore[no-any-return]
+                return json.loads(self.index_file.read_text(encoding="utf-8"))  # type: ignore[no-any-return]  # noqa: E501
             except (json.JSONDecodeError, IOError):
-                pass
+                logger.warning("[ananke] (json.JSONDecodeError, IOError) suppressed", exc_info=True)
         return {}
 
     def _save_index(self):
         """保存快照索引"""
         try:
             self.index_file.write_text(
-                json.dumps(self._index, ensure_ascii=False, indent=2),
-                encoding="utf-8"
+                json.dumps(self._index, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except IOError:
-            pass
+            logger.warning("[ananke] IOError suppressed", exc_info=True)
 
-    def snapshot(self, page_path: Path,
-                 change_summary: str = "") -> Optional[VersionSnapshot]:
+    def snapshot(self, page_path: Path, change_summary: str = "") -> Optional[VersionSnapshot]:
         """
         为页面创建快照
 
@@ -98,11 +96,13 @@ class VersionTimeTravel:
 
         try:
             content = page_path.read_text(encoding="utf-8")
-        except Exception:
-            logging.getLogger(__name__).warning(f"Caught unexpected error at ananke.py", exc_info=True)
+        except (OSError, IOError):
+            logging.getLogger(__name__).warning(
+                "Caught unexpected error at ananke.py", exc_info=True
+            )
             return None
 
-        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+        content_hash = hashlib.md5(content.encode("utf-8"), usedforsecurity=False).hexdigest()
         page_key = str(page_path.relative_to(self.wiki_base))
 
         # 检查是否与上一个快照相同
@@ -129,13 +129,15 @@ class VersionTimeTravel:
         if page_key not in self._index:
             self._index[page_key] = []
 
-        self._index[page_key].append({
-            "snapshot_id": snapshot_id,
-            "timestamp": snapshot.timestamp,
-            "content_hash": content_hash,
-            "change_summary": change_summary,
-            "size_bytes": snapshot.size_bytes,
-        })
+        self._index[page_key].append(
+            {
+                "snapshot_id": snapshot_id,
+                "timestamp": snapshot.timestamp,
+                "content_hash": content_hash,
+                "change_summary": change_summary,
+                "size_bytes": snapshot.size_bytes,
+            }
+        )
 
         self._save_index()
         return snapshot
@@ -163,12 +165,12 @@ class VersionTimeTravel:
             try:
                 return snapshot_path.read_text(encoding="utf-8")
             except IOError:
-                pass
+                logger.warning("[ananke] IOError suppressed", exc_info=True)
         return None
 
-    def diff(self, page_path: Path,
-             from_snapshot: str = None,
-             to_snapshot: str = None) -> Optional[VersionDiff]:
+    def diff(
+        self, page_path: Path, from_snapshot: str | None = None, to_snapshot: str | None = None
+    ) -> Optional[VersionDiff]:
         """
         比较两个版本
 
@@ -193,7 +195,7 @@ class VersionTimeTravel:
 
         # 获取内容
         from_content = self.get_version_content(from_snapshot)
-        to_content = self.get_version_content(to_snapshot)
+        to_content = self.get_version_content(to_snapshot)  # type: ignore[arg-type]
 
         if from_content is None or to_content is None:
             return None
@@ -202,12 +204,15 @@ class VersionTimeTravel:
         from_lines = from_content.splitlines(keepends=True)
         to_lines = to_content.splitlines(keepends=True)
 
-        diff_lines = list(difflib.unified_diff(
-            from_lines, to_lines,
-            fromfile=f"v-{from_snapshot[:8]}",
-            tofile=f"v-{to_snapshot[:8]}",
-            lineterm="",
-        ))
+        diff_lines = list(
+            difflib.unified_diff(
+                from_lines,
+                to_lines,
+                fromfile=f"v-{from_snapshot[:8]}",
+                tofile=f"v-{to_snapshot[:8]}",  # type: ignore[index]
+                lineterm="",
+            )
+        )
 
         # 解析 diff
         added = []
@@ -226,16 +231,14 @@ class VersionTimeTravel:
 
         return VersionDiff(
             from_version=from_snapshot,
-            to_version=to_snapshot,
+            to_version=to_snapshot,  # type: ignore[arg-type]
             added_lines=added,
             removed_lines=removed,
             modified_sections=section_changes,
             frontmatter_changes=fm_changes,
         )
 
-    def restore(self, page_path: Path,
-                snapshot_id: str,
-                create_backup: bool = True) -> bool:
+    def restore(self, page_path: Path, snapshot_id: str, create_backup: bool = True) -> bool:
         """
         恢复到指定版本
 
@@ -288,7 +291,7 @@ class VersionTimeTravel:
     def diff_to_markdown(self, diff: VersionDiff) -> str:
         """将 diff 转换为 Markdown 格式"""
         lines = [
-            f"# 版本对比",
+            "# 版本对比",
             f"**{diff.from_version[:8]}** → **{diff.to_version[:8]}**",
             "",
         ]
@@ -307,10 +310,14 @@ class VersionTimeTravel:
             lines.append("")
 
         if diff.added_lines:
-            lines.extend(["## 新增内容", "```diff", "+ " + "\n+ ".join(diff.added_lines[:20]), "```", ""])
+            lines.extend(
+                ["## 新增内容", "```diff", "+ " + "\n+ ".join(diff.added_lines[:20]), "```", ""]
+            )
 
         if diff.removed_lines:
-            lines.extend(["## 删除内容", "```diff", "- " + "\n- ".join(diff.removed_lines[:20]), "```", ""])
+            lines.extend(
+                ["## 删除内容", "```diff", "- " + "\n- ".join(diff.removed_lines[:20]), "```", ""]
+            )
 
         return "\n".join(lines)
 
@@ -344,8 +351,8 @@ class VersionTimeTravel:
                 if len(parts) >= 3:
                     try:
                         return yaml.safe_load(parts[1]) or {}
-                    except Exception as e:
-                        logger.warning(f"忽略异常: {e}")
+                    except (yaml.YAMLError, ValueError) as e:
+                        logger.warning("忽略异常: %s", e, exc_info=True)
             return {}
 
         old_fm = extract_fm(old_content)
@@ -408,15 +415,16 @@ class VersionTimeTravel:
 
 # ========== 便捷函数 ==========
 
+
 def snapshot_page(page_path: str, change_summary: str = "") -> Optional[VersionSnapshot]:
     """便捷函数：为页面创建快照"""
     traveler = VersionTimeTravel()
     return traveler.snapshot(Path(page_path), change_summary)
 
 
-def show_diff(page_path: str) -> Optional[str]:
+def show_diff(page_path: str, wiki_base: str | None = None) -> Optional[str]:
     """便捷函数：显示页面最近的 diff"""
-    traveler = VersionTimeTravel()
+    traveler = VersionTimeTravel(wiki_base=wiki_base)
     diff = traveler.diff(Path(page_path))
     if diff:
         return traveler.diff_to_markdown(diff)

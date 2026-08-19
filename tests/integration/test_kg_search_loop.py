@@ -12,9 +12,21 @@ P1-3 长链路测试 — KG 搜索链路
 """
 
 import sqlite3
-from pathlib import Path
 
 import pytest
+
+from core.access_policy import AccessNarrowing, PrincipalEnvelope
+
+
+def _principal() -> PrincipalEnvelope:
+    return PrincipalEnvelope(
+        principal_id="mcp:codex:kg-search-test",
+        agent="codex",
+        host_kind="codex",
+        capability_id="kg-search-test",
+        capabilities=frozenset({"memory_read"}),
+        allowed_source_agents=frozenset({"claude"}),
+    )
 
 
 class TestKnowledgeGraphLoop:
@@ -54,10 +66,8 @@ class TestKnowledgeGraphLoop:
         kg.apply_discovered(discovered)
 
         with sqlite3.connect(str(kg_db)) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT source, target, relation_type FROM relations"
-            ).fetchall()
+            conn.row_factory = sqlite3.Row  # noqa
+            rows = conn.execute("SELECT source, target, relation_type FROM relations").fetchall()
             assert len(rows) >= 1
             # 应发现 redis → memcached 的 REFERENCES 关系
             targets = [r["target"] for r in rows]
@@ -75,7 +85,10 @@ class TestKnowledgeGraphLoop:
             kg.apply_discovered(discovered)
 
         # 搜索
-        results = kg.search("caching system")
+        results = kg.search(
+            "caching system",
+            allowed_page_paths={"00-Inbox/redis.md", "00-Inbox/memcached.md"},
+        )
         assert isinstance(results, list)
         # 应召回 memcached 页面（通过 KG 关系或文件系统回退）
         titles = [r.get("title", "") for r in results]
@@ -94,7 +107,7 @@ class TestKnowledgeGraphLoop:
             kg.apply_discovered(discovered)
 
         with sqlite3.connect(str(kg_db)) as conn:
-            conn.row_factory = sqlite3.Row
+            conn.row_factory = sqlite3.Row  # noqa
             count = conn.execute(
                 "SELECT COUNT(*) as cnt FROM relations WHERE source LIKE '%redis%'"
             ).fetchone()["cnt"]
@@ -112,12 +125,16 @@ class TestContextAwareSearchLoop:
         inbox.mkdir(parents=True)
 
         (inbox / "docker.md").write_text(
-            "---\ntype: concept\nsource_agent: claude\nconfidence: 0.9\n---\n\n"
+            "---\ntype: concept\nscope: agent\nsource_agent: claude\n"
+            "acl_schema_version: 1\nacl_metadata_complete: true\n"
+            "acl_reconciliation_status: proven\nconfidence: 0.9\n---\n\n"
             "# Docker\n\nDocker is a containerization platform.\n",
             encoding="utf-8",
         )
         (inbox / "k8s.md").write_text(
-            "---\ntype: concept\nsource_agent: claude\nconfidence: 0.85\n---\n\n"
+            "---\ntype: concept\nscope: agent\nsource_agent: claude\n"
+            "acl_schema_version: 1\nacl_metadata_complete: true\n"
+            "acl_reconciliation_status: proven\nconfidence: 0.85\n---\n\n"
             "# Kubernetes\n\nKubernetes orchestrates Docker containers.\n",
             encoding="utf-8",
         )
@@ -127,7 +144,11 @@ class TestContextAwareSearchLoop:
         from core.app.context_search import ContextAwareSearch
 
         searcher = ContextAwareSearch(wiki_base=str(search_env))
-        results = searcher.search("container orchestration")
+        results = searcher.search(
+            "container orchestration",
+            principal=_principal(),
+            narrowing=AccessNarrowing(),
+        )
 
         assert isinstance(results, list)
         assert len(results) >= 1
@@ -141,7 +162,11 @@ class TestContextAwareSearchLoop:
 
         searcher = ContextAwareSearch(wiki_base=str(search_env))
         # 查询一个不太可能出现在 KG 中的词
-        results = searcher.search("orchestrates Docker")
+        results = searcher.search(
+            "orchestrates Docker",
+            principal=_principal(),
+            narrowing=AccessNarrowing(),
+        )
 
         assert isinstance(results, list)
         # 至少应通过文件系统搜索召回 k8s.md（SearchResult 对象）
@@ -159,7 +184,7 @@ class TestTeiresiasPushLoop:
         inbox.mkdir(parents=True)
         # frontmatter 需使用嵌套 关键词 结构才能被 _get_page_index 识别
         (inbox / "python.md").write_text(
-            "---\ntype: concept\n关键词:\n  工具实体: [\"Python\", \"pip\"]\n---\n\n"
+            '---\ntype: concept\n关键词:\n  工具实体: ["Python", "pip"]\n---\n\n'
             "# Python\n\nPython programming.\n",
             encoding="utf-8",
         )
@@ -175,7 +200,5 @@ class TestTeiresiasPushLoop:
         assert isinstance(decision, object)
         # 如果匹配到 Python 页面，应产生推送推荐
         if decision.should_push:
-            assert hasattr(decision, "matched_pages")
-            if decision.matched_pages:
-                assert any("python" in p.get("page_path", "").lower()
-                           for p in decision.matched_pages)
+            assert decision.matches
+            assert any("python" in m.page_path.lower() for m in decision.matches)

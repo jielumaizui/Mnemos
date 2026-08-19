@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """为所有 Inbox 页面建立跨 Agent 关联"""
+
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+import logging  # noqa: E402
 
-from core.kia.cross_agent_linker import CrossAgentLinker
-from core.config import get_config
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+from core.kia.cross_agent_linker import CrossAgentLinker  # noqa: E402
+from core.config import get_config  # noqa: E402
 
 
 def main():
@@ -32,7 +35,7 @@ def main():
             if actions:
                 total_links += len(actions)
                 print(f"  {page.name}: {len(actions)} links")
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
             print(f"  {page.name}: ERROR {e}")
 
     print(f"\nTotal link actions: {total_links}")

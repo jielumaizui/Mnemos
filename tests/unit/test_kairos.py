@@ -1,7 +1,14 @@
 import unittest
 from datetime import datetime, timedelta
 
-from core.kia.kairos import PeriodicDetector, TimeParser, TimeWindowType
+from core.kia.kairos import (
+    PeriodicDetector,
+    TimeParser,
+    TimeWindow,
+    TimeWindowType,
+    parse_time,
+    should_load_knowledge,
+)
 
 
 class TestKairosTimeParser(unittest.TestCase):
@@ -81,6 +88,39 @@ class TestKairosTimeParser(unittest.TestCase):
 
         self.assertEqual(result.days_until, 14)
         self.assertEqual(result.window, TimeWindowType.MEDIUM)
+
+    def test_parse_time_convenience_api_honors_reference_and_task_type(self):
+        result = parse_time(
+            "有空时处理",
+            reference_time=datetime(2026, 5, 27, 9, 0),
+            task_type="strategy",
+        )
+
+        self.assertEqual(result.window, TimeWindowType.SHORT)
+        self.assertEqual(result.days_until, 2)
+        self.assertEqual(result.due_date.date(), datetime(2026, 5, 29).date())
+
+    def test_should_load_knowledge_convenience_api_uses_task_type(self):
+        should_load, window = should_load_knowledge("帮我看看这个方案", task_type="coding")
+
+        self.assertTrue(should_load)
+        self.assertEqual(window.window, TimeWindowType.NO_TIME_INTENT)
+
+    def test_reminder_days_before_matches_time_window_policy(self):
+        parser = TimeParser(reference_time=datetime(2026, 5, 27, 9, 0))
+
+        self.assertEqual(
+            parser.get_reminder_days_before(TimeWindow(TimeWindowType.MEDIUM, 14)),
+            3,
+        )
+        self.assertEqual(
+            parser.get_reminder_days_before(TimeWindow(TimeWindowType.LONG, 45)),
+            7,
+        )
+        self.assertEqual(
+            parser.get_reminder_days_before(TimeWindow(TimeWindowType.SHORT, 3)),
+            0,
+        )
 
 
 class TestPeriodicDetector(unittest.TestCase):

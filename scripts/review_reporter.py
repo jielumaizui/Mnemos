@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 Background Review — 报告生成器
 将审查 Agent 的 JSON 输出转换为 ERRORS.md 格式并写入
@@ -11,17 +12,18 @@ import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 from dataclasses import dataclass
 from core.config import get_config
 
 ERRORS_MD_PATH = get_config().data_dir / "learnings/ERRORS.md"
-REVIEW_LOG_PATH = get_config().data_dir / "logs/review_history.jsonl"
+REVIEW_LOG_PATH = get_config().database_dir / "logs/review_history.jsonl"
 
 
 @dataclass
 class ReviewFinding:
     """审查发现"""
+
     id: str
     severity: str
     dimension: str
@@ -39,34 +41,30 @@ class ReviewFinding:
     def dedupe_key(self) -> str:
         """生成去重键"""
         content = f"{self.file}:{self.line_start}:{self.title}"
-        return hashlib.sha1(content.encode()).hexdigest()[:12]
+        return hashlib.sha1(content.encode(), usedforsecurity=False).hexdigest()[:12]
 
     def to_errors_md(self) -> str:
         """转换为 ERRORS.md 条目格式"""
-        severity_emoji = {
-            "critical": "🔴",
-            "warning": "🟡",
-            "info": "🟢"
-        }.get(self.severity, "⚪")
+        severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🟢"}.get(self.severity, "⚪")
 
         lines = [
             f"## {self.id} | {self.title}",
-            f"",
+            "",
             f"- **严重程度**: {severity_emoji} {self.severity}",
             f"- **维度**: {self.dimension}",
             f"- **文件**: `{self.file}:{self.line_start}-{self.line_end}`",
             f"- **审查批次**: {self.review_batch}",
             f"- **状态**: {self.status}",
-            f"",
-            f"**描述**:",
+            "",
+            "**描述**:",
             f"{self.description}",
-            f"",
-            f"**建议修复**:",
+            "",
+            "**建议修复**:",
             f"{self.suggestion}",
-            f"",
+            "",
             f"**修复成本**: {self.effort}",
             f"**忽略风险**: {self.risk_if_ignored}",
-            f""
+            "",
         ]
         return "\n".join(lines)
 
@@ -84,9 +82,9 @@ class ReviewReporter:
         self.errors_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def load_existing_findings(self) -> Dict[str, ReviewFinding]:
+    def load_existing_findings(self) -> Dict[str, str]:
         """从 ERRORS.md 加载已有发现（用于去重）"""
-        findings = {}
+        findings: Dict[str, str] = {}
         if not self.errors_path.exists():
             return findings
 
@@ -98,10 +96,10 @@ class ReviewReporter:
             finding_id = match.group(1)
             title = match.group(2)
             # 提取 file:line
-            file_match = re.search(r"`(.+?):(\d+)-", content[match.end():match.end()+500])
+            file_match = re.search(r"`(.+?):(\d+)-", content[match.end() : match.end() + 500])
             if file_match:
                 key = f"{file_match.group(1)}:{file_match.group(2)}:{title}"
-                findings[hashlib.sha1(key.encode()).hexdigest()[:12]] = finding_id
+                findings[hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:12]] = finding_id
 
         return findings
 
@@ -123,7 +121,7 @@ class ReviewReporter:
                 suggestion=item.get("suggestion", ""),
                 effort=item.get("effort", "s"),
                 risk_if_ignored=item.get("risk_if_ignored", ""),
-                review_batch=batch_id
+                review_batch=batch_id,
             )
             findings.append(finding)
 
@@ -151,9 +149,9 @@ class ReviewReporter:
 
         # 读取现有内容
         if self.errors_path.exists():
-            content = self.errors_path.read_text(encoding="utf-8")
+            _ = self.errors_path.read_text(encoding="utf-8")
         else:
-            content = self._create_errors_header()
+            self._create_errors_header()
 
         # 追加新条目
         new_entries = []
@@ -178,7 +176,7 @@ class ReviewReporter:
             "timestamp": datetime.now().isoformat(),
             "total_findings": len(findings),
             "severity_counts": self._count_by_severity(findings),
-            "finding_ids": [f.id for f in findings]
+            "finding_ids": [f.id for f in findings],
         }
 
         with open(self.log_path, "a", encoding="utf-8") as f:
@@ -192,7 +190,7 @@ class ReviewReporter:
 
     def _count_by_severity(self, findings: List[ReviewFinding]) -> Dict[str, int]:
         """按 severity 统计"""
-        counts = {}
+        counts: Dict[str, int] = {}
         for f in findings:
             counts[f.severity] = counts.get(f.severity, 0) + 1
         return counts
@@ -252,6 +250,7 @@ class ReviewReporter:
 def main():
     """CLI 入口"""
     import argparse
+
     parser = argparse.ArgumentParser(description="Background Review Reporter")
     parser.add_argument("--input", "-i", required=True, help="审查 JSON 输出文件路径")
     parser.add_argument("--batch-id", "-b", required=True, help="审查批次 ID")

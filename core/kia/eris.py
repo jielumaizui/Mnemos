@@ -13,39 +13,83 @@ Knowledge Entropy Engine - 知识熵减引擎
 - 合并策略基于内容完整性、时效性、置信度综合判断
 - 输出结构化报告，支持批量处理
 """
+
 # Eris — 纷争女神 — 熵引擎，知识混乱度与新鲜度计算
 # 原模块: entropy_engine.py
 
 
-
-import json
+import heapq
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from core.config import get_config
+from core.cognitive.state_contract import sha256_json
 from core.pluggable import PluggableModule
+from core.trust.formal_markdown import (
+    TrustedMarkdownDecisionPolicy,
+    authorize_exact_markdown_action,
+)
+from core.trust.markdown_adapter import read_markdown_text
+from core.trust.markdown_update import trusted_markdown_delete
+from core.trust.models import sha256_text
 
 import logging
+
 logger = logging.getLogger(__name__)
+
+ERIS_DUPLICATE_DELETE_MARKDOWN_POLICY = TrustedMarkdownDecisionPolicy(
+    contract_id="project-contract:eris-exact-duplicate-delete",
+    contract_revision_id="mnemos.eris_exact_duplicate_delete.v1",
+    contract_text=(
+        "Eris may delete only the exact discard-page preimage selected by an "
+        "explicit auto-fix request for one exact duplicate candidate and keep page."
+    ),
+    source_namespace="eris-exact-duplicate-delete",
+    producer="eris-entropy-autofix",
+    producer_code_hash=sha256_json(
+        {
+            "module": "core.kia.eris",
+            "producer": "EntropyEngine.auto_fix",
+            "version": "mnemos.eris_exact_duplicate_delete.v1",
+        }
+    ),
+    evaluator_id="eris-exact-duplicate-delete-evaluator",
+    constraints=(
+        "Keep page, discard page, discard preimage, similarity, and strategy remain exact.",
+        "Deletion is forbidden unless apply_duplicates was explicitly selected.",
+    ),
+    approved_candidate_key="delete_exact_reviewed_duplicate",
+    approved_candidate_summary="Delete the exact reviewed duplicate while retaining its keep page.",
+    rejected_candidate_key="retain_duplicate_for_manual_review",
+    rejected_candidate_summary="Retain both pages when candidate or bytes drift.",
+    approved_reason_code="eris_duplicate_delete_binding_verified",
+    rejected_reason_code="eris_duplicate_delete_binding_rejected",
+    committed_metric="eris_duplicate_delete_committed",
+    rejected_metric="unbound_eris_duplicate_delete_count",
+)
+
 
 @dataclass
 class MergeCandidate:
     """合并候选"""
+
     page_a: str
     page_b: str
     similarity: float
-    merge_strategy: str      # delete_duplicate / merge_into_one / link_related / cross_reference
+    merge_strategy: str  # delete_duplicate / merge_into_one / link_related / cross_reference
     reason: str
     recommended_action: str
-    keep_page: str = ""      # 建议保留的页面（合并/删除时）
+    keep_page: str = ""  # 建议保留的页面（合并/删除时）
     confidence: float = 0.0
 
 
 @dataclass
 class EntropyReport:
     """熵减报告"""
+
     total_pairs_scanned: int = 0
+    total_candidates_seen: int = 0
     candidates: List[MergeCandidate] = field(default_factory=list)
     estimated_savings: Dict[str, int] = field(default_factory=dict)  # 预估节省
 
@@ -62,6 +106,47 @@ class EntropyReport:
         return sum(1 for c in self.candidates if c.merge_strategy == "link_related")
 
 
+class _TopKBuffer:
+    """流式维护 top-k 候选，避免全量加载到内存。
+
+    使用最小堆存储 (-similarity, page_a, page_b, candidate)，
+    page_a/page_b 作为 tiebreaker 保证元组可比较。
+    同时维护 seen_pairs 实现实时去重。
+    """
+
+    def __init__(self, max_size: int = 1000):
+        self.max_size = max_size
+        self._heap: List[Tuple[float, str, str, MergeCandidate]] = []
+        self._seen_pairs: set = set()
+        self.total_added = 0
+
+    def add(self, candidate: MergeCandidate) -> bool:
+        pair = tuple(sorted([candidate.page_a, candidate.page_b]))
+        if pair in self._seen_pairs:
+            return False
+        self._seen_pairs.add(pair)
+        self.total_added += 1
+
+        entry = (-candidate.similarity, candidate.page_a, candidate.page_b, candidate)
+
+        if len(self._heap) < self.max_size:
+            heapq.heappush(self._heap, entry)
+            return True
+
+        # 新候选相似度 > 当前堆中最小相似度时替换
+        if entry[0] < self._heap[0][0]:
+            heapq.heapreplace(self._heap, entry)
+            return True
+        return False
+
+    def __len__(self) -> int:
+        return len(self._heap)
+
+    def get_sorted(self) -> List[MergeCandidate]:
+        """按相似度降序返回候选。"""
+        return [e[3] for e in sorted(self._heap, key=lambda x: x[0])]
+
+
 class EntropyEngine(PluggableModule):
     """知识熵减引擎 — 实现 PluggableModule 热插拔接口"""
 
@@ -70,12 +155,10 @@ class EntropyEngine(PluggableModule):
     MERGE_THRESHOLD = 0.80
     LINK_THRESHOLD = 0.60
     CROSS_REFERENCE_THRESHOLD = 0.40
-    EXCLUDED_DIRS = {"99-Reports", "07-Shadow", ".git", ".kg", "__pycache__"}
+    EXCLUDED_DIRS = {".git", ".kg", "__pycache__"}
 
-    def __init__(self, wiki_base: str = None):
-        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (
-            get_config().wiki_dir
-        )
+    def __init__(self, wiki_base: str | None = None):
+        self.wiki_base = Path(wiki_base).expanduser() if wiki_base else (get_config().wiki_dir)
 
         # 懒加载 DNA 引擎
         self._dna_engine = None
@@ -111,23 +194,95 @@ class EntropyEngine(PluggableModule):
                 self.scan()
 
     def _on_knowledge_ingested(self, page_path: Path) -> None:
-        """新知识入库后的增量扫描（TODO: 实现仅扫描新页面 vs 已有页面的增量模式）"""
-        # 当前熵减引擎只有全库扫描能力，增量场景下不触发全量 scan()
-        # 避免每次入库都进行 O(n²) 的全库比对。
-        # 未来应实现：仅将新页面与已有页面进行两两比对。
-        logger.debug(f"新知识入库 '{page_path.name}'，增量熵减扫描待实现")
+        """新知识入库后的增量扫描 — 仅比较新页面与已有页面，避免 O(n²) 全库比对"""
+        if not self._enabled or not page_path.exists():
+            return
+        try:
+            report = self._incremental_scan(page_path)
+            if report.candidates:
+                logger.info(
+                    "增量熵减: '%s' 与 %s 个已有页面比对，发现 %s 个候选",
+                    page_path.name,
+                    report.total_pairs_scanned,
+                    len(report.candidates),
+                )
+                self._emit_event(
+                    "entropy.suggestions",
+                    {
+                        "trigger": "incremental",
+                        "new_page": str(page_path),
+                        "candidate_count": len(report.candidates),
+                        "total_candidate_count": report.total_candidates_seen,
+                        "estimated_savings": report.estimated_savings,
+                        "candidates": [c.__dict__ for c in report.candidates],
+                    },
+                )
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError) as e:
+            logger.debug("增量熵减扫描失败: %s", e)
+
+    def _incremental_scan(self, new_page: Path) -> EntropyReport:
+        """增量扫描：仅将新页面与已有页面进行两两比对"""
+        if not self.dna_engine:
+            return EntropyReport()
+
+        # 1. 计算新页面的 DNA
+        new_dna = self.dna_engine.compute_dna(new_page)
+        if not new_dna:
+            return EntropyReport()
+        self.dna_engine.save_dna(new_dna)
+
+        # 2. 获取已有页面的 DNA（排除新页面自身）
+        existing_pages = [p for p in self._list_pages() if p != new_page]
+        if len(existing_pages) < 1:
+            return EntropyReport()
+
+        buffer = _TopKBuffer(max_size=1000)
+        compared = 0
+        for existing_page in existing_pages:
+            existing_dna = (
+                self.dna_engine.load_dna(str(existing_page))
+                if hasattr(self.dna_engine, "load_dna")
+                else None
+            )
+            if not existing_dna:
+                existing_dna = self.dna_engine.compute_dna(existing_page)
+                if not existing_dna:
+                    continue
+                self.dna_engine.save_dna(existing_dna)
+
+            # 快速过滤：不同领域+不同类型 跳过
+            if not self._should_compare(new_dna, existing_dna):
+                continue
+
+            # 计算相似度
+            result = self.dna_engine.compare(new_dna, existing_dna)
+            compared += 1
+
+            if result.overall_score >= self.CROSS_REFERENCE_THRESHOLD:
+                candidate = self._generate_candidate(new_dna, existing_dna, result)
+                if candidate:
+                    buffer.add(candidate)
+
+        unique = buffer.get_sorted()
+        return EntropyReport(
+            total_pairs_scanned=compared,
+            total_candidates_seen=buffer.total_added,
+            candidates=unique,
+            estimated_savings=self._estimate_savings(unique),
+        )
 
     @property
     def dna_engine(self):
         if self._dna_engine is None:
             try:
                 from .genos import DNAEngine
+
                 self._dna_engine = DNAEngine(wiki_base=str(self.wiki_base))
             except ImportError:
                 self._dna_engine = None
         return self._dna_engine
 
-    def scan(self, sample_size: int = None) -> EntropyReport:
+    def scan(self, sample_size: int | None = None) -> EntropyReport:
         """
         扫描知识库，找出合并候选
 
@@ -140,32 +295,32 @@ class EntropyEngine(PluggableModule):
         if not self.wiki_base.exists():
             return EntropyReport()
 
-        # 1. 为所有页面计算 DNA
+        # 1. 获取所有页面的 DNA（优先读缓存，未命中再计算）
         pages = self._list_pages()
         dnas = []
         for page in pages:
-            if self.dna_engine:
+            if not self.dna_engine:
+                continue
+            dna = None
+            if hasattr(self.dna_engine, "load_dna"):
+                dna = self.dna_engine.load_dna(str(page))
+            if not dna:
                 dna = self.dna_engine.compute_dna(page)
                 if dna:
                     self.dna_engine.save_dna(dna)
-                    dnas.append(dna)
+            if dna:
+                dnas.append(dna)
 
         if len(dnas) < 2:
             return EntropyReport()
 
         # 2. 两两比较（优化：只比较同领域/同类型的页面）
-        candidates = []
-        compared = set()
+        buffer = _TopKBuffer(max_size=sample_size or 1000)
+        pairs_scanned = 0
 
         for i, dna_a in enumerate(dnas):
-            for j, dna_b in enumerate(dnas[i + 1:], i + 1):
-                if sample_size and len(compared) >= sample_size:
-                    break
-
-                pair_key = tuple(sorted([dna_a.page_path, dna_b.page_path]))
-                if pair_key in compared:
-                    continue
-                compared.add(pair_key)
+            for j, dna_b in enumerate(dnas[i + 1 :], i + 1):
+                pairs_scanned += 1
 
                 # 快速过滤：不同领域+不同类型 跳过
                 if not self._should_compare(dna_a, dna_b):
@@ -175,39 +330,30 @@ class EntropyEngine(PluggableModule):
                 result = self.dna_engine.compare(dna_a, dna_b)
 
                 if result.overall_score >= self.CROSS_REFERENCE_THRESHOLD:
-                    candidate = self._generate_candidate(
-                        dna_a, dna_b, result
-                    )
+                    candidate = self._generate_candidate(dna_a, dna_b, result)
                     if candidate:
-                        candidates.append(candidate)
+                        buffer.add(candidate)
 
-            if sample_size and len(compared) >= sample_size:
-                break
-
-        # 3. 按相似度排序
-        candidates.sort(key=lambda x: x.similarity, reverse=True)
-
-        # 4. 去重（避免 A-B 和 B-A 同时出现）
-        seen_pairs = set()
-        unique = []
-        for c in candidates:
-            pair = tuple(sorted([c.page_a, c.page_b]))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                unique.append(c)
-
+        unique = buffer.get_sorted()
         estimated_savings = self._estimate_savings(unique)
         report = EntropyReport(
-            total_pairs_scanned=len(compared),
+            total_pairs_scanned=pairs_scanned,
+            total_candidates_seen=buffer.total_added,
             candidates=unique,
             estimated_savings=estimated_savings,
         )
         # 发布熵减建议事件
         if unique:
-            self._emit_event("entropy.suggestions", {
-                "candidate_count": len(unique),
-                "estimated_savings": estimated_savings,
-            })
+            self._emit_event(
+                "entropy.suggestions",
+                {
+                    "trigger": "scan",
+                    "candidate_count": len(unique),
+                    "total_candidate_count": buffer.total_added,
+                    "estimated_savings": estimated_savings,
+                    "candidates": [c.__dict__ for c in unique],
+                },
+            )
         return report
 
     def _list_pages(self) -> List[Path]:
@@ -328,7 +474,7 @@ class EntropyEngine(PluggableModule):
             similarity=round(score, 3),
             merge_strategy="cross_reference",
             reason=reason,
-            recommended_action=f"在 '{Path(dna_a.page_path).name}' 与 '{Path(dna_b.page_path).name}' 中加入双向引用",
+            recommended_action=f"在 '{Path(dna_a.page_path).name}' 与 '{Path(dna_b.page_path).name}' 中加入双向引用",  # noqa: E501
             confidence=score,
         )
 
@@ -346,7 +492,7 @@ class EntropyEngine(PluggableModule):
                 score += 0.3
             scores[dna.page_path] = score
 
-        return max(scores, key=scores.get)
+        return max(scores, key=scores.get)  # type: ignore[arg-type, no-any-return]
 
     def _analyze_complement(self, dna_a, dna_b) -> str:
         """分析两个页面的互补内容"""
@@ -390,15 +536,16 @@ class EntropyEngine(PluggableModule):
         for candidate in candidates:
             if candidate.merge_strategy not in {"delete_duplicate", "merge_into_one"}:
                 continue
-            discard = candidate.page_b if candidate.keep_page == candidate.page_a else candidate.page_a
+            discard = (
+                candidate.page_b if candidate.keep_page == candidate.page_a else candidate.page_a
+            )
             if discard in removable_pages:
                 continue
             removable_pages.add(discard)
             try:
                 estimated_chars += len(Path(discard).read_text(encoding="utf-8"))
-            except Exception:
-                logging.getLogger(__name__).warning(f"Caught unexpected error", exc_info=True)
-                pass
+            except (OSError, IOError):
+                logging.getLogger(__name__).warning("Caught unexpected error", exc_info=True)
         return {
             "pages": len(removable_pages),
             "characters": estimated_chars,
@@ -413,6 +560,7 @@ class EntropyEngine(PluggableModule):
             f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             f"扫描对数: {report.total_pairs_scanned}",
             f"发现候选: {len(report.candidates)}",
+            f"候选总数: {report.total_candidates_seen}",
             f"- 完全重复: {report.duplicate_count}",
             f"- 可合并: {report.mergeable_count}",
             f"- 建议关联: {report.linkable_count}",
@@ -426,7 +574,7 @@ class EntropyEngine(PluggableModule):
             return "\n".join(lines)
 
         # 按策略分组
-        strategy_groups = {
+        strategy_groups = {  # type: ignore[var-annotated]
             "delete_duplicate": ([], "🔴 完全重复（建议删除）"),
             "merge_into_one": ([], "🟠 高度相似（建议合并）"),
             "link_related": ([], "🟡 部分重叠（建议关联）"),
@@ -437,7 +585,7 @@ class EntropyEngine(PluggableModule):
             if candidate.merge_strategy in strategy_groups:
                 strategy_groups[candidate.merge_strategy][0].append(candidate)
 
-        for (candidates, title) in strategy_groups.values():
+        for candidates, title in strategy_groups.values():
             if not candidates:
                 continue
             lines.extend([f"## {title}", ""])
@@ -451,9 +599,9 @@ class EntropyEngine(PluggableModule):
 
         return "\n".join(lines)
 
-    def auto_fix(self, report: EntropyReport,
-                 apply_duplicates: bool = False,
-                 apply_links: bool = True) -> List[str]:
+    def auto_fix(
+        self, report: EntropyReport, apply_duplicates: bool = False, apply_links: bool = False
+    ) -> List[str]:
         """
         自动执行低风险的熵减操作
 
@@ -469,17 +617,60 @@ class EntropyEngine(PluggableModule):
         for candidate in report.candidates:
             if candidate.merge_strategy == "delete_duplicate" and apply_duplicates:
                 # 删除重复页面
-                discard = candidate.page_b if candidate.keep_page == candidate.page_a else candidate.page_a
+                discard = (
+                    candidate.page_b
+                    if candidate.keep_page == candidate.page_a
+                    else candidate.page_a
+                )
                 try:
-                    Path(discard).unlink()
-                    logs.append(f"已删除重复页面: {Path(discard).name}")
-                except Exception as e:
+                    discard_path = Path(discard)
+                    discard_content = read_markdown_text(discard_path)
+                    evidence_refs = [f"kept:{candidate.keep_page}"]
+                    material_action = authorize_exact_markdown_action(
+                        policy=ERIS_DUPLICATE_DELETE_MARKDOWN_POLICY,
+                        wiki_base=self.wiki_base,
+                        target_path=discard_path,
+                        content="",
+                        proposed_action="delete_exact_duplicate",
+                        expected_existing_hash=sha256_text(discard_content),
+                        source_facts={
+                            "schema_version": "mnemos.eris_duplicate_delete_facts.v1",
+                            "page_a": candidate.page_a,
+                            "page_b": candidate.page_b,
+                            "keep_page": candidate.keep_page,
+                            "discard_page": discard,
+                            "similarity": candidate.similarity,
+                            "merge_strategy": candidate.merge_strategy,
+                            "reason": candidate.reason,
+                            "recommended_action": candidate.recommended_action,
+                            "confidence": candidate.confidence,
+                        },
+                        evidence_refs=evidence_refs,
+                        task=f"Delete exact duplicate {discard_path.name}",
+                        goal="Remove only the exact reviewed duplicate page preimage.",
+                        created_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    receipt = trusted_markdown_delete(
+                        self.wiki_base,
+                        discard_path,
+                        "eris_entropy_autofix",
+                        "delete_exact_duplicate",
+                        evidence_refs=evidence_refs,
+                        metadata={"similarity": candidate.similarity},
+                        material_action=material_action,
+                    )
+                    if receipt.intercepted:
+                        logs.append(f"已提交删除重复页面提案: {Path(discard).name}")
+                    else:
+                        logs.append(f"已删除重复页面: {Path(discard).name}")
+                except (OSError, IOError) as e:
                     logs.append(f"删除失败 {Path(discard).name}: {e}")
 
             elif candidate.merge_strategy in {"link_related", "cross_reference"} and apply_links:
                 # 自动建立关系
                 try:
-                    from .knowledge_graph import KnowledgeGraph, Relation, RelationType
+                    from .knowledge_graph import KnowledgeGraph, Relation
+
                     kg = KnowledgeGraph(wiki_base=str(self.wiki_base))
                     rel_type = self._map_to_relation_type(candidate)
                     rel = Relation(
@@ -491,8 +682,10 @@ class EntropyEngine(PluggableModule):
                         source_method="entropy_engine",
                     )
                     if kg.add_relation(rel):
-                        logs.append(f"已建立关系: {Path(candidate.page_a).name} {rel_type.value} {Path(candidate.page_b).name}")
-                except Exception as e:
+                        logs.append(
+                            f"已建立关系: {Path(candidate.page_a).name} {rel_type.value} {Path(candidate.page_b).name}"  # noqa: E501
+                        )
+                except ImportError as e:
                     logs.append(f"建立关系失败: {e}")
 
         return logs
@@ -516,14 +709,19 @@ class EntropyEngine(PluggableModule):
 
 # ========== 便捷函数 ==========
 
-def run_entropy_scan(wiki_base: str = None) -> EntropyReport:
+
+def run_entropy_scan(wiki_base: str | None = None, sample_size: int | None = None) -> EntropyReport:
     """便捷函数：运行熵减扫描"""
     engine = EntropyEngine(wiki_base=wiki_base)
-    return engine.scan()
+    return engine.scan(sample_size=sample_size)
 
 
-def run_and_report(wiki_base: str = None) -> str:
+def run_and_report(
+    wiki_base: str | None = None,
+    report: EntropyReport | None = None,
+    sample_size: int | None = None,
+) -> str:
     """便捷函数：运行扫描并生成报告"""
     engine = EntropyEngine(wiki_base=wiki_base)
-    report = engine.scan()
+    report = report or engine.scan(sample_size=sample_size)
     return engine.generate_report(report)

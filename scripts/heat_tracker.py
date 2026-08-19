@@ -10,26 +10,168 @@ Heat Tracker - 知识库可视化报告生成器
     python3 scripts/heat_tracker.py --output ~/Desktop/wiki_heat.html
 """
 
-import os
 import sys
 import json
 import sqlite3
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import Counter
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.config import get_config
+from core.config import get_config  # noqa: E402
 
 WIKI_DIR = get_config().wiki_dir
 OUTPUT_DEFAULT = WIKI_DIR / ".kg" / "heat_report.html"
 
 
+def _count_domain_pages(wiki_dir: Path) -> Tuple[int, Dict[str, int]]:
+    """统计各目录的 markdown 页面数。"""
+    dir_counts: Dict[str, int] = {}
+    total_pages = 0
+    for subdir in [
+        "00-Inbox",
+        "01-People",
+        "02-Projects",
+        "03-Tech",
+        "04-Concepts",
+        "05-MOCs",
+        "retrospectives",
+    ]:
+        path = wiki_dir / subdir
+        if path.exists():
+            md_files = list(path.rglob("*.md"))
+            dir_counts[subdir] = len(md_files)
+            total_pages += len(md_files)
+    return total_pages, dir_counts
+
+
+def _read_graph_counts(graph_db: Path) -> Tuple[int, int]:
+    """从知识图谱数据库读取实体和关系数。"""
+    total_entities = 0
+    total_relations = 0
+    if graph_db.exists():
+        try:
+            with sqlite3.connect(str(graph_db), timeout=10) as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM entities")
+                total_entities = cursor.fetchone()[0]
+                cursor = conn.execute("SELECT COUNT(*) FROM relations")
+                total_relations = cursor.fetchone()[0]
+        except (sqlite3.Error, OSError):
+            pass
+    return total_entities, total_relations
+
+
+def _scan_page_frontmatter(md_file: Path, wiki_dir: Path) -> Optional[Dict[str, Any]]:
+    """读取单个 wiki 页面的 frontmatter，提取类型、热力、最近更新信息。"""
+    try:
+        content = md_file.read_text(encoding="utf-8")
+    except ValueError:
+        return None
+
+    frontmatter: Dict[str, Any] = {}
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                import yaml
+
+                frontmatter = yaml.safe_load(parts[1]) or {}
+            except ImportError:
+                pass
+
+    page_type = frontmatter.get("type", "unknown")
+    heat = frontmatter.get("heat", frontmatter.get("freshness_score", 0))
+    title = frontmatter.get("title", md_file.stem)
+    rel_path = str(md_file.relative_to(wiki_dir))
+
+    heat_entry: Optional[Dict[str, Any]] = None
+    if heat:
+        heat_entry = {
+            "page": rel_path,
+            "heat": float(heat) if isinstance(heat, (int, float)) else 0.5,
+            "title": title,
+        }
+
+    recent_entry: Optional[Dict[str, Any]] = None
+    updated = frontmatter.get("updated", "")
+    if updated:
+        try:
+            updated_date = datetime.strptime(updated, "%Y-%m-%d")
+            days_ago = (datetime.now() - updated_date).days
+            if days_ago <= 30:
+                recent_entry = {
+                    "page": rel_path,
+                    "title": title,
+                    "updated": updated,
+                    "days_ago": days_ago,
+                    "heat": frontmatter.get("heat", 0.5),
+                }
+        except ValueError:
+            pass
+
+    return {
+        "type": page_type,
+        "heat_entry": heat_entry,
+        "recent_entry": recent_entry,
+    }
+
+
+def _collect_heat_and_recent(wiki_dir: Path) -> Tuple[Dict[str, int], List[Dict], List[Dict]]:
+    """遍历 wiki 页面，收集类型分布、热力分数、最近更新页面。"""
+    heat_scores: List[Dict] = []
+    type_counts: Counter = Counter()
+    recent_pages: List[Dict] = []
+
+    for md_file in wiki_dir.rglob("*.md"):
+        page_info = _scan_page_frontmatter(md_file, wiki_dir)
+        if page_info is None:
+            continue
+
+        page_type = page_info["type"]
+        if page_type:
+            type_counts[page_type] += 1
+
+        heat_entry = page_info["heat_entry"]
+        if heat_entry:
+            heat_scores.append(heat_entry)
+
+        recent_entry = page_info["recent_entry"]
+        if recent_entry:
+            recent_pages.append(recent_entry)
+
+    type_distribution = dict(type_counts)
+    heat_scores = sorted(heat_scores, key=lambda x: x["heat"], reverse=True)[:50]
+    recent_pages = sorted(recent_pages, key=lambda x: x["days_ago"])[:20]
+    return type_distribution, heat_scores, recent_pages
+
+
+def _read_top_entities(dna_db: Path) -> List[Tuple[str, int]]:
+    """从 DNA 数据库读取高频实体。"""
+    if not dna_db.exists():
+        return []
+    try:
+        with sqlite3.connect(str(dna_db), timeout=10) as conn:
+            cursor = conn.execute("""
+                SELECT page_path, keywords FROM knowledge_dna
+                ORDER BY created_at DESC LIMIT 50
+            """)
+            entity_counts: Counter = Counter()
+            for row in cursor.fetchall():
+                keywords = row[1]
+                if keywords:
+                    for kw in keywords.split(","):
+                        entity_counts[kw.strip()] += 1
+            return entity_counts.most_common(20)
+    except (sqlite3.Error, OSError):
+        return []
+
+
 def collect_wiki_stats() -> dict:
     """收集 Wiki 统计数据"""
-    stats = {
+    stats: Dict[str, Any] = {
         "total_pages": 0,
         "total_entities": 0,
         "total_relations": 0,
@@ -43,104 +185,16 @@ def collect_wiki_stats() -> dict:
     if not WIKI_DIR.exists():
         return stats
 
-    # 统计各目录文件数
-    dir_counts = {}
-    for subdir in ["00-Inbox", "01-People", "02-Projects", "03-Tech",
-                   "04-Concepts", "05-MOCs", "retrospectives"]:
-        path = WIKI_DIR / subdir
-        if path.exists():
-            md_files = list(path.rglob("*.md"))
-            dir_counts[subdir] = len(md_files)
-            stats["total_pages"] += len(md_files)
-
-    stats["domain_distribution"] = dir_counts
-
-    # 尝试从知识图谱数据库获取实体和关系数
-    graph_db = WIKI_DIR / ".kg" / "graph.db"
-    if graph_db.exists():
-        try:
-            with sqlite3.connect(str(graph_db), timeout=10) as conn:
-                cursor = conn.execute("SELECT COUNT(*) FROM entities")
-                stats["total_entities"] = cursor.fetchone()[0]
-                cursor = conn.execute("SELECT COUNT(*) FROM relations")
-                stats["total_relations"] = cursor.fetchone()[0]
-        except Exception:
-            pass
-
-    # 从 wiki 页面 frontmatter 提取类型和热力数据
-    heat_scores = []
-    type_counts = Counter()
-    recent_pages = []
-
-    for md_file in WIKI_DIR.rglob("*.md"):
-        try:
-            content = md_file.read_text(encoding="utf-8")
-            frontmatter = {}
-
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    try:
-                        import yaml
-                        frontmatter = yaml.safe_load(parts[1]) or {}
-                    except Exception:
-                        pass
-
-            # 类型统计
-            page_type = frontmatter.get("type", "unknown")
-            if page_type:
-                type_counts[page_type] += 1
-
-            # 热力分数
-            heat = frontmatter.get("heat", frontmatter.get("freshness_score", 0))
-            if heat:
-                heat_scores.append({
-                    "page": str(md_file.relative_to(WIKI_DIR)),
-                    "heat": float(heat) if isinstance(heat, (int, float)) else 0.5,
-                    "title": frontmatter.get("title", md_file.stem),
-                })
-
-            # 最近更新
-            updated = frontmatter.get("updated", "")
-            if updated:
-                try:
-                    updated_date = datetime.strptime(updated, "%Y-%m-%d")
-                    days_ago = (datetime.now() - updated_date).days
-                    if days_ago <= 30:
-                        recent_pages.append({
-                            "page": str(md_file.relative_to(WIKI_DIR)),
-                            "title": frontmatter.get("title", md_file.stem),
-                            "updated": updated,
-                            "days_ago": days_ago,
-                            "heat": frontmatter.get("heat", 0.5),
-                        })
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    stats["type_distribution"] = dict(type_counts)
-    stats["heat_scores"] = sorted(heat_scores, key=lambda x: x["heat"], reverse=True)[:50]
-    stats["recent_pages"] = sorted(recent_pages, key=lambda x: x["days_ago"])[:20]
-
-    # 从 DNA 数据库获取高频实体
-    dna_db = WIKI_DIR / ".kg" / "dna.db"
-    if dna_db.exists():
-        try:
-            with sqlite3.connect(str(dna_db), timeout=10) as conn:
-                cursor = conn.execute("""
-                    SELECT page_path, keywords FROM knowledge_dna
-                    ORDER BY created_at DESC LIMIT 50
-                """)
-                entity_counts = Counter()
-                for row in cursor.fetchall():
-                    keywords = row[1]
-                    if keywords:
-                        for kw in keywords.split(","):
-                            entity_counts[kw.strip()] += 1
-                stats["top_entities"] = entity_counts.most_common(20)
-        except Exception:
-            pass
+    stats["total_pages"], stats["domain_distribution"] = _count_domain_pages(WIKI_DIR)
+    stats["total_entities"], stats["total_relations"] = _read_graph_counts(
+        WIKI_DIR / ".kg" / "graph.db"
+    )
+    (
+        stats["type_distribution"],
+        stats["heat_scores"],
+        stats["recent_pages"],
+    ) = _collect_heat_and_recent(WIKI_DIR)
+    stats["top_entities"] = _read_top_entities(WIKI_DIR / ".kg" / "dna.db")
 
     return stats
 
@@ -149,8 +203,8 @@ def generate_html(stats: dict) -> str:
     """生成 HTML 报告"""
 
     # 准备图表数据
-    domain_labels = list(stats["domain_distribution"].keys())
-    domain_values = list(stats["domain_distribution"].values())
+    list(stats["domain_distribution"].keys())
+    list(stats["domain_distribution"].values())
 
     type_labels = list(stats["type_distribution"].keys())
     type_values = list(stats["type_distribution"].values())
@@ -177,7 +231,7 @@ def generate_html(stats: dict) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Memos-Wiki Heat Tracker</title>
+    <title>Mnemos Heat Tracker</title>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -275,7 +329,7 @@ def generate_html(stats: dict) -> str:
 </head>
 <body>
     <div class="header">
-        <h1>🔥 Memos-Wiki Heat Tracker</h1>
+        <h1>🔥 Mnemos Heat Tracker</h1>
         <p class="meta">知识库可视化报告 | 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </div>
 
@@ -340,7 +394,7 @@ def generate_html(stats: dict) -> str:
     </div>
 
     <div class="footer">
-        <p>Memos-Wiki v6.0 | Heat Tracker | 数据实时从 Wiki 目录采集</p>
+        <p>Mnemos v2.0.0 | Heat Tracker | 数据实时从 Wiki 目录采集</p>
     </div>
 
     <script>
@@ -350,7 +404,7 @@ def generate_html(stats: dict) -> str:
             series: [{{
                 type: 'pie',
                 radius: ['40%', '70%'],
-                data: {json.dumps([{"name": k, "value": v} for k, v in stats['domain_distribution'].items()])},
+                data: {json.dumps([{"name": k, "value": v} for k, v in stats['domain_distribution'].items()])},  # noqa: E501
                 emphasis: {{
                     itemStyle: {{
                         shadowBlur: 10,
@@ -364,7 +418,7 @@ def generate_html(stats: dict) -> str:
         // 知识类型柱状图
         echarts.init(document.getElementById('typeChart')).setOption({{
             tooltip: {{ trigger: 'axis' }},
-            xAxis: {{ type: 'category', data: {json.dumps(type_labels)}, axisLabel: {{ rotate: 30 }} }},
+            xAxis: {{ type: 'category', data: {json.dumps(type_labels)}, axisLabel: {{ rotate: 30 }} }},  # noqa: E501
             yAxis: {{ type: 'value' }},
             series: [{{
                 data: {json.dumps(type_values)},
@@ -394,7 +448,7 @@ def generate_html(stats: dict) -> str:
         // 高频实体词云图（用柱状图替代）
         echarts.init(document.getElementById('entityChart')).setOption({{
             tooltip: {{ trigger: 'axis' }},
-            xAxis: {{ type: 'category', data: {json.dumps(entity_names[:15])}, axisLabel: {{ rotate: 30 }} }},
+            xAxis: {{ type: 'category', data: {json.dumps(entity_names[:15])}, axisLabel: {{ rotate: 30 }} }},  # noqa: E501
             yAxis: {{ type: 'value' }},
             series: [{{
                 data: {json.dumps(entity_counts[:15])},
@@ -411,10 +465,10 @@ def generate_html(stats: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Heat Tracker - 知识库可视化")
-    parser.add_argument("--output", default=str(OUTPUT_DEFAULT),
-                        help=f"输出 HTML 路径（默认: {OUTPUT_DEFAULT}）")
-    parser.add_argument("--open", action="store_true",
-                        help="生成后自动用浏览器打开")
+    parser.add_argument(
+        "--output", default=str(OUTPUT_DEFAULT), help=f"输出 HTML 路径（默认: {OUTPUT_DEFAULT}）"
+    )
+    parser.add_argument("--open", action="store_true", help="生成后自动用浏览器打开")
     args = parser.parse_args()
 
     print("🔥 Heat Tracker - 采集知识库数据...")
@@ -436,6 +490,7 @@ def main():
 
     if args.open:
         import subprocess
+
         if sys.platform == "darwin":
             subprocess.run(["open", str(output_path)])
         elif sys.platform == "win32":

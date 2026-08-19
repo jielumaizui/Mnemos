@@ -1,0 +1,940 @@
+{
+  "parent_root_id": "COG-046",
+  "root_count": 50,
+  "roots": [
+    {
+      "canonical_owner": "governing:COG-025",
+      "challenger": "required",
+      "contract_hash": "b5de222a194cdc85dd930063e1654d47e438e2e020d9b94444baed68efcbdb54",
+      "direct_finding_ids": [
+        "GLOB-001",
+        "P12-007"
+      ],
+      "implementation_commit": "848b6795c67b48f9e69c64cf55e09145bf3f8bd4",
+      "invalidates": [],
+      "next_allowed": "COG-045",
+      "phase_order": "P0-01",
+      "prerequisite_wps": [],
+      "prerequisites": [],
+      "production_snapshot_ref": null,
+      "root_id": "COG-025"
+    },
+    {
+      "canonical_owner": "governing:COG-045",
+      "challenger": "required",
+      "contract_hash": "def261c360d88b46ba206fb6e5ba86a1f72914c67b8c9911de6c4dabf1572f8f",
+      "direct_finding_ids": [
+        "P12-004"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-001",
+      "phase_order": "P1-01",
+      "prerequisite_wps": [
+        "WP-COG-046-P0-DENOMINATOR-LOCK"
+      ],
+      "prerequisites": [
+        "COG-025"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-045"
+    },
+    {
+      "canonical_owner": "governing:COG-001",
+      "challenger": "required",
+      "contract_hash": "3b3b6fcfbad76bc648cce1f6542e1e056e3ca54fbb217ff5787193ec067c220f",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-002",
+      "phase_order": "P1-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-045"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-001"
+    },
+    {
+      "canonical_owner": "governing:COG-002",
+      "challenger": "required",
+      "contract_hash": "8354103c9bb228a7f6a94dd220eaeebb7df759980c9aef2cd3366df579413284",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-004",
+      "phase_order": "P1-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-001"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-002"
+    },
+    {
+      "canonical_owner": "governing:COG-004",
+      "challenger": "required",
+      "contract_hash": "30d0541e360eff833ad1db0f9bd1f90ff9c7115efd532c361ce35161f16e1775",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-005",
+      "phase_order": "P1-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-002"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-004"
+    },
+    {
+      "canonical_owner": "governing:COG-005",
+      "challenger": "required",
+      "contract_hash": "ac5a2e5c1d52d951151ae6314111c682609a356c6f48b90cea12e7e62cede97d",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-006",
+      "phase_order": "P1-05",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-004"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-005"
+    },
+    {
+      "canonical_owner": "governing:COG-006",
+      "challenger": "required",
+      "contract_hash": "4cb38b6fef1b871eaceb2f87b620f45caa735d50cd1cad52cc5cd6595e001256",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-007",
+      "phase_order": "P1-06",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-005"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-006"
+    },
+    {
+      "canonical_owner": "governing:COG-007",
+      "challenger": "required",
+      "contract_hash": "ee76e74a9fdb598e3930718db313194b6a033bfa304431d8cd374cab5da61360",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-008",
+      "phase_order": "P1-07",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-006"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-007"
+    },
+    {
+      "canonical_owner": "governing:COG-008",
+      "challenger": "required",
+      "contract_hash": "b82e80001cf359c04fda23a33c2bd30b415bb06c2effd864e134c86be1b277b1",
+      "direct_finding_ids": [
+        "P12-002",
+        "P12-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-003",
+      "phase_order": "P1-08",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-007"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-008"
+    },
+    {
+      "canonical_owner": "governing:COG-003",
+      "challenger": "required",
+      "contract_hash": "19d4617d58e0ff37dc456920b0a218bd07af3a4627e841e143d86d18aead4c57",
+      "direct_finding_ids": [
+        "P12-004"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-009",
+      "phase_order": "P1-09",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-008"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-003"
+    },
+    {
+      "canonical_owner": "governing:COG-009",
+      "challenger": "required",
+      "contract_hash": "0a61ee4047d557ff2a3a4c1eddf8258e954ce75c03672156beace16fd90e2c4a",
+      "direct_finding_ids": [
+        "P12-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-026",
+      "phase_order": "P1-10",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-003"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-009"
+    },
+    {
+      "canonical_owner": "governing:COG-026",
+      "challenger": "required",
+      "contract_hash": "b73dcc5fb886e268ad418ca42815bd4c4318d32f5b3eded63a2056bc73b94a4b",
+      "direct_finding_ids": [
+        "P12-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-027",
+      "phase_order": "P1-11",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-009"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-026"
+    },
+    {
+      "canonical_owner": "governing:COG-027",
+      "challenger": "required",
+      "contract_hash": "f7f10e1ba57aed6f3dfff44b28d858a2a135c4986f0eca758574e6ec8dbd6cce",
+      "direct_finding_ids": [
+        "P12-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-018",
+      "phase_order": "P2-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-026"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-027"
+    },
+    {
+      "canonical_owner": "governing:COG-018",
+      "challenger": "required",
+      "contract_hash": "4b41f7d02161312f3e80d30b3c10dc74876de6f8f0755d545e24bfca2808915a",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-011",
+      "phase_order": "P2-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-027"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-018"
+    },
+    {
+      "canonical_owner": "governing:COG-011",
+      "challenger": "required",
+      "contract_hash": "8b8f26a081349ae4182d9d415bd7247d19bcd8bce0d4a51d624be955f1831b7d",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-028",
+      "phase_order": "P2-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-018"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-011"
+    },
+    {
+      "canonical_owner": "governing:COG-028",
+      "challenger": "required",
+      "contract_hash": "03541f50ae3f865114f6a87be0122c355013afe3db8496212b56fa0be2a38641",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-029",
+      "phase_order": "P2-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-011"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-028"
+    },
+    {
+      "canonical_owner": "governing:COG-029",
+      "challenger": "required",
+      "contract_hash": "bf327fb4c82dd2c6d9b55e280f8e2d1abc88ea946f1c8fb0aed699814260f4cc",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-044",
+      "phase_order": "P2-05",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-028"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-029"
+    },
+    {
+      "canonical_owner": "governing:COG-044",
+      "challenger": "required",
+      "contract_hash": "172dab6396c5ef7991012ef8cb57a0b46c695b4d3cf0a0cebb9fc56477309400",
+      "direct_finding_ids": [
+        "P12-001",
+        "P5-002"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-047",
+      "phase_order": "P2-06",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-029"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-044"
+    },
+    {
+      "canonical_owner": "governing:COG-047",
+      "challenger": "required",
+      "contract_hash": "77d24d9fad5740b808401114fea9d1f1b4705ec1aea8ce38d845317852f93211",
+      "direct_finding_ids": [
+        "P12-002",
+        "P12-007"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-010",
+      "phase_order": "P2-07",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-044"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-047"
+    },
+    {
+      "canonical_owner": "governing:COG-010",
+      "challenger": "required",
+      "contract_hash": "dfdb1dac5e612079547aa5284953e38ab99adde7e21db21046e594d5e5651ed4",
+      "direct_finding_ids": [
+        "P12-007"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-012",
+      "phase_order": "P2-08",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-047"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-010"
+    },
+    {
+      "canonical_owner": "governing:COG-012",
+      "challenger": "required",
+      "contract_hash": "d18c6c195e3158fa0acc634c4636a57a806a1e4fa23fce86a1afa481b49640e1",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-013",
+      "phase_order": "P2-09",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-010"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-012"
+    },
+    {
+      "canonical_owner": "governing:COG-013",
+      "challenger": "required",
+      "contract_hash": "ef401012b84ac3f4ad0f3317b34bf0f1557b5a1cbb30f79fffe82a41376cf735",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-049",
+      "phase_order": "P2-10",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-012"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-013"
+    },
+    {
+      "canonical_owner": "governing:COG-049",
+      "challenger": "required",
+      "contract_hash": "185f54ea56a8affd48c70dbb52412cb9e313bf2b778f6bfe1eed08d35f6519c3",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-043",
+      "phase_order": "P2-11",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-013"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-049"
+    },
+    {
+      "canonical_owner": "governing:COG-043",
+      "challenger": "required",
+      "contract_hash": "905430fdf17b7721911950279909b5926254f05fa525058640fe41e7e22e7612",
+      "direct_finding_ids": [],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-035",
+      "phase_order": "P3-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-049"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-043"
+    },
+    {
+      "canonical_owner": "governing:COG-035",
+      "challenger": "required",
+      "contract_hash": "226f1389c2986ae4d95827ed3b7cd498b94f2d180d583dd0cacac768620afafd",
+      "direct_finding_ids": [
+        "P3-001",
+        "P3-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-036",
+      "phase_order": "P3-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-043"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-035"
+    },
+    {
+      "canonical_owner": "governing:COG-036",
+      "challenger": "required",
+      "contract_hash": "9d983cc3fd9d98bb7db5d0ad05268bd194dfc381d947e096d7e1a29dac558b63",
+      "direct_finding_ids": [
+        "P3-002",
+        "P3-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-037",
+      "phase_order": "P3-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-035"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-036"
+    },
+    {
+      "canonical_owner": "governing:COG-037",
+      "challenger": "required",
+      "contract_hash": "b739e0121423310bd0f5c9d6f548d84311129f2db9a9c3fb4757ea804395cee6",
+      "direct_finding_ids": [
+        "P3-001",
+        "P3-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-038",
+      "phase_order": "P3-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-036"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-037"
+    },
+    {
+      "canonical_owner": "governing:COG-038",
+      "challenger": "required",
+      "contract_hash": "576fc066cd82dbc0ddf0483db8198efc44c433e08fdf3343cc2a6693733bb926",
+      "direct_finding_ids": [
+        "P3-001",
+        "P3-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-048",
+      "phase_order": "P3-05",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-037"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-038"
+    },
+    {
+      "canonical_owner": "governing:COG-048",
+      "challenger": "required",
+      "contract_hash": "25391b6afc4cb82780e5821d9afc045efd78788ed37d8710520bcc29490daa76",
+      "direct_finding_ids": [
+        "P3-001",
+        "P3-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-014",
+      "phase_order": "P3-06",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-038"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-048"
+    },
+    {
+      "canonical_owner": "governing:COG-014",
+      "challenger": "required",
+      "contract_hash": "123ae1c05974122f980b406f29824cd186bfb7f35ef11c781e7e8a2a6d7d4eb7",
+      "direct_finding_ids": [
+        "P3-002"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-030",
+      "phase_order": "P4-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-048"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-014"
+    },
+    {
+      "canonical_owner": "governing:COG-030",
+      "challenger": "required",
+      "contract_hash": "4363020816b33ceede7c369f584bfdae14145ed967287417f4c8505ce12a9469",
+      "direct_finding_ids": [
+        "P12-005",
+        "P4-001"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-015",
+      "phase_order": "P4-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-014"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-030"
+    },
+    {
+      "canonical_owner": "governing:COG-015",
+      "challenger": "required",
+      "contract_hash": "956a2fd5ff68da0f34e655d1bb549f140fd080d72d7ff7586327ce2d798dbab9",
+      "direct_finding_ids": [
+        "P12-005",
+        "P4-002"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-050",
+      "phase_order": "P4-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-030"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-015"
+    },
+    {
+      "canonical_owner": "governing:COG-050",
+      "challenger": "required",
+      "contract_hash": "f129b28127b1c2eb7ec3f117be5571f7239fa7b66790bbebf328f490e7f2eeee",
+      "direct_finding_ids": [
+        "P12-005",
+        "P4-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-039",
+      "phase_order": "P4-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-015"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-050"
+    },
+    {
+      "canonical_owner": "governing:COG-039",
+      "challenger": "required",
+      "contract_hash": "f46345af999dcbdc24e6a1e5db0fb3b5efde32b5b6fcb6021957f99da7499d13",
+      "direct_finding_ids": [
+        "P12-004",
+        "P4-004"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-034",
+      "phase_order": "P4-05",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-050"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-039"
+    },
+    {
+      "canonical_owner": "governing:COG-034",
+      "challenger": "required",
+      "contract_hash": "c3df0a000bbe246ee1795258f0fe775925e10415bddbad2de115a3dc701788e8",
+      "direct_finding_ids": [
+        "P12-004",
+        "P4-004",
+        "P4-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-031",
+      "phase_order": "P4-06",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-039"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-034"
+    },
+    {
+      "canonical_owner": "governing:COG-031",
+      "challenger": "required",
+      "contract_hash": "0e7ba3c027cfd1791f4087cdd3291aeace70e9813fde06d31c0805646c4a2db3",
+      "direct_finding_ids": [
+        "P4-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-024",
+      "phase_order": "P4-07",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-034"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-031"
+    },
+    {
+      "canonical_owner": "governing:COG-024",
+      "challenger": "required",
+      "contract_hash": "ce217f43b44e694a802016d18c797c2189a9354e2e506e15414b9e52c12a59a0",
+      "direct_finding_ids": [
+        "P12-005",
+        "P4-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-016",
+      "phase_order": "P4-08",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-031"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-024"
+    },
+    {
+      "canonical_owner": "governing:COG-016",
+      "challenger": "required",
+      "contract_hash": "78bdaba7125123f344f5654b96f39325e80ba52b77c02af56a52788deb8e46af",
+      "direct_finding_ids": [
+        "P5-006"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-017",
+      "phase_order": "P5-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-024"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-016"
+    },
+    {
+      "canonical_owner": "governing:COG-017",
+      "challenger": "required",
+      "contract_hash": "3839550d402419cbd3b58e2d855e4245dbcb1b76e206a610ac7ccb61a7ec7a35",
+      "direct_finding_ids": [
+        "P5-004",
+        "P5-005"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-019",
+      "phase_order": "P5-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-016"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-017"
+    },
+    {
+      "canonical_owner": "governing:COG-019",
+      "challenger": "required",
+      "contract_hash": "075e4db1b05609331a5dfc71fe54b7ce1cdfd0b552897ffa585ed4dfb4442953",
+      "direct_finding_ids": [
+        "P5-001",
+        "P5-002"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-032",
+      "phase_order": "P5-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-017"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-019"
+    },
+    {
+      "canonical_owner": "governing:COG-032",
+      "challenger": "required",
+      "contract_hash": "26d1895b0b90f7623520c2e0d6a6217da8862d0e060c9de2d9864570517ac558",
+      "direct_finding_ids": [
+        "P5-001"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-020",
+      "phase_order": "P5-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-019"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-032"
+    },
+    {
+      "canonical_owner": "governing:COG-020",
+      "challenger": "required",
+      "contract_hash": "15c444425d91b6b7c3144e2059c54774de42505163f60592086f2be2c0315c8d",
+      "direct_finding_ids": [
+        "P5-003",
+        "P5-006"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-021",
+      "phase_order": "P5-05",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-032"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-020"
+    },
+    {
+      "canonical_owner": "governing:COG-021",
+      "challenger": "required",
+      "contract_hash": "82cb6b1f433dce05adcdcf43ced712111de066520a0ad599cd3d19add6f2acd1",
+      "direct_finding_ids": [
+        "P5-006"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-022",
+      "phase_order": "P5-06",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-020"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-021"
+    },
+    {
+      "canonical_owner": "governing:COG-022",
+      "challenger": "required",
+      "contract_hash": "fe51240820fcbe1eb93dc039bf5753f0fcc6f0fa23a912b6c335d1b3453830a2",
+      "direct_finding_ids": [
+        "P6-001",
+        "P6-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-023",
+      "phase_order": "P6-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-021"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-022"
+    },
+    {
+      "canonical_owner": "governing:COG-023",
+      "challenger": "required",
+      "contract_hash": "277327bf205c44c3466c32a5ad3dc342bcafba539287d48047c6ef47f9355ba5",
+      "direct_finding_ids": [
+        "P6-001",
+        "P6-003"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-033",
+      "phase_order": "P6-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-022"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-023"
+    },
+    {
+      "canonical_owner": "governing:COG-033",
+      "challenger": "required",
+      "contract_hash": "863b4c66244f815ca8eb31107711713850234aadf1a454fac2acb3de36324cfd",
+      "direct_finding_ids": [
+        "P6-002",
+        "P6-003",
+        "P6-004"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-040",
+      "phase_order": "P6-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-023"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-033"
+    },
+    {
+      "canonical_owner": "governing:COG-040",
+      "challenger": "required",
+      "contract_hash": "024eb67467f83fae62bf7c0433154b8ee0f6f43207cd60465bf4e6b0819bbb58",
+      "direct_finding_ids": [
+        "P7-001",
+        "P7-002"
+      ],
+      "implementation_commit": "92c832673059fe659269211d219a1af4caa59e70",
+      "invalidates": [],
+      "next_allowed": "COG-041",
+      "phase_order": "P7-01",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-033"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-040"
+    },
+    {
+      "canonical_owner": "governing:COG-041",
+      "challenger": "required",
+      "contract_hash": "e428f6c330731fd7d96dd8ecf3c6914614d4845e5c9a38e71e58c61f35313643",
+      "direct_finding_ids": [
+        "P7-003",
+        "P7-004"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": "COG-046",
+      "phase_order": "P7-02",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-040"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-041"
+    },
+    {
+      "canonical_owner": "governing:COG-046",
+      "challenger": "required",
+      "contract_hash": "76252f8e369cd65e6b512562c5c97aada79207b1d331c3a6ed343a9f2a654335",
+      "direct_finding_ids": [
+        "GLOB-003",
+        "GLOB-004",
+        "P12-006",
+        "P5-007",
+        "P7-005",
+        "P7-007",
+        "P7-008"
+      ],
+      "implementation_commit": "566b73ac4189553dee824d881cdd28c69206ce3b",
+      "invalidates": [],
+      "next_allowed": "COG-042",
+      "phase_order": "P7-03",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-041"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-046"
+    },
+    {
+      "canonical_owner": "governing:COG-042",
+      "challenger": "required",
+      "contract_hash": "47eb79b6321b6aa18438ff7688961b00dd461c1b9cecadc815a6ecad3d3aa2b9",
+      "direct_finding_ids": [
+        "GLOB-002",
+        "GLOB-003",
+        "GLOB-004",
+        "P12-006",
+        "P5-007",
+        "P6-004",
+        "P7-005",
+        "P7-006",
+        "P7-007",
+        "P7-008"
+      ],
+      "implementation_commit": null,
+      "invalidates": [],
+      "next_allowed": null,
+      "phase_order": "P7-04",
+      "prerequisite_wps": [],
+      "prerequisites": [
+        "COG-046"
+      ],
+      "production_snapshot_ref": null,
+      "root_id": "COG-042"
+    }
+  ],
+  "schema_version": "mnemos.cognitive_phase0_governance.v1",
+  "support_wps": [
+    {
+      "parent_root_id": "COG-025",
+      "prerequisites": [],
+      "work_package": "WP-COG-025-SAFETY"
+    },
+    {
+      "parent_root_id": "COG-040",
+      "prerequisites": [
+        "WP-COG-025-SAFETY"
+      ],
+      "work_package": "WP-COG-040-P0-BASELINE"
+    },
+    {
+      "parent_root_id": "COG-046",
+      "prerequisites": [
+        "WP-COG-040-P0-BASELINE"
+      ],
+      "work_package": "WP-COG-046-P0-DENOMINATOR-LOCK"
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+{
+  "schema_version": "mnemos.cognitive_performance_baseline.v1",
+  "parent_root_id": "COG-040",
+  "work_package": "WP-COG-040-P0-BASELINE",
+  "contract_mode": "baseline_only",
+  "frozen_at": "2026-07-24",
+  "source_commit": "848b6795c67b48f9e69c64cf55e09145bf3f8bd4",
+  "contract_fingerprint_sha256": "c5aa99b6a94d1a6fd7e2bf786e5e4c49a6d23c9c538c845ffab8ca82441ae134",
+  "purpose": "Freeze the current hermetic workload, dataset, machine, configuration, cold/hot and repeatability contract before Phase 1. This artifact is not a Phase 7 capacity or soak certificate.",
+  "performance_certificate_eligible": false,
+  "phase7_root_closed": false,
+  "hardware": {
+    "architecture": "arm64",
+    "cpu": "Apple M4 Pro",
+    "os": "macOS",
+    "os_version": "15.7.4",
+    "python": "3.12.13",
+    "fingerprint_sha256": "36a6c56963626d020f9c08f341fe07247a442de8ce0cfaebe9bcd57477fa8604"
+  },
+  "configuration": {
+    "execution_mode": "hermetic_synthetic",
+    "network": "disabled_by_contract",
+    "api_credentials": "not_inherited",
+    "formal_state": "must_not_be_read_or_written",
+    "storage_backend": "in_memory_or_run_owned_sqlite",
+    "pytest_plugin_autoload": "disabled",
+    "pytest_benchmark_required": false,
+    "timing_clock": "time.perf_counter",
+    "fingerprint_sha256": "00751bfd5882c02e67b286c23887c20df571da0419d40b678081703dadac072d"
+  },
+  "runner_selector": {
+    "environment": {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+    "node_ids": [
+      "tests/benchmark/test_benchmark_sync.py::test_sync_batch_smoke_throughput",
+      "tests/benchmark/test_benchmark_sync.py::test_sync_session_smoke_latency",
+      "tests/benchmark/test_feedback_attribution_capacity.py::test_real_replay_converges_for_reaction_proposal_and_compensation_capacity",
+      "tests/benchmark/test_smoke_bench.py::TestContextSearchSmoke::test_context_search_symbols_imported",
+      "tests/benchmark/test_smoke_bench.py::TestContextSearchSmoke::test_search_result_dataclass_performance",
+      "tests/benchmark/test_smoke_bench.py::TestKnowledgeGraphSmoke::test_knowledge_graph_schema_defined",
+      "tests/benchmark/test_smoke_bench.py::TestKnowledgeGraphSmoke::test_knowledge_graph_symbols_imported",
+      "tests/benchmark/test_smoke_bench.py::TestSyncEngineSmoke::test_sanitize_content_performance",
+      "tests/benchmark/test_smoke_bench.py::TestSyncEngineSmoke::test_sync_engine_symbols_imported"
+    ]
+  },
+  "measurement_protocol": {
+    "cold": {
+      "definition": "fresh interpreter, empty unique HermeticRunEnvironment, no imported Mnemos modules, one measured invocation per process",
+      "fresh_process_repetitions": 5,
+      "phase0_observation": "not_collected"
+    },
+    "hot": {
+      "definition": "one unmeasured schema/import warmup followed by the frozen workload in the same process",
+      "warmup_repetitions": 1,
+      "repetitions": 12
+    },
+    "repeatability": {
+      "independent_runs": 5,
+      "report": ["median", "p95", "p99", "mean", "standard_deviation", "coefficient_of_variation"],
+      "max_cv": 0.15,
+      "p95_relative_regression_budget": 0.10,
+      "peak_rss_relative_regression_budget": 0.15,
+      "absolute_floor_ms": 2.0,
+      "phase0_observation": "single_run_only_not_regression_certifying"
+    }
+  },
+  "datasets": [
+    {
+      "path": "tests/benchmark/test_benchmark_sync.py",
+      "sha256": "f950d2a1f53279c060b5d407d9c7234e4b38f53897390c860822c6155a63eef2",
+      "kind": "synthetic_sync_smoke"
+    },
+    {
+      "path": "tests/benchmark/test_smoke_bench.py",
+      "sha256": "8fb12fd09baa8594b9b345cf5ec38fa08aa8dc0c66a1e739afd4ec79fb47e93f",
+      "kind": "synthetic_hot_path_smoke"
+    },
+    {
+      "path": "tests/benchmark/test_feedback_attribution_capacity.py",
+      "sha256": "c65d620f9b69824ea7fb93f5c61467e13155c5f568dcfa5750ab991aeafe619e",
+      "kind": "bounded_functional_capacity"
+    }
+  ],
+  "workloads": [
+    {
+      "workload_id": "sync_session_5_turn_hot",
+      "dataset_path": "tests/benchmark/test_benchmark_sync.py",
+      "shape": {"sessions": 1, "turns_per_session": 5, "measured_repetitions": 12},
+      "absolute_budget": {"p95_ms_lt": 500.0},
+      "baseline_observation": {"mean_ms": 20.8, "p95_ms": 25.0, "runs": 1, "certifying": false}
+    },
+    {
+      "workload_id": "sync_batch_10x3_hot",
+      "dataset_path": "tests/benchmark/test_benchmark_sync.py",
+      "shape": {"sessions": 10, "turns_per_session": 3, "measured_repetitions": 1},
+      "absolute_budget": {"elapsed_ms_lt": 3000.0},
+      "baseline_observation": {"elapsed_ms": 132.0, "runs": 1, "certifying": false}
+    },
+    {
+      "workload_id": "feedback_attribution_bounded_capacity",
+      "dataset_path": "tests/benchmark/test_feedback_attribution_capacity.py",
+      "shape": {"source_reactions": 1501, "proposal_commands_gt": 10000, "compensation_commands_gt": 10000},
+      "absolute_budget": {"wall_clock": "not_a_phase0_oracle"},
+      "baseline_observation": {"functional_capacity_only": true, "certifying": false}
+    }
+  ],
+  "denominators": {
+    "functional": {
+      "required": 9,
+      "observed": 9,
+      "status": "hermetic_smoke_passed",
+      "release_blocking": false,
+      "scope": "tests/benchmark only",
+      "node_ids": [
+        "tests/benchmark/test_benchmark_sync.py::test_sync_session_smoke_latency",
+        "tests/benchmark/test_benchmark_sync.py::test_sync_batch_smoke_throughput",
+        "tests/benchmark/test_feedback_attribution_capacity.py::test_real_replay_converges_for_reaction_proposal_and_compensation_capacity",
+        "tests/benchmark/test_smoke_bench.py::TestSyncEngineSmoke::test_sync_engine_symbols_imported",
+        "tests/benchmark/test_smoke_bench.py::TestSyncEngineSmoke::test_sanitize_content_performance",
+        "tests/benchmark/test_smoke_bench.py::TestKnowledgeGraphSmoke::test_knowledge_graph_symbols_imported",
+        "tests/benchmark/test_smoke_bench.py::TestKnowledgeGraphSmoke::test_knowledge_graph_schema_defined",
+        "tests/benchmark/test_smoke_bench.py::TestContextSearchSmoke::test_context_search_symbols_imported",
+        "tests/benchmark/test_smoke_bench.py::TestContextSearchSmoke::test_search_result_dataclass_performance"
+      ]
+    },
+    "recall": {
+      "required": "phase7_manifest_defined_population",
+      "observed": 0,
+      "status": "missing_phase7_evidence",
+      "release_blocking": true
+    },
+    "acl": {
+      "required": "phase7_manifest_defined_population",
+      "observed": 0,
+      "status": "missing_phase7_evidence",
+      "release_blocking": true
+    },
+    "effect": {
+      "required": "production target before/after plus reciprocal receipts",
+      "observed": 0,
+      "status": "missing_phase7_evidence",
+      "release_blocking": true
+    }
+  },
+  "missing_phase7_evidence": [
+    "formal_performance_runner",
+    "recall_acl_effect_oracle",
+    "queue_fairness_starvation",
+    "2h_24h_soak"
+  ],
+  "next_allowed": "WP-COG-046-P0-DENOMINATOR-LOCK after local COG-040 contract commit"
+}

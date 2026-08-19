@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
 """
 Background Review - 知识自动审查脚本
 
@@ -15,7 +16,7 @@ Background Review - 知识自动审查脚本
   4. 标记已处理条目
 
 安全设计：
-  - 只读取，不修改原始 Memos 记录
+  - 只读取，不修改原始 L1 storage 记录
   - 审查报告供人工确认后执行
 """
 
@@ -23,14 +24,13 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
-from core.config import get_config
+from typing import List, Dict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from core.config import get_config  # noqa: E402
 
 REVIEW_QUEUE = get_config().data_dir / "review_queue.jsonl"
-REVIEW_LOG_DIR = get_config().data_dir / "logs/review"
+REVIEW_LOG_DIR = get_config().database_dir / "logs/review"
 
 
 def load_pending_entries() -> List[Dict]:
@@ -51,7 +51,7 @@ def load_pending_entries() -> List[Dict]:
                         entries.append(entry)
                 except json.JSONDecodeError:
                     continue
-    except Exception as e:
+    except (OSError, UnicodeError, TypeError) as e:
         print(f"[Review] 读取队列失败: {e}")
         return []
 
@@ -61,13 +61,13 @@ def load_pending_entries() -> List[Dict]:
 def generate_review_report(entries: List[Dict]) -> str:
     """生成审查报告"""
     lines = [
-        f"# Background Review Report",
-        f"",
+        "# Background Review Report",
+        "",
         f"生成时间: {datetime.now().isoformat()}",
         f"待审查条目: {len(entries)}",
-        f"",
-        f"---",
-        f"",
+        "",
+        "---",
+        "",
     ]
 
     for i, entry in enumerate(entries, 1):
@@ -78,17 +78,17 @@ def generate_review_report(entries: List[Dict]) -> str:
         content_preview = entry.get("content_preview", "")
 
         lines.append(f"## {i}. {entry.get('l1_uid', 'unknown')[:16]}...")
-        lines.append(f"")
+        lines.append("")
         lines.append(f"- **分类**: {category}")
         lines.append(f"- **实体**: {', '.join(entities[:5]) if entities else 'N/A'}")
         lines.append(f"- **概念**: {', '.join(concepts[:5]) if concepts else 'N/A'}")
         lines.append(f"- **摘要**: {summary or 'N/A'}")
-        lines.append(f"")
-        lines.append(f"**内容预览**:")
-        lines.append(f"```")
+        lines.append("")
+        lines.append("**内容预览**:")
+        lines.append("```")
         lines.append(content_preview[:500])
-        lines.append(f"```")
-        lines.append(f"")
+        lines.append("```")
+        lines.append("")
 
         # 审查建议（规则-based，零 LLM 成本）
         suggestions = []
@@ -102,15 +102,15 @@ def generate_review_report(entries: List[Dict]) -> str:
             suggestions.append("缺少摘要，建议补充")
 
         if suggestions:
-            lines.append(f"**审查建议**:")
+            lines.append("**审查建议**:")
             for s in suggestions:
                 lines.append(f"- {s}")
         else:
-            lines.append(f"**审查建议**: 通过")
+            lines.append("**审查建议**: 通过")
 
-        lines.append(f"")
-        lines.append(f"---")
-        lines.append(f"")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -141,12 +141,13 @@ def mark_entries_processed(entries: List[Dict]) -> None:
         with open(REVIEW_QUEUE, "w", encoding="utf-8") as f:
             for line in updated_lines:
                 f.write(line + "\n")
-    except Exception as e:
+    except (OSError, UnicodeError, TypeError, ValueError) as e:
         print(f"[Review] 标记处理状态失败: {e}")
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Background Review - 知识自动审查")
     parser.add_argument("--dry-run", action="store_true", help="只生成报告，不标记已处理")
     parser.add_argument("--output", help="报告输出路径（默认自动生成）")
