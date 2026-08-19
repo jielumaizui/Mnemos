@@ -1,496 +1,597 @@
-# Mnemos - Local AI Memory and Decision Support
+# Mnemos
 
-> **Local-first AI memory, knowledge, and decision-support system**
+**Local Decision Brain & Behavior-Driven System**
+
+> A local-first memory, knowledge, and decision-support system for AI agents — it doesn't just remember; it teaches your AI when to recall and how to act.
 >
-> 🇨🇳 [中文完整版](README.md)
+> Current version v2.0.0: the core pipeline (capture → distill → store → decision support) is production-ready; advanced capabilities such as adaptive scoring and push precision keep improving as your data accumulates.
+>
+> 🌍 [中文版](README.md)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://img.shields.io/github/actions/workflow/status/jielumaizui/mnemos/CI.yml?branch=main)](https://github.com/jielumaizui/mnemos/actions)
-
-**Mnemos** is a local-first AI Agent memory, knowledge, and decision-support system. It captures authorized conversation and file signals through Agent Kit, MCP, CLI, daemon services, and local source parsers; keeps canonical raw evidence; distills useful knowledge; builds Wiki/KG/search surfaces; and injects relevant context back into AI workflows.
-
-As of 2026-07-11, the daemon PID file uses `mnemos.daemon_instance.v2` and the heartbeat uses `mnemos.daemon_heartbeat.v3`. `daemon status/stop` and strict health verify OS start/boot/executable facts, runtime-code fingerprint, the config-file byte hash, the canonical effective-config fingerprint, database identity, and the exact current service manifest. PID reuse, incomplete evidence, or effective-config drift caused by env/performance-tier changes fails closed without sending a signal, and `start` reports success only after the current instance heartbeat is durable.
-
-The Capture → Amphora → Hephaestus → recap path now uses durable, revision-aware typed receipts. Capture reaches `done` only after a matching Amphora enqueue receipt; distillation is terminal only after a durable page or an explicit intentional-skip receipt; trusted proposals, partial results, retries, and write failures remain non-terminal. Audit historical gaps with `python3 scripts/reconcile_pipeline_receipts.py`; add `--apply` only after reviewing the plan and taking database backups.
-
-As of 2026-07-11, recap consumption itself uses a durable fan-out outbox. Requested labels are mapped to canonical retrieval, policy, follow-up, persona, scheduler, and scoring consumers; a recap becomes `consumed` only when every required command has a committed or explicit intentional-skip receipt. `recap_feedback` runs a correction outbox that cancels or compensates committed effects, exposes partial/retryable state, and requires the latest `supersedes_event_id` for conflicting feedback. Audit production schemas with `python3 scripts/reconcile_recap_consumption.py --json`; use `--apply --json` only after stopping the daemon and reviewing the four-database backup scope.
-
-Wiki projections have their own append-only lifecycle ledger. Every create, update, move, or delete produces a stable `page_id`, a causal `page_revision`, and a tombstone when applicable. EventBus closes a mutation only after the Knowledge Graph, Cognitive Graph, relation embeddings, Wiki search index, metrics, and MOC consumers each return a typed `ack` or `noop`; retries, deferrals, dead letters, daemon restarts, and out-of-order revisions remain visible. `scripts/rebuild_wiki_projection_state.py` is read-only by default and provides an explicit backup-and-rebuild path with full/incremental/isolated comparison and receipt reconciliation. See the [Wiki projection lifecycle contract](docs/WIKI_PROJECTION_LIFECYCLE.md).
-
-Canonical raw turns now separate stable logical aliases from append-only immutable revisions. `raw_turns.current_revision_id` selects the current bytes, while superseded `raw_turn_revisions` remain addressable by `raw-revision:<revision_id>`. Capture handoffs, Amphora tasks, distilled fragments, and Wiki pages carry revision-plus-span provenance; durable edges protect referenced raw data from retention. `session_search` authorizes metadata before fetching canonical revision bodies, so RawIndex and Markdown projections are candidate hints rather than evidence authorities. `python3 scripts/reconcile_raw_revision_provenance.py` is dry-run by default; `--apply` backs up the database, records provable edges, and marks unprovable historical pages as `pending_rebuild` instead of inventing provenance.
-
-Complete distillation no longer compresses long code blocks into head/tail excerpts or drops the fourth and later shell commands. Except for explicit private `[thinking]...[/thinking]` blocks, `clean_message_content()` preserves visible content and formatting. Standard and chunked extractors build canonical input with `lossless=True`: tiny total or per-message budgets record `budget_overflow_tokens` instead of invoking head/tail or message truncation, while private exclusions expose only type, span, and counts. WikiBuilder's plain-text fallback no longer takes a 500-character prefix; token pressure is handled by lossless `split_to_tokens()` chunks so first, middle, and tail evidence all reach extractor input. Chunk checkpoint hashes and `chunk_info` declare `lossless-visible-v1`; legacy unversioned checkpoints miss and are re-extracted instead of being reused.
-
-Chunk recovery also requires the complete `mnemos.distill_execution_spec.v2`. The exact rendered prompt, output schema, extract/parse/quality code digests, explicit provider/model/backend routing, merge contract, all output-affecting effective settings, and the immutable `DistillInputSpec` hash determine `execution_spec_hash`. The model root must pass the `distill_output_v4` schema-owned conditional rules and typed runtime validator: skip is legal only with empty fragments/claims plus a non-empty reason and source-bound evidence, while knowledge/skill requires fragments, claims, a non-skip intent, behavior intent, and the complete 19-field `cognition_episode`; artifact, relation, and cognitive-action dependencies are conditional schema rules as well. The same validation runs before and after correction, on checkpoint save/load, and before formal write; both checkpoint save and reuse receive the full immutable input spec. `CheckpointAdmission` persists the input-spec hash, output-contract version, canonical-root hash, and judgment. Before any formal sink, the canonical episode revision, event, and projection outbox are atomically committed to the single `CognitiveStateStore`. `create_page` additionally requires an engine-issued `FragmentRouteCapability` bound to the root/input hashes and the post-admission fragment object references, so a direct caller cannot swap fragments after admission. Chunk provenance records cache hits, miss reasons, and field-level spec differences. Old schemas, missing root/admission, corrupt spec/payload metadata, or any effective-field change must miss; a failed run under a new spec cannot overwrite an older successful generation. `python3 scripts/audit_distill_output_contract.py --strict --json` verifies the release contract. `python3 scripts/reconcile_distill_execution_checkpoints.py --json` is read-only by default; after stopping the daemon, use explicit `--apply --backup-dir <dir> --json` to back up and migrate while retaining old rows as non-reusable history.
-
-The core capture -> distill -> store path is usable in v2.0.0, but Mnemos is not a fully autonomous cognitive system and it does not force the trusted-push decision loop by default. Trusted Push is configurable: `off` keeps the legacy write path, `shadow` records proposals without formal Journal writes, and `enforce` requires ProposalQueue / Journal / Writer approval before formal writes. Formal Markdown write/delete/move fallback commits now require a typed receipt bound to the exact target, content hash and expected-existing hash; moves also bind the source and its hash. `python3 -m core.trust.static_scan` v4 uses AST callsite analysis rather than directory or whole-file marker allowances. The current denominator is 169 sinks: 143 exact non-formal/recovery registry entries, 17 receipt-dominated formal callsites, seven central-writer sinks, and two primitive sinks; unknown, stale, known-bypass, and forged guarded classifications fail closed. There is no local Web dashboard/control center yet; configuration and operations currently use the CLI, MCP tools, and `~/.mnemos/configs/main.json`.
-
-Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — letting LLMs incrementally build and maintain persistent knowledge bases. Mnemos goes one step further: **knowledge doesn't just get stored, it stays alive in decision-making.**
+[![CI](https://img.shields.io/github/actions/workflow/status/jielumaizui/mnemos/ci.yml?branch=main)](https://github.com/jielumaizui/mnemos/actions)
 
 ---
 
-## The Problem We Solve
+**Do these problems sound familiar?**
 
-- You discuss a complex project with AI, come back two weeks later, and it's completely forgotten the context
-- You keep hitting the same bugs because you can't remember past experiences
-- You spend hours taking notes but can never find what you need when you need it
-- Most of what you learn fades away, leaving you feeling like you've accomplished nothing
-- You know you have knowledge gaps but have no idea where they are
+- You finished a complex project with an AI two weeks ago — ask it again today and the context is gone
+- You hit the same problems over and over, re-searching and re-stepping into the same pits
+- You spend hours taking notes and organizing docs, yet can never find them when it matters
+- You learn a lot and forget most of it within weeks
+- You know you have knowledge blind spots, but not where they are
 
-**All these problems stem from one fact: human cognition is finite.**
+**All of these are the same problem at root: human cognition is limited.**
 
-Our brains are great for thinking and creating, but limited at memory and retrieval. Mnemos is built as a local memory layer that helps AI assistants recall durable, source-backed knowledge during work.
+Mnemos is a local-first memory, knowledge, and decision-support system for AI agents. It connects to all your AI assistants, records every conversation in full, automatically distills structured knowledge from them, builds your personal knowledge graph and user persona, and then — when you need it — proactively pushes the right knowledge back into your AI's workflow.
 
----
+**You do zero extra organizing.** No notes, no tags, no searching. Just chat with your AI and work as usual, hand files to Mnemos, and everything else — capture, distillation, scoring, storage, push — runs automatically.
 
-## What Mnemos Does
+> **Honest boundaries**: v2.0.0 is not a fully autonomous cognitive system. High-risk writes, trusted-push enforce mode, data deletion, and some repair actions still require your explicit approval. There is no web control center either — everything happens through the CLI, MCP, config files, and Obsidian.
 
-### 1. Permanent AI Memory
-- Canonical raw capture for supported and authorized AI assistants, with fidelity explicitly reported as full, derived, or partial
-- Cross-agent recall for supported sources and Agent Kit targets, subject to access control and source fidelity
-- No more context window limitations, no more repeating yourself
+Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — letting an LLM incrementally build and maintain a persistent knowledge base. Mnemos goes one step further with a decision-support layer: **knowledge shouldn't just sit in storage; it should stay alive in decisions.**
 
-### 2. Universal File Parser
-- Import any file: PDF, Word, Excel, PowerPoint, Markdown, HTML, EPUB, MOBI
-- Automatically extracts core content, key concepts, and important data
-- Batch import entire folders
+## How Is It Different from Other "Second Brain" Tools?
 
-### 3. Automatic Knowledge Extraction
-- Valuable conversations can be distilled into structured knowledge through the configured queue and LLM backend
-- Generates structured Wiki pages, permanently stored in your local knowledge base
-- Automatically builds connections between knowledge to form your personal knowledge graph
+| Dimension | Typical Second Brain tools | Mnemos |
+|-----------|---------------------------|--------|
+| Positioning | Knowledge storage & retrieval | Local-first AI memory, knowledge & decision support |
+| Automation | Semi-automatic (manual organizing/tagging) | Automatic capture → distill → store → push, zero manual organizing |
+| Knowledge flow | You → system → you search it yourself | System → AI agent → real-time decision support |
+| Quality assurance | Deduplication (if any) | Seven-layer distillation pipeline + quality gate + cognitive value gate + adaptive scoring |
+| Adaptability | Fixed rules | Cold-start rules → Bayesian adaptation → behavioral feedback loop |
+| User modeling | None | Cognitive persona (three-layer radar + refutable assertions + consumption-effect logs) driving decision strategy |
+| Knowledge lifecycle | Manual or unmanaged | Score-driven evolution, staleness alerts, forced-retrospective loop |
+| Write safety | Direct writes | Optional trusted-push loop: ProposalQueue → approval → append-only Journal → controlled writes |
+| Coupling | Monolith | Hot-pluggable modules, enable on demand |
 
-### 4. Proactive Knowledge Delivery
-- Predicts what knowledge you need and pushes it to you proactively
-- When you discuss a topic, surfaces relevant past knowledge when search/preflight/push gates match
-- Based on the Ebbinghaus forgetting curve, reminds you to review before you forget
+## Core Strengths
 
-### 5. Shadow Pages
-- While you're thinking about a problem, the system silently retrieves all relevant knowledge in the background
-- Generates a "shadow page" containing information you might have forgotten
-- Helps you fill blind spots in your thinking
+### Storage Is the Floor, Not the Selling Point
 
-### 6. Knowledge Gap Detection & Forced Retrospectives
-- Automatically analyzes your knowledge graph to identify gaps
-- Weekly auto-generated personal growth review reports
-- Forced retrospectives: the system evaluates urgency across 5 dimensions and can open Obsidian or surface dialog reminders according to configured budgets
+Knowledge storage and memory retrieval are Mnemos' most basic features. Hand it files (PDF/Word/PPT/Excel/HTML/EBOOK) and they're distilled into the knowledge base; AI conversations are automatically captured and distilled into structured knowledge — no manual organizing, no manual tagging. But that's only the beginning — **storing isn't the goal; using is.**
 
-### 7. Closed-Loop Self-Evolution
-- The more you use it, the better it understands you
-- Knowledge quality improves through usage feedback
-- Grows with you as your personal cognitive extension
+### 1. Adaptive Dynamic Adjustment Engine
 
----
+The system is not a set of hard-coded rules but a continuously evolving judgment machine:
 
-## How Mnemos Differs
+- **Three-phase cold start**: COLD (pure rules) → WARM (rules + Bayesian blend) → HOT (data-driven). Every adaptive module falls back to rules when data is scarce — it never goes on strike for "not enough data"
+- **Bayesian scoring**: every piece of knowledge, entity, and relation carries a confidence score, with posteriors updated in real time as new evidence arrives
+- **Feedback loop**: implicit signals (searches/clicks/ignores) + explicit feedback → weighted fusion → scorer retraining
+- **Drift detection**: automatic model recalibration when feature distributions shift beyond threshold
 
-| Dimension | Common Second Brain | Mnemos |
-|-----------|---------------------|--------|
-| System Position | Knowledge storage & retrieval | Local AI memory, knowledge, and decision support |
-| Automation | Semi-automatic (manual tagging) | Automated capture/distill/store where configured; high-risk writes, deletion, and enforce-mode decisions require explicit approval |
-| Knowledge Flow | You → System → You search | System → AI Agent → Real-time decision assist |
-| Quality Assurance | Deduplication (if any) | 7-layer distillation pipeline + adaptive scoring + 3 self-checks |
-| Adaptability | Fixed rules | Cold-start rules → Bayesian adaptation → behavior feedback loop |
-| User Modeling | None | 3-layer persona radar (energy/cognitive/value), drives decision strategy |
-| Knowledge Lifecycle | Manual or none | Score-driven auto-evolution, freshness alerts, forced retrospective loop |
-| Module Coupling | Monolithic | Hot-pluggable design, enable on demand |
+The scoring engine covers 5 domain scorers (sync, raw capture, knowledge graph, persona, operational health) plus 1 standalone distill scorer. Each domain scores, evolves, and degrades independently. The adaptive policy matrix spans 9 domains (distillation, quality gate, scoring, delivery, search, document processing, and more); shadow experiments keep a 24-hour rollback window, and with no active shadow your explicit configuration is strictly respected.
 
----
+### 2. Persona Decision Hub
 
-## Quick Start
+The persona is not a wall of labels — it's a decision hub. The system infers your cognitive patterns and value priorities from your AI conversation behavior, and injects the persona into the AI's workflow:
 
-### Prerequisites
-- Python >= 3.10
-- An AI Agent (Claude Code, Hermes, OpenClaw, OpenCode, Codex, etc.)
-- [Obsidian](https://obsidian.md) — knowledge base (Required)
-- Required model endpoints for LLM, Embedding, and Reranker. Each endpoint needs a model ID, API base URL, and API key.
+- **Three-layer radar**: energy patterns (focus/activation/endurance/switching), cognitive patterns (abstraction/systems/questioning/creativity), value priorities (correctness/efficiency/depth/perfection/innovation/autonomy)
+- **Refutable persona assertions**: corrections, ignores, interruptions, rework, and stated preferences become assertions with evidence, confidence, and privacy levels — low-confidence or corrected assertions can be rebutted or revoked by later evidence
+- **Persona-driven dialogue strategy**: dynamically generates prompt fragments so the AI's style adapts to you — perfectionists get more rigorous suggestions, efficiency-first users get more concise plans
+- **Consumption-effect loop**: preflight, search, distillation, and quality gates all record which assertions they used, whether behavior changed, and how it turned out — the persona no longer talks to itself
+- **Context isolation**: personas evolve independently across work/personal/study contexts, avoiding cross-contamination
+- **14-dimension evolution timeline**: long-term tracking of persona drift, with automatic detection of burnout signals, cognitive shifts, and value reversals
 
-> **Note**: Mnemos does not require a specific vendor. Any compatible endpoint can be used if you provide the model ID, API base URL, and API key. Setup smoke-tests LLM, Embedding, and Reranker separately; failed checks prompt again in interactive mode and fail in `--yes` mode. Reranker `base_url` may be either the service root or the full endpoint ending in `/rerank`.
->
-> If Obsidian is not detected during setup, setup stops with an explanation: the raw Vault stores original Agent conversations, and the Mnemos Vault stores distilled cognitive knowledge; both must be openable and reviewable in Obsidian. Install Obsidian first, then rerun setup.
+### 3. Forced Retrospective & Logic Self-Check
 
-### One-Command Install (Recommended)
+Storing knowledge is not the finish line — continuous verification is. The system tracks the knowledge lifecycle with budgets, weights, and your confirmation policy, intervening at key moments:
 
-```bash
-git clone https://github.com/jielumaizui/mnemos.git
-cd mnemos
-./setup.sh        # macOS / Linux
-```
+- **Weighted forced opening**: every pending retrospective is scored in real time across five dimensions — severity, wait time, recurrence frequency, current-context relevance, and promise breaches. Above threshold, the relevant Obsidian page opens automatically; below it, you get a light in-conversation reminder that doesn't break your flow
+- **User-scheduled reminders open directly**: say "remind me to review this in 1 day" and the page opens on time — no weighting algorithm for your own appointments
+- **Startup compensation**: appointments that expired while the machine was off are reissued on next launch
+- **Retrospectives actually get consumed**: conclusions fan out through durable plans → commands → receipts into retrieval, policy patches, persona, scheduling, and scoring; negative feedback can revoke already-committed effects — a retrospective is no longer a document nobody reads
+- **Seven-layer distillation pipeline**: noise filtering → value pre-judgment → LLM judgment → knowledge extraction → self-check → cross-agent linking → feedback loop. Before hitting the Wiki, pages must also pass a general quality gate and a cognitive value gate that demands an explicit cognitive contribution to decisions, methods, anti-patterns, or preferences
+- **Dispute arbitration**: when new knowledge conflicts with existing knowledge, the system neither overwrites nor ignores — it generates an arbitration page recording the dispute and waits for your ruling
+- **Incremental + deferred distillation**: long conversations draft incrementally every 5 turns; low-confidence content waits in a deferred queue until signals accumulate
+- **Recycling guard**: prevents Wiki-injected content from being distilled back into the knowledge base, eliminating self-referential pollution
 
-Windows PowerShell:
+### 4. Trusted Writes & Hot-Pluggable Modules
 
-```powershell
-.\setup.bat
-```
-
-The installer labels each prompt as `LLM`, `Embedding`, or `Reranker` so model IDs do not get entered into the wrong slot.
-
-`setup.sh` / `setup.bat` automatically:
-1. Checks Python >= 3.10
-2. Installs dependencies
-3. Verifies Obsidian is installed and confirms the Mnemos/raw Vault paths; if Obsidian is missing, explains why and stops deployment
-4. Generates `~/.mnemos/configs/main.json`
-5. Initializes standard wiki directory structure
-6. Installs AI Agent active access (adapter hooks + MCP-only config/policy)
-7. Starts background daemon
-8. Configures or prints scheduler setup: macOS writes launchd; Linux prints a cron command with runtime environment variables; Windows calls `mnemos scheduler install-windows` and prints the manual command if registration fails
-9. Runs deployment verification: model endpoints must be usable; installed targets must first pass static conformance and then prove runtime full power with authorization plus a recent MCP health/synthetic-safe completeness receipt; targets that are not installed are skipped
-
-Non-interactive mode (macOS / Linux):
-```bash
-export MNEMOS_LLM_MODEL=your_llm_model_id
-export MNEMOS_LLM_BASE_URL=https://your-llm-api.example/v1
-export MNEMOS_LLM_API_KEY=your_llm_key
-export MNEMOS_EMBEDDING_MODEL=your_embedding_model_id
-export MNEMOS_EMBEDDING_BASE_URL=https://your-embedding-api.example/v1
-export MNEMOS_EMBEDDING_API_KEY=your_embedding_key
-export MNEMOS_RERANKER_MODEL=your_reranker_model_id
-export MNEMOS_RERANKER_BASE_URL=https://your-reranker-api.example/v1
-export MNEMOS_RERANKER_API_KEY=your_reranker_key
-./setup.sh --yes
-```
-
-Non-interactive mode (Windows PowerShell):
-```powershell
-$env:MNEMOS_LLM_MODEL="your_llm_model_id"
-$env:MNEMOS_LLM_BASE_URL="https://your-llm-api.example/v1"
-$env:MNEMOS_LLM_API_KEY="your_llm_key"
-$env:MNEMOS_EMBEDDING_MODEL="your_embedding_model_id"
-$env:MNEMOS_EMBEDDING_BASE_URL="https://your-embedding-api.example/v1"
-$env:MNEMOS_EMBEDDING_API_KEY="your_embedding_key"
-$env:MNEMOS_RERANKER_MODEL="your_reranker_model_id"
-$env:MNEMOS_RERANKER_BASE_URL="https://your-reranker-api.example/v1"
-$env:MNEMOS_RERANKER_API_KEY="your_reranker_key"
-.\setup.bat --yes
-```
-
-`--yes` never prompts for model settings. If any required endpoint is missing or fails smoke, setup exits with code 1.
-
-### Manual Install
-
-If you prefer manual configuration:
-
-```bash
-# Clone the repository
-git clone https://github.com/jielumaizui/mnemos.git
-cd mnemos
-
-# Install dependencies
-pip install -e .
-
-# Copy and edit configuration
-mkdir -p ~/.mnemos/configs
-cp config/config.example.json ~/.mnemos/configs/main.json
-# Edit ~/.mnemos/configs/main.json with your paths and llm/embedding/reranker base_url, model, api_key_source=env:...
-export MNEMOS_LLM_MODEL=your_llm_model_id
-export MNEMOS_LLM_BASE_URL=https://your-llm-api.example/v1
-export MNEMOS_LLM_API_KEY=your_llm_key
-export MNEMOS_EMBEDDING_MODEL=your_embedding_model_id
-export MNEMOS_EMBEDDING_BASE_URL=https://your-embedding-api.example/v1
-export MNEMOS_EMBEDDING_API_KEY=your_embedding_key
-export MNEMOS_RERANKER_MODEL=your_reranker_model_id
-export MNEMOS_RERANKER_BASE_URL=https://your-reranker-api.example/v1
-export MNEMOS_RERANKER_API_KEY=your_reranker_key
-
-# Verify model endpoints and run system diagnosis
-# Doctor text, diagnostic JSON, distill status, and E2E dry-run paths are redacted by default; use --unsafe-debug only for private local debugging.
-python3 verify_installation.py --api-smoke
-mnemos doctor
-```
-
-Validation is hermetic by default. The quick, integration, system, heavy, diagnostics, and non-real-API full-score entrypoints create one `mnemos.hermetic_run_environment.v1` root that owns HOME, Mnemos/database/wiki, XDG, temporary, bytecode-cache, and artifact paths. The `system` layer is the OS-neutral system-test entrypoint shared by the Linux, macOS, and Windows CI matrix; workflows must not recreate it with shell-specific temporary-directory or environment syntax. Its manifest records `environment_hash`, `outside_write_count`, and `formal_state_diff`; API credentials are absent unless `run_full_score_gates.py --real-api` is explicitly selected. A supplied `--output-dir` is the sandbox root and must be absent or empty, so existing evidence is never cleared or reused. Health, status, distill status, and `scripts/verify_installation.py` are read-only by default; use `--write-probes` only for an explicit unique-file permission probe. Golden benchmark runs require an explicit output directory or the run-owned `MNEMOS_RUN_ARTIFACTS_DIR`, rather than a shared `~/.mnemos/benchmarks/golden/latest` directory.
-
-Quality-debt validation separates development ratchets from release closure. `scripts/check_maintainability_budget.py --closure` tracks every broad catch by an exact AST fingerprint and requires time-bounded owner, telemetry, and removal metadata; parse failures, same-count replacement, expired acceptance, and a baseline that was not tightened after improvement fail closed. `scripts/check_zombie_code_policy.py --closure` applies the same rule to compatibility candidates. Accepted residual debt may pass local development checks only with `release_eligible=false`; strict full-score runs add `--closure --strict --json` and require zero residual debt. The vulture whitelist and its CI baseline are both fixed at zero.
-
-Release certification is separate from a focused diagnostic run. `--strict --real-api` rejects `--only` and every skip selector. `mnemos.full_score_gates.v2` is release eligible only when the current canonical 44-gate manifest has identical expected, selected, and executed sets, no omitted gate, all required receipts pass, and the run is bound to a clean full Git commit. The denominator includes three strict maintainability/zombie/vulture zero-closure gates and the required-Desktop `docs.asset_manifest.strict` gate. Each receipt binds its stdout/stderr SHA-256; verify the artifact with `scripts/verify_full_score_certificate.py`. A successful partial run remains `certifying=false`. `scripts/audit_test_suite_denominator.py` currently proves all 480 pytest files belong to exactly one quick/integration/heavy layer, while `scripts/run_cognitive_behavior_scenarios.py` executes the behavior files promised by the scenario matrix.
-
-Documentation and prompt assets use the canonical `mnemos.document_asset_manifest.v1` contract. The current denominator is 65/65 tracked Markdown files, 23/23 prompt/schema assets, and 25/25 Desktop system-map assets, with zero exclusions and zero unverified assets. Freshness and sensitive-data audits share tracked-file discovery; prompt entries bind exact hashes, real consumer symbols, and schema/inline output contracts; Desktop current contracts bind both current-state and repo anchors, while generated indexes bind the current commit. Verify it with `python3 scripts/audit_document_asset_manifest.py --strict --desktop-mode required --json`.
-
-`core/kia/relation_evidence_schema.py` is the only DDL/version/hash authority for `knowledge_graph.db.relation_evidence`. `KnowledgeGraph` and `RelationManager` validate the existing columns, defaults, foreign key, index, registry version, and semantic hash before any constructor-side DDL. Preview with `python3 scripts/reconcile_relation_evidence_schema.py --json`; after stopping the daemon and confirming no missing evidence type, apply with `--apply --backup-dir <dir> --json`. The apply path creates and verifies a SQLite backup, migrates transactionally, preserves row counts, and refuses unknown or ambiguous data. `python3 scripts/audit_schema_registry.py --strict --json` enforces the single owner in local, pre-commit, CI, and full-score gates.
-
-```bash
-python3 scripts/run_tests.py quick
-python3 scripts/run_tests.py integration
-python3 scripts/run_tests.py system  # System tests only; OS-neutral hermetic CI entrypoint
-python3 scripts/run_tests.py heavy
-python3 scripts/audit_gate_hermeticity.py --suite diagnostics --strict --json --output-dir /tmp/mnemos-diagnostics-hermetic
-python3 scripts/run_full_score_gates.py --strict --real-api
-python3 scripts/verify_full_score_certificate.py /tmp/mnemos-full-score-release/full_score_gates.json
-```
-
-SQLite databases are stored as canonical plaintext `.db` files; whole-file SQLite encryption artifacts are removed. Sensitive values are controlled through field redaction, secret inventory checks, and `env:` / `keyring:` / `keyref:` references. `checks.sqlite_disk_budget` monitors `.db-wal`, Mnemos temp files, snapshots, and `raw_events.db` growth; WAL checkpoint and stale temp cleanup are safe repairs, while snapshot and raw event deletion require user confirmation.
-
-### Verify System is Working
-
-```bash
-# Check distillation queue
-python3 core/kia/amphora.py --list
-
-# Check daemon status
-python3 -m mnemos_daemon status
-
-# Check inbox for new content
-ls ~/Documents/mnemos/00-Inbox/
-
-# Check persona
-cat ~/Documents/mnemos/L5-Feedback/user-persona.md
-mnemos calibrate
-
-# Check scorer status
-mnemos scorer status
-```
-
-### CLI Commands
-
-```bash
-mnemos init                       # Interactive setup wizard
-mnemos doctor                     # System diagnosis
-mnemos status                     # View system status
-mnemos config                     # View/edit configuration
-
-# Agent management
-mnemos agent list                 # List available AI Agents
-mnemos agent install              # Install adapter hooks + MCP-only active access
-mnemos agent detect               # Detect installed Agents
-mnemos agent doctor               # Diagnose Agent status
-
-# Background services
-mnemos daemon start               # Start background daemon
-mnemos daemon stop                # Stop background daemon
-mnemos daemon status              # View daemon status
-mnemos scheduler install-windows  # Register Windows startup
-mnemos scheduler uninstall-windows # Unregister Windows startup
-
-# Event system
-mnemos events stats               # View event queue statistics
-mnemos events cleanup             # Clean up expired events
-
-# Scoring system
-mnemos scorer status              # View scorer status
-mnemos scorer retrain             # Manual retraining trigger
-mnemos scorer rollback            # Rollback to previous model
-
-# Sync system
-mnemos sync status                # View sync status
-mnemos sync retry-failed          # Retry failed sync tasks
-
-# Search & reports
-mnemos search <query>             # Context-aware search
-mnemos report generate            # Generate weekly persona report
-
-# Other
-mnemos calibrate                  # Launch persona calibration
-mnemos mcp serve                  # Start MCP server
-```
-
----
+- **Trusted-push loop (optional)**: `trusted_push.mode=off|shadow|enforce`. In enforce mode, distilled pages must enter the ProposalQueue and be approved by you before an append-only WriteJournal and controlled writer touch disk — the AI cannot silently rewrite your knowledge base; every write is auditable and reversible
+- **Wiki projection lifecycle**: every create/update/move/delete of a formal Wiki page lands in an append-only mutation ledger first, then publishes events to six consumers (knowledge graph, cognitive graph, relation embeddings, search index, page metrics, MOC navigation), each returning its own receipt — the Wiki and its derived indexes never silently drift apart
+- **Modular architecture**: 14+ subsystems (knowledge graph, shadow pages, DNA fingerprints, entropy engine, time capsules, …) run independently; disabling any of them leaves the core pipeline intact
+- **KIA scheduler**: 16 scheduled steps executed in parallel via topological ordering; a module that keeps failing is auto-disabled instead of dragging everything down
+- **Event-driven**: modules communicate through a loosely-coupled EventBus — distillation done → graph update → persona refresh → push evaluation, fully asynchronous
+- **Resource governance**: `ResourceBudget` monitors CPU/memory/thermal/power; background tasks slow down (not shut down) under heat or battery
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Application Layer — Decision Output                            │
-│  IntentRouter │ ApplicationHub │ ContextAwareSearch            │
-│  PredictivePush │ BlindspotDiscovery │ DisputeResolver         │
-│  FreshnessAlert │ WeeklyReport │ ForcedRetrospective            │
+│  Application Layer — decision output                             │
+│  IntentRouter │ ContextAwareSearch │ PredictivePush              │
+│  BlindspotDiscovery │ DisputeResolver │ ForcedRetrospective      │
+│  FreshnessAlert │ PolicyPatch │ DeliveryRouter                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  Knowledge Layer — Understanding & Modeling                     │
-│  ┌──────────────────────┐  ┌──────────────────────────────────┐│
-│  │ Knowledge Graph      │  │ User Persona                     ││
-│  │ EntityManager        │  │ 3-layer radar + cross-validation ││
-│  │ RelationManager      │  │ Dialogue strategy + context iso  ││
-│  │ EvolutionTracker     │  │ 14-dim evolution timeline        ││
-│  │ KGEventHandler       │  │ Event-driven updates             ││
-│  └──────────────────────┘  └──────────────────────────────────┘│
+│  Cognitive Layer — observe & reflect (L3/L4/L5)                  │
+│  ObservationEngine (behavioral observations)                     │
+│  ReflectionEngine (deviation detection + insights)               │
+│  FeedbackLoop (attribution & revocation) │ CognitiveGraph        │
 ├─────────────────────────────────────────────────────────────────┤
-│  Scoring & Distillation — Quality Assurance                     │
-│  ┌──────────────────────┐  ┌──────────────────────────────────┐│
-│  │ Adaptive Scoring     │  │ 7-layer Distillation Pipeline    ││
-│  │ COLD/WARM/HOT 3-stage│  │ Noise→Judge→LLM→Extract→Check→ ││
-│  │ 6 subsystem scorers  │  │ Link→Feedback                    ││
-│  │ Feedback loop + drift│  │ PromptBuilder + TokenBudget      ││
-│  └──────────────────────┘  └──────────────────────────────────┘│
+│  Knowledge Layer — understanding & modeling                      │
+│  ┌──────────────────────┐  ┌──────────────────────────────────┐  │
+│  │ Knowledge Graph       │  │ User Persona                     │  │
+│  │ EntityManager         │  │ 3-layer radar + refutable        │  │
+│  │ RelationManager       │  │ assertions, dialogue strategy,   │  │
+│  │ EvolutionTracker      │  │ context isolation, 14-dim timeline│  │
+│  └──────────────────────┘  └──────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
-│  Sync Layer — Data Ingestion                                    │
-│  SyncEngine (8-step pipeline) │ 12 Agent Sources │ FileIngestor │
-│  TriggerSystem (Watchdog/Polling/Hybrid) │ AgentLifecycleMgr  │
+│  Scoring & Distillation — quality assurance                      │
+│  ┌──────────────────────┐  ┌──────────────────────────────────┐  │
+│  │ Adaptive scoring      │  │ 7-layer pipeline (Hephaestus)    │  │
+│  │ COLD/WARM/HOT phases  │  │ noise→prejudge→LLM→extract→      │  │
+│  │ 5 domain scorers +    │  │ selfcheck→link→feedback          │  │
+│  │ distill scorer        │  │ quality gate + cognitive gate    │  │
+│  │ feedback + drift      │  │ incremental + deferred distill   │  │
+│  └──────────────────────┘  └──────────────────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│  Trusted Writes — auditable changes                              │
+│  ProposalQueue │ PushDecisionGate │ WriteJournal (append-only)   │
+│  WikiProjectionLedger │ ActionLedger │ SnapshotManager           │
+├─────────────────────────────────────────────────────────────────┤
+│  Sync Layer — data ingestion                                     │
+│  Capture (MCP reports) │ SyncEngine 8-step pipeline              │
+│  12 Agent Sources │ DocumentImport (PDF/Word/PPT/Excel/HTML/…)   │
+├─────────────────────────────────────────────────────────────────┤
+│  Daemon — 38 background services                                 │
+│  raw_sync │ distill_and_merge │ persona_analyzer │ scheduler_tick│
+│  observation_engine │ reflection_engine │ recap_consumption │ …  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
+## How the System Runs (6-Step Pipeline)
 
-## Design Principle: Quality Control
+Mnemos' core value chain is **capture → sync → project → distill → store → assist**:
 
-Mnemos **directly calls LLM APIs** for all distillation tasks, ensuring quality control and closed-loop processes.
+```
+1. Capture
+   Agent conversation ends / MCP report / user imports a file
+        ↓
+2. Sync
+   SyncEngine normalizes raw content into append-only raw revisions
+        ↓
+3. Raw Projection
+   The daemon projects current revisions into readable raw/<agent>/<date>/<chunk>.md
+        ↓
+4. Distill
+   The Hephaestus seven-layer pipeline refines raw material into structured Wiki pages
+        ↓
+5. Store & Graph
+   Default mode writes straight to the Wiki; enforce mode requires ProposalQueue approval
+        ↓
+6. Assist (KIA)
+   Preflight preloading, Guard checks, PredictivePush, forced-retrospective loop
+```
 
-**Rule: distillation execution stays in Mnemos, not the Agent.**
+The whole chain uses persistent, revision-aware typed receipts: capture only completes when a matching queue receipt arrives; distillation only terminates with a formal page or an explicit intentional skip; partial, retry, and write failures stay non-terminal and recoverable.
 
-Why not delegate distillation to the Agent:
-1. **Quality uncontrollable** — Agents may bypass Mnemos pipelines and process files independently, causing hard validation, knowledge graph construction, and Wiki ingestion to all fail
-2. **Agreements unreliable** — Agent autonomous behavior cannot be forcibly constrained; "gentlemen's agreements" will inevitably be violated
-3. **Closed-loop process** — only Mnemos executing itself guarantees the complete loop: raw material → distillation → hard validation → ingestion → knowledge graph
+## Distillation Execution Model
 
-Mnemos uses **LLMApiChain** for ordered failover based on `llm.chain`, while keeping the primary / same-provider / cross-provider fields for compatibility and preserving additional backup nodes. It is managed centrally in `core/llm_config.py`.
+Mnemos **calls LLM APIs directly through the `DistillBackend` interface**, keeping quality controllable and the pipeline closed-loop. The production default is `LLMBackend` (an OpenAI-compatible HTTP caller); local CLI `AgentBackend`s may only run on a shadow-only evaluation surface and never enter the production write path.
 
----
+**Design principle: distillation executes inside Mnemos, not inside the agent.**
 
-## Integration with AI Agents
+Why not delegate distillation to agents:
 
-### Method 1: MCP Protocol (Recommended, Universal)
+1. **Uncontrollable quality** — an agent might bypass the Mnemos pipeline and handle material itself, voiding hard validation, knowledge-graph construction, and Wiki storage
+2. **Unreliable conventions** — autonomous agent behavior cannot be forced; a "gentleman's agreement" will be violated
+3. **Closed loop** — only by executing itself can Mnemos guarantee the full loop: raw material → distillation → hard validation → storage → knowledge graph
 
-Any MCP-compatible AI Agent can connect. After connection, the Agent can use tools such as:
+Mnemos implements ordered failover via **LLMApiChain** (primary / same-provider / cross-provider fallback chains) and is vendor-agnostic — any endpoint with an OpenAI-style API works.
 
-`mnemos agent install` issues a distinct high-entropy launch capability per host. Host configuration stores only a `0600` keyring reference; the plaintext capability is not persisted in config, backups, logs, or the authorization database. At stdio startup, Mnemos resolves an immutable server-side `PrincipalEnvelope` from `AgentAuthorizationStore` and revalidates revocation/expiry before every tool call. All 51 tools must match the shared policy registry. Callers cannot self-assert or expand identity with `agent`, `source_agent`, `allow_cross_agent`, or `authorized_agents`; `session_id` and `project` may only narrow the server grant.
+## 5-Minute Walkthrough
 
-Wiki/raw/search candidates require a complete ACL envelope and fail closed on missing, conflicting, or unproven provenance. `wiki_read` normalizes the path and authorizes frontmatter before reading the body. Heat, training, persona, search-session, click, reminder-cooldown, and push-history effects receive authorized results only. Cross-agent/project access is explicitly managed with `mnemos agent grant-mcp <agent> ...`; updating or revoking a grant immediately invalidates older launch capabilities, after which that host must be reinstalled.
+> Follow this example once and you'll know exactly what Mnemos does.
 
-- `wiki_search` — Search knowledge base
-- `wiki_read` — Read specific wiki page
-- `wiki_write` — Write to wiki page
-- `knowledge_ingest` — Ingest user-provided knowledge
-- `knowledge_import` — Import local file to knowledge base
-- `knowledge_distill` — Trigger knowledge distillation
-- `document_process` — Import documents through the single-owner path: canonical raw → capture outbox → Amphora → quality gate → Wiki; returns accepted/pending immediately, while `mode=parse` remains preview-only
-- `capture_turn` — Report single conversation turn (< 200ms)
-- `capture_session` — Batch report entire session
-- `end_session` — Mark session as complete
-- `capture_status` — Query capture queue status
-- `session_search` — Search historical sessions
-- `preflight_inject` — Load relevant experience before tasks
-- `guard_check` — Risk guard during execution
-- `persona_summary` — Get user persona summary
-- `persona_behavior_prompt` — Get persona-driven behavior prompt
-- `persona_update` — Trigger persona update
-- `signal_collect` — Trigger signal collection
-- `context_aware_search` — Context-aware search with persona weighting
-- `intent_route` — Intent routing (recall/knowledge/task/chat)
-- `blindspot_check` — Knowledge gap detection
+### Scenario: You Had Claude Fix a Bug
 
-`preflight_inject` and `guard_check` are high-frequency Agent entrypoints. The persona signal store uses a 2-second default SQLite connect/busy-wait budget. If the daemon temporarily holds a persona SQLite connection and `PreFlightInjector` cannot initialize, MCP should return a successful degraded response instead of a tool execution error: `preflight_inject` includes `degraded_reason`, and `guard_check` falls back to the default high-risk guard checklist.
+**Step 1: Talk normally**
 
-Policy patches are matched only against the current task/subtype/context and an explicit project scope; patch content never proves its own trigger. Non-global patches require an exact project match. Candidates are ranked by task fit and matched trigger evidence, deduplicated, and capped by `policy_patch.max_active`. KIA responses expose `match_source=current_context`, `matched_triggers`, `task_fit_score`, `dedupe_key`, and `interruption_budget_ok`. Reflection key-point prose is explanation metadata, not trigger input. Audit stored triggers with `python3 scripts/reconcile_policy_patch_triggers.py --json`; `--apply --json` creates a database backup before changing rows.
-The same boundary applies to reflection and persona metrics: when the persona store is temporarily unavailable, reflection continues with `persona_store=None`, and `persona_behavior_metrics` returns base behavior metrics with an empty `profile_usage` section.
-`guard_alert` events emitted by `guard_check` are droppable telemetry. When the current process has no EventBus consumers, `publish_event` skips global EventBus initialization so a daemon-held `events.db` lock cannot turn the MCP response into a tool error.
-- `freshness_check` — Knowledge freshness check
-- `predictive_push` — Proactive knowledge recommendation
-- `health_check` — Canonical 30-check health snapshot shared with the CLI
-- `agent_runtime_probe` — Record a content-free runtime receipt from a fixed synthetic-safe host sample
+You ask Claude: "Why does asyncio.gather blow up memory?" After some debugging, you find the root cause. Conversation ends.
 
-### Method 2: Claude Code Hooks
+**Step 2: Distillation triggers automatically**
 
-Run `mnemos init` or `mnemos agent install` to install Claude hooks into `~/.claude/settings.json`.
+The session-end signal triggers distillation. The conversation flows through the seven-layer pipeline — noise filtering drops the chit-chat, value pre-judgment recognizes "valuable debugging experience", the LLM extracts structured knowledge, self-check validates claims and code snippets, and the quality gate plus cognitive value gate confirm it's not generic reference text. A knowledge card is born.
 
-### Method 3: Codex / Hermes / Kiro / OpenCode / OpenClaw
+**Step 3: Scoring & controlled storage**
 
-Codex, Hermes, Kiro, OpenCode, and OpenClaw use MCP-only active access plus passive local session sources. `setup.sh` and `mnemos agent install` configure their MCP server entries and active policy blocks by default.
+The adaptive scoring engine grades the card. Once scoring and the cognitive-contribution gate pass, default mode writes it into the knowledge base; with `trusted_push.mode=enforce`, the card enters the ProposalQueue and is stored only after your approval. The knowledge graph creates entities and relations in sync.
 
-Agent Kit v2 checks `codex`, `claude`, `hermes`, `opencode`, `openclaw`, `crush`, `kiro`, and `kimi`. Missing targets are `not_installed` and N/A. Installation, MCP/Policy, passive-source fidelity, and cognitive capability declarations yield only `conformance_ok`. Runtime `full_power` additionally requires content authorization, a recent authenticated call to the canonical `health_check`, and a valid fixed `mnemos.agent_runtime_probe.v1` completeness sample. Missing, stale, malformed, unauthorized, or check-set-mismatched receipts are strict failures; old reports are unknown rather than green. The receipt stores metadata only, never the sample text.
+**Step 4: Persona learning**
 
-Continuous native capture is separately owned by the default-enabled `daemon.raw_sync` schedule derived from the same manifest. Watchdog, polling, and hybrid triggers accelerate a dirty source but are never the only capture gate. The daemon heartbeat carries a privacy-safe per-source discovery/capture/cursor/gap/error projection, and `python3 scripts/audit_agent_source_coverage.py --strict --json` independently verifies the active owner and Native-to-Raw coverage rather than treating installation or a one-off backfill as proof.
+The system captures signals from the conversation: deep focus and a questioning tendency during debugging, maybe an explicit correction like "test before committing". These become refutable persona assertions. Next time a similar scenario arises, preflight/search/distill/quality gates consume these assertions and record whether they actually changed behavior.
 
----
+**Step 5: Proactive decision support**
+
+A week later you start writing a high-concurrency crawler. IntentRouter recognizes the task intent, ContextAwareSearch retrieves the earlier debugging experience, and the persona hub judges you'd care about memory issues — so it reminds you about the asyncio.gather pitfall at the start of the conversation.
+
+**The only thing you did: talk normally.**
+
+### Verify the System Is Working
+
+```bash
+# 1. Check the distillation queue
+python3 -m core.kia.amphora --list
+
+# 2. Check daemon status
+python3 mnemos_cli.py daemon status
+
+# 3. Check the Inbox for new pages (default Wiki path)
+ls ~/Documents/mnemos/00-Inbox/
+
+# 4. View the persona
+cat ~/Documents/mnemos/L5-Feedback/user-persona.md
+
+# 5. Check scorer status
+python3 mnemos_cli.py scorer status
+```
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python >= 3.10
+- One AI agent (any of Claude Code, Kimi, Crush, Codex, Hermes, Kiro, OpenCode, OpenClaw)
+- **Required** [Obsidian](https://obsidian.md): the raw Vault holds original conversations and the Mnemos Vault holds distilled knowledge — both must be openable in Obsidian for human review; setup stops with an explanation if Obsidian is not detected
+- **Required** three model endpoints: LLM (chat/distillation), Embedding (vector/semantic recall), Reranker (search reranking). Each needs a model ID, API base URL, and API key
+- **Optional** multimodal endpoint: parses images, screenshots, and visual evidence; the system works fine without it
+
+> Mnemos is vendor-agnostic. Any endpoint compatible with the required API works — just provide model ID, base URL, and API key. Setup smoke-tests all three required endpoints and asks again on failure. API keys are stored in the system keyring by preference, never in plaintext.
+
+### Product-Grade Install (Recommended)
+
+```bash
+git clone https://github.com/jielumaizui/mnemos.git
+cd mnemos
+python3 mnemos_cli.py setup --dry-run --json   # preview the install plan
+python3 mnemos_cli.py setup                    # interactive install
+```
+
+`mnemos setup` is the recommended entry point. It threads configuration, Vault initialization, agent integration, scheduler, and deployment verification into a single install state machine:
+
+1. Checks Python >= 3.10 and installs dependencies
+2. Detects Obsidian and confirms the two default Vault paths (Mnemos + raw)
+3. Generates `~/.mnemos/configs/main.json` (mode 0600)
+4. Initializes the standard Wiki directory layout
+5. Installs AI agent integration (adapter hooks + MCP config)
+6. Starts the background daemon and registers the system scheduler (macOS launchd / Linux cron / Windows Task Scheduler)
+7. Runs deployment verification: smoke tests for the three required endpoints + a read-only E2E probe
+
+Fully automatic mode (non-interactive, macOS / Linux):
+
+```bash
+export MNEMOS_LLM_MODEL=your_llm_model_id
+export MNEMOS_LLM_BASE_URL=https://your-llm-api.example/v1
+export MNEMOS_LLM_API_KEY=your_llm_key
+export MNEMOS_EMBEDDING_MODEL=your_embedding_model_id
+export MNEMOS_EMBEDDING_BASE_URL=https://your-embedding-api.example/v1
+export MNEMOS_EMBEDDING_API_KEY=your_embedding_key
+export MNEMOS_RERANKER_MODEL=your_reranker_model_id
+export MNEMOS_RERANKER_BASE_URL=https://your-reranker-api.example/v1
+export MNEMOS_RERANKER_API_KEY=your_reranker_key
+python3 mnemos_cli.py setup --yes
+```
+
+`--yes` skips all prompts; any missing required endpoint or failed smoke test aborts immediately. On Windows, use `setup.bat` or set the equivalent environment variables in PowerShell.
+
+Upgrade, repair, and uninstall share the same state machine:
+
+```bash
+python3 mnemos_cli.py upgrade plan --json
+python3 mnemos_cli.py upgrade apply --json      # takes a global snapshot first
+python3 mnemos_cli.py doctor repair-all --json
+python3 mnemos_cli.py uninstall --preserve-data --json
+```
+
+`uninstall` preserves data by default; actual deletion requires a freeze, a snapshot reference, and a second confirmation.
+
+### Manual Install
+
+```bash
+# 1. Clone and install
+git clone https://github.com/jielumaizui/mnemos.git
+cd mnemos
+pip install -e .
+
+# 2. Copy and edit the config
+mkdir -p ~/.mnemos/configs
+cp config/config.example.json ~/.mnemos/configs/main.json
+# Edit main.json: wiki path + base_url, model, api_key_source for llm/embedding/reranker
+
+# 3. Diagnose and verify
+python3 mnemos_cli.py doctor
+python3 mnemos_cli.py setup --dry-run --json
+python3 scripts/verify_installation.py --api-smoke
+```
+
+### Build the Semantic Search Index (Optional Boost)
+
+Once the Embedding/Reranker endpoints pass their smoke tests, build the vector index to improve recall on unfamiliar queries:
+
+```bash
+pip install -e ".[ml]"                          # install hnswlib and other extras
+python3 scripts/build_embedding_index.py        # build the index
+```
+
+Without it, the system falls back to an in-memory index — everything still works.
+
+### Command-Line Tool
+
+```bash
+mnemos setup                       # install/configure/verify entry point
+mnemos init                        # interactive config wizard
+mnemos doctor                      # system diagnostics (repair subcommands available)
+mnemos status                      # system overview
+mnemos health --json               # machine-readable health check (30 checks)
+mnemos config                      # view/edit configuration
+
+# Agent management
+mnemos agent list                  # list locally available AI agents
+mnemos agent install               # install adapter hooks + MCP integration
+mnemos agent doctor                # diagnose agent status
+
+# Background services
+mnemos daemon start|stop|status    # daemon management
+mnemos scheduler install-windows   # register Windows startup task
+
+# Pipeline
+mnemos sync status                 # sync status
+mnemos distill status              # distillation queue status
+mnemos import <path>               # import documents (PDF/Word/PPT/Excel/HTML/EBOOK)
+mnemos search <query>              # context-aware search
+mnemos wiki read <page>            # read a Wiki page
+
+# Cognitive layer
+mnemos observe run                 # run the Observation Engine (L3)
+mnemos reflect manual              # trigger a Reflection manually (L4)
+mnemos feedback stats              # feedback loop statistics (L5)
+mnemos persona behavior-metrics    # persona consumption metrics
+mnemos recap list                  # retrospective queue
+
+# Scoring & governance
+mnemos scorer status               # scorer status and mode
+mnemos kg doctor                   # knowledge-graph diagnostics
+mnemos dispute list                # dispute arbitration list
+mnemos blindspot list              # knowledge blind spots
+mnemos data inventory --json       # data-ownership inventory
+mnemos backup create               # global snapshot backup
+```
+
+There are 57 top-level commands; the unlisted ones are mostly advanced/debug/experimental — run `python3 mnemos_cli.py <command> --help` for details.
+
+## AI Agent Integration
+
+### Option 1: MCP Protocol (Recommended, Universal)
+
+Any MCP-capable AI agent can connect. The MCP server registers **57 tools** in 5 groups:
+
+**core — high-frequency loop**
+
+| Tool | Purpose |
+|------|---------|
+| `preflight_inject` | Load relevant experience before a task (KIA loop step 1) |
+| `guard_check` | Mid-execution risk guard, incl. analysis-loop/repeat-read alerts (KIA loop step 2) |
+| `wiki_search` | Search the knowledge base |
+| `wiki_read` | Read a specific page |
+| `document_process` | Process a user-specified document into the distillation pipeline |
+
+**lifecycle — session capture**
+
+| Tool | Purpose |
+|------|---------|
+| `capture_turn` | Report a conversation turn (< 200ms enqueue) |
+| `capture_session` | Batch-report a whole session |
+| `end_session` | Mark a session as ended |
+| `capture_status` | Query capture-queue status |
+
+**extended — knowledge & retrospectives**
+
+| Tool | Purpose |
+|------|---------|
+| `knowledge_ingest` | User-fed knowledge ("remember this") |
+| `knowledge_distill` | Trigger knowledge distillation |
+| `wiki_build` / `wiki_write` | Trigger a Wiki build / write a page |
+| `memory_write_project` / `memory_write_framework` / `memory_write_global` | Scoped memory writes |
+| `memory_search` | Search memory by project/framework/global scope |
+| `session_search` | Search historical sessions |
+| `check_pending_recaps` | Check pending retrospectives |
+| `recap_start` / `recap_submit` / `recap_finalize` / `recap_skip` / `recap_feedback` / `recap_status` / `recap_claim_owner` | Full structured three-question retrospective flow |
+| `retrospective_list` | List available retrospective experience |
+| `persona_summary` / `persona_update` / `persona_behavior_prompt` / `persona_behavior_metrics` / `persona_record_explicit_evidence` | Persona queries, updates, and evidence recording |
+
+**auxiliary — system & search**
+
+| Tool | Purpose |
+|------|---------|
+| `health_check` | System health snapshot (same check set as the CLI) |
+| `self_diagnose` / `detect_sources` | Self-diagnosis / data-source connectivity |
+| `configure_wiki` | Configure the Wiki path |
+| `context_aware_search` | Context-aware search (persona-weighted + graph recall) |
+| `knowledge_source_list` | Knowledge-source distribution stats |
+| `signal_collect` | Trigger signal collection |
+| `build_cognitive_state` | Build a cognitive-state snapshot |
+| `agent_runtime_probe` | Host runtime-capability acceptance probe |
+
+**advanced — decision & cognition**
+
+| Tool | Purpose |
+|------|---------|
+| `intent_route` / `intent_correct` | Intent routing and correction |
+| `predictive_push` / `push_feedback` / `delivery_display_ack` | Predictive push and delivery-feedback loop |
+| `blindspot_check` | Blind-spot detection |
+| `freshness_check` | Knowledge-freshness check |
+| `observation_run` / `observation_search` | Observation Engine (L3) |
+| `reflect_on_input` / `reflect_manually` / `reflection_feedback` / `reflection_pending` | Reflection (L4) and feedback (L5) |
+| `record_decision` / `apply_outcome` | Decision recording and outcome backfill |
+| `wiki_write` | Controlled Wiki writes |
+
+Configuration example:
+
+```json
+{
+  "mnemos": {
+    "command": "mnemos",
+    "args": ["mcp", "serve"]
+  }
+}
+```
+
+Security model: `mnemos agent install` issues each host an independent high-entropy launch capability (only a keyring reference is stored — never plaintext); every tool call re-validates revocation/expiry. Cross-agent/project capabilities require your explicit grant (`mnemos agent grant-mcp`); callers cannot self-assert identity or escalate privileges.
+
+### Option 2: Adapter Hooks (Claude Code / Kimi / Crush)
+
+Hooks are installed automatically by `mnemos setup` or `mnemos agent install` (Claude Code writes to `~/.claude/settings.json`). If something breaks, run `mnemos doctor repair`.
+
+### Option 3: MCP-Only Integration (Codex / Hermes / Kiro / OpenCode / OpenClaw)
+
+These 5 agents connect through JSON MCP configuration — no hooks needed; `mnemos setup` writes their MCP config and active policy automatically.
+
+### Passive Ingestion Sources (Aider / Gemini CLI / Cursor / Windsurf)
+
+These 4 tools don't support active integration, but the daemon's `raw_sync` service periodically parses their local conversation files, feeding the same capture → distillation pipeline.
+
+Per-agent integration docs live in `docs/integrations/`.
+
+## Relationship with Obsidian
+
+Mnemos and [Obsidian](https://obsidian.md) complement each other — neither replaces the other.
+
+- Mnemos' knowledge layer is **plain Markdown + YAML frontmatter** — not bound to any specific tool
+- Obsidian is required at deploy time because:
+  1. **Native compatibility**: Obsidian notes are Markdown — no export/conversion
+  2. **Bidirectional links**: `[[page name]]` syntax builds the knowledge graph automatically
+  3. **Graph view**: Obsidian's Graph View is your knowledge-graph visualization
+  4. **Community ecosystem**: Dataview, Templater, and other plugins interoperate with Mnemos data
+  5. **Local-first**: consistent with Mnemos' data-privacy policy — all knowledge stays on disk
+- Division of labor: Obsidian handles **organization, visualization, and human editing**; Mnemos handles **automatic capture, raw projection, distillation, scoring, persona, and closed-loop evolution**. Humans create; AI operates.
+- Dual-Vault design: the raw Vault (default `~/Documents/raw`) holds readable projections of original agent conversations from `raw_events.db`; the Mnemos Vault (default `~/Documents/mnemos`) holds the distilled knowledge base
+
+### Data Ownership
+
+- Everything lives on your local disk: Wiki/raw as plain Markdown, runtime state in local SQLite — nothing is uploaded to any server
+- `mnemos data inventory --json` lists where each data category lives, estimated record counts, consumers, and export/freeze/delete policies
+- `mnemos data export` produces a redacted export manifest; `delete` requires a prior freeze, a snapshot reference, and confirmation
+- Mnemos does not collect, upload, or share any of your data
 
 ## Configuration
 
-Runtime config file: `~/.mnemos/configs/main.json`.
-Legacy `~/.mnemos/config.yaml` is only used as a migration source.
+The authoritative runtime config is `~/.mnemos/configs/main.json` (unified across platforms; legacy YAML is migrated automatically).
+
+Precedence: **code defaults < JSON config file < environment variables** (env wins).
+
+Main supported environment variables:
+
+| Variable | Config key | Description |
+|----------|-----------|-------------|
+| `MNEMOS_DIR` | — | Mnemos data root (default `~/.mnemos`) |
+| `MNEMOS_WIKI_DIR` / `WIKI_DIR` | `wiki.vault_path` | Wiki knowledge-base directory |
+| `MNEMOS_LLM_API_KEY` / `MNEMOS_LLM_BASE_URL` / `MNEMOS_LLM_MODEL` | `llm.*` | LLM (chat/distillation) endpoint |
+| `MNEMOS_EMBEDDING_API_KEY` / `MNEMOS_EMBEDDING_BASE_URL` / `MNEMOS_EMBEDDING_MODEL` | `embedding.*` | Embedding (vector/semantic recall) endpoint |
+| `MNEMOS_RERANKER_API_KEY` / `MNEMOS_RERANKER_BASE_URL` / `MNEMOS_RERANKER_MODEL` | `reranker.*` | Reranker (search reranking) endpoint |
+| `MNEMOS_MULTIMODAL_API_KEY` / `MNEMOS_MULTIMODAL_BASE_URL` / `MNEMOS_MULTIMODAL_MODEL` | `multimodal.*` | Multimodal (image parsing) endpoint, optional |
+
+Key configuration example:
 
 ```json
 {
   "wiki": {
-    "vault_path": "~/Documents/mnemos",
-    "subdirs": [
-      "00-Inbox", "01-People", "02-Projects", "03-Tech",
-      "04-Concepts", "05-MOCs", "06-Retrospectives", "07-Shadow",
-      "99-Reports"
-    ]
-  },
-  "storage": {
-    "backend": "obsidian",
-    "obsidian": {
-      "vault_path": "~/Documents/raw"
-    }
-  },
-  "daemon": {
-    "services": {
-      "capture_worker": true,
-      "eventbus": true
-    }
+    "vault_path": "~/Documents/mnemos"
   },
   "llm": {
     "provider": "openai-compatible",
     "base_url": "https://your-llm-api.example/v1",
-    "api_key": "",
     "api_key_source": "env:MNEMOS_LLM_API_KEY",
     "model": "your-llm-model-id"
   },
   "embedding": {
     "enabled": true,
-    "provider": "openai-compatible",
     "base_url": "https://your-embedding-api.example/v1",
-    "api_key": "",
     "api_key_source": "env:MNEMOS_EMBEDDING_API_KEY",
-    "model": "your-embedding-model-id"
+    "model": "your-embedding-model-id",
+    "use_rerank": true
   },
   "reranker": {
     "enabled": true,
-    "provider": "openai-compatible",
     "base_url": "https://your-reranker-api.example/v1",
-    "api_key": "",
     "api_key_source": "env:MNEMOS_RERANKER_API_KEY",
     "model": "your-reranker-model-id"
+  },
+  "trusted_push": {
+    "mode": "off"
+  },
+  "delivery": {
+    "preference": "balanced"
   }
 }
 ```
 
----
+- **API key management**: `api_key_source` prefers `keyring:REF` (system keyring); `env:VAR` is an explicitly accepted fallback. Multiple keys per endpoint are supported via `api_key_sources` with automatic cooldown on 429/5xx
+- **Delivery preference**: `delivery.preference` is `quiet` / `balanced` (default) / `active`, controlling proactive-push frequency and cooldowns
+- **Trusted push**: `trusted_push.mode` is `off` (default) / `shadow` / `enforce`
+
+## Data Sources & Privacy
+
+Persona data sources are entirely your choice. Only AI-conversation capture is on by default; everything else requires explicit opt-in:
+
+| Source | Used for | Privacy level |
+|--------|----------|---------------|
+| AI conversations | Inferring focus depth, questioning tendency, perfection preference | Local storage only |
+| Git commits | Inferring endurance patterns, innovation tendency | Statistics only, no code stored |
+| Wiki interactions | Inferring domains of interest, learning paths | Page paths and action types only |
+| File system | Inferring active projects and rhythm | Local processing only, never uploaded |
+
+Persona signals carry scope/context (work/personal/study isolation); every persona assertion keeps a privacy level, expiry, supporting/rebutting evidence, and a revision policy. Persona strategy injection can be turned off entirely via `persona.strategy_injection_enabled=false`.
 
 ## Tech Stack
 
 - **Language**: Python 3.10+
-- **Storage**: Markdown files (knowledge base) + SQLite (persona/scoring/graph/scheduler)
-- **Protocol**: MCP (Model Context Protocol) for AI Agent integration
-- **Model APIs**: Mnemos directly calls LLM, Embedding, and Reranker endpoints after setup smoke validation
-- **Scoring**: ComplementNB + TfidfVectorizer + Bayesian posterior update
-- **Clustering**: HDBSCAN → DBSCAN → K-Means fallback chain
-- **Scheduling**: Topological sort + ThreadPoolExecutor parallel execution
-- **Document Processing**: PDF / PPT / Excel / Word / HTML / EBOOK parsing
-- **Core Dependencies**: requests, pyyaml, watchdog, numpy
-
----
+- **Storage**: Markdown files (knowledge base) + SQLite (~20 local databases: raw events / persona / scoring / graph / scheduling / ledgers)
+- **Protocol**: MCP (Model Context Protocol) for AI agent integration
+- **Distillation execution**: Mnemos calls LLM APIs directly (LLMApiChain ordered failover, vendor-agnostic)
+- **Scoring algorithms**: ComplementNB + TfidfVectorizer + Bayesian posterior updates
+- **Vector index**: hnswlib (optional, `.[ml]` extra; in-memory fallback otherwise)
+- **Scheduling**: topological ordering + ThreadPoolExecutor parallelism
+- **Document processing**: PDF / PPT / Excel / Word / HTML / EBOOK parsing
+- **Key management**: system keyring preferred, env references as explicit fallback
+- **Core dependencies**: requests, pyyaml, jsonschema, watchdog, numpy, openai, anthropic, keyring, pypdf, python-docx, openpyxl, python-pptx, pdfplumber, beautifulsoup4, markdownify, ebooklib, psutil
 
 ## Project Status
 
-Release security uses the machine-readable `mnemos.security_audit.v2` contract. Run
-`python3 scripts/security_audit.py --strict --json`; Bandit, pip-audit, and health-security
-results are normalized into typed findings, and the report derives counts, status, `ok`, and
-the process exit code from those findings with the invariant `ok == (blocking_count == 0)`.
-`python3 scripts/audit_release_privacy_security.py --strict --json` validates that contract
-again before aggregating config, documentation, repository-literal, and diagnostic-redaction
-checks. Any blocking finding stops release; warnings remain explicit non-blocking evidence.
+**Mnemos v2.0.0** — core pipeline production-ready, advanced capabilities continuously improving.
 
-**Mnemos v2.0.0**
+### Available Now
 
-Major updates in v2.0.0:
-- [x] Adaptive scoring engine: COLD/WARM/HOT 3-stage + 6 subsystem scorers
-- [x] 7-layer distillation pipeline
-- [x] Knowledge graph expansion with Bayesian confidence
-- [x] Persona decision hub: 3-layer radar + cross-validation + 14-dim timeline
-- [x] Application layer: IntentRouter, predictive push, dispute arbitration, freshness alerts
-- [x] Sync framework: 8-step pipeline + 12 agent sources
-- [x] Agent Kit integration: 8 targets with static conformance separated from authorized, recent runtime receipts; missing proof cannot report `full_power`
-- [x] KIA scheduler: topological parallel execution + auto-disable on failure
-- [x] Incremental & deferred distillation
+- [x] **Sync framework**: SyncEngine 8-step pipeline + 12 agent sources + append-only raw revisions
+- [x] **Seven-layer distillation pipeline**: noise filter → value pre-judgment → LLM judgment → extraction → self-check → cross-agent linking → feedback loop
+- [x] **Knowledge graph**: entity/relation management + confidence governance + context-aware queries
+- [x] **Scoring loop**: COLD/WARM/HOT phases + 5 domain scorers + distill scorer + drift detection
+- [x] **Cognitive chain**: Observation (L3) → Reflection (L4) → Feedback (L5) + cross-layer cognitive graph
+- [x] **Trusted-push loop**: ProposalQueue → approval → append-only Journal → controlled writes (off/shadow/enforce)
+- [x] **Retrospective consumption loop**: conclusions actually land in retrieval/policy/persona/scheduling/scoring; negative feedback revokes
+- [x] **MCP server**: 57 tools covering knowledge base / ingestion / sessions / KIA / persona / decisions / cognition / system
+- [x] **Agent Kit**: 8 host agents (Claude Code / Kimi / Crush / Codex / Hermes / Kiro / OpenCode / OpenClaw) + 4 passive ingestion sources
+- [x] **Document processing**: PDF / PPT / Excel / Word / HTML / EBOOK parsing
+- [x] **Semantic search**: vendor-agnostic Embedding/Reranker endpoints + vector index
+- [x] **Optional multimodal**: images/screenshots parsed and ingested when configured
 
-Planned:
-- [ ] Web dashboard / local control center
-- [ ] Obsidian plugin
+### In Progress
 
----
+- [ ] **Scorer cold start**: WARM/HOT modes need accumulated training samples; matures naturally with use
+- [ ] **Push precision**: improves continuously as feedback data accumulates
+- [ ] **Web dashboard / local control center**: use the CLI, MCP, and config files for now
+- [ ] **Obsidian plugin**: bidirectional sync and inline queries
+
+## Acknowledgements
+
+- [Andrej Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — originator of the LLM Wiki pattern, Mnemos' core inspiration
+- [Obsidian](https://obsidian.md) — the benchmark knowledge-management tool, Mnemos' recommended knowledge-base visualization
 
 ## License
 
 [MIT License](LICENSE)
 
-**Mnemos** (/ˈnɛmɒs/) — from Greek mythology, the goddess of memory. Not just helping you remember, but helping AI assistants recall source-backed knowledge and act within auditable, configurable boundaries.
+---
+
+**Mnemos** (/ˈnɛmɒs/) — named after Mnemosyne, the Greek goddess of memory. Not just remembering for you, but — within auditable, configurable, degradable boundaries — letting your AI recall the right knowledge at the right moment and act on it.
